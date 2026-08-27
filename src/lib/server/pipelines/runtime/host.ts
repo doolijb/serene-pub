@@ -198,7 +198,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					// `isHidden` is the existing convention for a message that should
 					// not reach a model. Honoured here rather than left to each
 					// binding, so a new Query type cannot forget it.
-					const rows = await db
+					let rows = await db
 						.select()
 						.from(schema.sessionMessages)
 						.where(
@@ -209,6 +209,25 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						)
 						.orderBy(desc(schema.sessionMessages.id))
 						.limit(Math.min(q.limit ?? 100, 500))
+
+					// Channel filtering (20 §7): 'main' — and absent — is the
+					// legacy read exactly, because every legacy row lives on
+					// 'main' by migration. Another value narrows through the
+					// message model's channel column. The intersection is by
+					// id, which the mirror keeps identical across both tables.
+					if (typeof q.channel === "string" && q.channel !== "main") {
+						const laneIds: Array<{ id: number }> = await db
+							.select({ id: schema.messages.id })
+							.from(schema.messages)
+							.where(
+								and(
+									eq(schema.messages.sessionId, sessionId),
+									eq(schema.messages.channel, q.channel)
+								)
+							)
+						const lane = new Set(laneIds.map((r) => r.id))
+						rows = rows.filter((r: any) => lane.has(r.id))
+					}
 
 					// Reversed after a descending limit: "the most recent N, in
 					// reading order" is what every caller wants, and doing it here
@@ -889,19 +908,19 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						throw new HostScopeError(
 							`${node.key} has no session to write to — the run was started without a session scope`
 						)
-					const [row] = await db
-						.insert(schema.sessionMessages)
-						.values({
-							sessionId,
-							userId: p.userId ?? scope.userId ?? null,
-							characterId: p.characterId ?? null,
-							personaId: p.personaId ?? null,
-							role: p.role ?? "assistant",
-							content: String(p.text ?? ""),
-							metadata: p.metadata ?? {},
-							isGenerating: false
-						})
-						.returning()
+					const { insertLegacy } = await import(
+						"$lib/server/messages/store"
+					)
+					const row = await insertLegacy(db as any, {
+						sessionId,
+						userId: p.userId ?? scope.userId ?? null,
+						characterId: p.characterId ?? null,
+						personaId: p.personaId ?? null,
+						role: p.role ?? "assistant",
+						content: String(p.text ?? ""),
+						metadata: p.metadata ?? {},
+						isGenerating: false
+					})
 					return { id: row.id, sessionId: row.sessionId }
 				}
 
@@ -917,17 +936,96 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 								`from outside the run — a message created in the same run cannot be updated ` +
 								`by a second node (13 §10b).`
 						)
-					const [row] = await db
-						.update(schema.sessionMessages)
-						.set({ content: String(p.text ?? ""), isEdited: true })
-						.where(eq(schema.sessionMessages.id, id))
-						.returning()
+					const { updateLegacy } = await import(
+						"$lib/server/messages/store"
+					)
+					const row = await updateLegacy(db as any, id, {
+						content: String(p.text ?? ""),
+						isEdited: true
+					})
 					if (!row)
 						throw new HostScopeError(
 							`${node.key}: no message ${id} to update`
 						)
 					assertScoped(node, row.sessionId, scope.sessionId)
 					return { id: row.id, sessionId: row.sessionId }
+				}
+
+				// Attachments (20 §1): bytes into the session's asset store,
+				// a typed part onto the message — never bytes in a row, never
+				// a foreign URL. Both consumers are gate-eligible (`effects:
+				// 'write'`; attach-image even defaults review ON, F14's proof
+				// case), so what the reviewer approves is what lands.
+				case "core:consumer/attach-image":
+				case "core:consumer/attach-audio": {
+					const media = (p.image ?? p.audio ?? p) as Record<
+						string,
+						any
+					>
+					const messageId =
+						media.messageId ?? p.messageId ?? p.target?.id
+					if (typeof messageId !== "number")
+						throw new HostScopeError(
+							`${node.key} was given no message id to attach to — the id comes ` +
+								`from outside the run (13 §10b), on the payload's messageId.`
+						)
+					const b64 =
+						typeof media.data === "string" ? media.data : null
+					if (!b64)
+						throw new HostScopeError(
+							`${node.key} was given no bytes — the payload carries base64 'data'.`
+						)
+					const { getMessage, appendParts } = await import(
+						"$lib/server/messages/store"
+					)
+					const target = await getMessage(db as any, messageId)
+					if (!target)
+						throw new HostScopeError(
+							`${node.key}: no message ${messageId} to attach to`
+						)
+					assertScoped(node, target.sessionId, scope.sessionId)
+					const { createSessionAsset } = await import(
+						"$lib/server/messages/assets"
+					)
+					const isImage = node.typeId.includes("attach-image")
+					const asset = await createSessionAsset(db as any, {
+						sessionId: target.sessionId,
+						bytes: Buffer.from(b64, "base64"),
+						mime:
+							typeof media.mime === "string"
+								? media.mime
+								: isImage
+									? "image/png"
+									: "application/octet-stream",
+						createdBy: scope.userId ?? null
+					})
+					await appendParts(db as any, messageId, [
+						isImage
+							? {
+									type: "core:image",
+									data: {
+										assetId: asset.id,
+										...(media.alt
+											? { alt: String(media.alt) }
+											: {})
+									}
+								}
+							: {
+									type: "core:file",
+									data: {
+										assetId: asset.id,
+										mime: asset.mime,
+										...(media.name
+											? { name: String(media.name) }
+											: {})
+									}
+								}
+					])
+					return {
+						id: asset.id,
+						messageId,
+						sessionId: target.sessionId
+					}
 				}
 
 				case "core:consumer/create-lore-entry": {

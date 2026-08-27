@@ -657,11 +657,11 @@ export class VariableLayoutError extends Error {}
  * this whole layer exists to prevent. The message names the variable, because
  * the raw engine error does not.
  */
-export function renderVariable(
+export async function renderVariable(
 	layouts: ResolvedLayouts | undefined,
 	key: string,
 	value: unknown
-): string {
+): Promise<string> {
 	const def = definitionByKey.get(key)
 
 	// Absence, decided in code and before any layout runs. Through 0.5 the
@@ -682,7 +682,7 @@ export function renderVariable(
 	if (!chosen?.source) return floor()
 
 	try {
-		return renderTemplate(chosen.engine, {
+		return await renderTemplate(chosen.engine, {
 			template: chosen.source,
 			variables: { [key]: value }
 		})

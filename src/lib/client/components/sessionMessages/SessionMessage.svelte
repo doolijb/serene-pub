@@ -4,6 +4,7 @@
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import MessageComposer from "$lib/client/components/sessionMessages/MessageComposer.svelte"
 	import MessageControls from "$lib/client/components/sessionMessages/MessageControls.svelte"
+	import MessagePartsView from "$lib/client/components/sessionMessages/MessagePartsView.svelte"
 	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
 	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
@@ -80,6 +81,21 @@
 		isSummarizationMode?: boolean
 		isSelected?: boolean
 		onStartSummarization?: (msg: SelectSessionMessage) => void
+		// The contributed menu-trigger set (19 §4) — passed through to
+		// MessageControls, fired with this message as the subject.
+		menuTriggers?: Array<{
+			function: string
+			name: string
+			icon?: string
+			specSlug: string
+		}>
+		onFireTrigger?: (fn: string, msg: SelectSessionMessage) => void
+		// Declared block actions inside a parts-native body (20 §6).
+		onBlockAction?: (
+			fn: string,
+			msg: SelectSessionMessage,
+			payload?: Record<string, unknown>
+		) => void
 		// Snippets
 		GeneratingAnimationComponent?: Snippet<[]>
 		messageControls?: Snippet<[SelectSessionMessage]>
@@ -118,6 +134,9 @@
 		isSummarizationMode = false,
 		isSelected = false,
 		onStartSummarization,
+		menuTriggers = [],
+		onFireTrigger = undefined,
+		onBlockAction = undefined,
 		GeneratingAnimationComponent,
 		messageControls
 	}: Props = $props()
@@ -146,6 +165,7 @@
 	const thinkingContent = $derived((msg.metadata as any)?.thinking || "")
 	const hasThinking = $derived(thinkingContent.trim().length > 0)
 
+
 	// Optional per-trigger focus note for a Narrator response (e.g. "Focus on
 	// the weather turning stormy") — set once at trigger time, see sessions.ts's
 	// narratorMessage.metadata.narratorInstructions.
@@ -173,6 +193,15 @@
 	const isEditing = $derived(
 		!!editSessionMessage && editSessionMessage.id === msg.id
 	)
+	// Parts-native rendering (20 §13 phase 2): when the server attached the
+	// message's typed parts and the message is settled, the body — thinking
+	// and section collapsibles included — renders from them. Streaming,
+	// errors, and unenriched broadcasts fall back to the legacy fields, which
+	// are parity-identical by construction.
+	const partsNative = $derived(
+		!!msg.parts?.length && !msg.isGenerating && !msg.error && !isEditing
+	)
+
 	const isEditDirty = $derived(
 		isEditing && editContent !== (editSessionMessage?.content ?? "")
 	)
@@ -369,6 +398,8 @@
 							{onAbortMessage}
 							{onBranchMessage}
 							{onStartSummarization}
+							{menuTriggers}
+							{onFireTrigger}
 							open={openMsgControlsMenu === msg.id}
 							onOpenChange={(isOpen) =>
 								(openMsgControlsMenu = isOpen
@@ -429,8 +460,9 @@
 		{/if}
 	</div>
 
-	<!-- Extra instructions block (Narrator's optional per-trigger focus note) -->
-	{#if hasNarratorInstructions}
+	<!-- Extra instructions block (Narrator's optional per-trigger focus note).
+	     Suppressed when parts render: the section part carries it there. -->
+	{#if hasNarratorInstructions && !partsNative}
 		<div class="mx-2 mt-2">
 			<button
 				class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
@@ -477,8 +509,9 @@
 		</div>
 	{/if}
 
-	<!-- Thinking block (native model thinking, e.g. Ollama think: true) -->
-	{#if hasThinking}
+	<!-- Thinking block (native model thinking, e.g. Ollama think: true).
+	     Suppressed when parts render: the thinking part carries it there. -->
+	{#if hasThinking && !partsNative}
 		<div class="mx-2 mt-2">
 			<button
 				class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
@@ -633,6 +666,19 @@
 							</span>
 						{/if}
 					</div>
+				</div>
+			{:else if partsNative}
+				<!-- The parts-native body (20 §2): markdown, thinking,
+				     sections, steps — everything typed renders from parts. -->
+				<div class="w-full">
+					<MessagePartsView
+						messageId={msg.id}
+						parts={msg.parts!}
+						activeRevisions={msg.activeRevisions ?? { "0": 0 }}
+						onContentClick={handleContentClick}
+						onAction={(fn, payload) =>
+							onBlockAction?.(fn, msg, payload)}
+					/>
 				</div>
 			{:else}
 				<!-- Click delegation only matters for the inline `<img>` tags

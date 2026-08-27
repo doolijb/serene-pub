@@ -139,12 +139,31 @@ export global {
 
 	// Session Message types
 	export type SelectSessionMessage =
-		typeof schema.sessionMessages.$inferSelect
+		typeof schema.sessionMessages.$inferSelect & {
+			/**
+			 * The parts-native half, attached by the server's wire enrichment
+			 * (20 §13 phase 2). Optional: a message emitted mid-generation or
+			 * by a not-yet-migrated path carries only the legacy fields, and
+			 * the client's legacy rendering is parity-identical.
+			 */
+			parts?: SelectMessagePart[]
+			activeRevisions?: Record<string, number>
+			kind?: string
+			speakerLabel?: string | null
+			channel?: string
+			extras?: Record<string, unknown>
+			version?: string | null
+		}
 	export type InsertSessionMessage =
 		typeof schema.sessionMessages.$inferInsert
 	export type UpdateSessionMessage = Partial<SelectSessionMessage> & {
 		id: number
 	}
+
+	// The message model (20 §1)
+	export type SelectMessagePart = typeof schema.messageParts.$inferSelect
+	export type SelectMessageRow = typeof schema.messages.$inferSelect
+	export type SelectSessionAsset = typeof schema.sessionAssets.$inferSelect
 
 	// Session Persona types
 	export type SelectSessionPersona =

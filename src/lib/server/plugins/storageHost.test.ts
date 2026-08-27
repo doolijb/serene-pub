@@ -3,7 +3,7 @@ import fs from "fs"
 import os from "os"
 import path from "path"
 import { createRequire } from "module"
-import { STORAGE_HOST_SOURCE } from "./storageHost"
+import { capabilityKey, STORAGE_HOST_SOURCE } from "./storageHost"
 
 /** Evaluate the embedded source exactly as a worker would, and hand back the factory. */
 function loadMakeStorageHost() {
@@ -65,5 +65,26 @@ describe("storage host", () => {
 		// a within-quota write still works
 		store.write("ok.txt", "x".repeat(100))
 		expect(store.read("ok.txt")).toHaveLength(100)
+	})
+})
+
+describe("capabilityKey", () => {
+	it("treats an allowlist as a set, not a sequence", () => {
+		// Reordering the same hosts is not a grant change, and must not churn a
+		// loaded plugin; adding one is, and must.
+		expect(capabilityKey({ networkHosts: ["a.com", "b.com"] })).toBe(
+			capabilityKey({ networkHosts: ["b.com", "a.com"] })
+		)
+		expect(capabilityKey({ networkHosts: ["a.com"] })).not.toBe(
+			capabilityKey({ networkHosts: ["a.com", "b.com"] })
+		)
+	})
+
+	it("separates an absent grant from an empty one and from a narrowed quota", () => {
+		expect(capabilityKey(undefined)).toBe("")
+		expect(capabilityKey({})).not.toBe("")
+		expect(capabilityKey({ quotaBytes: 1024 })).not.toBe(
+			capabilityKey({ quotaBytes: 8_000_000 })
+		)
 	})
 })

@@ -65,45 +65,73 @@
 	 */
 	let openRow = $state<string | null>(null)
 	/** Unsaved edits, keyed the same way, so switching rows cannot cross them. */
-	let drafts = $state<Record<string, { name: string; source: string }>>({})
+	let drafts = $state<
+		Record<
+			string,
+			{ name: string; source: string; engine: string | null }
+		>
+	>({})
 
 	const rowKey = (kind: string, id: number) => `${kind}:${id}`
 
-	function toggle(
-		kind: string,
-		row: { id: number; name: string; source: string }
-	) {
+	type EditableRow = {
+		id: number
+		name: string
+		source: string
+		engine?: string | null
+	}
+
+	function toggle(kind: string, row: EditableRow) {
 		const key = rowKey(kind, row.id)
 		if (openRow === key) {
 			openRow = null
 			return
 		}
 		openRow = key
-		if (!drafts[key]) drafts[key] = { name: row.name, source: row.source }
+		if (!drafts[key])
+			drafts[key] = {
+				name: row.name,
+				source: row.source,
+				engine: row.engine ?? null
+			}
 	}
 
-	const draftFor = (
-		kind: string,
-		row: { id: number; name: string; source: string }
-	) => drafts[rowKey(kind, row.id)] ?? { name: row.name, source: row.source }
+	const draftFor = (kind: string, row: EditableRow) =>
+		drafts[rowKey(kind, row.id)] ?? {
+			name: row.name,
+			source: row.source,
+			engine: row.engine ?? null
+		}
 
 	function edit(
 		kind: string,
 		id: number,
-		patch: { name?: string; source?: string }
+		patch: { name?: string; source?: string; engine?: string | null }
 	) {
 		const key = rowKey(kind, id)
-		const d = drafts[key] ?? { name: "", source: "" }
+		const d = drafts[key] ?? { name: "", source: "", engine: null }
 		drafts[key] = { ...d, ...patch }
 	}
 
-	const dirty = (
-		kind: string,
-		row: { id: number; name: string; source: string }
-	) => {
+	const dirty = (kind: string, row: EditableRow) => {
 		const d = drafts[rowKey(kind, row.id)]
-		return !!d && (d.name !== row.name || d.source !== row.source)
+		return (
+			!!d &&
+			(d.name !== row.name ||
+				d.source !== row.source ||
+				d.engine !== (row.engine ?? null))
+		)
 	}
+
+	/* --- template engines --------------------------------------------- */
+
+	/**
+	 * NULL on a row means core's default, so the picker maps the default id
+	 * back to null on save — a template that never chose stays "whatever core
+	 * ships" rather than pinning today's engine id.
+	 */
+	const CORE_ENGINE = "core:template/handlebars@1"
+	const engines = $derived(view?.engines ?? [])
 
 	/* --- template + layout writes ------------------------------------ */
 
@@ -118,7 +146,8 @@
 			kind: templateKind(t) as any,
 			id: row.id,
 			name: d.name,
-			source: d.source
+			source: d.source,
+			engine: d.engine
 		})
 		delete drafts[key]
 	}
@@ -203,9 +232,11 @@
 	) {
 		const key = rowKey(templateKind(t), row.id)
 		previewFor = key
+		const d = draftFor(templateKind(t), row as any)
 		socket.emit("pipelines:previewTemplate", {
 			kind: t === "templates" ? "context" : "variable",
-			source: draftFor(templateKind(t), row as any).source,
+			source: d.source,
+			engine: d.engine,
 			poolId
 		})
 	}
@@ -715,6 +746,42 @@
 												edit(kind, row.id, { source })}
 										/>
 									</label>
+									{#if engines.length > 1 && !row.isImmutable}
+										<!-- Only when there is a choice to
+										     make: with core's engine alone, a
+										     picker with one option is chrome.
+										     NULL means "core's default", so
+										     picking the core id saves null. -->
+										<label
+											class="flex flex-col gap-1 text-xs font-medium"
+										>
+											Engine
+											<select
+												class="select w-full"
+												value={d.engine ?? CORE_ENGINE}
+												onchange={(e) =>
+													edit(kind, row.id, {
+														engine:
+															e.currentTarget
+																.value ===
+															CORE_ENGINE
+																? null
+																: e
+																		.currentTarget
+																		.value
+													})}
+											>
+												{#each engines as eng (eng.id)}
+													<option value={eng.id}>
+														{eng.id}
+														{eng.owner === "core"
+															? "(built in)"
+															: `(${eng.owner})`}
+													</option>
+												{/each}
+											</select>
+										</label>
+									{/if}
 									<div class="flex items-center gap-2">
 										<button
 											type="button"

@@ -1,5 +1,6 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
+import { updateLegacyWhere } from "$lib/server/messages/store"
 import { and, eq } from "drizzle-orm"
 import {
 	broadcastToSessionUsers,
@@ -38,16 +39,14 @@ export async function persistGenerationStage(
 		status === "queued" || status === "loading" || status === "generating"
 			? status
 			: null
-	const [updated] = await db
-		.update(schema.sessionMessages)
-		.set({ generationStage: stage })
-		.where(
-			and(
-				eq(schema.sessionMessages.id, generatingMessageId),
-				eq(schema.sessionMessages.isGenerating, true)
-			)
-		)
-		.returning()
+	const [updated] = await updateLegacyWhere(
+		db,
+		and(
+			eq(schema.sessionMessages.id, generatingMessageId),
+			eq(schema.sessionMessages.isGenerating, true)
+		),
+		{ generationStage: stage }
+	)
 	if (updated) {
 		await broadcastToSessionUsers(socketIo, sessionId, "sessionMessage", {
 			sessionMessage: updated
@@ -72,21 +71,19 @@ export async function persistGenerationErrorRow(
 ) {
 	const error = friendlyErrorFromUnknown(err)
 	console.error("[generationStatus] generation failed:", err)
-	const [updated] = await db
-		.update(schema.sessionMessages)
-		.set({
+	const [updated] = await updateLegacyWhere(
+		db,
+		and(
+			eq(schema.sessionMessages.id, generatingMessageId),
+			eq(schema.sessionMessages.isGenerating, true)
+		),
+		{
 			isGenerating: false,
 			generationStage: null,
 			queueItemId: null,
 			error
-		})
-		.where(
-			and(
-				eq(schema.sessionMessages.id, generatingMessageId),
-				eq(schema.sessionMessages.isGenerating, true)
-			)
-		)
-		.returning()
+		}
+	)
 	if (updated) {
 		const guestFacing = {
 			...updated,

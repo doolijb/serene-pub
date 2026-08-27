@@ -100,14 +100,14 @@ function structuralContext(): Record<string, unknown> {
  * Keyed by the scope key rather than the variable id, because that is what a
  * template writes: `{{{characters}}}`, not `{{{core:var/characters@1}}}`.
  */
-export function sampleContext(
+export async function sampleContext(
 	layouts?: ResolvedLayouts
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
 	const out: Record<string, unknown> = structuralContext()
 	for (const decl of allVariables()) {
 		const values = sampleValues(decl)
 		for (const key of Object.keys(decl.scope))
-			out[key] = renderVariable(layouts, key, values[key])
+			out[key] = await renderVariable(layouts, key, values[key])
 	}
 	return out
 }
@@ -143,14 +143,14 @@ export interface ContextPreviewInput {
  * sections rather than one wall of text — the same reason the editor it feeds
  * has always used it.
  */
-export function previewContextTemplate(input: ContextPreviewInput): {
+export async function previewContextTemplate(input: ContextPreviewInput): Promise<{
 	messages?: PreviewMessage[]
 	error?: string
-} {
+}> {
 	try {
-		const rendered = renderTemplate(input.engine, {
+		const rendered = await renderTemplate(input.engine, {
 			template: input.source,
-			variables: sampleContext(input.layouts),
+			variables: await sampleContext(input.layouts),
 			promptFormat: PromptFormats.SPLIT_CHAT
 		})
 		return {
@@ -175,10 +175,12 @@ export interface VariablePreviewInput {
  * Returns the string the context template would receive — so what you see here
  * is exactly what `{{{characters}}}` will be, wrappers included.
  */
-export function previewVariableTemplate(input: VariablePreviewInput): {
+export async function previewVariableTemplate(
+	input: VariablePreviewInput
+): Promise<{
 	rendered?: string
 	error?: string
-} {
+}> {
 	const decl = getVariable(input.variableId)
 	if (!decl)
 		return {
@@ -192,7 +194,7 @@ export function previewVariableTemplate(input: VariablePreviewInput): {
 	try {
 		const scope: Record<string, unknown> = sampleValues(decl)
 		return {
-			rendered: renderTemplate(input.engine, {
+			rendered: await renderTemplate(input.engine, {
 				template: input.source,
 				variables: scope,
 				promptFormat: PromptFormats.SPLIT_CHAT

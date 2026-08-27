@@ -560,7 +560,9 @@ const exports: AdapterExports = {
 	listModels,
 	connectionDefaults:
 		CONNECTION_DEFAULTS[CONNECTION_TYPE.LLAMACPP_COMPLETION],
-	samplingKeyMap: llamaCppSamplingKeyMap
+	samplingKeyMap: llamaCppSamplingKeyMap,
+	// 20 §9: SP formats and grammar-constrains via jsonSchemaToGbnf.
+	capabilities: { toolUse: "emulated" }
 }
 
 export default exports

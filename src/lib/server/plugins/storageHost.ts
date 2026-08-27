@@ -51,41 +51,77 @@ function makeStorageHost(config) {
 		}
 		return total;
 	}
+	// A raw Node fs error leaks the absolute host path (and so the OS username,
+	// install layout and plugin id) in its .message — which crosses to the guest
+	// verbatim on both backends. Re-throw a code-only message so a failing op
+	// tells the plugin *what* failed, never *where*. The jail's own throws carry
+	// no .code, so they (and their safe, path-free text) pass straight through.
+	function guard(fn) {
+		try {
+			return fn();
+		} catch (e) {
+			if (e && e.code) {
+				var m = {
+					ENOENT: "not found",
+					ENOTDIR: "not a directory",
+					EISDIR: "is a directory",
+					EEXIST: "already exists",
+					EACCES: "permission denied",
+					EPERM: "operation not permitted",
+					ENOSPC: "no space left"
+				};
+				throw new Error("storage: " + (m[e.code] || "io error"));
+			}
+			throw e;
+		}
+	}
 	return {
 		read: function (rel) {
-			var full = resolve(rel);
-			if (!fs.existsSync(full)) return null;
-			return fs.readFileSync(full, "utf8");
+			return guard(function () {
+				var full = resolve(rel);
+				if (!fs.existsSync(full)) return null;
+				return fs.readFileSync(full, "utf8");
+			});
 		},
 		write: function (rel, data) {
-			ensureRoot();
-			var full = resolve(rel);
-			var str = String(data == null ? "" : data);
-			var incoming = Buffer.byteLength(str, "utf8");
-			var existing = fs.existsSync(full) ? fs.statSync(full).size : 0;
-			if (dirSize(root) - existing + incoming > quota)
-				throw new Error("storage: quota exceeded");
-			fs.mkdirSync(path.dirname(full), { recursive: true });
-			var tmp = full + ".tmp-" + process.pid + "-" + Math.floor(Math.random() * 1e9);
-			fs.writeFileSync(tmp, str, "utf8");
-			fs.renameSync(tmp, full);
-			return true;
+			return guard(function () {
+				ensureRoot();
+				var full = resolve(rel);
+				var str = String(data == null ? "" : data);
+				var incoming = Buffer.byteLength(str, "utf8");
+				var existing = fs.existsSync(full) ? fs.statSync(full).size : 0;
+				if (dirSize(root) - existing + incoming > quota)
+					throw new Error("storage: quota exceeded");
+				fs.mkdirSync(path.dirname(full), { recursive: true });
+				var tmp = full + ".tmp-" + process.pid + "-" + Math.floor(Math.random() * 1e9);
+				fs.writeFileSync(tmp, str, "utf8");
+				fs.renameSync(tmp, full);
+				return true;
+			});
 		},
 		exists: function (rel) {
-			return fs.existsSync(resolve(rel));
+			return guard(function () {
+				return fs.existsSync(resolve(rel));
+			});
 		},
 		remove: function (rel) {
-			var full = resolve(rel);
-			if (fs.existsSync(full)) fs.rmSync(full, { recursive: true, force: true });
-			return true;
+			return guard(function () {
+				var full = resolve(rel);
+				if (fs.existsSync(full)) fs.rmSync(full, { recursive: true, force: true });
+				return true;
+			});
 		},
 		list: function (rel) {
-			var dir = rel ? resolve(rel) : root;
-			if (!fs.existsSync(dir)) return [];
-			return fs.readdirSync(dir);
+			return guard(function () {
+				var dir = rel ? resolve(rel) : root;
+				if (!fs.existsSync(dir)) return [];
+				return fs.readdirSync(dir);
+			});
 		},
 		size: function () {
-			return dirSize(root);
+			return guard(function () {
+				return dirSize(root);
+			});
 		}
 	};
 }
@@ -93,6 +129,22 @@ function makeStorageHost(config) {
 
 /** The per-plugin capability grants the runtime passes at load. Each field is
  * present only when the effective permission set grants that capability. */
+/**
+ * A capability grant as one comparable string, so a runtime can tell whether a
+ * bundle it already holds still carries the grants it should. Keyed only on the
+ * bundle hash, a runtime treats a grant-only change — same code, lower quota,
+ * revoked hosts — as a no-op and keeps the original config alive. Host order is
+ * normalised because an allowlist is a set, not a sequence.
+ */
+export function capabilityKey(config?: CapabilityConfig): string {
+	if (!config) return ""
+	return JSON.stringify([
+		config.storageDir ?? null,
+		config.quotaBytes ?? 0,
+		[...(config.networkHosts ?? [])].sort()
+	])
+}
+
 export interface CapabilityConfig {
 	/** Absolute path to this plugin's private directory (extensions_data/<id>). */
 	storageDir?: string

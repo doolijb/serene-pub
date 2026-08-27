@@ -1,5 +1,6 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
+import { updateLegacyWhere } from "$lib/server/messages/store"
 import { and, eq } from "drizzle-orm"
 import { v4 as uuidv4 } from "uuid"
 import { getConnectionAdapter } from "./getConnectionAdapter"
@@ -176,17 +177,18 @@ export async function generateResponse({
 	}
 
 	// Initial write: enter the pipeline as "queued" — no queue item exists yet.
-	await db
-		.update(schema.sessionMessages)
-		.set({
+	await updateLegacyWhere(
+		db,
+		eq(schema.sessionMessages.id, generatingMessage.id),
+		{
 			isGenerating: true,
 			generationStage: "queued",
 			error: null,
 			content: preservedContent, // Preserve existing content for continue
 			queueItemId: null,
 			metadata: clearedMeta
-		})
-		.where(eq(schema.sessionMessages.id, generatingMessage.id))
+		}
+	)
 
 	const req: Sockets.SessionMessage.Call = {
 		sessionMessage: {
@@ -549,10 +551,11 @@ export async function generateResponse({
 	// run to be active/started while the row still shows queueItemId: null —
 	// closes the race where a very-fast Stop click finds nothing to cancel.
 	const queueItemId = uuidv4()
-	await db
-		.update(schema.sessionMessages)
-		.set({ queueItemId })
-		.where(eq(schema.sessionMessages.id, generatingMessage.id))
+	await updateLegacyWhere(
+		db,
+		eq(schema.sessionMessages.id, generatingMessage.id),
+		{ queueItemId }
+	)
 
 	const { done } = llmQueue.enqueue<GenerateExecuteResult>(
 		{
@@ -791,17 +794,15 @@ async function runGenerateAndPersist({
 					}
 				}
 
-				const [updatedSessionMsg] = await db
-					.update(schema.sessionMessages)
-					.set(updateData)
-					.where(
-						and(
-							eq(schema.sessionMessages.id, generatingMessage.id),
-							eq(schema.sessionMessages.isGenerating, true),
-							eq(schema.sessionMessages.queueItemId, queueItemId)
-						)
-					)
-					.returning()
+				const [updatedSessionMsg] = await updateLegacyWhere(
+					db,
+					and(
+						eq(schema.sessionMessages.id, generatingMessage.id),
+						eq(schema.sessionMessages.isGenerating, true),
+						eq(schema.sessionMessages.queueItemId, queueItemId)
+					),
+					updateData
+				)
 				if (!!updatedSessionMsg) {
 					// Removed verbose streaming log
 					const sessionMsgReq: Sockets.SessionMessage.Call = {
@@ -879,9 +880,14 @@ async function runGenerateAndPersist({
 		const streamingDebugMeta = streamingDebugMetaValue
 			? { debugMeta: streamingDebugMetaValue }
 			: {}
-		const ret = await db
-			.update(schema.sessionMessages)
-			.set({
+		const ret = await updateLegacyWhere(
+			db,
+			and(
+				eq(schema.sessionMessages.id, generatingMessage.id),
+				eq(schema.sessionMessages.isGenerating, true),
+				eq(schema.sessionMessages.queueItemId, queueItemId)
+			),
+			{
 				content,
 				isGenerating: false,
 				generationStage: null,
@@ -889,15 +895,8 @@ async function runGenerateAndPersist({
 				error: null,
 				...(finalMetadata !== null ? { metadata: finalMetadata } : {}),
 				...streamingDebugMeta
-			})
-			.where(
-				and(
-					eq(schema.sessionMessages.id, generatingMessage.id),
-					eq(schema.sessionMessages.isGenerating, true),
-					eq(schema.sessionMessages.queueItemId, queueItemId)
-				)
-			)
-			.returning()
+			}
+		)
 		if (!ret || ret.length === 0) {
 			if (signal.aborted) {
 				// Cancelled — the cancel handler already reset this row; this run's
@@ -992,17 +991,15 @@ async function runGenerateAndPersist({
 			...nonStreamDebugMeta
 		}
 
-		const ret = await db
-			.update(schema.sessionMessages)
-			.set(updateData)
-			.where(
-				and(
-					eq(schema.sessionMessages.id, generatingMessage.id),
-					eq(schema.sessionMessages.isGenerating, true),
-					eq(schema.sessionMessages.queueItemId, queueItemId)
-				)
-			)
-			.returning()
+		const ret = await updateLegacyWhere(
+			db,
+			and(
+				eq(schema.sessionMessages.id, generatingMessage.id),
+				eq(schema.sessionMessages.isGenerating, true),
+				eq(schema.sessionMessages.queueItemId, queueItemId)
+			),
+			updateData
+		)
 		if (!ret || ret.length === 0) {
 			if (signal.aborted) {
 				// Cancelled — the cancel handler already reset this row; this run's

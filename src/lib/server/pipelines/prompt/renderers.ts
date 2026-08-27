@@ -31,7 +31,15 @@ export interface RenderContext {
 	promptFormat?: string
 }
 
-export type TemplateRenderer = (ctx: RenderContext) => string
+/**
+ * May be async: a plugin's engine runs out-of-process through the runtime
+ * manager, so its render is a round trip. Core's stays synchronous; the seam
+ * (`renderTemplate`) is async either way so a caller cannot tell — which is
+ * the same "never learns which ran" posture the script fold takes.
+ */
+export type TemplateRenderer = (
+	ctx: RenderContext
+) => string | Promise<string>
 
 const renderers = new Map<string, { render: TemplateRenderer; owner: string }>()
 
@@ -70,6 +78,22 @@ export function registerRenderer(
 	renderers.set(engineId, { render, owner })
 }
 
+/**
+ * Release an engine a plugin registered — the disable/uninstall half of
+ * `registerRenderer`, called by the engine host's sync and nobody else.
+ *
+ * Owner-checked for the same reason registration is: a plugin that could
+ * release somebody else's engine could make every template on that engine
+ * stop rendering by asking nicely. Core's engine is not releasable at all.
+ * Releasing an id nobody holds is a no-op, not an error — the sync that calls
+ * this reconciles toward a desired state, and "already gone" is that state.
+ */
+export function releaseRenderer(engineId: string, owner: string): void {
+	if (engineId === CORE_TEMPLATE_ENGINE) return
+	const existing = renderers.get(engineId)
+	if (existing && existing.owner === owner) renderers.delete(engineId)
+}
+
 /** Test-only: drop plugin-registered engines, keeping core's. */
 export function _resetRenderers(): void {
 	for (const id of [...renderers.keys()])
@@ -88,10 +112,10 @@ export const knownEngines = () =>
  * and that reaches a model as a prompt full of markup nobody meant to send. A
  * refusal names the engine and who could supply it.
  */
-export function renderTemplate(
+export async function renderTemplate(
 	engineId: string | null | undefined,
 	ctx: RenderContext
-): string {
+): Promise<string> {
 	const id = engineId ?? CORE_TEMPLATE_ENGINE
 	const renderer = renderers.get(id)
 	if (!renderer)
@@ -102,5 +126,5 @@ export function renderTemplate(
 					.map((e) => `${e.id} (${e.owner})`)
 					.join(", ")}`
 		)
-	return renderer.render(ctx)
+	return await renderer.render(ctx)
 }

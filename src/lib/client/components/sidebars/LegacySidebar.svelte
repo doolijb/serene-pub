@@ -67,11 +67,14 @@
 	>
 		{#each TABS as t (t.key)}
 			{@const Icon = t.icon}
+			<!-- The site's underlined tab style (see PanelTab): no pill, a
+			     bottom border that colours in on selection. -->
 			<button
 				type="button"
-				class="btn btn-sm {tab === t.key
-					? 'preset-filled-primary-500'
-					: 'preset-tonal-surface'}"
+				class="flex items-center gap-1.5 rounded-none border-b-2 bg-transparent px-2 py-1.5 text-sm {tab ===
+				t.key
+					? 'border-primary-500 text-primary-500'
+					: 'text-surface-700-300 hover:text-primary-500 border-transparent'}"
 				aria-current={tab === t.key ? "page" : undefined}
 				onclick={() => {
 					// Dropped rather than carried across: see `childClose`.

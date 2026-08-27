@@ -14,6 +14,8 @@
 		showControls?: boolean
 		contentTitle?: string
 		classes?: string
+		/** The currently-open chat — highlighted and pinned by the sidebar. */
+		active?: boolean
 	}
 
 	let {
@@ -23,7 +25,8 @@
 		onDelete,
 		showControls = true,
 		contentTitle = "Go to session",
-		classes = ""
+		classes = "",
+		active = false
 	}: Props = $props()
 
 	const avatars = $derived([
@@ -48,7 +51,9 @@
 	itemType="Session"
 	onclick={handleClick}
 	{contentTitle}
-	{classes}
+	classes={active
+		? `preset-filled-primary-500/20 ring-primary-500 ring-2 ${classes}`
+		: classes}
 >
 	{#snippet content()}
 		<div class="relative w-fit">
@@ -86,8 +91,26 @@
 			</div>
 		</div>
 		<div class="flex min-w-0 flex-col">
-			<div class="truncate text-left font-semibold">
-				{session.name || "Untitled Session"}
+			<div class="flex items-center gap-2">
+				<span class="truncate text-left font-semibold">
+					{session.name || "Untitled Session"}
+				</span>
+				{#if session.modeName}
+					<!-- The session's type (its mode): "Chat", or a custom
+					     mode a plugin added. -->
+					<span
+						class="preset-tonal-secondary shrink-0 rounded-full px-2 py-0.5 text-[10px] leading-none font-medium"
+					>
+						{session.modeName}
+					</span>
+				{/if}
+				{#if active}
+					<span
+						class="text-primary-500 shrink-0 text-[10px] font-semibold tracking-wide uppercase"
+					>
+						Open
+					</span>
+				{/if}
 			</div>
 			<div class="text-muted-foreground line-clamp-2 text-left text-xs">
 				{#if session.sessionCharacters?.length}

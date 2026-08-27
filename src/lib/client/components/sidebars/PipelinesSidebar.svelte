@@ -34,7 +34,6 @@
 	import { getContext, onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
-	import PanelSectionTitle from "$lib/client/components/panels/PanelSectionTitle.svelte"
 	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import PipelineConfigOptions from "$lib/client/components/pipelines/PipelineConfigOptions.svelte"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
@@ -87,8 +86,7 @@
 </script>
 
 {#if !selectedSlug}
-	<PanelSectionTitle title="Pipelines" />
-
+	<!-- No section title: Layout's PanelHeader already shows "Pipelines". -->
 	{#if loading}
 		<p class="text-muted p-4 text-sm">Loading…</p>
 	{:else if !list.length}

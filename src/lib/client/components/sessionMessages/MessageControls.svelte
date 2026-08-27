@@ -22,6 +22,16 @@
 		onBranchMessage?: (e: Event, msg: SelectSessionMessage) => void
 		onContinueMessage?: (e: Event, msg: SelectSessionMessage) => void
 		onStartSummarization?: (msg: SelectSessionMessage) => void
+		// The contributed menu-trigger set (19 §4, `kind: 'menu'`): presence
+		// is rows, so a retired contributor takes its entry with it. Fired
+		// with this message as the subject.
+		menuTriggers?: Array<{
+			function: string
+			name: string
+			icon?: string
+			specSlug: string
+		}>
+		onFireTrigger?: (fn: string, msg: SelectSessionMessage) => void
 		debugMeta?: Record<string, any> | null
 		onShowDebugMeta?: (meta: Record<string, any>) => void
 		// The "more actions" popover is opened/closed by the parent list so
@@ -46,6 +56,8 @@
 		onBranchMessage,
 		onContinueMessage,
 		onStartSummarization,
+		menuTriggers = [],
+		onFireTrigger = undefined,
 		debugMeta = null,
 		onShowDebugMeta = undefined,
 		open,
@@ -54,6 +66,15 @@
 
 	function closeMenu() {
 		onOpenChange(false)
+	}
+
+	/** `book-open-text` → `BookOpenText`, resolved against the lucide set. */
+	function triggerIcon(name?: string) {
+		const pascal = (name ?? "")
+			.split("-")
+			.map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+			.join("")
+		return (Icons as any)[pascal] ?? Icons.Play
 	}
 </script>
 
@@ -229,6 +250,33 @@
 							<Icons.Trash2 size={16} aria-hidden="true" />
 							<span>Delete Message</span>
 						</button>
+						{#if onFireTrigger && menuTriggers.length && !msg.isGenerating}
+							<!-- The contributed entries (19 §4): after core's
+							     actions, separated so a plugin's verb never
+							     reads as one of core's. -->
+							<hr class="hr" />
+							{#each menuTriggers as t (t.specSlug + t.function)}
+								{@const TriggerIconComponent = triggerIcon(
+									t.icon
+								)}
+								<button
+									class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
+									title={t.name}
+									disabled={!!editSessionMessage ||
+										hasGeneratingMessage}
+									onclick={() => {
+										closeMenu()
+										onFireTrigger!(t.function, msg)
+									}}
+								>
+									<TriggerIconComponent
+										size={16}
+										aria-hidden="true"
+									/>
+									<span>{t.name}</span>
+								</button>
+							{/each}
+						{/if}
 					</article>
 					<Popover.Arrow>
 						<Popover.ArrowTip

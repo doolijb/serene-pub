@@ -1,10 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest"
+import fs from "fs"
+import os from "os"
+import path from "path"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { pluginHookInvocations } from "$lib/server/db/schema"
 import {
 	upsertPlugin,
 	setEnabled,
 	setBackendPref,
+	setAdminDenied,
+	setStorageQuotaOverride,
 	loadEnabledPlugins,
 	writeInvocation,
 	removePlugin
@@ -69,6 +74,99 @@ describe("plugin store", () => {
 		const row = (await loadEnabledPlugins(db)).find((r) => r.id === "acme/hello")
 		expect(row?.backend).toBe("ses")
 	})
+
+	it("an admin storage-quota override supersedes the manifest quota (and clears back)", async () => {
+		await upsertPlugin(db, {
+			pluginId: "acme/store",
+			name: "Store",
+			bundleSource: BUNDLE,
+			bundleHash: "hash-store",
+			backends: ["ses"],
+			manifest: { permissions: { storage: { quotaBytes: 4096 } } }
+		})
+		await setEnabled(db, "acme/store", true)
+		const find = async () =>
+			(await loadEnabledPlugins(db)).find((r) => r.id === "acme/store")
+
+		// manifest quota by default
+		expect((await find())?.storageQuotaBytes).toBe(4096)
+		// an override raises it beyond the 256 MB author ceiling (trusted admin act)
+		await setStorageQuotaOverride(db, "acme/store", 512 * 1024 * 1024)
+		expect((await find())?.storageQuotaBytes).toBe(512 * 1024 * 1024)
+		// clearing reverts to the manifest quota
+		await setStorageQuotaOverride(db, "acme/store", null)
+		expect((await find())?.storageQuotaBytes).toBe(4096)
+	})
+
+	it("denial beats the override — a denied storage permission cannot be revived", async () => {
+		await setStorageQuotaOverride(db, "acme/store", 100 * 1024 * 1024)
+		await setAdminDenied(db, "acme/store", ["storage"])
+		const row = (await loadEnabledPlugins(db)).find((r) => r.id === "acme/store")
+		expect(row?.storageQuotaBytes).toBeUndefined()
+	})
+
+	it("a storage-quota override reloads the live plugin and enforces the new ceiling", async () => {
+		// The end-to-end seam: an admin override → store projection → the manager's
+		// staleness swap → the storage host enforcing the NEW quota on the very next
+		// call. (RuntimeManager.test proves the copy is dropped on a quota change via
+		// a bundle-behaviour swap; this proves the reloaded copy honours the number.)
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sp-quota-live-"))
+		const mgr = new RuntimeManager({ dataDir: dir })
+		try {
+			const PUT = `module.exports = { hooks: { put: function (input, ctx) {
+				try { ctx.storage.write("f", "x".repeat(input.n)); return { stored: true }; }
+				catch (e) { return { stored: false, err: String((e && e.message) || e) }; }
+			} } }`
+			await upsertPlugin(db, {
+				pluginId: "acme/quota-live",
+				name: "Quota Live",
+				bundleSource: PUT,
+				bundleHash: "h-live",
+				backends: ["ses"],
+				manifest: { permissions: { storage: { quotaBytes: 2048 } } }
+			})
+			await setEnabled(db, "acme/quota-live", true)
+
+			// Re-project the enabled row and (re-)register — register decides
+			// staleness eagerly, so a changed quota drops the warm copy here.
+			const reproject = async () => {
+				const row = (await loadEnabledPlugins(db)).find(
+					(r) => r.id === "acme/quota-live"
+				)
+				if (!row) throw new Error("plugin was not projected")
+				mgr.register(row)
+			}
+			const put = async (n: number): Promise<boolean | null> => {
+				const r = await mgr.callHook(
+					"acme/quota-live",
+					"put",
+					{ n },
+					{ timeoutMs: 5000 }
+				)
+				return r.ok ? (r.value as { stored: boolean }).stored : null
+			}
+
+			await reproject()
+			mgr.markReady()
+			// 1.5 KB fits the 2 KB manifest quota; 5 KB does not
+			expect(await put(1500)).toBe(true)
+			expect(await put(5000)).toBe(false)
+
+			// raise the ceiling to 100 KB → the same 5 KB write now fits, which can
+			// only happen if the live copy reloaded with the new grant
+			await setStorageQuotaOverride(db, "acme/quota-live", 100 * 1024)
+			await reproject()
+			expect(await put(5000)).toBe(true)
+
+			// drop it back to 1 KB → the next write is refused again
+			await setStorageQuotaOverride(db, "acme/quota-live", 1024)
+			await reproject()
+			expect(await put(2000)).toBe(false)
+		} finally {
+			await mgr.dispose()
+			fs.rmSync(dir, { recursive: true, force: true })
+		}
+	}, 30_000)
 
 	it("manager invocations are written to the log table", async () => {
 		const writes: Promise<void>[] = []

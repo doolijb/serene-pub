@@ -8,6 +8,7 @@
 	import MessageComposer from "$lib/client/components/sessionMessages/MessageComposer.svelte"
 	import MessageControls from "$lib/client/components/sessionMessages/MessageControls.svelte"
 	import SessionContainer from "$lib/client/components/sessionMessages/SessionContainer.svelte"
+	import PluginFrame from "$lib/client/components/frames/PluginFrame.svelte"
 	import SessionMessage from "$lib/client/components/sessionMessages/SessionMessage.svelte"
 	import NextCharacterBlock from "$lib/client/components/sessionMessages/NextCharacterBlock.svelte"
 	import ProcessSceneModal from "$lib/client/components/modals/ProcessSceneModal.svelte"
@@ -147,6 +148,30 @@
 	let modeTriggers: Sockets.Sessions.Triggers.Response["triggers"] = $state(
 		[]
 	)
+
+	// The session's frame surfaces (20 §12): a mode-declared session-view
+	// replaces core's log wholesale (the total-conversion lane); panels are
+	// every enabled plugin's declared side frames. Presence is data — a
+	// disabled plugin takes its frames with it, and a missing view-plugin
+	// falls back to core's log with no error.
+	let sessionFrames = $state<Sockets.Sessions.View.Response | null>(null)
+	const sessionViewFrame = $derived(sessionFrames?.sessionView ?? null)
+	function handleSessionsView(res: Sockets.Sessions.View.Response) {
+		if (res.sessionId === sessionId) sessionFrames = res
+	}
+	/** Frame actions ride the same audited path as every contributed button. */
+	function handleFrameAction(
+		fn: string,
+		messageId?: number,
+		payload?: Record<string, unknown>
+	) {
+		socket.emit("sessions:triggerFunction", {
+			sessionId,
+			function: fn,
+			...(messageId != null ? { messageId } : {}),
+			...(payload && Object.keys(payload).length ? { payload } : {})
+		})
+	}
 
 	// The mode's shape (19 §1–§2): what capabilities exist for this session at
 	// all. Null — an unknown mode, or a registry that never synced — means
@@ -1407,6 +1432,37 @@
 		socket.emit("sessions:triggerFunction", { sessionId, function: fn })
 	}
 
+	/**
+	 * A `kind: 'menu'` trigger, fired from a message's options menu (19 §4).
+	 * The message is the subject: its id rides the run's input, so the winning
+	 * spec receives which message the person meant.
+	 */
+	function fireMenuTrigger(fn: string, msg: SelectSessionMessage) {
+		socket.emit("sessions:triggerFunction", {
+			sessionId,
+			function: fn,
+			messageId: msg.id
+		})
+	}
+
+	/**
+	 * A declared block action (20 §6): a choices button or a form submit
+	 * inside a parts-native message. Same audited path as a menu trigger,
+	 * with the entered values riding as the payload.
+	 */
+	function fireBlockAction(
+		fn: string,
+		msg: SelectSessionMessage,
+		payload?: Record<string, unknown>
+	) {
+		socket.emit("sessions:triggerFunction", {
+			sessionId,
+			function: fn,
+			messageId: msg.id,
+			...(payload && Object.keys(payload).length ? { payload } : {})
+		})
+	}
+
 	/** `book-open-text` → `BookOpenText`, resolved against the lucide set. */
 	function triggerIcon(name?: string) {
 		const pascal = (name ?? "")
@@ -1460,6 +1516,7 @@
 		socket.on("scenes:list:error", handleScenesListError)
 		socket.on("sessions:getNarratorName", handleSessionsGetNarratorName)
 		socket.on("sessions:triggers", handleSessionsTriggers)
+		socket.on("sessions:view", handleSessionsView)
 		socket.on("sessions:triggerFunction", handleSessionsTriggerFunction)
 		socket.on("sessions:modes", handleSessionsModesPage)
 
@@ -1470,6 +1527,7 @@
 		// The contributed trigger set (19 §4) — the buttons are rows — and the
 		// shape, which gates what the view renders at all (19 §2).
 		socket.emit("sessions:triggers", { sessionId })
+		socket.emit("sessions:view", { sessionId })
 		socket.emit("sessions:modes", {})
 
 		// Cleanup function
@@ -1517,6 +1575,7 @@
 				handleSessionsGetNarratorName
 			)
 			socket.off("sessions:triggers", handleSessionsTriggers)
+			socket.off("sessions:view", handleSessionsView)
 			socket.off(
 				"sessions:triggerFunction",
 				handleSessionsTriggerFunction
@@ -1644,6 +1703,24 @@
 	</div>
 {:else}
 	<div class="relative flex h-full flex-col">
+		{#if sessionViewFrame}
+			<!-- The mode's declared session view (20 §12): one opaque-origin
+			     frame owning the whole message section, layout-sized, fed
+			     over its channel. Core's chrome deliberately absent — this is
+			     the total-conversion lane. -->
+			<div class="min-h-0 flex-1">
+				<PluginFrame
+					src={sessionViewFrame.src}
+					title={sessionViewFrame.title ?? "Session view"}
+					surface="session-view"
+					session={session
+						? { id: session.id, name: (session as any).name ?? null }
+						: undefined}
+					messages={session?.sessionMessages ?? []}
+					onAction={handleFrameAction}
+				/>
+			</div>
+		{:else}
 		<SessionContainer
 			{session}
 			{pagination}
@@ -1706,7 +1783,12 @@
 					!isSummarizationMode
 						? enterSummarizationMode
 						: undefined}
-				>
+					menuTriggers={modeTriggers.filter(
+						(t) => t.kind === "menu"
+					)}
+					onFireTrigger={fireMenuTrigger}
+					onBlockAction={fireBlockAction}
+>
 					{#snippet GeneratingAnimationComponent()}
 						{@const character = props.getMessageCharacter(
 							props.msg
@@ -2024,6 +2106,7 @@
 				{/if}
 			{/snippet}
 		</SessionContainer>
+		{/if}
 	</div>
 
 	{#if showProcessSceneModal && processSceneId !== null && session?.lorebookId}

@@ -28,6 +28,42 @@ async function withHook(name: string, body: string) {
 }
 
 describe("QuickJsRuntime", () => {
+	it("re-stores when only the capability grant changes", async () => {
+		rt = new QuickJsRuntime()
+		const src = "module.exports = { hooks: {} }"
+		await rt.load("p1", src, "h1", {
+			quotaBytes: 8_000_000,
+			networkHosts: ["a.example.com"]
+		})
+		// Same bytes, narrowed grant. Keyed on the bundle hash alone this is a
+		// no-op and the plugin keeps executing under the wider grant — so the
+		// stored config, which has no public surface, is what has to be checked.
+		await rt.load("p1", src, "h1", { quotaBytes: 1024 })
+		const held = (
+			rt as unknown as {
+				loaded: Map<string, { config?: { quotaBytes?: number; networkHosts?: string[] } }>
+			}
+		).loaded.get("p1")
+		expect(held?.config?.quotaBytes).toBe(1024)
+		expect(held?.config?.networkHosts).toBeUndefined()
+	})
+
+	it("settles a pending store ack when the worker dies", async () => {
+		rt = new QuickJsRuntime()
+		// An ack needs an event-loop round trip, so disposing before awaiting
+		// the load guarantees the worker is terminated with the store still in
+		// flight. A stranded ack would leave `load` pending forever — hanging
+		// the call that asked for it, which the manager counts as in flight and
+		// gates that plugin's refresh on.
+		const load = rt.load("p1", "module.exports = { hooks: {} }", "h1")
+		await rt.dispose()
+		const outcome = await Promise.race([
+			load.then(() => "settled"),
+			new Promise((r) => setTimeout(() => r("stranded"), 3000))
+		])
+		expect(outcome).toBe("settled")
+	})
+
 	it("runs a hook and returns its value", async () => {
 		await withHook("greet", "(input) => ({ msg: 'hi ' + input.name })")
 		const r = await rt.invoke({ pluginId: "p1", hookName: "greet" }, opts({ name: "Ada" }))

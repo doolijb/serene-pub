@@ -288,7 +288,7 @@ export interface RenderedContext {
  * For anyone else's engine it is their renderer, and an unregistered engine
  * throws rather than being rendered as Handlebars.
  */
-export function render(input: RenderInput): RenderedContext {
+export async function render(input: RenderInput): Promise<RenderedContext> {
 	const included = input.allocation.blocks.filter((b) => b.included)
 	const bySource = (source: string) =>
 		included.filter((b) => b.source === source).map((b) => b.content)
@@ -312,6 +312,24 @@ export function render(input: RenderInput): RenderedContext {
 	const layout = (key: string, value: unknown) =>
 		renderVariable(input.variables, key, value)
 
+	// Laid out ahead of the object literal because layouts may render through
+	// a plugin's engine now — an await inside the literal would read fine and
+	// interleave the three renders with whatever else the executor is doing.
+	// Sequential on purpose: three renders per turn is not a fan-out worth the
+	// nondeterministic completion order in a trace.
+	const worldLoreLaidOut = await layout(
+		"worldLore",
+		objectByName(bySourceBlocks("worldLore"))
+	)
+	const historyLaidOut = await layout(
+		"history",
+		objectByDate(bySourceBlocks("history"))
+	)
+	const currentDateLaidOut = await layout(
+		"currentDate",
+		currentDateOf(bySourceBlocks("history"))
+	)
+
 	// Named *and shaped* the way the existing templates already expect. The
 	// names alone were not enough: the first parity run rendered
 	// `WORLDLORE:` empty against a legacy
@@ -330,20 +348,14 @@ export function render(input: RenderInput): RenderedContext {
 		// isolation; only a byte comparison showed it.
 		...(input.prompts ?? {}),
 		...(input.templateContext ?? {}),
-		worldLore: layout(
-			"worldLore",
-			objectByName(bySourceBlocks("worldLore"))
-		),
+		worldLore: worldLoreLaidOut,
 		// Not laid out, and not an oversight: nothing renders this. Lore bound
 		// to a character is folded into that character inside `characters`,
 		// under an `"extra lore"` key (docs/context-templates.md is explicit).
 		// A layout for it would be a setting that changes nothing.
 		characterLore: bySource("characterLore"),
-		history: layout("history", objectByDate(bySourceBlocks("history"))),
-		currentDate: layout(
-			"currentDate",
-			currentDateOf(bySourceBlocks("history"))
-		),
+		history: historyLaidOut,
+		currentDate: currentDateLaidOut,
 		sessionMessages: input.messages,
 		// Script injections, resolved from depth to a render index — the same
 		// arithmetic and the same moment as `postHistory.targetIndex` (§20):
@@ -363,7 +375,7 @@ export function render(input: RenderInput): RenderedContext {
 		...(input.postHistory ? { postHistory: input.postHistory } : {})
 	}
 
-	const rendered = renderTemplate(input.engine, {
+	const rendered = await renderTemplate(input.engine, {
 		template: input.template,
 		variables: context,
 		promptFormat: input.promptFormat

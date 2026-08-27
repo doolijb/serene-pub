@@ -156,10 +156,15 @@ describe("plugin admin socket API", () => {
 			c.emit
 		)
 		expect(perms.permissions.map((p) => p.key).sort()).toEqual([
-			"network",
+			"network:x.com",
 			"storage"
 		])
 		expect(perms.permissions.find((p) => p.key === "storage")?.granted).toBe(true)
+		// storage facts ride along for the override control
+		expect(perms.storage?.granted).toBe(true)
+		expect(perms.storage?.declaredBytes).toBe(2048)
+		expect(perms.storage?.effectiveBytes).toBe(2048)
+		expect(perms.storage?.overrideBytes).toBe(null)
 
 		// deny storage → not granted anymore
 		const after = await h.pluginsSetPermission.handler(
@@ -168,7 +173,10 @@ describe("plugin admin socket API", () => {
 			c.emit
 		)
 		expect(after.permissions.find((p) => p.key === "storage")?.granted).toBe(false)
-		expect(after.permissions.find((p) => p.key === "network")?.granted).toBe(true)
+		expect(after.permissions.find((p) => p.key === "network:x.com")?.granted).toBe(true)
+		// storage denied → facts reflect it (no enforced quota)
+		expect(after.storage?.granted).toBe(false)
+		expect(after.storage?.effectiveBytes).toBe(null)
 
 		// re-grant
 		const regranted = await h.pluginsSetPermission.handler(
@@ -177,6 +185,48 @@ describe("plugin admin socket API", () => {
 			c.emit
 		)
 		expect(regranted.permissions.find((p) => p.key === "storage")?.granted).toBe(true)
+	})
+
+	test("admin sets and clears a per-plugin storage-quota override", async () => {
+		const h = await import("./plugins")
+		const c = collector()
+		await h.pluginsInstall.handler(
+			adminSocket,
+			{
+				pluginId: "acme/quota",
+				name: "Quota",
+				bundleSource: BUNDLE,
+				backends: ["quickjs"],
+				manifest: { permissions: { storage: { quotaBytes: 2048 } } }
+			},
+			c.emit
+		)
+		// set an override above the author ceiling (a trusted admin act)
+		const set = await h.pluginsSetStorageQuota.handler(
+			adminSocket,
+			{ pluginId: "acme/quota", bytes: 512 * 1024 * 1024 },
+			c.emit
+		)
+		expect(set.storage?.overrideBytes).toBe(512 * 1024 * 1024)
+		expect(set.storage?.effectiveBytes).toBe(512 * 1024 * 1024)
+		expect(set.storage?.declaredBytes).toBe(2048)
+
+		// an out-of-band huge value is clamped to the admin ceiling
+		const clamped = await h.pluginsSetStorageQuota.handler(
+			adminSocket,
+			{ pluginId: "acme/quota", bytes: 999 * 1024 * 1024 * 1024 },
+			c.emit
+		)
+		expect(clamped.storage?.overrideBytes).toBe(2 * 1024 * 1024 * 1024)
+
+		// clearing reverts to the manifest quota
+		const cleared = await h.pluginsSetStorageQuota.handler(
+			adminSocket,
+			{ pluginId: "acme/quota", bytes: null },
+			c.emit
+		)
+		expect(cleared.storage?.overrideBytes).toBe(null)
+		expect(cleared.storage?.effectiveBytes).toBe(2048)
 	})
 
 	test("non-admins are refused", async () => {

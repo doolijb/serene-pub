@@ -633,7 +633,9 @@ const exports: AdapterExports = {
 	testConnection,
 	listModels,
 	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.KOBOLDCPP],
-	samplingKeyMap: koboldCppSamplingKeyMap
+	samplingKeyMap: koboldCppSamplingKeyMap,
+	// 20 §9: SP formats and grammar-constrains via jsonSchemaToGbnf.
+	capabilities: { toolUse: "emulated" }
 }
 
 export default exports

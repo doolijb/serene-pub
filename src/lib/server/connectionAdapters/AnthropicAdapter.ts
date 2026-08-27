@@ -369,7 +369,9 @@ const exports: AdapterExports = {
 	listModels,
 	testConnection,
 	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.ANTHROPIC],
-	samplingKeyMap: anthropicSamplingKeyMap
+	samplingKeyMap: anthropicSamplingKeyMap,
+	// 20 §9: the Messages API speaks tool_use blocks natively.
+	capabilities: { toolUse: "native" }
 }
 
 export default exports

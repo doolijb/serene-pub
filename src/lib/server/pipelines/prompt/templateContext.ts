@@ -141,9 +141,9 @@ const EMPTY_CHAT = { sessionCharacters: [], sessionPersonas: [] }
  * being removed rather than an omission. A pipeline node cannot reach back into
  * anything; everything it needs arrived on a port.
  */
-export function buildTemplateContext(
+export async function buildTemplateContext(
 	input: BuildContextInput
-): TemplateContext {
+): Promise<TemplateContext> {
 	const interpolation = new InterpolationEngine()
 	const texts = input.texts ?? {}
 
@@ -232,33 +232,39 @@ export function buildTemplateContext(
 		renderVariable(input.variables, key, value)
 
 	return {
-		instructions: layout("instructions", interpolate(texts.instructions)),
-		relationshipsPerspectives: layout(
+		instructions: await layout(
+			"instructions",
+			interpolate(texts.instructions)
+		),
+		relationshipsPerspectives: await layout(
 			"relationshipsPerspectives",
 			input.relationshipsPerspectives
 		),
-		relationshipsKnown: layout(
+		relationshipsKnown: await layout(
 			"relationshipsKnown",
 			input.relationshipsKnown
 		),
-		characters: layout("characters", charactersWithLore),
-		personas: layout("personas", personasWithLore),
-		characterNames: layout(
+		characters: await layout("characters", charactersWithLore),
+		personas: await layout("personas", personasWithLore),
+		characterNames: await layout(
 			"characterNames",
 			interpolationContext.characterNames
 		),
-		personaNames: layout("personaNames", interpolationContext.personaNames),
-		scenario: layout("scenario", interpolate(input.scenario)),
+		personaNames: await layout(
+			"personaNames",
+			interpolationContext.personaNames
+		),
+		scenario: await layout("scenario", interpolate(input.scenario)),
 		// Empty string rather than undefined. The legacy path leaves these
 		// `undefined` when the config has no text; both render as nothing and
 		// both are falsy under `{{#if}}`, so the prompt is unchanged — but a
 		// context that is inspected before it renders should not show a hole
 		// where "the config has no example dialogue" is the actual answer.
-		exampleDialogue: layout(
+		exampleDialogue: await layout(
 			"exampleDialogue",
 			interpolate(texts.exampleDialogue)
 		),
-		postHistoryInstructions: layout(
+		postHistoryInstructions: await layout(
 			"postHistoryInstructions",
 			postHistoryInstructions
 		),

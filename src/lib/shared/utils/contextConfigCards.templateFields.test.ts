@@ -78,7 +78,7 @@ describe("template field vocabulary", () => {
 			"$lib/server/pipelines/prompt/preview"
 		)
 		const { allVariables, sampleValues } = await import("@serene-pub/sdk")
-		const sample = sampleContext() as Record<string, unknown>
+		const sample = (await sampleContext()) as Record<string, unknown>
 
 		for (const decl of allVariables()) {
 			const values = sampleValues(decl)

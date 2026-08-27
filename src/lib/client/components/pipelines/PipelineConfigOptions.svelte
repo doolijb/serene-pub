@@ -69,6 +69,14 @@
 		 * everywhere instead.
 		 */
 		editsConfigId?: number
+		/**
+		 * Show only the reference/enum *selectors* — connection, sampling,
+		 * prompt, template, mode enums — and drop the advanced tuning block and
+		 * the inline prompt/template edit fields. For a surface that lets
+		 * someone pick which prompt or connection a chat uses without exposing
+		 * the wording or the weights: "just the selectors."
+		 */
+		selectorsOnly?: boolean
 	}
 
 	let {
@@ -79,8 +87,19 @@
 		stepKey,
 		granular = false,
 		showConfigPicker = true,
-		editsConfigId
+		editsConfigId,
+		selectorsOnly = false
 	}: Props = $props()
+
+	/** The controls that are pure selectors — what `selectorsOnly` keeps. */
+	const SELECTOR_CONTROLS = new Set([
+		"enum",
+		"prompts-ref",
+		"context-template-ref",
+		"variable-template-ref",
+		"connection-ref",
+		"sampling-ref"
+	])
 
 	const socket = useTypedSocket()
 
@@ -770,7 +789,19 @@
 	const stepGroups = $derived(
 		visibleSteps
 			.map((step) => {
-				const all = granular ? allOf(step) : step.options
+				const base = granular ? allOf(step) : step.options
+				// Selectors-only drops everything but the reference/enum
+				// pickers, and with them the quick/rest disclosure — a handful
+				// of dropdowns needs no door. The review gate is a selector by
+				// control but is not a "which model/prompt" choice, so it is
+				// excluded here too.
+				const all = selectorsOnly
+					? base.filter(
+							(o) =>
+								SELECTOR_CONTROLS.has(o.control) &&
+								o.facet !== "review"
+						)
+					: base
 				// The author's answer to "which of these does anyone change",
 				// not a guess from control kind or position. A step whose
 				// settings are *all* quick, or none, gets no disclosure — a
@@ -778,7 +809,10 @@
 				const quick = all.filter((o) => o.quick)
 				const rest = all.filter((o) => !o.quick)
 				const open = showAll[step.key] ?? false
-				const pool = quick.length && rest.length && !open ? quick : all
+				const pool =
+					!selectorsOnly && quick.length && rest.length && !open
+						? quick
+						: all
 				const facets = FACET_GROUPS.filter(
 					(g) =>
 						granular ||
@@ -796,8 +830,11 @@
 					label: step.label,
 					facets,
 					hidden:
-						quick.length && rest.length && !open ? rest.length : 0,
-					canCollapse: !!(quick.length && rest.length && open),
+						!selectorsOnly && quick.length && rest.length && !open
+							? rest.length
+							: 0,
+					canCollapse:
+						!selectorsOnly && !!(quick.length && rest.length && open),
 					count: facets.reduce((n, f) => n + f.rows.length, 0)
 				}
 			})
@@ -821,7 +858,9 @@
 	 * host them, because moving them out first would take away settings with
 	 * nowhere to go.
 	 */
-	const tuning = $derived(granular ? [] : rowsOf((s) => s.advanced))
+	const tuning = $derived(
+		granular || selectorsOnly ? [] : rowsOf((s) => s.advanced)
+	)
 
 	/**
 	 * Once the step headings are gone, two options can arrive under one heading
@@ -1067,7 +1106,7 @@
 						</option>
 					{/each}
 				</select>
-				{#if option.prompt}
+				{#if option.prompt && !selectorsOnly}
 					<button
 						type="button"
 						class="btn btn-sm preset-tonal-surface shrink-0"
@@ -1089,7 +1128,7 @@
 				{/if}
 			</div>
 
-			{#if option.prompt}
+			{#if option.prompt && !selectorsOnly}
 				{@const readOnly = option.prompt.readOnly}
 				<div class="card bg-surface-100-800 mt-1 space-y-3 p-3">
 					{#if readOnly}
@@ -1216,7 +1255,7 @@
 				>
 					<Icons.Plus size={14} />
 				</button>
-				{#if option.contextTemplate}
+				{#if option.contextTemplate && !selectorsOnly}
 					<button
 						type="button"
 						class="btn btn-sm preset-tonal-surface shrink-0"
@@ -1238,7 +1277,7 @@
 				{/if}
 			</div>
 
-			{#if option.contextTemplate}
+			{#if option.contextTemplate && !selectorsOnly}
 				{@const readOnly = option.contextTemplate.readOnly}
 				<div class="card bg-surface-100-800 mt-1 space-y-3 p-3">
 					{#if readOnly}
@@ -1349,7 +1388,7 @@
 						</option>
 					{/each}
 				</select>
-				{#if option.variableTemplate}
+				{#if option.variableTemplate && !selectorsOnly}
 					<button
 						type="button"
 						class="btn btn-sm preset-tonal-surface shrink-0"
@@ -1371,7 +1410,7 @@
 				{/if}
 			</div>
 
-			{#if option.variableTemplate}
+			{#if option.variableTemplate && !selectorsOnly}
 				{@const readOnly = option.variableTemplate.readOnly}
 				<div class="card bg-surface-100-800 mt-1 space-y-3 p-3">
 					{#if readOnly}
@@ -1706,6 +1745,19 @@
 		</div>
 	{/if}
 
+	{#if selectorsOnly}
+		<!-- One flat list of selectors — no per-step cards, no step or facet
+		     headings — so the host can wrap the whole pipeline in one card. -->
+		<div class="flex flex-col gap-2">
+			{#each stepGroups as group (group.key)}
+				{#each group.facets as facet (facet.label)}
+					{#each facet.rows as row (row.option.id)}
+						{@render optionRow(row.option, row.option.label)}
+					{/each}
+				{/each}
+			{/each}
+		</div>
+	{:else}
 	<!-- Grouped by what a setting *is*, not by which step computes it. A group
 	     with nothing visible to this viewer is skipped rather than shown
 	     empty — for a non-admin that usually leaves just the prompt. -->
@@ -1765,4 +1817,5 @@
 			</details>
 		{/if}
 	</div>
+	{/if}
 {/if}

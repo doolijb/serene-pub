@@ -22,8 +22,24 @@
 	let runtimeEnabled = $state(false)
 	let loading = $state(true)
 	let permsByPlugin = $state<Record<string, Sockets.Plugins.PermState[]>>({})
+	let storageByPlugin = $state<
+		Record<string, Sockets.Plugins.StorageQuota | undefined>
+	>({})
+	/** Per-plugin storage-override input draft (MB), bound to the quota field. */
+	let quotaDraft = $state<Record<string, number | null>>({})
 	let openPerms = $state<string | null>(null)
 	let pollTimer: ReturnType<typeof setInterval> | null = null
+
+	/* --- plugin settings (12 §6) -------------------------------------- */
+
+	/** The fetched view per plugin: schema, masked values, config state. */
+	let settingsByPlugin = $state<
+		Record<string, Sockets.Plugins.SettingsView | null>
+	>({})
+	let openSettings = $state<string | null>(null)
+	/** Unsaved edits, per plugin — only touched fields are ever sent. */
+	let settingsDraft = $state<Record<string, Record<string, unknown>>>({})
+	let settingsError = $state<Record<string, string | null>>({})
 
 	onMount(() => {
 		if (!userCtx.user?.isAdmin) {
@@ -45,12 +61,34 @@
 			"plugins:permissions",
 			(res: Sockets.Plugins.Permissions.Response) => {
 				permsByPlugin[res.pluginId] = res.permissions
+				storageByPlugin[res.pluginId] = res.storage
+			}
+		)
+		socket.on(
+			"plugins:getSettings",
+			(res: Sockets.Plugins.GetSettings.Response) => {
+				settingsByPlugin[res.pluginId] = res.settings
+				settingsError[res.pluginId] = null
+				// A fresh view supersedes the draft: it either reflects the
+				// save that just landed, or the panel was just opened.
+				delete settingsDraft[res.pluginId]
+			}
+		)
+		socket.on(
+			"plugins:setSettings:error",
+			(res: Sockets.Plugins.SetSettings.Response) => {
+				if (res.error) settingsError[res.pluginId] = res.error
 			}
 		)
 		socket.emit("plugins:list", {})
 		socket.emit("plugins:logs", { limit: 100 })
 		socket.emit("plugins:active", {})
-		pollTimer = setInterval(() => socket.emit("plugins:active", {}), 2000)
+		// The list rides the same poll as the monitor: `warm` is runtime truth
+		// that changes as hooks fire, and a stale badge reads as a stuck unload.
+		pollTimer = setInterval(() => {
+			socket.emit("plugins:active", {})
+			socket.emit("plugins:list", {})
+		}, 2000)
 	})
 
 	onDestroy(() => {
@@ -70,6 +108,10 @@
 		if (confirm(`Uninstall "${p.name}"? Its stored data is removed; its log history is kept.`))
 			socket.emit("plugins:uninstall", { pluginId: p.pluginId })
 	}
+	/** Drop the loaded copy; the plugin stays installed and reloads on the next call. */
+	function unload(p: Sockets.Plugins.PluginRow) {
+		socket.emit("plugins:unload", { pluginId: p.pluginId })
+	}
 	function kill(callId: number) {
 		socket.emit("plugins:kill", { callId })
 	}
@@ -77,8 +119,50 @@
 		openPerms = openPerms === pluginId ? null : pluginId
 		if (openPerms) socket.emit("plugins:permissions", { pluginId })
 	}
+	function toggleSettings(pluginId: string) {
+		openSettings = openSettings === pluginId ? null : pluginId
+		if (openSettings) socket.emit("plugins:getSettings", { pluginId })
+	}
+	function editSetting(pluginId: string, key: string, value: unknown) {
+		settingsDraft[pluginId] = {
+			...(settingsDraft[pluginId] ?? {}),
+			[key]: value
+		}
+	}
+	function saveSettings(pluginId: string) {
+		const draft = settingsDraft[pluginId]
+		if (!draft || !Object.keys(draft).length) return
+		socket.emit("plugins:setSettings", { pluginId, values: draft })
+	}
+	/** The value a control shows: the draft's if touched, else the stored one. */
+	function settingValue(pluginId: string, key: string): unknown {
+		const d = settingsDraft[pluginId]
+		if (d && key in d) return d[key]
+		return settingsByPlugin[pluginId]?.values?.[key]
+	}
+	const fieldLabel = (key: string, decl: any): string =>
+		typeof decl?.label === "string"
+			? decl.label
+			: (decl?.label?.en ?? key)
+	const fieldDescription = (decl: any): string | null =>
+		typeof decl?.description === "string"
+			? decl.description
+			: (decl?.description?.en ?? null)
 	function setPerm(pluginId: string, key: string, granted: boolean) {
 		socket.emit("plugins:setPermission", { pluginId, key, granted })
+	}
+	function fmtBytes(n: number | null | undefined): string {
+		if (n == null) return "—"
+		if (n >= 1024 * 1024) return `${Math.round((n / (1024 * 1024)) * 10) / 10} MB`
+		return `${Math.round(n / 1024)} KB`
+	}
+	/** Apply an override typed in MB, or clear it (mb = null). */
+	function setStorageQuota(pluginId: string, mb: number | null) {
+		const bytes =
+			mb == null || !Number.isFinite(mb) || mb <= 0
+				? null
+				: Math.round(mb * 1024 * 1024)
+		socket.emit("plugins:setStorageQuota", { pluginId, bytes })
 	}
 	function elapsed(startedAt: number): string {
 		return `${Math.max(0, Math.round((Date.now() - startedAt) / 100) / 10)}s`
@@ -123,7 +207,25 @@
 							<tr>
 								<td>
 									<div class="font-medium">{p.name}</div>
-									<div class="text-xs text-surface-500">{p.pluginId} · v{p.version}</div>
+									<div class="text-xs text-surface-500">
+										{p.pluginId} · v{p.version}
+										{#if runtimeEnabled && p.enabled}
+											{#if p.warm}
+												<span
+													class="text-success-600"
+													title="A copy is loaded in its sandbox right now"
+												>
+													· loaded
+												</span>
+											{:else}
+												<span
+													title="Nothing loaded — the first hook call loads it"
+												>
+													· idle
+												</span>
+											{/if}
+										{/if}
+									</div>
 								</td>
 								<td>
 									<select
@@ -162,6 +264,23 @@
 									/>
 								</td>
 								<td class="text-right whitespace-nowrap">
+									{#if runtimeEnabled && p.warm}
+										<button
+											class="btn btn-sm variant-soft"
+											title="Drop the loaded copy and free its sandbox — it reloads on the next hook call"
+											onclick={() => unload(p)}
+										>
+											Unload
+										</button>
+									{/if}
+									{#if p.hasSettings}
+										<button
+											class="btn btn-sm variant-soft"
+											onclick={() => toggleSettings(p.pluginId)}
+										>
+											Settings
+										</button>
+									{/if}
 									<button
 										class="btn btn-sm variant-soft"
 										onclick={() => togglePerms(p.pluginId)}
@@ -173,10 +292,216 @@
 									</button>
 								</td>
 							</tr>
+							{#if openSettings === p.pluginId}
+								{@const view = settingsByPlugin[p.pluginId]}
+								<tr>
+									<td colspan="5">
+										<div class="space-y-3 p-2">
+											<div class="text-sm font-medium">Settings</div>
+											{#if !view}
+												<p class="text-surface-500 text-xs">Loading…</p>
+											{:else}
+												{#if view.state.state === "needs-configuration"}
+													<p class="text-warning-600 text-xs">
+														Waiting on {view.state.missing.join(", ")} — the
+														extension is installed and listed, not broken.
+													</p>
+												{/if}
+												{#each Object.entries(view.schema) as [key, decl] (key)}
+													<label class="flex flex-col gap-1 text-sm">
+														<span class="font-medium">
+															{fieldLabel(key, decl)}
+															{#if decl.required}
+																<span class="text-warning-600">*</span>
+															{/if}
+														</span>
+														{#if fieldDescription(decl)}
+															<span class="text-surface-500 text-xs">
+																{fieldDescription(decl)}
+															</span>
+														{/if}
+														{#if decl.type === "secret"}
+															{@const set = (settingsByPlugin[p.pluginId]?.values?.[key] as any)?.$secretSet}
+															<div class="flex items-center gap-2">
+																<input
+																	type="password"
+																	class="input input-sm max-w-xs"
+																	placeholder={set
+																		? "•••••• (set — type to replace)"
+																		: "not set"}
+																	value={typeof settingValue(p.pluginId, key) === "string"
+																		? (settingValue(p.pluginId, key) as string)
+																		: ""}
+																	oninput={(e) =>
+																		editSetting(p.pluginId, key, e.currentTarget.value)}
+																/>
+																{#if set}
+																	<button
+																		class="btn btn-sm variant-soft"
+																		title="Clear the stored secret"
+																		onclick={() => editSetting(p.pluginId, key, null)}
+																	>
+																		Clear
+																	</button>
+																{/if}
+															</div>
+														{:else if decl.type === "boolean"}
+															<input
+																type="checkbox"
+																class="checkbox"
+																checked={!!settingValue(p.pluginId, key)}
+																onchange={(e) =>
+																	editSetting(p.pluginId, key, e.currentTarget.checked)}
+															/>
+														{:else if decl.type === "enum"}
+															<select
+																class="select select-sm max-w-xs"
+																value={settingValue(p.pluginId, key) ?? ""}
+																onchange={(e) =>
+																	editSetting(p.pluginId, key, e.currentTarget.value)}
+															>
+																{#each decl.of ?? [] as opt}
+																	<option value={opt}>{opt}</option>
+																{/each}
+															</select>
+														{:else if decl.type === "number" || decl.type === "integer"}
+															<input
+																type="number"
+																class="input input-sm max-w-xs"
+																step={decl.type === "integer" ? "1" : "any"}
+																min={decl.min}
+																max={decl.max}
+																value={settingValue(p.pluginId, key) ?? ""}
+																oninput={(e) => {
+																	const n = Number(e.currentTarget.value)
+																	editSetting(
+																		p.pluginId,
+																		key,
+																		Number.isFinite(n) ? n : undefined
+																	)
+																}}
+															/>
+														{:else if decl.type === "string[]"}
+															<input
+																type="text"
+																class="input input-sm"
+																placeholder="comma-separated"
+																value={Array.isArray(settingValue(p.pluginId, key))
+																	? (settingValue(p.pluginId, key) as string[]).join(", ")
+																	: ""}
+																oninput={(e) =>
+																	editSetting(
+																		p.pluginId,
+																		key,
+																		e.currentTarget.value
+																			.split(",")
+																			.map((s) => s.trim())
+																			.filter(Boolean)
+																	)}
+															/>
+														{:else if decl.type === "text"}
+															<textarea
+																class="textarea text-sm"
+																rows="3"
+																value={String(settingValue(p.pluginId, key) ?? "")}
+																oninput={(e) =>
+																	editSetting(p.pluginId, key, e.currentTarget.value)}
+															></textarea>
+														{:else}
+															<input
+																type="text"
+																class="input input-sm"
+																value={String(settingValue(p.pluginId, key) ?? "")}
+																oninput={(e) =>
+																	editSetting(p.pluginId, key, e.currentTarget.value)}
+															/>
+														{/if}
+													</label>
+												{/each}
+												{#if view.orphaned.length}
+													<p class="text-surface-500 text-xs">
+														Kept from an earlier version (no longer declared):
+														{view.orphaned.join(", ")}
+													</p>
+												{/if}
+												{#if settingsError[p.pluginId]}
+													<p class="text-error-600 text-xs">
+														{settingsError[p.pluginId]}
+													</p>
+												{/if}
+												<div>
+													<button
+														class="btn btn-sm variant-soft"
+														disabled={!Object.keys(settingsDraft[p.pluginId] ?? {}).length}
+														onclick={() => saveSettings(p.pluginId)}
+													>
+														Save settings
+													</button>
+												</div>
+											{/if}
+										</div>
+									</td>
+								</tr>
+							{/if}
 							{#if openPerms === p.pluginId}
 								<tr>
 									<td colspan="5">
 										<div class="space-y-1 p-2">
+											{#if storageByPlugin[p.pluginId]}
+												{@const sq = storageByPlugin[p.pluginId]!}
+												<div class="text-sm font-medium">Storage quota</div>
+												<div class="flex flex-wrap items-center gap-2 text-sm">
+													<span class="text-surface-500 text-xs">
+														Enforced: <strong>{fmtBytes(sq.effectiveBytes)}</strong>
+														· declared {fmtBytes(sq.declaredBytes)}
+														{#if sq.overrideBytes != null}
+															· override {fmtBytes(sq.overrideBytes)}
+														{/if}
+													</span>
+													<input
+														type="number"
+														min="0"
+														step="1"
+														placeholder="MB"
+														disabled={!sq.granted}
+														class="input input-sm w-24"
+														bind:value={quotaDraft[p.pluginId]}
+														onkeydown={(e) => {
+															if (e.key === "Enter")
+																setStorageQuota(
+																	p.pluginId,
+																	quotaDraft[p.pluginId] ?? null
+																)
+														}}
+													/>
+													<button
+														class="btn btn-sm variant-soft"
+														disabled={!sq.granted}
+														onclick={() =>
+															setStorageQuota(
+																p.pluginId,
+																quotaDraft[p.pluginId] ?? null
+															)}
+													>
+														Set override
+													</button>
+													<button
+														class="btn btn-sm variant-soft"
+														disabled={sq.overrideBytes == null}
+														onclick={() => setStorageQuota(p.pluginId, null)}
+													>
+														Clear
+													</button>
+													{#if !sq.granted}
+														<span class="text-warning-600 text-xs">
+															(storage denied — grant it to set a quota)
+														</span>
+													{/if}
+												</div>
+												<div class="text-surface-500 text-xs">
+													Override band {fmtBytes(sq.minBytes)}–{fmtBytes(sq.maxBytes)}.
+												</div>
+											{/if}
 											<div class="text-sm font-medium">Permissions (admin deny)</div>
 											{#if (permsByPlugin[p.pluginId] ?? []).length === 0}
 												<p class="text-surface-500 text-xs">

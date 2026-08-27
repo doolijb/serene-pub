@@ -288,7 +288,7 @@ export const contextConfigsPreview: Handler<
 		// every block twice-wrapped — a bug that exists only in the preview,
 		// which is the worst kind to go looking for.
 		const res: Sockets.ContextConfigs.Preview.Response =
-			previewContextTemplate({
+			await previewContextTemplate({
 				source: params.template,
 				layouts: bareLayouts()
 			})

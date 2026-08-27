@@ -245,6 +245,26 @@ export type SocketEventMap = {
 		params: Sockets.Plugins.SetPermission.Params
 		response: Sockets.Plugins.SetPermission.Response
 	}
+	"plugins:unload": {
+		params: Sockets.Plugins.Unload.Params
+		response: Sockets.Plugins.Unload.Response
+	}
+	"plugins:getSettings": {
+		params: Sockets.Plugins.GetSettings.Params
+		response: Sockets.Plugins.GetSettings.Response
+	}
+	"plugins:setSettings": {
+		params: Sockets.Plugins.SetSettings.Params
+		response: Sockets.Plugins.SetSettings.Response
+	}
+	"plugins:setSettings:error": {
+		params: Sockets.Plugins.SetSettings.Params
+		response: Sockets.Plugins.SetSettings.Response
+	}
+	"plugins:setStorageQuota": {
+		params: Sockets.Plugins.SetStorageQuota.Params
+		response: Sockets.Plugins.SetStorageQuota.Response
+	}
 	"connections:list": {
 		params: Sockets.Connections.List.Params
 		response: Sockets.Connections.List.Response
@@ -483,6 +503,14 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.Modes.Params
 		response: Sockets.Sessions.Modes.Response
 	}
+	"sessions:pipelines": {
+		params: Sockets.Sessions.Pipelines.Params
+		response: Sockets.Sessions.Pipelines.Response
+	}
+	"sessions:view": {
+		params: Sockets.Sessions.View.Params
+		response: Sockets.Sessions.View.Response
+	}
 	"sessions:triggers": {
 		params: Sockets.Sessions.Triggers.Params
 		response: Sockets.Sessions.Triggers.Response
@@ -526,6 +554,10 @@ export type SocketEventMap = {
 	"sessions:setSpeakerStrategy": {
 		params: Sockets.Sessions.Bindings.SetSpeakerStrategy.Params
 		response: Sockets.Sessions.Bindings.SetSpeakerStrategy.Response
+	}
+	"sessions:accountVisibility": {
+		params: Sockets.Sessions.AccountVisibility.Params
+		response: Sockets.Sessions.AccountVisibility.Response
 	}
 	"sessions:saveDraft": {
 		params: Sockets.Sessions.SaveDraft.Params

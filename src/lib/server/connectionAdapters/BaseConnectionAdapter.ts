@@ -396,10 +396,30 @@ export abstract class BaseConnectionAdapter {
 	 */
 }
 
+/**
+ * What an endpoint can do beyond "complete text" (20 §9) — resolved per
+ * adapter, refined per model where the backend can be asked.
+ *
+ *  - `native`: the API speaks tool calls itself.
+ *  - `emulated`: SP formats the advertisement into the prompt and
+ *    grammar-constrains/parses the reply (`jsonSchemaToGbnf` lineage) — tool
+ *    calling *provided by SP* to models that never heard of it.
+ *  - `probed`: per-model; ask the backend at health-check time and cache on
+ *    the connection. Until a probe answers, treat as `emulated` — the tier
+ *    that works everywhere.
+ *  - `none`: and it says so, at bind time, as `needs-capability` — never as a
+ *    garbage parse presented as a reply.
+ */
+export interface ConnectionCapabilities {
+	toolUse: "native" | "emulated" | "probed" | "none"
+}
+
 export interface AdapterExports {
 	Adapter: new (args: BaseConnectionAdapterParams) => BaseConnectionAdapter
 	listModels: ListModelsFn
 	testConnection: TestConnectionFn
 	connectionDefaults: Record<string, any>
 	samplingKeyMap: Record<string, string>
+	/** Absent means `{ toolUse: 'emulated' }` — the everywhere tier. */
+	capabilities?: ConnectionCapabilities
 }

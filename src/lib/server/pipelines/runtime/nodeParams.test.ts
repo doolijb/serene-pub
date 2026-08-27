@@ -116,3 +116,98 @@ describe("a lore node's parameters reach the scan", () => {
 		expect(r.value.skipped[0].reason).toMatch(/set to rag/)
 	})
 })
+
+/**
+ * The signal-weight matrix reaching the scorer (migration 0146).
+ *
+ * The descriptor declares it transposed — nine `perMember` fields, one control
+ * row per signal — while `withDefaults` demands one complete set per source,
+ * with no deep merge. `signalsFrom` in `bindings.ts` is the seam that
+ * transposes back and constructs the completeness, and this is the
+ * start-at-the-params, end-at-the-selection assertion that catches it dying
+ * the way `scanDepth` once did.
+ */
+describe("the ranker's signal weights reach the scorer", () => {
+	const rank = (params: Record<string, unknown>) =>
+		coreBindings()["core:task/rank-hybrid@1"]!(
+			{
+				candidates: [
+					// A scores 0.35 under the defaults (keyword, worldLore);
+					// B scores 0 — density does not apply to lore today.
+					{
+						id: "A",
+						source: "worldLore",
+						tokens: 100,
+						signals: { keyword: 1 }
+					},
+					{
+						id: "B",
+						source: "worldLore",
+						tokens: 100,
+						signals: { density: 1 }
+					}
+				],
+				// Room for exactly one, so the order is observable as survival.
+				budget: { remaining: 100 },
+				params
+			},
+			{} as any
+		) as Promise<any>
+
+	it("a raised weight changes who survives the budget", async () => {
+		const byDefault = await rank({})
+		expect(byDefault.value.candidates.map((c: any) => c.id)).toEqual(["A"])
+
+		const densityHeavy = await rank({
+			signalDensity: {
+				messages: 0.1,
+				worldLore: 2,
+				characterLore: 0,
+				history: 0,
+				relationships: 0
+			}
+		})
+		expect(densityHeavy.value.candidates.map((c: any) => c.id)).toEqual([
+			"B"
+		])
+	})
+
+	it("an untouched signal keeps its default rather than zeroing", async () => {
+		// Only `signalDensity` is named. If the transposition replaced the
+		// whole per-source set, `keyword` would silently become 0 and B (0.2)
+		// would beat A — the exact "I set one weight and everything else
+		// stopped working" failure the per-field fallback exists to prevent.
+		const partial = await rank({
+			signalDensity: {
+				messages: 0.1,
+				worldLore: 0.2,
+				characterLore: 0,
+				history: 0,
+				relationships: 0
+			}
+		})
+		expect(partial.value.candidates.map((c: any) => c.id)).toEqual(["A"])
+	})
+
+	it("the declared defaults are the shipped constants", async () => {
+		// The descriptor's transposed defaults, exactly as `contracts`
+		// declares them. Handing them over must select identically to handing
+		// nothing — which is what makes declaring the matrix
+		// behaviour-preserving for every untouched spec.
+		const declaredDefaults = {
+			signalKeyword: { messages: 0, worldLore: 0.35, characterLore: 0.35, history: 0.35, relationships: 0 },
+			signalNameMatch: { messages: 0, worldLore: 0.25, characterLore: 0.25, history: 0, relationships: 0 },
+			signalEntityCooccurrence: { messages: 0, worldLore: 0.2, characterLore: 0.2, history: 0, relationships: 0 },
+			signalTfidf: { messages: 0.1, worldLore: 0.1, characterLore: 0.1, history: 0.1, relationships: 0 },
+			signalLastRefRecency: { messages: 0, worldLore: 0.1, characterLore: 0.1, history: 0.1, relationships: 0 },
+			signalRecency: { messages: 0.3, worldLore: 0, characterLore: 0, history: 0.2, relationships: 0 },
+			signalSceneAffinity: { messages: 0.15, worldLore: 0, characterLore: 0, history: 0.1, relationships: 0 },
+			signalDensity: { messages: 0.1, worldLore: 0, characterLore: 0, history: 0, relationships: 0 },
+			signalPriorityBonus: { messages: 0, worldLore: 0.15, characterLore: 0.15, history: 0, relationships: 0 }
+		}
+		const declared = await rank(declaredDefaults)
+		const untouched = await rank({})
+		expect(declared.value.decisions.map((d: any) => [d.candidate.id, d.score]))
+			.toEqual(untouched.value.decisions.map((d: any) => [d.candidate.id, d.score]))
+	})
+})

@@ -308,8 +308,8 @@ describe("shipped variable layouts reproduce the code they replaced", () => {
 
 		describe(`${t.key} (${t.name})`, () => {
 			for (const [label, value] of cases) {
-				it(`matches the in-code default for ${label}`, () => {
-					const viaTemplate = renderVariable(
+				it(`matches the in-code default for ${label}`, async () => {
+					const viaTemplate = await renderVariable(
 						layoutFor(t.source, t.key),
 						t.key,
 						value
@@ -335,39 +335,39 @@ describe("the floor", () => {
 		JSON.stringify(value, null, 2) +
 		"\n```"
 
-	it("is used when no layout resolved at all", () => {
-		expect(renderVariable(undefined, "characters", value)).toBe(AS_0_5)
+	it("is used when no layout resolved at all", async () => {
+		expect(await renderVariable(undefined, "characters", value)).toBe(AS_0_5)
 	})
 
-	it("is used when the slot resolved but this key did not", () => {
+	it("is used when the slot resolved but this key did not", async () => {
 		// A dangling reference drops to `undefined` in `world.ts` rather than
 		// erroring, so this is the shape a deleted row actually produces.
 		expect(
-			renderVariable({ personas: undefined }, "characters", value)
+			await renderVariable({ personas: undefined }, "characters", value)
 		).toBe(AS_0_5)
 	})
 
-	it("is used when the selected row has an empty source", () => {
+	it("is used when the selected row has an empty source", async () => {
 		expect(
-			renderVariable({ characters: { source: "" } }, "characters", value)
+			await renderVariable({ characters: { source: "" } }, "characters", value)
 		).toBe(AS_0_5)
 	})
 
-	it("refuses rather than degrading when a selected layout throws", () => {
+	it("refuses rather than degrading when a selected layout throws", async () => {
 		// The other direction from the three above, and deliberately so: a
 		// *selected* layout that cannot render must not quietly produce default
 		// output, or the panel shows one thing and the prompt contains another.
-		expect(() =>
+		await expect(
 			renderVariable(
 				{ characters: { source: "{{#each characters}}" } },
 				"characters",
 				value
 			)
-		).toThrow(/layout selected for 'characters'/)
+		).rejects.toThrow(/layout selected for 'characters'/)
 	})
 
-	it("names an unknown engine rather than rendering it as Handlebars", () => {
-		expect(() =>
+	it("names an unknown engine rather than rendering it as Handlebars", async () => {
+		await expect(
 			renderVariable(
 				{
 					characters: {
@@ -378,7 +378,7 @@ describe("the floor", () => {
 				"characters",
 				value
 			)
-		).toThrow(/someone-elses:template\/thing@1/)
+		).rejects.toThrow(/someone-elses:template\/thing@1/)
 	})
 })
 
@@ -424,7 +424,7 @@ describe("the shipped set", () => {
 			).toBeTruthy()
 	})
 
-	it("marks exactly one row per variable as the default", () => {
+	it("marks exactly one row per variable as the default", async () => {
 		// `defaultVariableTemplateFor` resolves by this flag's seed key, and
 		// `renderVariable`'s floor reads the flagged row's expression. Two
 		// flagged rows would make both of those answer arbitrarily.
@@ -435,7 +435,7 @@ describe("the shipped set", () => {
 			expect(byKey.get(key), `${key} has no single default`).toBe(1)
 	})
 
-	it("names each variable's layouts uniquely", () => {
+	it("names each variable's layouts uniquely", async () => {
 		// `(variable_id, name)` is a unique index, so a duplicate here is a seed
 		// that throws at boot on a fresh install.
 		const seen = new Set<string>()
@@ -461,7 +461,7 @@ describe("a heading never appears above nothing", () => {
 		(t) => t.isDefault && wrapFor(t.key)
 	)
 
-	it("covers every variable core wrapped", () => {
+	it("covers every variable core wrapped", async () => {
 		// So this block cannot silently stop testing anything if the shipped
 		// set is rearranged.
 		expect(wrapped.map((t) => t.key).sort()).toEqual([
@@ -508,23 +508,23 @@ describe("a heading never appears above nothing", () => {
 	for (const t of wrapped)
 		describe(t.key, () => {
 			for (const [label, value] of absentFor(t.key))
-				it(`renders nothing for ${label}`, () => {
+				it(`renders nothing for ${label}`, async () => {
 					expect(
-						renderVariable(layoutFor(t.source, t.key), t.key, value)
+						await renderVariable(layoutFor(t.source, t.key), t.key, value)
 					).toBe("")
 				})
 
-			it("renders nothing when no layout resolved either", () => {
-				expect(renderVariable(undefined, t.key, undefined)).toBe("")
+			it("renders nothing when no layout resolved either", async () => {
+				expect(await renderVariable(undefined, t.key, undefined)).toBe("")
 			})
 
-			it("renders nothing through a layout of someone's own", () => {
+			it("renders nothing through a layout of someone's own", async () => {
 				// The rule is the render path's, not the shipped source's. A
 				// user who rewrites a layout as prose cannot reintroduce a
 				// heading above an absent value by forgetting a guard they
 				// were never asked to write.
 				expect(
-					renderVariable(
+					await renderVariable(
 						layoutFor(`Their own words: {{{${t.key}}}}`, t.key),
 						t.key,
 						undefined
@@ -533,13 +533,13 @@ describe("a heading never appears above nothing", () => {
 			})
 		})
 
-	it("still renders an empty cast, which is not the same as no cast", () => {
+	it("still renders an empty cast, which is not the same as no cast", async () => {
 		// `JSON.stringify([])` is `"[]"`, a truthy string, so 0.5 rendered the
 		// heading and an empty array for a session with no assistant characters.
 		// Handlebars' own `{{#if}}` calls an empty array empty — which is
 		// exactly why the absence rule is in code and not in the source.
 		expect(
-			renderVariable(
+			await renderVariable(
 				layoutFor(shippedByKey.get("characters")!.source, "characters"),
 				"characters",
 				[]
@@ -555,12 +555,12 @@ describe("a heading never appears above nothing", () => {
 describe("the bare rows", () => {
 	const value = [{ name: "Ash", description: "A rider." }]
 
-	it("write the content and nothing else", () => {
+	it("write the content and nothing else", async () => {
 		const bare = SHIPPED_VARIABLE_TEMPLATES.find(
 			(t) => t.key === "characters" && !t.isDefault
 		)!
 		expect(
-			renderVariable(
+			await renderVariable(
 				layoutFor(bare.source, "characters"),
 				"characters",
 				value
@@ -568,7 +568,7 @@ describe("the bare rows", () => {
 		).toBe(JSON.stringify(value, null, 2))
 	})
 
-	it("are what the shipped row wraps", () => {
+	it("are what the shipped row wraps", async () => {
 		// One function produces both, so this cannot drift — asserted anyway,
 		// because the day someone hand-writes one of the two sources is the day
 		// it starts being able to.
@@ -602,7 +602,7 @@ describe("an explicit layout renders the declared shape and nothing else", () =>
 		(t) => t.explicit && !t.isDefault
 	)
 
-	it("covers the layouts that were made explicit", () => {
+	it("covers the layouts that were made explicit", async () => {
 		// So this block cannot quietly stop testing anything.
 		expect(explicit.map((t) => t.key).sort()).toEqual([
 			"characters",
@@ -615,11 +615,11 @@ describe("an explicit layout renders the declared shape and nothing else", () =>
 		])
 	})
 
-	it("drops a key the variable does not declare", () => {
+	it("drops a key the variable does not declare", async () => {
 		const bare = explicit.find((t) => t.key === "characters")!
 		const value = [{ name: "Ash", favouriteColour: "ash grey" }]
 		expect(
-			renderVariable(
+			await renderVariable(
 				layoutFor(bare.source, "characters"),
 				"characters",
 				value
@@ -629,12 +629,12 @@ describe("an explicit layout renders the declared shape and nothing else", () =>
 		expect(bare.codeDefault(value)).toContain("favouriteColour")
 	})
 
-	it("renders the empty form for a value that is not the declared shape", () => {
+	it("renders the empty form for a value that is not the declared shape", async () => {
 		const bare = explicit.find((t) => t.key === "characters")!
 		// `null` is not a list. The floor stringifies it as `null`; the layout
 		// has no shape to render and produces the empty list.
 		expect(
-			renderVariable(
+			await renderVariable(
 				layoutFor(bare.source, "characters"),
 				"characters",
 				null
@@ -643,12 +643,12 @@ describe("an explicit layout renders the declared shape and nothing else", () =>
 		expect(bare.codeDefault(null)).toBe("null")
 	})
 
-	it("the passthrough is still available, and still passes anything through", () => {
+	it("the passthrough is still available, and still passes anything through", async () => {
 		// The escape hatch the two cases above point at. Not a shipped row for
 		// these keys any more — it is a layout somebody can select or type.
 		const value = [{ name: "Ash", favouriteColour: "ash grey" }]
 		expect(
-			renderVariable(
+			await renderVariable(
 				layoutFor("{{{json characters 2}}}", "characters"),
 				"characters",
 				value
@@ -665,27 +665,27 @@ describe("jsonValue reproduces a nested position", () => {
 	const render = (source: string, value: unknown) =>
 		renderVariable(layoutFor(source, "characters"), "characters", value)
 
-	it("offsets every line but the first, which is what nesting means", () => {
+	it("offsets every line but the first, which is what nesting means", async () => {
 		// `JSON.stringify({ a: { b: 1 } }, null, 2)` renders the inner object as
 		// its own stringify with two spaces added to lines 2..n. The offset
 		// argument is that addition, so a record nested two levels deep uses 4.
 		const inner = { "The Ashguard brand": "Carries a brand." }
 		const value = [{ name: "Ash", "extra lore": inner }]
-		expect(render(shippedByKey.get("characters")!.source, value)).toBe(
+		expect(await render(shippedByKey.get("characters")!.source, value)).toBe(
 			"Assistant Characters (AI-controlled):\n```json\n" +
 				JSON.stringify(value, null, 2) +
 				"\n```"
 		)
 	})
 
-	it("renders nothing for undefined rather than the text 'undefined'", () => {
-		expect(render("{{{jsonValue characters}}}", undefined)).toBe("")
+	it("renders nothing for undefined rather than the text 'undefined'", async () => {
+		expect(await render("{{{jsonValue characters}}}", undefined)).toBe("")
 	})
 
-	it("escapes as JSON, not as HTML", () => {
+	it("escapes as JSON, not as HTML", async () => {
 		// The render path has escaping on. A helper returning a plain string
 		// would turn every quote in the prompt into `&quot;`.
-		expect(render("{{jsonValue characters}}", ['a "b" & <c>'])).toBe(
+		expect(await render("{{jsonValue characters}}", ['a "b" & <c>'])).toBe(
 			JSON.stringify(['a "b" & <c>'], null, 2)
 		)
 	})
@@ -708,7 +708,7 @@ describe("the shipped layouts agree with the floor on each variable's own sample
 			if (!decl) continue
 			const value = sampleValues(decl)[t.key]
 			expect(
-				renderVariable(layoutFor(t.source, t.key), t.key, value),
+				await renderVariable(layoutFor(t.source, t.key), t.key, value),
 				`${t.key} (${t.name})`
 			).toBe(t.codeDefault(value))
 		}

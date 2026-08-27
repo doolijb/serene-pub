@@ -1231,7 +1231,18 @@ describe("options arrive in the order they were declared", () => {
 			"Scripts",
 			"Context split",
 			"Most entries per source",
-			"Always keep at least"
+			"Always keep at least",
+			// The signal-weight matrix (migration 0146), in the transposed
+			// declaration's own order — nine per-source rows, advanced only.
+			"Keyword match",
+			"Name mentioned",
+			"Shared entities",
+			"Distinctive words",
+			"Recently referenced",
+			"Recency",
+			"Same scene",
+			"Information density",
+			"Author priority"
 		])
 	})
 

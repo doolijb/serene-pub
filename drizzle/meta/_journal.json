@@ -1016,6 +1016,48 @@
 			"when": 1787276896207,
 			"tag": "0144_plugin_admin_denied",
 			"breakpoints": true
+		},
+		{
+			"idx": 145,
+			"version": "7",
+			"when": 1787276896208,
+			"tag": "0145_plugin_storage_quota_override",
+			"breakpoints": true
+		},
+		{
+			"idx": 146,
+			"version": "7",
+			"when": 1787276896209,
+			"tag": "0146_ranking_and_cast_reprojection",
+			"breakpoints": true
+		},
+		{
+			"idx": 147,
+			"version": "7",
+			"when": 1787276896210,
+			"tag": "0147_plugin_settings",
+			"breakpoints": true
+		},
+		{
+			"idx": 148,
+			"version": "7",
+			"when": 1787276896211,
+			"tag": "0148_messages_model_and_modalities",
+			"breakpoints": true
+		},
+		{
+			"idx": 149,
+			"version": "7",
+			"when": 1787276896212,
+			"tag": "0149_session_history_channel_reprojection",
+			"breakpoints": true
+		},
+		{
+			"idx": 150,
+			"version": "7",
+			"when": 1787276896213,
+			"tag": "0150_plugin_files",
+			"breakpoints": true
 		}
 	]
 }

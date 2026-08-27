@@ -351,6 +351,15 @@ export const connections = pgTable("connections", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	name: text("name").notNull(), // Connection name (e.g., ollama, llama, sessiongpt)
 	type: text("type").notNull(), // Connection type/category (e.g., ollama, sessiongpt, etc)
+	/**
+	 * What kind of model sits behind this connection (20 §14):
+	 * `text-gen | embeddings | image-gen | ner | tts | …` — an open vocabulary
+	 * whose contract is the SDK's connection *shapes* (`S.textGen`,
+	 * `S.embeddings`). A provider node's declared shape filters the picker and
+	 * the binding refuses a mismatch (F17), so a text node can only ever bind
+	 * a text connection.
+	 */
+	modality: text("modality").notNull().default("text-gen"),
 	baseUrl: text("base_url"), // Base URL or endpoint for API
 	model: text("model"), // Model name or identifier
 	// Ollama-specific options
@@ -1875,6 +1884,13 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
 }))
 
 // Session messages
+/**
+ * ⚠ LEGACY (20 §1, ruled 2026-08-26). The message model is now `messages` +
+ * `message_parts` below; this table is maintained in lockstep by the message
+ * store (`server/messages/store.ts`) so readers not yet migrated keep working,
+ * and goes read-only once they move. Do not add new writers — every write goes
+ * through the store, which mirrors here.
+ */
 export const sessionMessages = pgTable(
 	"session_messages",
 	{
@@ -1962,6 +1978,151 @@ export const sessionMessagesRelations = relations(
 		})
 	})
 )
+
+/**
+ * The message model (20 §1, ruled 2026-08-26): a message is a *folder* —
+ * identity, position, lane — and its content lives in `message_parts`,
+ * addressed by (step, revision, ordinal).
+ *
+ *  - **step accumulates**: phases of a stepped activity render side by side.
+ *  - **revision excludes**: alternatives of one step; exactly one shows.
+ *  - Today's swipes are revisions of step 0 — the degenerate coordinates,
+ *    not a different mode.
+ *
+ * **The freeze rule:** only the latest step is swipeable; generating step N+1
+ * freezes step N's selection at the revision that produced it. Step-back is
+ * destructive to later steps, confirmed.
+ *
+ * **The map invariant:** `active_revisions` ⇄ parts stay in sync because the
+ * message store is the single writer; a key with no matching parts is a bug
+ * the store's tests pin, never a state to tolerate.
+ */
+export const messages = pgTable(
+	"messages",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		sessionId: integer("session_id")
+			.notNull()
+			.references(() => sessions.id, { onDelete: "cascade" }),
+		/** Filter lane within a session; the mode declares the set (20 §7). */
+		channel: text("channel").notNull().default("main"),
+		/** Namespaced activity kind — `core:chat`, `core:narration`, a plugin's. */
+		kind: text("kind").notNull().default("core:chat"),
+		/**
+		 * Row-shape version. Nullable with NO database default, written "1.0"
+		 * by every creating code path (migration included) — the null/value
+		 * split is the upgrade hook for a future shape change.
+		 */
+		version: text("version"),
+		userId: integer("user_id").references(() => users.id, {
+			onDelete: "set null"
+		}),
+		characterId: integer("character_id").references(() => characters.id, {
+			onDelete: "set null"
+		}),
+		personaId: integer("persona_id").references(() => personas.id, {
+			onDelete: "set null"
+		}),
+		/** Resolved-at-write display name — retires `isNarratorResponse`. */
+		speakerLabel: text("speaker_label"),
+		/** Prompt-side role: user | assistant | system. */
+		role: text("role").notNull(),
+		/** Lifecycle of the *latest* step; earlier steps are frozen-settled. */
+		status: text("status").notNull().default("settled"),
+		error: json("error").$type<{ message: string; code?: string } | null>(),
+		/** Which revision shows, per step — `{"0": 1}`. See the freeze rule. */
+		activeRevisions: json("active_revisions")
+			.notNull()
+			.default({ "0": 0 })
+			.$type<Record<string, number>>(),
+		/** Namespaced per-plugin data — the surface/`match` key (20 §1). */
+		extras: json("extras")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
+		isHidden: boolean("is_hidden").notNull().default(false),
+		isEdited: boolean("is_edited").notNull().default(false),
+		debugMeta: json("debug_meta").$type<Record<string, any>>(),
+		queueItemId: text("queue_item_id"),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [
+		index("messages_session_id_idx").on(t.sessionId),
+		index("messages_session_channel_idx").on(t.sessionId, t.channel)
+	]
+)
+
+/**
+ * Everything renderable. Self-ordering: (step, revision, ordinal) lives on the
+ * row, so render order is reconstructible from parts alone. `content` is the
+ * text for textual types; `data` carries structure (block trees, field
+ * schemas, asset refs). An unknown `type` (plugin absent) renders as a
+ * collapsed labeled section — uninstalling strands nothing (20 §2).
+ */
+export const messageParts = pgTable(
+	"message_parts",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		messageId: integer("message_id")
+			.notNull()
+			.references(() => messages.id, { onDelete: "cascade" }),
+		step: integer("step").notNull().default(0),
+		revision: integer("revision").notNull().default(0),
+		ordinal: integer("ordinal").notNull().default(0),
+		/** `core:markdown | core:thinking | core:section | core:image | …` */
+		type: text("type").notNull(),
+		content: text("content"),
+		data: json("data").$type<Record<string, unknown> | null>()
+	},
+	(t) => [
+		uniqueIndex("message_parts_addr_idx").on(
+			t.messageId,
+			t.step,
+			t.revision,
+			t.ordinal
+		)
+	]
+)
+
+/**
+ * Binary attachments referenced by `core:image`/`core:file` parts and the
+ * block vocabulary's image block (20 §1) — one reference vocabulary, not two.
+ * Bytes live under the data dir, jailed like plugin storage; serving is a
+ * session-access-checked route.
+ */
+export const sessionAssets = pgTable("session_assets", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	sessionId: integer("session_id")
+		.notNull()
+		.references(() => sessions.id, { onDelete: "cascade" }),
+	hash: text("hash").notNull(),
+	mime: text("mime").notNull(),
+	bytes: integer("bytes").notNull(),
+	path: text("path").notNull(),
+	createdBy: integer("created_by").references(() => users.id, {
+		onDelete: "set null"
+	}),
+	createdAt: timestamp("created_at").notNull().defaultNow()
+})
+
+export const messagesRelations = relations(messages, ({ one, many }) => ({
+	session: one(sessions, {
+		fields: [messages.sessionId],
+		references: [sessions.id]
+	}),
+	parts: many(messageParts)
+}))
+
+export const messagePartsRelations = relations(messageParts, ({ one }) => ({
+	message: one(messages, {
+		fields: [messageParts.messageId],
+		references: [messages.id]
+	})
+}))
 
 // Many-to-many: sessions <-> personas
 export const sessionPersonas = pgTable(
@@ -2119,6 +2280,16 @@ export const systemSettings = pgTable("system_settings", {
 			onDelete: "set null"
 		}
 	),
+	/**
+	 * The one active embedding connection, site-wide (20 §14) — embeddings are
+	 * an instance property, not a per-session choice, because every stored
+	 * vector must come from one model to be comparable. Changing it triggers
+	 * the 13 §8 re-embed (background, resumable), never a refusal or a silent
+	 * orphaning.
+	 */
+	activeEmbeddingConnectionId: integer(
+		"active_embedding_connection_id"
+	).references(() => connections.id, { onDelete: "set null" }),
 	lockConnection: boolean("lock_connection").notNull().default(false),
 	defaultSamplingConfigId: integer("default_sampling_id").references(
 		() => samplingConfigs.id,
@@ -3955,6 +4126,29 @@ export const plugins = pgTable(
 			.notNull()
 			.default([])
 			.$type<string[]>(),
+		/**
+		 * An admin's per-plugin storage-quota override, in bytes (null = none). A
+		 * deliberate, trusted admin act that supersedes the manifest-declared quota,
+		 * so it may exceed the 256 MB author ceiling — clamped at grant-derivation to
+		 * a sane admin band [1 KB … 2 GB]. Denying the `storage` permission still wins:
+		 * an override can raise/lower a *granted* quota, never revive a denied one.
+		 */
+		storageQuotaOverride: bigint("storage_quota_override", { mode: "number" }),
+		/**
+		 * Stored values for the manifest-declared settings schema (12 §6,
+		 * 13 §6). Values only — the schema lives in the manifest. A `secret`
+		 * field's value is stored as `{$secret: true, value}` with `value`
+		 * AES-256-GCM ciphertext under the app secret (settingsHost.ts):
+		 * typed, so core mechanically masks it to the client, excludes it
+		 * from export, and decrypts it only into the declaring plugin's own
+		 * hook invocations. Fields the current schema no longer declares are
+		 * kept, never deleted — the SDK's `reconcile` reports them as
+		 * orphaned diagnostics (an update must stay reversible).
+		 */
+		settings: json("settings")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
 		installedAt: timestamp("installed_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
@@ -3976,6 +4170,31 @@ export const plugins = pgTable(
  * re-storing hook timing/identity — a soft link on purpose, so pruning a run
  * never deletes the hook history.
  */
+/**
+ * A plugin's client-side files (20 §12) — the documents and assets its frame
+ * surfaces load. Stored at install beside the server bundle, served by the
+ * `/plugin-ui/<pluginId>/<path>` route under a CSP composed from the plugin's
+ * grants, and mounted only ever inside `sandbox="allow-scripts"` frames:
+ * opaque origin, no cookies, no DOM reach — isolation by attribute, not
+ * infrastructure. Content is base64 so one column carries text and binaries
+ * alike; `hash` is per-file for immutable caching.
+ */
+export const pluginFiles = pgTable(
+	"plugin_files",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		pluginId: text("plugin_id").notNull(),
+		/** Relative, slash-separated, no traversal — validated at install. */
+		path: text("path").notNull(),
+		mime: text("mime").notNull(),
+		/** Base64 of the file bytes. */
+		content: text("content").notNull(),
+		hash: text("hash").notNull(),
+		bytes: integer("bytes").notNull()
+	},
+	(t) => [uniqueIndex("plugin_files_plugin_path_idx").on(t.pluginId, t.path)]
+)
+
 export const pluginHookInvocations = pgTable(
 	"plugin_hook_invocations",
 	{

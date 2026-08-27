@@ -389,6 +389,8 @@
 					{#each session.sessionMessages as msg, index (msg.id)}
 						{@const isLastMessage =
 							index === session.sessionMessages.length - 1}
+						{@const onMainChannel =
+							!msg.channel || msg.channel === "main"}
 						{@const si = msgSceneMap.get(msg.id)}
 						{@const color = si ? SCENE_COLORS[si.colorIndex] : null}
 
@@ -508,6 +510,7 @@
 						     shut at the end — a worse artifact than the fix. -->
 						<li
 							class="flex w-full items-stretch gap-2"
+							class:hidden={!onMainChannel}
 							in:softFade={{
 								suppressed:
 									loadingOlderMessages || !isLastMessage

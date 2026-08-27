@@ -27,6 +27,7 @@ import {
 } from "$lib/server/pipelines/config/panel"
 import { getVariable } from "@serene-pub/sdk"
 import { poolKeyFor } from "$lib/server/pipelines/entities/contextTemplateDefaults"
+import { knownEngines } from "$lib/server/pipelines/prompt/renderers"
 
 type Db = { select: any; insert: any; update: any; delete: any }
 
@@ -86,6 +87,12 @@ export interface LibraryView {
 	 */
 	contextPools: LibraryPool[]
 	variablePools: LibraryPool[]
+	/**
+	 * Every registered template engine — core's plus whatever enabled
+	 * extensions declare (12 §2a). The editor's picker renders from this; a
+	 * single entry means the picker never appears at all.
+	 */
+	engines: Array<{ id: string; owner: string }>
 }
 
 /**
@@ -282,6 +289,7 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			.sort((a, b) => a.label.localeCompare(b.label)),
 		variablePools: [...variableLabels]
 			.map(([id, label]) => ({ id, label }))
-			.sort((a, b) => a.label.localeCompare(b.label))
+			.sort((a, b) => a.label.localeCompare(b.label)),
+		engines: knownEngines()
 	}
 }

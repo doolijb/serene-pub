@@ -27,6 +27,7 @@ import {
 	setBackendPref,
 	setSequentialPref,
 	setAdminDenied,
+	setStorageQuotaOverride,
 	removePlugin
 } from "$lib/server/plugins/store"
 import {
@@ -35,8 +36,18 @@ import {
 	effectivePermissions,
 	storageGrant,
 	networkGrant,
+	normalizeAdminStorageQuota,
+	MIN_STORAGE_QUOTA,
+	MAX_ADMIN_STORAGE_QUOTA,
 	type PluginManifest
 } from "$lib/server/plugins/permissions"
+import {
+	applySettingsWrite,
+	clientSettingsView,
+	hookSettingsFor,
+	settingsSchemaOf,
+	writePluginSettings
+} from "$lib/server/plugins/settingsHost"
 
 type Emit = (event: string, data: any) => void
 
@@ -60,6 +71,8 @@ interface Row {
 	enabled: boolean
 	manifest?: PluginManifest | null
 	adminDenied?: string[] | null
+	storageQuotaOverride?: number | null
+	settings?: Record<string, unknown> | null
 }
 
 function toPluginRow(r: Row): Sockets.Plugins.PluginRow {
@@ -74,13 +87,15 @@ function toPluginRow(r: Row): Sockets.Plugins.PluginRow {
 		backends: backends.length ? backends : ["quickjs"],
 		backend: r.backend === "ses" ? "ses" : "quickjs",
 		sequential: r.sequential,
-		enabled: r.enabled
+		enabled: r.enabled,
+		hasSettings: Object.keys(settingsSchemaOf(r.manifest)).length > 0
 	}
 }
 
 function toDescriptor(r: Row): PluginDescriptor {
 	const p = toPluginRow(r)
 	const eff = effectivePermissions(declaredPermissions(r.manifest), r.adminDenied)
+	const settings = hookSettingsFor(r.manifest, r.settings)
 	return {
 		id: r.pluginId,
 		name: r.name,
@@ -89,8 +104,9 @@ function toDescriptor(r: Row): PluginDescriptor {
 		backends: p.backends,
 		backend: p.backend,
 		sequential: r.sequential,
-		storageQuotaBytes: storageGrant(eff),
-		networkHosts: networkGrant(eff)
+		storageQuotaBytes: storageGrant(eff, r.storageQuotaOverride),
+		networkHosts: networkGrant(eff),
+		...(settings ? { settings } : {})
 	}
 }
 
@@ -100,7 +116,17 @@ async function allRows(): Promise<Row[]> {
 
 async function listPayload(): Promise<Sockets.Plugins.List.Response> {
 	const rows = await allRows()
-	return { plugins: rows.map(toPluginRow), runtimeEnabled: pluginsEnabled() }
+	const runtimeEnabled = pluginsEnabled()
+	// Warm/cold is runtime truth, so it is annotated from the live manager
+	// rather than stored: with the gate off nothing is ever loaded.
+	const mgr = runtimeEnabled ? getManager() : null
+	return {
+		plugins: rows.map((r) => ({
+			...toPluginRow(r),
+			warm: mgr ? mgr.isWarm(r.pluginId) : false
+		})),
+		runtimeEnabled
+	}
 }
 
 /** After any mutation: refresh the canonical list to the client. */
@@ -120,12 +146,48 @@ async function syncManager(pluginId: string): Promise<void> {
 	const mgr = getManager()
 	if (!row || !row.enabled) {
 		mgr.unregister(pluginId)
+		await syncEngines()
 		return
 	}
 	try {
 		mgr.register(toDescriptor(row as Row))
 	} catch (e) {
 		console.warn(`[plugins] manager register '${pluginId}' failed:`, e)
+	}
+	await syncEngines()
+}
+
+/** Reconcile manifest-declared template engines with the enabled set. */
+async function syncEngines(): Promise<void> {
+	try {
+		const { syncPluginEngines } = await import(
+			"$lib/server/plugins/engineHost"
+		)
+		await syncPluginEngines(db, getManager())
+	} catch (e) {
+		console.warn("[plugins] template-engine sync failed:", e)
+	}
+}
+
+/** The storage-quota picture for the admin override control (undefined = plugin declares no storage). */
+function storageFacts(r: Row): Sockets.Plugins.StorageQuota | undefined {
+	const declared = declaredPermissions(r.manifest)
+	const storagePerm = declared.find((p) => p.key === "storage")
+	if (!storagePerm) return undefined
+	const eff = effectivePermissions(declared, r.adminDenied)
+	const granted = eff.some((p) => p.key === "storage")
+	return {
+		granted,
+		// The manifest-declared (author-band-clamped) quota, shown even when denied.
+		declaredBytes: (storagePerm.config?.quotaBytes as number) ?? null,
+		// What the runtime will actually enforce right now (override wins) — only
+		// meaningful while storage is granted.
+		effectiveBytes: granted
+			? (storageGrant(eff, r.storageQuotaOverride) ?? null)
+			: null,
+		overrideBytes: r.storageQuotaOverride ?? null,
+		minBytes: MIN_STORAGE_QUOTA,
+		maxBytes: MAX_ADMIN_STORAGE_QUOTA
 	}
 }
 
@@ -174,6 +236,19 @@ export const pluginsInstall: Handler<
 			sequential: params.sequential,
 			manifest: params.manifest
 		})
+		// The frame surfaces' documents (20 §12), replaced wholesale like the
+		// bundle. Refused paths are logged, not fatal — a plugin with one bad
+		// path still installs, minus that file.
+		if (Array.isArray(params.files)) {
+			const { storePluginFiles } = await import(
+				"$lib/server/plugins/frameHost"
+			)
+			const r = await storePluginFiles(db, params.pluginId, params.files)
+			if (r.refused.length)
+				console.warn(
+					`[plugins] '${params.pluginId}' UI files refused (unsafe path): ${r.refused.join(", ")}`
+				)
+		}
 		// A fresh/changed bundle is disabled until re-enabled — no manager sync.
 		return { plugins: await emitList(emitToUser) }
 	}
@@ -240,6 +315,28 @@ export const pluginsUninstall: Handler<
 		requireAdmin(socket, emitToUser)
 		if (pluginsEnabled()) getManager().unregister(params.pluginId)
 		await removePlugin(db, params.pluginId)
+		await db
+			.delete(schema.pluginFiles)
+			.where(eq(schema.pluginFiles.pluginId, params.pluginId))
+		if (pluginsEnabled()) await syncEngines()
+		return { plugins: await emitList(emitToUser) }
+	}
+}
+
+/**
+ * The admin's memory lever: drop a plugin's loaded copy (and a SES plugin's
+ * dedicated worker) while keeping it installed and enabled — the next hook
+ * call faults it back in cold. Deferred by the manager while calls are in
+ * flight, so nothing running loses the copy it started on.
+ */
+export const pluginsUnload: Handler<
+	Sockets.Plugins.Unload.Params,
+	Sockets.Plugins.Unload.Response
+> = {
+	event: "plugins:unload",
+	handler: async (socket, params, emitToUser) => {
+		requireAdmin(socket, emitToUser)
+		if (pluginsEnabled()) getManager().unload(params.pluginId)
 		return { plugins: await emitList(emitToUser) }
 	}
 }
@@ -329,7 +426,8 @@ export const pluginsPermissions: Handler<
 		const permissions = row
 			? permissionStates(row.manifest as PluginManifest, row.adminDenied)
 			: []
-		const res = { pluginId: params.pluginId, permissions }
+		const storage = row ? storageFacts(row as Row) : undefined
+		const res = { pluginId: params.pluginId, permissions, storage }
 		emitToUser("plugins:permissions", res)
 		return res
 	}
@@ -360,8 +458,132 @@ export const pluginsSetPermission: Handler<
 		const permissions = updated
 			? permissionStates(updated.manifest as PluginManifest, updated.adminDenied)
 			: []
-		const res = { pluginId: params.pluginId, permissions }
+		const storage = updated ? storageFacts(updated as Row) : undefined
+		const res = { pluginId: params.pluginId, permissions, storage }
 		emitToUser("plugins:permissions", res)
+		return res
+	}
+}
+
+/**
+ * Set or clear (bytes=null) an admin's per-plugin storage-quota override. The
+ * value is normalized/clamped to the admin band here (defensively) and again at
+ * grant-derivation; an invalid non-null value clears the override rather than
+ * bricking the quota. Re-syncs the live grant so the new ceiling takes effect.
+ */
+export const pluginsSetStorageQuota: Handler<
+	Sockets.Plugins.SetStorageQuota.Params,
+	Sockets.Plugins.SetStorageQuota.Response
+> = {
+	event: "plugins:setStorageQuota",
+	handler: async (socket, params, emitToUser) => {
+		requireAdmin(socket, emitToUser)
+		const bytes =
+			params.bytes == null
+				? null
+				: (normalizeAdminStorageQuota(params.bytes) ?? null)
+		await setStorageQuotaOverride(db, params.pluginId, bytes)
+		await syncManager(params.pluginId)
+		const [updated] = await db
+			.select()
+			.from(schema.plugins)
+			.where(eq(schema.plugins.pluginId, params.pluginId))
+		const permissions = updated
+			? permissionStates(updated.manifest as PluginManifest, updated.adminDenied)
+			: []
+		const storage = updated ? storageFacts(updated as Row) : undefined
+		const res = { pluginId: params.pluginId, permissions, storage }
+		emitToUser("plugins:permissions", res)
+		return res
+	}
+}
+
+/**
+ * The settings view for one plugin (12 §6): the manifest's schema, the stored
+ * values with every secret masked to set/unset, and the config state. Admin
+ * only, like the rest of this surface — per-user (`scope: 'user'`) settings
+ * are a later lane; today every write is instance scope.
+ */
+export const pluginsGetSettings: Handler<
+	Sockets.Plugins.GetSettings.Params,
+	Sockets.Plugins.GetSettings.Response
+> = {
+	event: "plugins:getSettings",
+	handler: async (socket, params, emitToUser) => {
+		requireAdmin(socket, emitToUser)
+		const [row] = await db
+			.select()
+			.from(schema.plugins)
+			.where(eq(schema.plugins.pluginId, params.pluginId))
+		const res: Sockets.Plugins.GetSettings.Response = {
+			pluginId: params.pluginId,
+			settings: row
+				? clientSettingsView(row.manifest, row.settings)
+				: null
+		}
+		emitToUser("plugins:getSettings", res)
+		return res
+	}
+}
+
+/**
+ * Write settings values. Secrets arrive as plaintext over the socket and are
+ * encrypted at this one write path (settingsHost.ts); absent means unchanged
+ * and empty means cleared, so the form never has to read one back. A
+ * successful write re-syncs the manager, so the next hook call carries the
+ * new values.
+ */
+export const pluginsSetSettings: Handler<
+	Sockets.Plugins.SetSettings.Params,
+	Sockets.Plugins.SetSettings.Response
+> = {
+	event: "plugins:setSettings",
+	handler: async (socket, params, emitToUser) => {
+		requireAdmin(socket, emitToUser)
+		const [row] = await db
+			.select()
+			.from(schema.plugins)
+			.where(eq(schema.plugins.pluginId, params.pluginId))
+		if (!row) {
+			const res = {
+				pluginId: params.pluginId,
+				error: "That extension is not installed."
+			}
+			emitToUser("plugins:setSettings:error", res)
+			return res
+		}
+		const schemaDecl = settingsSchemaOf(row.manifest)
+		if (!Object.keys(schemaDecl).length) {
+			const res = {
+				pluginId: params.pluginId,
+				error: "This extension declares no settings."
+			}
+			emitToUser("plugins:setSettings:error", res)
+			return res
+		}
+		const applied = applySettingsWrite(
+			schemaDecl,
+			row.settings,
+			params.values ?? {}
+		)
+		if (!applied.ok) {
+			const res = { pluginId: params.pluginId, error: applied.error }
+			emitToUser("plugins:setSettings:error", res)
+			return res
+		}
+		await writePluginSettings(db, params.pluginId, applied.next)
+		await syncManager(params.pluginId)
+		const [after] = await db
+			.select()
+			.from(schema.plugins)
+			.where(eq(schema.plugins.pluginId, params.pluginId))
+		const res: Sockets.Plugins.SetSettings.Response = {
+			pluginId: params.pluginId,
+			settings: after
+				? clientSettingsView(after.manifest, after.settings)
+				: null
+		}
+		emitToUser("plugins:getSettings", res)
 		return res
 	}
 }
@@ -374,12 +596,16 @@ export function registerPluginHandlers(
 	register(socket, pluginsList, emitToUser)
 	register(socket, pluginsPermissions, emitToUser)
 	register(socket, pluginsSetPermission, emitToUser)
+	register(socket, pluginsSetStorageQuota, emitToUser)
 	register(socket, pluginsInstall, emitToUser)
 	register(socket, pluginsSetEnabled, emitToUser)
 	register(socket, pluginsSetBackend, emitToUser)
 	register(socket, pluginsSetSequential, emitToUser)
 	register(socket, pluginsUninstall, emitToUser)
+	register(socket, pluginsUnload, emitToUser)
 	register(socket, pluginsActive, emitToUser)
 	register(socket, pluginsKill, emitToUser)
 	register(socket, pluginsLogs, emitToUser)
+	register(socket, pluginsGetSettings, emitToUser)
+	register(socket, pluginsSetSettings, emitToUser)
 }

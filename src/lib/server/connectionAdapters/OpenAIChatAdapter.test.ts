@@ -19,7 +19,9 @@ const createMock = vi.fn()
 const modelsListMock = vi.fn()
 vi.mock("openai", () => ({
 	OpenAI: class {
-		session = {
+		// `chat.completions` is the vendor SDK's own surface, not our vocabulary
+		// — the sessions rename must never reach it, here or in the adapter.
+		chat = {
 			completions: { create: (...args: any[]) => createMock(...args) }
 		}
 		models = { list: (...args: any[]) => modelsListMock(...args) }

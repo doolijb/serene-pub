@@ -29,7 +29,8 @@ function tmp(): string {
 const HOOK = `module.exports = { hooks: {
 	save: function (input, ctx) { ctx.storage.write("k.txt", input.v); return ctx.storage.read("k.txt"); },
 	list: function (input, ctx) { ctx.storage.write("a", "1"); ctx.storage.write("b", "2"); return ctx.storage.list().sort(); },
-	escape: function (input, ctx) { return ctx.storage.read("../escape"); }
+	escape: function (input, ctx) { return ctx.storage.read("../escape"); },
+	leak: function (input, ctx) { ctx.storage.write("probe", "x"); try { ctx.storage.list("probe"); return "no-throw"; } catch (e) { return String(e && e.message); } }
 } }`
 
 const opts = (input: Record<string, unknown>) => ({
@@ -61,6 +62,24 @@ describe("storage capability", () => {
 		const r = await rt.invoke({ pluginId: "p", hookName: "list" }, opts({}))
 		expect(r.ok).toBe(true)
 		if (r.ok) expect(r.value).toEqual(["a", "b"])
+	})
+
+	each("does not leak host paths in fs error messages", async (make) => {
+		const dir = tmp()
+		const rt = make()
+		await rt.load("p", HOOK, "h", { storageDir: dir, quotaBytes: 10_000 })
+		const r = await rt.invoke(
+			{ pluginId: "p", hookName: "leak" },
+			opts({})
+		)
+		expect(r.ok).toBe(true)
+		if (r.ok) {
+			const msg = String(r.value)
+			expect(msg).not.toBe("no-throw") // readdir on a file did throw
+			expect(msg).not.toContain(dir) // no absolute jail path leaked
+			expect(msg).not.toContain(os.tmpdir()) // no host layout at all
+			expect(msg).toMatch(/^storage:/) // sanitized, code-only message
+		}
 	})
 
 	each("denies storage without a grant", async (make) => {

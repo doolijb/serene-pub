@@ -18,6 +18,7 @@
 	import { z } from "zod"
 	import ConnectionSamplingPicker from "../ConnectionSamplingPicker.svelte"
 	import SchemaForm from "../pipelines/SchemaForm.svelte"
+	import PipelineConfigOptions from "../pipelines/PipelineConfigOptions.svelte"
 
 	// The F29 floor (19 §2) — stated here rather than imported from the
 	// server-only sessionModes module. When "sessions:modes" returns nothing (a
@@ -177,7 +178,26 @@
 	let adminNarratorPromptConfigsList: Sockets.NarratorPromptConfigs.List.Response["narratorPromptConfigsList"] =
 		$state([])
 
-	let activeSessionTab = $state<"participants" | "settings">("participants")
+	let activeSessionTab = $state<"participants" | "settings" | "visibility">(
+		"participants"
+	)
+
+	// The pipelines involved in this chat (respond + enabled contributed
+	// functions like narrate), each rendered as its own settings card at
+	// session scope. Fetched lazily when the Settings tab opens.
+	let sessionPipelines: Sockets.Sessions.Pipelines.Pipeline[] = $state([])
+	const handleSessionsPipelines = (
+		msg: Sockets.Sessions.Pipelines.Response
+	) => {
+		if (msg.sessionId === editSessionId) sessionPipelines = msg.pipelines
+	}
+
+	// The account-visibility view (design §4): what of the current user's data
+	// this session exposes to its other participants. Fetched lazily when the
+	// tab opens.
+	let accountVisibility = $state<
+		Sockets.Sessions.AccountVisibility.Response | undefined
+	>(undefined)
 
 	// MODALS
 	let showCharacterModal = $state(false)
@@ -742,6 +762,13 @@
 		selectedSpeakerStrategy = msg.selected
 	}
 
+	const handleAccountVisibility = (
+		msg: Sockets.Sessions.AccountVisibility.Response
+	) => {
+		if (msg.sessionId !== session?.id) return
+		accountVisibility = msg
+	}
+
 	const handleSessionsSetSpeakerStrategy = (
 		msg: Sockets.Sessions.Bindings.SetSpeakerStrategy.Response
 	) => {
@@ -1185,6 +1212,8 @@
 		socket.emit("sessions:modes", {})
 		socket.on("sessions:upgradeMode", handleSessionsUpgradeMode)
 		socket.on("sessions:speakerStrategies", handleSessionsSpeakerStrategies)
+		socket.on("sessions:accountVisibility", handleAccountVisibility)
+		socket.on("sessions:pipelines", handleSessionsPipelines)
 		socket.on("sessions:presets", handleSessionsPresets)
 		socket.on("sessions:choosePreset", handleSessionsChoosePreset)
 		socket.on("sessions:functions", handleSessionsFunctions)
@@ -1231,6 +1260,8 @@
 			"sessions:speakerStrategies",
 			handleSessionsSpeakerStrategies
 		)
+		socket.off("sessions:accountVisibility", handleAccountVisibility)
+		socket.off("sessions:pipelines", handleSessionsPipelines)
 		socket.off("sessions:presets", handleSessionsPresets)
 		socket.off("sessions:choosePreset", handleSessionsChoosePreset)
 		socket.off("sessions:functions", handleSessionsFunctions)
@@ -1465,15 +1496,60 @@
 
 		<Tabs
 			value={activeSessionTab}
-			onValueChange={(e) =>
-				(activeSessionTab = e.value as typeof activeSessionTab)}
+			onValueChange={(e) => {
+				activeSessionTab = e.value as typeof activeSessionTab
+				// Fetch the visibility view lazily, only when its tab is opened.
+				if (activeSessionTab === "visibility" && session?.id)
+					socket.emit("sessions:accountVisibility", {
+						sessionId: session.id
+					})
+				// The involved pipelines, likewise — only an existing session
+				// has them (a not-yet-created session has no scope to write to).
+				if (activeSessionTab === "settings" && session?.id)
+					socket.emit("sessions:pipelines", {
+						sessionId: session.id
+					})
+			}}
 		>
-			<Tabs.List class="flex flex-wrap gap-1">
-				<Tabs.Trigger value="participants">
-					<Icons.Users size={16} /> Participants
+			<!-- Matches the site's underlined tab strip (see PanelTab): no
+			     pill, no fill, a bottom border that colours in on selection.
+			     Only the open tab shows its label — the others are icon-only,
+			     so the strip reads as a tab bar rather than a row of buttons. -->
+			<Tabs.List
+				class="border-surface-200-800 flex items-center gap-1 border-b"
+			>
+				<Tabs.Trigger
+					value="participants"
+					title="Participants"
+					aria-label="Participants"
+					class="text-surface-700-300 hover:text-primary-500 data-[selected]:border-primary-500 data-[selected]:text-primary-500 flex items-center gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-2 py-1.5"
+				>
+					<Icons.Users size={16} aria-hidden="true" />
+					{#if activeSessionTab === "participants"}
+						<span>Participants</span>
+					{/if}
 				</Tabs.Trigger>
-				<Tabs.Trigger value="settings">
-					<Icons.Settings size={16} /> Session Settings
+				<Tabs.Trigger
+					value="settings"
+					title="Settings"
+					aria-label="Settings"
+					class="text-surface-700-300 hover:text-primary-500 data-[selected]:border-primary-500 data-[selected]:text-primary-500 flex items-center gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-2 py-1.5"
+				>
+					<Icons.Settings size={16} aria-hidden="true" />
+					{#if activeSessionTab === "settings"}
+						<span>Settings</span>
+					{/if}
+				</Tabs.Trigger>
+				<Tabs.Trigger
+					value="visibility"
+					title="Privacy"
+					aria-label="Privacy"
+					class="text-surface-700-300 hover:text-primary-500 data-[selected]:border-primary-500 data-[selected]:text-primary-500 flex items-center gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-2 py-1.5"
+				>
+					<Icons.Eye size={16} aria-hidden="true" />
+					{#if activeSessionTab === "visibility"}
+						<span>Privacy</span>
+					{/if}
 				</Tabs.Trigger>
 			</Tabs.List>
 			<Tabs.Content value="participants">
@@ -2212,53 +2288,42 @@
 						</div>
 					{/if}
 
-					<!-- Admin-only AI override -->
-					{#if userCtx.user?.isAdmin}
-						<div class="flex flex-col gap-2">
-							<p class="font-semibold">AI Override</p>
-							<p class="text-muted-foreground text-xs">
-								Overrides system defaults for this session.
-								Leave as "System default" to use the global
-								setting.
-							</p>
-							<ConnectionSamplingPicker
-								connectionsList={adminConnectionsList}
-								samplingList={adminSamplingList}
-								bind:connectionId={sessionConnectionId}
-								bind:samplingConfigId={sessionSamplingConfigId}
-							/>
-							<div
-								class="grid grid-cols-[5.5rem_1fr] items-center gap-x-2 gap-y-1.5"
-							>
-								<span class="text-muted-foreground text-xs">
-									Character Prompt
-								</span>
-								<select
-									class="select text-xs"
-									bind:value={sessionPromptConfigId}
-								>
-									<option value={null}>System default</option>
-									{#each adminPromptConfigsList.filter((p) => p.id != null) as p}
-										<option value={p.id}>{p.name}</option>
-									{/each}
-								</select>
+					<!-- Configurables grouped BY PIPELINE (not by setting
+					     type): every pipeline this chat involves — the reply
+					     pipeline plus each enabled function like narrate — gets
+					     its own card, rendered from the pipeline's own
+					     declarations and written at this session's scope. The
+					     panel already handles connection (text-gen only),
+					     sampling, prompts and tuning per step. -->
+					{#if session?.id && sessionPipelines.length}
+						<div class="flex flex-col gap-3">
+							<div>
+								<p class="font-semibold">Pipelines</p>
+								<p class="text-muted-foreground text-xs">
+									Changes here apply to this chat only. Leave a
+									control on its default to inherit the global
+									setting.
+								</p>
 							</div>
-							<div
-								class="grid grid-cols-[5.5rem_1fr] items-center gap-x-2 gap-y-1.5"
-							>
-								<span class="text-muted-foreground text-xs">
-									Narrator Prompt
-								</span>
-								<select
-									class="select text-xs"
-									bind:value={narratorPromptConfigId}
+							{#each sessionPipelines as p (p.slug)}
+								<!-- One card per pipeline: in selectorsOnly the
+								     panel renders a flat selector list, so this
+								     is the only card — no nesting. -->
+								<div
+									class="card preset-tonal-surface flex flex-col gap-2 p-3"
 								>
-									<option value={null}>System default</option>
-									{#each adminNarratorPromptConfigsList.filter((p) => p.id != null) as p}
-										<option value={p.id}>{p.name}</option>
-									{/each}
-								</select>
-							</div>
+									<p class="text-sm font-semibold">
+										{p.label}
+									</p>
+									<PipelineConfigOptions
+										slug={p.slug}
+										sessionId={session.id}
+										selectorsOnly
+										showConfigPicker={false}
+										showScopeNote={false}
+									/>
+								</div>
+							{/each}
 						</div>
 					{/if}
 
@@ -2340,6 +2405,144 @@
 							</div>
 						{/if}
 					</div>
+				</div>
+			</Tabs.Content>
+			<Tabs.Content value="visibility">
+				<div class="flex flex-col gap-5 pt-4">
+					<div class="preset-tonal-surface rounded-lg p-4 text-sm">
+						<div class="flex items-start gap-2">
+							<Icons.Eye size={18} class="mt-0.5 shrink-0" />
+							<div class="flex flex-col gap-1">
+								<p class="font-semibold">
+									What this session sees of your data
+								</p>
+								<p class="text-surface-500">
+									Anything you own and add here becomes visible
+									to this session's other participants, and is
+									read by the pipelines that generate its
+									replies. This shows only your own data — never
+									what anyone else has shared.
+								</p>
+							</div>
+						</div>
+					</div>
+
+					{#if !accountVisibility}
+						<p class="text-surface-500 text-sm">Loading…</p>
+					{:else}
+						<p class="text-sm">
+							{#if accountVisibility.isOwner}
+								You are the <span class="font-semibold"
+									>owner</span
+								> of this session.
+							{:else if accountVisibility.isGuest}
+								You are a <span class="font-semibold">guest</span>
+								in this session.
+							{:else}
+								You are a participant in this session.
+							{/if}
+						</p>
+
+						{@const ex = accountVisibility.exposed}
+						{#if ex.characters.length + ex.personas.length + ex.lorebooks.length === 0}
+							<div class="card preset-tonal p-4 text-sm">
+								You have not added any of your own characters,
+								personas, or lorebooks to this session — so it
+								exposes nothing of yours.
+							</div>
+						{:else}
+							<div class="flex flex-col gap-3">
+								{#if ex.characters.length}
+									<div
+										class="card preset-tonal flex flex-col gap-2 p-3"
+									>
+										<div
+											class="flex items-center gap-2 text-sm font-semibold"
+										>
+											<Icons.User size={16} /> Characters
+										</div>
+										<div class="flex flex-wrap gap-2">
+											{#each ex.characters as c}
+												<span
+													class="preset-tonal-primary rounded-full px-3 py-1 text-xs"
+													>{c.name}</span
+												>
+											{/each}
+										</div>
+									</div>
+								{/if}
+								{#if ex.personas.length}
+									<div
+										class="card preset-tonal flex flex-col gap-2 p-3"
+									>
+										<div
+											class="flex items-center gap-2 text-sm font-semibold"
+										>
+											<Icons.UserCircle size={16} /> Personas
+										</div>
+										<div class="flex flex-wrap gap-2">
+											{#each ex.personas as p}
+												<span
+													class="preset-tonal-primary rounded-full px-3 py-1 text-xs"
+													>{p.name}</span
+												>
+											{/each}
+										</div>
+									</div>
+								{/if}
+								{#if ex.lorebooks.length}
+									<div
+										class="card preset-tonal flex flex-col gap-2 p-3"
+									>
+										<div
+											class="flex items-center gap-2 text-sm font-semibold"
+										>
+											<Icons.BookOpen size={16} /> Lorebooks
+										</div>
+										<div class="flex flex-wrap gap-2">
+											{#each ex.lorebooks as l}
+												<span
+													class="preset-tonal-primary rounded-full px-3 py-1 text-xs"
+													>{l.name}</span
+												>
+											{/each}
+										</div>
+									</div>
+								{/if}
+							</div>
+						{/if}
+
+						<div class="flex flex-col gap-2">
+							<p class="text-sm font-semibold">
+								Who can see the above
+							</p>
+							{#if accountVisibility.viewers.length === 0}
+								<p class="text-surface-500 text-sm">
+									No one else yet — you are the only
+									participant.
+								</p>
+							{:else}
+								<div class="flex flex-col gap-2">
+									{#each accountVisibility.viewers as v}
+										<div
+											class="card preset-tonal flex items-center justify-between gap-3 p-3 text-sm"
+										>
+											<span
+												class="flex items-center gap-2"
+											>
+												<Icons.User size={16} />
+												{v.username}
+											</span>
+											<span
+												class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs capitalize"
+												>{v.role}</span
+											>
+										</div>
+									{/each}
+								</div>
+							{/if}
+						</div>
+					{/if}
 				</div>
 			</Tabs.Content>
 		</Tabs>

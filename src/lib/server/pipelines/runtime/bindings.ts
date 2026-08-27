@@ -35,8 +35,11 @@ import {
 } from "$lib/server/pipelines/ranking/semantic"
 import { queryWindows } from "$lib/server/pipelines/ranking/ragQuery"
 import {
+	DEFAULT_SIGNAL_WEIGHTS,
 	PRIORITY_SCORE_BONUS,
-	withDefaults
+	withDefaults,
+	type SignalWeights,
+	type SourceKind
 } from "$lib/server/pipelines/ranking/weights"
 import { allocate, render } from "$lib/server/pipelines/prompt/assemble"
 import { resolveContextInput } from "$lib/server/pipelines/prompt/promptFields"
@@ -89,13 +92,62 @@ function retrievalParamsFrom(params: any) {
 	return Object.keys(retrieval).length ? { retrieval } : {}
 }
 
+/**
+ * The declared signal fields, `signalKeyword` → `signals[source].keyword`.
+ *
+ * The descriptor declares the matrix transposed — nine `perMember` fields,
+ * because a `parameters` schema's unit is the field and its control is a
+ * per-source row — while `withDefaults` demands the untransposed shape with
+ * one law attached: **naming a source means giving it a complete set** (no
+ * deep merge, so a partial set cannot silently inherit weights the user
+ * thought they had replaced). This transposes back and *constructs* that
+ * completeness: any field the config did not carry falls back per-field to
+ * the default, so the set handed over is total whichever fields arrived.
+ */
+const SIGNAL_FIELDS: Array<[param: string, signal: keyof SignalWeights]> = [
+	["signalKeyword", "keyword"],
+	["signalNameMatch", "nameMatch"],
+	["signalEntityCooccurrence", "entityCooccurrence"],
+	["signalTfidf", "tfidf"],
+	["signalLastRefRecency", "lastRefRecency"],
+	["signalRecency", "recency"],
+	["signalSceneAffinity", "sceneAffinity"],
+	["signalDensity", "density"],
+	["signalPriorityBonus", "priorityBonus"]
+]
+
+function signalsFrom(
+	params: any
+): Partial<Record<SourceKind, SignalWeights>> | null {
+	const carried = SIGNAL_FIELDS.filter(
+		([param]) => params[param] && typeof params[param] === "object"
+	)
+	if (!carried.length) return null
+	const signals: Partial<Record<SourceKind, SignalWeights>> = {}
+	for (const source of Object.keys(
+		DEFAULT_SIGNAL_WEIGHTS
+	) as SourceKind[]) {
+		const set = { ...DEFAULT_SIGNAL_WEIGHTS[source] }
+		for (const [param, signal] of carried) {
+			const v = params[param][source]
+			if (typeof v === "number" && Number.isFinite(v)) set[signal] = v
+		}
+		signals[source] = set
+	}
+	return signals
+}
+
 function rankingParamsFrom(params: any) {
 	if (!params || typeof params !== "object") return {}
+	const out: Record<string, unknown> = {}
 	const groups: Record<string, unknown> = {}
 	if (params.share) groups.share = params.share
 	if (params.maxEntries) groups.maxEntries = params.maxEntries
 	if (params.minEntries) groups.minEntries = params.minEntries
-	return Object.keys(groups).length ? { groups } : {}
+	if (Object.keys(groups).length) out.groups = groups
+	const signals = signalsFrom(params)
+	if (signals) out.signals = signals
+	return out
 }
 
 /**
@@ -335,7 +387,13 @@ export function coreBindings(): Bindings {
 		"core:query/session-history@1": async (input: any, ctx: any) => {
 			const messages = await ctx.read("session_messages", {
 				sessionId: input?.scope?.sessionId,
-				limit: input?.limit ?? 100
+				limit: input?.limit ?? 100,
+				// Which lane builds this context (20 §7). 'main' is the chat
+				// log and today's exact behaviour; another value is a mode's
+				// declared channel, read on purpose by the pipeline that wants
+				// it.
+				channel:
+					input?.params?.channel ?? input?.channel ?? "main"
 			})
 			// `main` and `messages` carry the same value on purpose: `main` is what
 			// an unrefined `$.history` resolves to, and having it be the useful
@@ -839,7 +897,7 @@ export function coreBindings(): Bindings {
 			// dereferenced from row ids into template sources by `world.ts` —
 			// the same treatment `prompts` gets, and for the same reason: this
 			// node needs the template, not the number.
-			const templateContext = buildTemplateContext({
+			const templateContext = await buildTemplateContext({
 				...resolved,
 				variables: input?.variables
 			})
@@ -940,7 +998,7 @@ export function coreBindings(): Bindings {
 				postHistory = resolved.postHistory
 			}
 
-			const rendered = render({
+			const rendered = await render({
 				allocation,
 				postHistory,
 				template,
@@ -1063,6 +1121,118 @@ export function coreBindings(): Bindings {
 		 * and the draft the model writes back — without it a batch sized exactly
 		 * to the window leaves no room for the answer.
 		 */
+		/**
+		 * Tool calling's pure halves (20 §9). A tool is any same-shaped
+		 * provider — canonically a sandboxed plugin hook on the spine — and
+		 * these two only decide how the model learns about it and how its
+		 * answer is read back. Which door (`style`) is a bind-time match
+		 * against the connection's capability report, never a runtime guess.
+		 */
+		"core:task/advertise-tools@1": async (input: any) => {
+			const tools: any[] = Array.isArray(input?.tools)
+				? input.tools.filter(
+						(t: any) => t && typeof t.name === "string"
+					)
+				: []
+			// Normalized for a native tool API: name/description/parameters,
+			// nothing else — an adapter maps this onto its provider's shape.
+			const native = tools.map((t) => ({
+				name: t.name,
+				description: String(t.description ?? ""),
+				parameters:
+					t.parameters && typeof t.parameters === "object"
+						? t.parameters
+						: { type: "object", properties: {} }
+			}))
+			// The emulated door: the advertisement as prompt text, with one
+			// unambiguous call convention the parse task's grammar mirrors.
+			const prompt = tools.length
+				? [
+						"# Tools",
+						"To use a tool, reply with ONLY a fenced block:",
+						"```tool_call",
+						'{"tool": "<name>", "args": { ... }}',
+						"```",
+						"Reply normally when no tool is needed.",
+						"",
+						...tools.map(
+							(t) =>
+								`- ${t.name}: ${String(t.description ?? "")}` +
+								(t.parameters
+									? `\n  args schema: ${JSON.stringify(t.parameters)}`
+									: "")
+						)
+					].join("\n")
+				: ""
+			const style = input?.params?.style === "native" ? "native" : "prompt"
+			return ok({
+				main: style === "native" ? native : prompt,
+				native,
+				prompt
+			})
+		},
+
+		"core:task/parse-tool-call@1": async (input: any) => {
+			const text = String(input?.text ?? "")
+			const known = new Set(
+				(Array.isArray(input?.tools) ? input.tools : [])
+					.map((t: any) => t?.name)
+					.filter((n: any) => typeof n === "string")
+			)
+			/** First match wins: the fenced convention, then a bare object. */
+			const fenced = /```tool_call\s*\n([\s\S]*?)```/.exec(text)
+			// The bare form needs *balanced* extraction — a lazy regex stops
+			// at the first `}` and beheads any call with nested args.
+			let bare: string | null = null
+			if (!fenced) {
+				const at = text.search(/\{\s*"(tool|name)"\s*:/)
+				if (at >= 0) {
+					let depth = 0
+					for (let i = at; i < text.length; i++) {
+						const c = text[i]
+						if (c === "{") depth++
+						else if (c === "}" && --depth === 0) {
+							bare = text.slice(at, i + 1)
+							break
+						}
+					}
+				}
+			}
+			const raw = fenced?.[1] ?? bare ?? null
+
+			let call: { tool: string; args: Record<string, unknown> } | null =
+				null
+			if (raw) {
+				try {
+					const parsed = JSON.parse(raw)
+					const tool =
+						typeof parsed?.tool === "string"
+							? parsed.tool
+							: typeof parsed?.name === "string"
+								? parsed.name
+								: null
+					if (tool && (!known.size || known.has(tool)))
+						call = {
+							tool,
+							args:
+								parsed.args && typeof parsed.args === "object"
+									? parsed.args
+									: (parsed.arguments ?? {})
+						}
+				} catch {
+					// An unparseable block is prose, not a crash: the loop's
+					// predicate sees no call and the turn settles as text.
+				}
+			}
+			// What renders is prose; what dispatches is data. Stripping only
+			// the matched block keeps a reply that mixed narration and a call
+			// readable.
+			const matched = fenced?.[0] ?? bare ?? undefined
+			const stripped =
+				call && matched ? text.replace(matched, "").trim() : text
+			return ok({ main: call, call, text: stripped })
+		},
+
 		"core:task/batch-messages@1": async (input: any) => {
 			const messages: any[] = Array.isArray(input?.messages)
 				? input.messages

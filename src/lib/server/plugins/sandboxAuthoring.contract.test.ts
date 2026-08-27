@@ -1,9 +1,16 @@
+/**
+ * Contract test: the sandbox authoring surface now lives in `@serene-pub/cli`
+ * (sandbox = the manifest compiler, sandbox-bundle = the esbuild preset). This
+ * pins that the SDK's authoring output is exactly what the app runtime reads and
+ * runs — the manifest shape `permissions.ts` interprets, and a bundle both
+ * backends can load.
+ */
 import { describe, it, expect, afterEach } from "vitest"
-import { compileManifest } from "./manifest"
-import { bundlePlugin } from "./bundle"
-import { QuickJsRuntime } from "../QuickJsRuntime"
-import { SesWorkerRuntime } from "../SesWorkerRuntime"
-import type { PluginRuntime } from "../types"
+import { compileManifest } from "@serene-pub/cli/sandbox"
+import { bundlePlugin } from "@serene-pub/cli/sandbox-bundle"
+import { QuickJsRuntime } from "./QuickJsRuntime"
+import { SesWorkerRuntime } from "./SesWorkerRuntime"
+import type { PluginRuntime } from "./types"
 
 describe("manifest compiler", () => {
 	it("compiles and normalizes a valid declaration", () => {
@@ -22,6 +29,29 @@ describe("manifest compiler", () => {
 		expect(m.permissions.storage?.quotaBytes).toBe(4096)
 		expect(m.permissions.network?.hosts).toEqual(["api.example.com"])
 		expect(m.sequential).toBe(false)
+	})
+
+	it("accepts wildcard network hosts and rejects malformed ones", () => {
+		const m = compileManifest({
+			id: "acme/scraper",
+			name: "Scraper",
+			version: "1.0.0",
+			permissions: { network: { hosts: ["*.example.com", "*", "api.example.com:8443"] } }
+		})
+		expect(m.permissions.network?.hosts).toEqual([
+			"*.example.com",
+			"*",
+			"api.example.com:8443"
+		])
+		for (const bad of ["*.*", "**", "a b.com", "*.", "http://x.com"])
+			expect(() =>
+				compileManifest({
+					id: "a/b",
+					name: "x",
+					version: "1.0.0",
+					permissions: { network: { hosts: [bad] } }
+				})
+			).toThrow(/host/)
 	})
 
 	it("rejects bad id / version / hook / empty network / bad quota", () => {

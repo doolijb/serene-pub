@@ -89,7 +89,15 @@ const config = {
 				"font-src": ["self", "data:", "https://fonts.gstatic.com"],
 				"object-src": ["none"],
 				"base-uri": ["self"],
-				"frame-ancestors": ["none"]
+				"frame-ancestors": ["none"],
+				// Exit hardening (20 §11): no form on this app posts anywhere
+				// but itself, so a form action to a foreign host can only be
+				// an exfiltration attempt — most cheaply, an in-document
+				// component wrapping scraped data in a <form>. The other two
+				// exits (connect-src, img-src) stay open pending the
+				// same-origin-socket and image-ingest decisions recorded in
+				// the plan; this one costs nothing today.
+				"form-action": ["self"]
 			}
 		}
 	}

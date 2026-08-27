@@ -219,7 +219,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 			}
 		} catch (err: any) {
 			console.error(
-				"[OpenAIAdapter] Error from openai.session.completions.create:",
+				"[OpenAIAdapter] Error from openai.chat.completions.create:",
 				err
 			)
 			// Enhanced error reporting for upstream/proxy errors
@@ -331,7 +331,9 @@ const exports: AdapterExports = {
 	listModels,
 	testConnection,
 	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT],
-	samplingKeyMap: openAISamplingKeyMap
+	samplingKeyMap: openAISamplingKeyMap,
+	// 20 §9: chat-completions tool calls.
+	capabilities: { toolUse: "native" }
 }
 
 export default exports

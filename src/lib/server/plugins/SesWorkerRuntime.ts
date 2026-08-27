@@ -27,7 +27,11 @@
 
 import { Worker } from "node:worker_threads"
 import { AMBIENT_PRELUDE } from "./prelude"
-import { STORAGE_HOST_SOURCE, type CapabilityConfig } from "./storageHost"
+import {
+	STORAGE_HOST_SOURCE,
+	capabilityKey,
+	type CapabilityConfig
+} from "./storageHost"
 import { FETCH_HOST_SOURCE } from "./fetchHost"
 import { CRYPTO_HOST_SOURCE } from "./cryptoHost"
 import type {
@@ -184,6 +188,15 @@ export class SesWorkerRuntime implements PluginRuntime {
 	private workerBroken = false
 	private jobSeq = 0
 	private readonly pending = new Map<number, Pending>()
+	/**
+	 * Store acks awaiting the worker, by job id. Registered here — rather than
+	 * left as a bare promise — because `pending` only covers run jobs, and a
+	 * store ack that never settles leaves `load` awaiting forever: it strands
+	 * the caller's call, and with it everything the manager gates on that call
+	 * finishing. The bundle stays in `loaded`, so a respawned worker re-hydrates
+	 * it and the settled load is honest about where things stand.
+	 */
+	private readonly pendingLoads = new Map<number, () => void>()
 
 	async load(
 		pluginId: string,
@@ -192,7 +205,15 @@ export class SesWorkerRuntime implements PluginRuntime {
 		config?: CapabilityConfig
 	): Promise<void> {
 		const prev = this.loaded.get(pluginId)
-		if (prev && prev.hash === bundleHash) return
+		// Identical bytes *and* identical grants. Anything else has to re-store:
+		// a narrowed capability arriving with the same bundle must not be
+		// discarded as a no-op, whatever the caller's own bookkeeping believes.
+		if (
+			prev &&
+			prev.hash === bundleHash &&
+			capabilityKey(prev.config) === capabilityKey(config)
+		)
+			return
 		this.loaded.set(pluginId, {
 			source: bundleSource,
 			hash: bundleHash,
@@ -200,15 +221,18 @@ export class SesWorkerRuntime implements PluginRuntime {
 		})
 		const w = this.ensureWorker()
 		if (!w) return // unavailable; invoke will report it
-		await new Promise<void>((resolve, reject) => {
+		await new Promise<void>((resolve) => {
 			const id = ++this.jobSeq
-			const once = (msg: { id: number; ack?: boolean }) => {
-				if (msg.id !== id) return
-				w.off("message", once)
+			const onMsg = (msg: { id: number; ack?: boolean }) => {
+				if (msg.id === id) settle()
+			}
+			const settle = () => {
+				w.off("message", onMsg)
+				this.pendingLoads.delete(id)
 				resolve()
 			}
-			w.on("message", once)
-			w.once("error", reject)
+			this.pendingLoads.set(id, settle)
+			w.on("message", onMsg)
 			w.postMessage({
 				t: "store",
 				id,
@@ -217,8 +241,6 @@ export class SesWorkerRuntime implements PluginRuntime {
 				hash: bundleHash,
 				config
 			})
-		}).catch(() => {
-			/* worker died mid-store; ensureWorker re-hydrates on next call */
 		})
 	}
 
@@ -371,6 +393,9 @@ export class SesWorkerRuntime implements PluginRuntime {
 			entry.resolve({ ok: false, reason, kind: "error" })
 		}
 		this.pending.clear()
+		// Store acks are waiters too — an unsettled one hangs `load` forever.
+		for (const settle of [...this.pendingLoads.values()]) settle()
+		this.pendingLoads.clear()
 		if (w) void w.terminate()
 	}
 

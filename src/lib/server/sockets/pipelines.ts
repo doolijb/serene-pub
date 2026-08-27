@@ -915,6 +915,9 @@ export const pipelinesUpdateVariableTemplate: Handler<
 				...(params.name !== undefined ? { name: params.name } : {}),
 				...(params.source !== undefined
 					? { source: params.source }
+					: {}),
+				...(params.engine !== undefined
+					? { engine: params.engine }
 					: {})
 			})
 		} catch (err) {
@@ -1174,6 +1177,9 @@ export const pipelinesUpdateContextTemplate: Handler<
 				...(params.name !== undefined ? { name: params.name } : {}),
 				...(params.source !== undefined
 					? { source: params.source }
+					: {}),
+				...(params.engine !== undefined
+					? { engine: params.engine }
 					: {})
 			})
 		} catch (err) {
@@ -1277,7 +1283,7 @@ export const pipelinesPreviewTemplate: Handler<
 		let res: Sockets.Pipelines.PreviewTemplate.Response
 		if (params.kind === "variable") {
 			const decl = getVariable(params.poolId)
-			res = previewVariableTemplate({
+			res = await previewVariableTemplate({
 				source: params.source,
 				engine: params.engine,
 				variableId: params.poolId
@@ -1288,7 +1294,7 @@ export const pipelinesPreviewTemplate: Handler<
 					decl.scope
 				).map((i) => i.message)
 		} else {
-			res = previewContextTemplate({
+			res = await previewContextTemplate({
 				source: params.source,
 				engine: params.engine
 			})
@@ -1423,7 +1429,8 @@ export const pipelinesLibraryCreateTemplate: Handler<
 				await createContextTemplate(db as any, {
 					nodeTypeId: params.poolId,
 					name,
-					source: params.source ?? ""
+					source: params.source ?? "",
+					engine: params.engine ?? null
 				})
 			} else {
 				const { createVariableTemplate } = await import(
@@ -1432,7 +1439,8 @@ export const pipelinesLibraryCreateTemplate: Handler<
 				await createVariableTemplate(db as any, {
 					variableId: params.poolId,
 					name,
-					source: params.source ?? ""
+					source: params.source ?? "",
+					engine: params.engine ?? null
 				})
 			}
 		} catch (err) {
@@ -1527,6 +1535,9 @@ export const pipelinesLibraryUpdateTemplate: Handler<
 				...(params.name !== undefined ? { name: params.name } : {}),
 				...(params.source !== undefined
 					? { source: params.source }
+					: {}),
+				...(params.engine !== undefined
+					? { engine: params.engine }
 					: {})
 			}
 			if (params.kind === "context") {

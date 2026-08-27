@@ -86,7 +86,7 @@ function validShape(content: string, v: unknown): string | null {
 		return typeof v === "string" ? null : "a string was expected"
 	if (content === "messages" || content === "candidates")
 		return Array.isArray(v) ? null : "an array was expected"
-	if (content === "context")
+	if (content === "context" || content === "cast")
 		return v && typeof v === "object" && !Array.isArray(v)
 			? null
 			: "an object was expected"

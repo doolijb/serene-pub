@@ -24,6 +24,7 @@ import { createReviewer } from "$lib/server/pipelines/runtime/reviewGate"
 import { createHost, type HostScope } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
+import { pluginNodeBindings } from "$lib/server/pipelines/runtime/pluginBindings"
 import {
 	loadPublished,
 	RESPOND_SPEC_ID
@@ -189,10 +190,24 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 	// link never stalls a turn on the ready-gate. When any is false, plugin
 	// links are absorbed as skips and the pipeline is untouched.
 	let pluginDispatch: PluginHookDispatch | undefined
+	// A plugin's *nodes* on the spine (20 §9) — same gates as its chain
+	// links: subsystem on, startup finished. Empty when dark, so the spread
+	// below is a no-op and core specs run exactly as before.
+	let pluginNodes: Awaited<ReturnType<typeof pluginNodeBindings>> = {}
 	if (scriptsOn && pluginsEnabled()) {
 		const manager = getManager()
-		if (manager.isReady())
+		if (manager.isReady()) {
 			pluginDispatch = makePluginHookDispatch(request.db, manager)
+			pluginNodes = await pluginNodeBindings(request.db, manager, {
+				seed,
+				nowMs: Date.now(),
+				runId,
+				user:
+					request.userId != null
+						? String(request.userId)
+						: undefined
+			})
+		}
 	}
 
 	const receipt = await run(doc, {
@@ -209,7 +224,10 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 		seed,
 		triggerSource: request.preview ? "ui" : "event",
 		preview: request.preview,
-		bindings: coreBindings(),
+		// Core's bindings, with a plugin's process-transport nodes beside
+		// them — a collision is impossible by construction (namespaced ids,
+		// core: reserved at registration).
+		bindings: { ...coreBindings(), ...pluginNodes },
 		host: createHost(request.db, scope),
 		// The script engine, behind the executor's seam (18 §4a). Chains are
 		// config, so which ones run is already decided by the world above;

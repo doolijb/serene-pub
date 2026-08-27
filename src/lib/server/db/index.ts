@@ -438,6 +438,33 @@ if (!building) {
  * would be the wrong trade. It is logged, and the report carries the reason for
  * a diagnostics screen to show.
  */
+// The message-model migration (20 §5): one-shot, idempotent, before anything
+// reads messages. After the first pass the store's runtime mirror keeps the
+// legacy table and the new model in step, so this finds nothing.
+if (!building) {
+	try {
+		const { migrateMessages } = await import("$lib/server/messages/store")
+		const { migrated } = await migrateMessages(db)
+		if (migrated)
+			console.log(`[messages] migrated ${migrated} legacy message(s)`)
+	} catch (err) {
+		console.warn("[messages] legacy migration failed:", err)
+	}
+	// Embeddings become a connection (20 §14) — one-shot, pointer-guarded.
+	try {
+		const { migrateEmbeddingConnection } = await import(
+			"$lib/server/embedding/migrateEmbeddingConnection"
+		)
+		const r = await migrateEmbeddingConnection(db)
+		if (r.migrated)
+			console.log(
+				`[embedding] endpoint config migrated to connection ${r.connectionId}`
+			)
+	} catch (err) {
+		console.warn("[embedding] connection migration failed:", err)
+	}
+}
+
 if (!building) {
 	try {
 		const { bootstrapPipelines } = await import(

@@ -1,5 +1,13 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
+import {
+	insertLegacy,
+	insertLegacyMany,
+	updateLegacyWhere,
+	deleteLegacy,
+	hasNativeSteps
+} from "$lib/server/messages/store"
+import { verbRefusal } from "$lib/server/messages/verbs"
 import { and, asc, count, desc, eq, inArray, isNull, lt, or } from "drizzle-orm"
 import {
 	syncLorebookBindingsForCharacter,
@@ -336,6 +344,19 @@ async function buildSessionsListFor(
 	// personas/guests only — enforced server-side in sessionsUpdateHandler,
 	// not just hidden client-side). canEdit kept for back-compat meaning
 	// "can open the edit menu at all" (owner or guest), not "owns the session".
+	// The mode display name per session — the "type" the card shows (Chat,
+	// or a custom mode). One registry read, mapped; best-effort, so a
+	// registry that never synced just leaves the label off.
+	const { listSessionModes, STANDARD_MODE_ID } = await import(
+		"$lib/server/pipelines/entities/sessionModes"
+	)
+	const modeNames = new Map(
+		(await listSessionModes(db as any).catch(() => [])).map((m) => [
+			m.modeId,
+			m.name
+		])
+	)
+
 	const sessionsWithEditPermission = sessionsList.map((session) => {
 		const isOwner = session.userId === userId
 		const isGuest = !isOwner && guestSessionIds.includes(session.id)
@@ -344,6 +365,8 @@ async function buildSessionsListFor(
 			isOwner,
 			isGuest,
 			canEdit: isOwner || isGuest,
+			modeName:
+				modeNames.get(session.modeId ?? STANDARD_MODE_ID) ?? "Chat",
 			// sessionCharacters/sessionPersonas rows can have a null character/
 			// persona when the linked row was deleted (the FK is nullable,
 			// onDelete: "set null") — filter those out, matching the same
@@ -588,7 +611,7 @@ export const sessionsCreateHandler: Handler<
 						}
 					}
 				}
-				await db.insert(schema.sessionMessages).values(newMessage)
+				await insertLegacy(db, newMessage)
 			}
 		}
 
@@ -1160,6 +1183,26 @@ export const sessionsTriggerFunctionHandler: Handler<
 						`Nothing serves '${params.function}' for this session's mode.`
 					)
 
+				// A menu trigger's subject (19 §4): the message it was pressed
+				// on. Verified against the session before it rides the input —
+				// hiding a button is presentation, but a forged id reaching a
+				// spec as data would make the control surface decoration.
+				if (params.messageId != null) {
+					const [subject] = await db
+						.select({
+							sessionId: schema.sessionMessages.sessionId
+						})
+						.from(schema.sessionMessages)
+						.where(
+							eq(schema.sessionMessages.id, params.messageId)
+						)
+						.limit(1)
+					if (!subject || subject.sessionId !== params.sessionId)
+						return fail(
+							"That message is not part of this session."
+						)
+				}
+
 				const { runSpec } = await import(
 					"$lib/server/pipelines/runtime/runTurn"
 				)
@@ -1175,6 +1218,12 @@ export const sessionsTriggerFunctionHandler: Handler<
 						text: "",
 						sessionId: params.sessionId,
 						characterId: null,
+						...(params.messageId != null
+							? { messageId: params.messageId }
+							: {}),
+						...(params.payload && typeof params.payload === "object"
+							? { payload: params.payload }
+							: {}),
 						sessionScope: {
 							sessionId: params.sessionId,
 							currentCharacterId: null
@@ -1205,6 +1254,166 @@ export const sessionsTriggerFunctionHandler: Handler<
 				return fail("Failed to run the function.")
 			}
 		})
+}
+
+/**
+ * The pipelines involved in a session, for the chat's grouped settings: the
+ * intrinsic `respond` plus every enabled contributed function (narrate, the
+ * summarize family, plugin functions). Each resolves to a spec slug the
+ * config panel can render at session scope; the list is what lets the Edit
+ * Chat settings group configurables **by pipeline** rather than by setting
+ * type. Deduped by slug — one spec serving two functions is one card.
+ */
+export const sessionsPipelinesHandler: Handler<
+	Sockets.Sessions.Pipelines.Params,
+	Sockets.Sessions.Pipelines.Response
+> = {
+	event: "sessions:pipelines",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const access = await checkSessionAccess(params.sessionId, userId)
+		const res: Sockets.Sessions.Pipelines.Response = {
+			sessionId: params.sessionId,
+			pipelines: []
+		}
+		if (access.hasAccess) {
+			const {
+				resolveFunctionSpec,
+				enabledSessionFunctions,
+				STANDARD_MODE_ID
+			} = await import(
+				"$lib/server/pipelines/entities/sessionModes"
+			)
+			const [session] = await db
+				.select({ modeId: schema.sessions.modeId })
+				.from(schema.sessions)
+				.where(eq(schema.sessions.id, params.sessionId))
+				.limit(1)
+			const modeId = session?.modeId ?? STANDARD_MODE_ID
+
+			const nameOf = async (slug: string): Promise<string | null> => {
+				const [row] = await db
+					.select({ name: schema.pipelineSpecs.name })
+					.from(schema.pipelineSpecs)
+					.where(eq(schema.pipelineSpecs.slug, slug))
+					.limit(1)
+				return row?.name ?? null
+			}
+			const seen = new Set<string>()
+			const add = async (
+				slug: string | null,
+				label: string
+			): Promise<void> => {
+				if (!slug || seen.has(slug)) return
+				seen.add(slug)
+				res.pipelines.push({
+					slug,
+					label: label || (await nameOf(slug)) || slug
+				})
+			}
+
+			// The reply pipeline is always involved; then every function the
+			// session actually has switched on (19 §4) — narrate included.
+			await add(
+				await resolveFunctionSpec(db, modeId, "respond", {
+					sessionId: params.sessionId
+				}),
+				"Respond"
+			)
+			const fns = await enabledSessionFunctions(
+				db as any,
+				params.sessionId,
+				modeId,
+				userId
+			)
+			for (const fn of fns)
+				await add(
+					await resolveFunctionSpec(db, modeId, fn.function, {
+						sessionId: params.sessionId
+					}),
+					fn.name
+				)
+		}
+		emitToUser("sessions:pipelines", res)
+		return res
+	}
+}
+
+/**
+ * The session's frame surfaces (20 §12): the mode-declared session-view and
+ * every enabled plugin's declared panels, each resolved to a frame src on the
+ * plugin-ui route. Presence is data — disabling a plugin takes its frames
+ * with it, and a mode whose view-plugin is missing falls back to core's log
+ * (the frame is simply absent, never an error).
+ */
+export const sessionsViewHandler: Handler<
+	Sockets.Sessions.View.Params,
+	Sockets.Sessions.View.Response
+> = {
+	event: "sessions:view",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const access = await checkSessionAccess(params.sessionId, userId)
+		const res: Sockets.Sessions.View.Response = {
+			sessionId: params.sessionId,
+			panels: []
+		}
+		if (access.hasAccess) {
+			const { surfacesOf, frameSrc } = await import(
+				"$lib/server/plugins/frameHost"
+			)
+			const enabled = await db
+				.select({
+					pluginId: schema.plugins.pluginId,
+					name: schema.plugins.name,
+					manifest: schema.plugins.manifest
+				})
+				.from(schema.plugins)
+				.where(eq(schema.plugins.enabled, true))
+
+			// Panels: every enabled plugin's declarations, in name order.
+			for (const p of enabled) {
+				const surfaces = surfacesOf(p.manifest)
+				for (const panel of surfaces.panels)
+					res.panels.push({
+						pluginId: p.pluginId,
+						panelId: panel.id,
+						src: frameSrc(p.pluginId, panel.entry),
+						title: panel.title ?? panel.id
+					})
+			}
+
+			// The mode's declared session-view, when its plugin is enabled
+			// and declares the surface.
+			const { getSessionMode, STANDARD_MODE_ID } = await import(
+				"$lib/server/pipelines/entities/sessionModes"
+			)
+			const [session] = await db
+				.select({ modeId: schema.sessions.modeId })
+				.from(schema.sessions)
+				.where(eq(schema.sessions.id, params.sessionId))
+				.limit(1)
+			const mode = await getSessionMode(
+				db as any,
+				session?.modeId ?? STANDARD_MODE_ID
+			)
+			const viewPlugin = (mode?.shape as any)?.view
+			if (typeof viewPlugin === "string") {
+				const owner = enabled.find((p) => p.pluginId === viewPlugin)
+				const decl = owner
+					? surfacesOf(owner.manifest).sessionView
+					: undefined
+				if (owner && decl)
+					res.sessionView = {
+						pluginId: owner.pluginId,
+						src: frameSrc(owner.pluginId, decl.entry),
+						title: decl.title ?? owner.name
+					}
+			}
+		}
+		emitToUser("sessions:view", res)
+		return res
+	}
 }
 
 /**
@@ -1523,6 +1732,19 @@ export const sessionsGetHandler: Handler<
 				| null
 				| undefined
 			const userDraft = drafts?.[String(userId)] || null
+
+			// The parts-native half rides along (20 §13 phase 2): the client
+			// renders from parts when present and falls back to the legacy
+			// fields when not — the two are parity-identical by construction.
+			if ((sessionData as any).sessionMessages?.length) {
+				const { attachParts } = await import(
+					"$lib/server/messages/store"
+				)
+				;(sessionData as any).sessionMessages = await attachParts(
+					db,
+					(sessionData as any).sessionMessages
+				)
+			}
 
 			const res: Sockets.Sessions.Get.Response = {
 				session: sessionData as any,
@@ -2533,7 +2755,8 @@ export const sessionsBranchHandler: Handler<
 				}
 
 				if (messagesToCopy.length > 0) {
-					await tx.insert(schema.sessionMessages).values(
+					await insertLegacyMany(
+						tx,
 						messagesToCopy.map(
 							(message) =>
 								({
@@ -2674,15 +2897,14 @@ export const sessionsReassignRemovedParticipantHandler: Handler<
 				// via onDelete: "set null" and reverts to "Unknown": the
 				// exact data loss this handler exists to prevent.
 				await db.transaction(async (tx) => {
-					await tx
-						.update(schema.sessionMessages)
-						.set({ characterId: newId })
-						.where(
-							and(
-								eq(schema.sessionMessages.sessionId, sessionId),
-								eq(schema.sessionMessages.characterId, oldId)
-							)
-						)
+					await updateLegacyWhere(
+						tx,
+						and(
+							eq(schema.sessionMessages.sessionId, sessionId),
+							eq(schema.sessionMessages.characterId, oldId)
+						),
+						{ characterId: newId }
+					)
 					await tx
 						.insert(schema.sessionCharacters)
 						.values({
@@ -2753,15 +2975,14 @@ export const sessionsReassignRemovedParticipantHandler: Handler<
 				}
 
 				await db.transaction(async (tx) => {
-					await tx
-						.update(schema.sessionMessages)
-						.set({ personaId: newId })
-						.where(
-							and(
-								eq(schema.sessionMessages.sessionId, sessionId),
-								eq(schema.sessionMessages.personaId, oldId)
-							)
-						)
+					await updateLegacyWhere(
+						tx,
+						and(
+							eq(schema.sessionMessages.sessionId, sessionId),
+							eq(schema.sessionMessages.personaId, oldId)
+						),
+						{ personaId: newId }
+					)
 					await tx
 						.insert(schema.sessionPersonas)
 						.values({
@@ -2909,10 +3130,7 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 				content
 			}
 
-			const [inserted] = await db
-				.insert(schema.sessionMessages)
-				.values(newMessage)
-				.returning()
+			const inserted = await insertLegacy(db, newMessage)
 
 			const res: Sockets.SessionMessages.SendPersonaMessage.Response = {
 				sessionMessage: inserted as any
@@ -2990,6 +3208,25 @@ export const sessionMessagesUpdateHandler: Handler<
 				return res
 			}
 
+			// The mode's declared verb policy (20 §4) — content edits only.
+			// isHidden is a floor: hiding is always the owner's, and no
+			// declaration is consulted for it.
+			if (content !== undefined) {
+				const editRefusal = await verbRefusal(
+					db,
+					existingMessage.sessionId,
+					"edit"
+				)
+				if (editRefusal) {
+					const res: Sockets.SessionMessages.Update.Response = {
+						sessionMessage: undefined,
+						error: editRefusal
+					}
+					emitToUser("sessionMessages:update:error", res)
+					return res
+				}
+			}
+
 			if (
 				content !== undefined &&
 				content.length > MAX_CHAT_MESSAGE_LENGTH
@@ -3036,11 +3273,11 @@ export const sessionMessagesUpdateHandler: Handler<
 			if (isHidden !== undefined) updates.isHidden = isHidden
 
 			// Update the message
-			const [updated] = await db
-				.update(schema.sessionMessages)
-				.set(updates)
-				.where(eq(schema.sessionMessages.id, id))
-				.returning()
+			const [updated] = await updateLegacyWhere(
+				db,
+				eq(schema.sessionMessages.id, id),
+				updates
+			)
 
 			if (!updated) {
 				const res: Sockets.SessionMessages.Update.Response = {
@@ -3111,10 +3348,8 @@ export const sessionMessagesDeleteHandler: Handler<
 				return res
 			}
 
-			// Delete the message
-			await db
-				.delete(schema.sessionMessages)
-				.where(eq(schema.sessionMessages.id, params.id))
+			// Delete the message (both worlds — the store owns the mirror)
+			await deleteLegacy(db, params.id)
 
 			const res: Sockets.SessionMessages.Delete.Response = {
 				id: params.id,
@@ -3186,6 +3421,23 @@ export const sessionMessagesRegenerateHandler: Handler<
 						return res
 					}
 
+					// The mode's declared verb policy (20 §4): presence is
+					// presentation, refusal is the law.
+					const retryRefusal = await verbRefusal(
+						db,
+						messageToRegenerate.sessionId,
+						"retry"
+					)
+					if (retryRefusal) {
+						const res: Sockets.SessionMessages.Regenerate.Response =
+							{
+								sessionMessage: undefined,
+								error: retryRefusal
+							}
+						emitToUser("sessionMessages:regenerate", res)
+						return res
+					}
+
 					// Freshness guard, re-checked now that the lock is held — a
 					// queued call must see whatever the call ahead of it in line
 					// already committed, not a stale pre-lock snapshot. Mirrors
@@ -3215,17 +3467,17 @@ export const sessionMessagesRegenerateHandler: Handler<
 						(messageToRegenerate.metadata as any) || {}
 
 					// Clear the content and set as generating
-					const [updated] = await db
-						.update(schema.sessionMessages)
-						.set({
+					const [updated] = await updateLegacyWhere(
+						db,
+						eq(schema.sessionMessages.id, params.id),
+						{
 							content: "",
 							isGenerating: true,
 							generationStage: "queued",
 							error: null,
 							metadata: currentMetadata
-						})
-						.where(eq(schema.sessionMessages.id, params.id))
-						.returning()
+						}
+					)
 
 					const res: Sockets.SessionMessages.Regenerate.Response = {
 						sessionMessage: updated as any
@@ -3308,6 +3560,21 @@ export const sessionMessagesContinueHandler: Handler<
 						return res
 					}
 
+					// The mode's declared verb policy (20 §4).
+					const continueRefusal = await verbRefusal(
+						db,
+						messageToContinue.sessionId,
+						"continue"
+					)
+					if (continueRefusal) {
+						const res: Sockets.SessionMessages.Continue.Response = {
+							sessionMessage: undefined,
+							error: continueRefusal
+						}
+						emitToUser("sessionMessages:continue", res)
+						return res
+					}
+
 					// Freshness guard, re-checked now that the lock is held — see
 					// the identical comment in sessionMessagesRegenerateHandler.
 					const alreadyGenerating =
@@ -3336,16 +3603,16 @@ export const sessionMessagesContinueHandler: Handler<
 
 					// Set as generating but KEEP existing content
 					// The content will be used as a prefix in generateResponse
-					const [updated] = await db
-						.update(schema.sessionMessages)
-						.set({
+					const [updated] = await updateLegacyWhere(
+						db,
+						eq(schema.sessionMessages.id, params.id),
+						{
 							isGenerating: true,
 							generationStage: "queued",
 							error: null,
 							metadata: currentMetadata
-						})
-						.where(eq(schema.sessionMessages.id, params.id))
-						.returning()
+						}
+					)
 
 					const res: Sockets.SessionMessages.Continue.Response = {
 						sessionMessage: updated as any
@@ -3437,6 +3704,18 @@ export const sessionMessagesSwipeLeftHandler: Handler<
 				return res
 			}
 
+			// The freeze rule (20 §1): once a stepped activity has advanced,
+			// step 0's selection is frozen at what produced the later steps —
+			// legacy swiping only ever addresses step 0, so it refuses here.
+			if (await hasNativeSteps(db, message.id)) {
+				const res: Sockets.SessionMessages.SwipeLeft.Response = {
+					sessionMessage: undefined,
+					error: "This activity has moved past its first step — earlier steps are frozen. Step back first."
+				}
+				emitToUser("sessionMessages:swipeLeft", res)
+				return res
+			}
+
 			// Regenerate/Continue/SwipeRight all wrap their mutation in the
 			// per-session generation lock; without it here, a SwipeRight/
 			// Regenerate/Continue racing against a concurrent SwipeLeft on
@@ -3508,11 +3787,11 @@ export const sessionMessagesSwipeLeftHandler: Handler<
 				// primary key, not an updatable column, and isn't optional on
 				// SelectSessionMessage so `delete` can't be used here)
 				const { id: _id, ...dataWithoutId } = data
-				const [updated] = await db
-					.update(schema.sessionMessages)
-					.set({ ...dataWithoutId })
-					.where(eq(schema.sessionMessages.id, message.id))
-					.returning()
+				const [updated] = await updateLegacyWhere(
+					db,
+					eq(schema.sessionMessages.id, message.id),
+					{ ...dataWithoutId }
+				)
 
 				if (!updated) {
 					const res: Sockets.SessionMessages.SwipeLeft.Response = {
@@ -3569,6 +3848,16 @@ export const sessionMessagesSwipeRightHandler: Handler<
 				const res: Sockets.SessionMessages.SwipeRight.Response = {
 					sessionMessage: undefined,
 					error: "Message not found"
+				}
+				emitToUser("sessionMessages:swipeRight", res)
+				return res
+			}
+
+			// The freeze rule (20 §1) — see swipeLeft.
+			if (await hasNativeSteps(db, message.id)) {
+				const res: Sockets.SessionMessages.SwipeRight.Response = {
+					sessionMessage: undefined,
+					error: "This activity has moved past its first step — earlier steps are frozen. Step back first."
 				}
 				emitToUser("sessionMessages:swipeRight", res)
 				return res
@@ -3693,11 +3982,11 @@ export const sessionMessagesSwipeRightHandler: Handler<
 				const { id: _id, ...dataWithoutId } = data
 
 				// Update the session message in the database
-				const [updated] = await db
-					.update(schema.sessionMessages)
-					.set({ ...dataWithoutId })
-					.where(eq(schema.sessionMessages.id, message.id))
-					.returning()
+				const [updated] = await updateLegacyWhere(
+					db,
+					eq(schema.sessionMessages.id, message.id),
+					{ ...dataWithoutId }
+				)
 
 				if (!updated) {
 					const res: Sockets.SessionMessages.SwipeRight.Response = {
@@ -3859,24 +4148,22 @@ export const sessionMessagesCancelHandler: Handler<
 			for (const message of generatingMessages) targetIds.add(message.id)
 
 			for (const id of targetIds) {
-				const [updated] = await db
-					.update(schema.sessionMessages)
-					.set({
+				const [updated] = await updateLegacyWhere(
+					db,
+					and(
+						eq(schema.sessionMessages.id, id),
+						eq(
+							schema.sessionMessages.sessionId,
+							params.sessionId
+						)
+					),
+					{
 						isGenerating: false,
 						generationStage: null,
 						queueItemId: null,
 						error: null
-					})
-					.where(
-						and(
-							eq(schema.sessionMessages.id, id),
-							eq(
-								schema.sessionMessages.sessionId,
-								params.sessionId
-							)
-						)
-					)
-					.returning()
+					}
+				)
 				if (updated) {
 					await broadcastToSessionUsers(
 						socket.io,
@@ -4473,10 +4760,10 @@ export const triggerGenerateMessageHandler: Handler<
 							generationStage: "queued"
 						}
 
-						const [generatingMessage] = await db
-							.insert(schema.sessionMessages)
-							.values(assistantMessage)
-							.returning()
+						const generatingMessage = await insertLegacy(
+							db,
+							assistantMessage
+						)
 
 						// emitToUser is always provided by the handler dispatcher (see
 						// Handler in $lib/shared/events.ts — non-optional), so this
@@ -4621,10 +4908,10 @@ export const triggerNarratorResponseHandler: Handler<
 					}
 				}
 
-				const [generatingMessage] = await db
-					.insert(schema.sessionMessages)
-					.values(narratorMessage)
-					.returning()
+				const generatingMessage = await insertLegacy(
+					db,
+					narratorMessage
+				)
 
 				await broadcastToSessionUsers(
 					socket.io,
@@ -4912,6 +5199,127 @@ export const updateSessionCharacterVisibilityHandler: Handler<
 }
 
 // Registration function for all session handlers
+/**
+ * The account-visibility view (design §4). From the caller's own seat, what of
+ * *their* data this session exposes to everyone else in it.
+ *
+ * This is the exact inverse of `canViewCharacter`/`canViewPersona`: a character
+ * or persona a person owns becomes viewable by every other participant — and
+ * readable by the pipelines that assemble this session's prompts — the instant
+ * it is bound in. A guest asking here sees only their own contributions and who
+ * else can see them, so they understand the consequence before contributing.
+ * Owner and guests may both ask; access is gated the same way as every other
+ * session-scoped read.
+ */
+export const sessionsAccountVisibilityHandler: Handler<
+	Sockets.Sessions.AccountVisibility.Params,
+	Sockets.Sessions.AccountVisibility.Response
+> = {
+	event: "sessions:accountVisibility",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const res: Sockets.Sessions.AccountVisibility.Response = {
+			sessionId: params.sessionId,
+			isOwner: false,
+			isGuest: false,
+			viewers: [],
+			exposed: { characters: [], personas: [], lorebooks: [] }
+		}
+
+		const access = await checkSessionAccess(params.sessionId, userId)
+		if (!access.hasAccess) {
+			res.error = "no access to this session"
+			emitToUser("sessions:accountVisibility", res)
+			return res
+		}
+		res.isOwner = access.isOwner
+		res.isGuest = access.isGuest
+
+		// The caller's own characters/personas bound into this session — what a
+		// bound entity discloses to the rest of the participants.
+		res.exposed.characters = await db
+			.select({
+				id: schema.characters.id,
+				name: schema.characters.name
+			})
+			.from(schema.sessionCharacters)
+			.innerJoin(
+				schema.characters,
+				eq(schema.sessionCharacters.characterId, schema.characters.id)
+			)
+			.where(
+				and(
+					eq(schema.sessionCharacters.sessionId, params.sessionId),
+					eq(schema.characters.userId, userId)
+				)
+			)
+
+		res.exposed.personas = await db
+			.select({ id: schema.personas.id, name: schema.personas.name })
+			.from(schema.sessionPersonas)
+			.innerJoin(
+				schema.personas,
+				eq(schema.sessionPersonas.personaId, schema.personas.id)
+			)
+			.where(
+				and(
+					eq(schema.sessionPersonas.sessionId, params.sessionId),
+					eq(schema.personas.userId, userId)
+				)
+			)
+
+		// The session's lorebook is a single binding on the session row (the
+		// `sessionLorebooks` junction is unused legacy). Exposed only when the
+		// caller owns it.
+		const session = await db.query.sessions.findFirst({
+			where: eq(schema.sessions.id, params.sessionId),
+			columns: { userId: true, lorebookId: true }
+		})
+		if (session?.lorebookId) {
+			res.exposed.lorebooks = await db
+				.select({ id: schema.lorebooks.id, name: schema.lorebooks.name })
+				.from(schema.lorebooks)
+				.where(
+					and(
+						eq(schema.lorebooks.id, session.lorebookId),
+						eq(schema.lorebooks.userId, userId)
+					)
+				)
+		}
+
+		// Who else can see the above: the session owner plus every guest, minus
+		// the caller themselves.
+		const guests = await db
+			.select({ userId: schema.sessionGuests.userId })
+			.from(schema.sessionGuests)
+			.where(eq(schema.sessionGuests.sessionId, params.sessionId))
+		const ownerId = session?.userId ?? null
+		const otherIds = new Set<number>()
+		if (ownerId != null && ownerId !== userId) otherIds.add(ownerId)
+		for (const g of guests)
+			if (g.userId != null && g.userId !== userId) otherIds.add(g.userId)
+
+		if (otherIds.size) {
+			const rows = await db
+				.select({
+					id: schema.users.id,
+					username: schema.users.username,
+					displayName: schema.users.displayName
+				})
+				.from(schema.users)
+				.where(inArray(schema.users.id, [...otherIds]))
+			res.viewers = rows.map((u) => ({
+				userId: u.id,
+				username: u.displayName || u.username,
+				role: u.id === ownerId ? ("owner" as const) : ("guest" as const)
+			}))
+		}
+
+		emitToUser("sessions:accountVisibility", res)
+		return res
+	}
+}
+
 export function registerSessionHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -4928,6 +5336,8 @@ export function registerSessionHandlers(
 	register(socket, sessionsGetHandler, emitToUser)
 	register(socket, sessionsModesHandler, emitToUser)
 	register(socket, sessionsTriggersHandler, emitToUser)
+	register(socket, sessionsViewHandler, emitToUser)
+	register(socket, sessionsPipelinesHandler, emitToUser)
 	register(socket, sessionsTriggerFunctionHandler, emitToUser)
 	register(socket, sessionsPresetsHandler, emitToUser)
 	register(socket, sessionsChoosePresetHandler, emitToUser)
@@ -4961,4 +5371,5 @@ export function registerSessionHandlers(
 	register(socket, sessionsGetNarratorNameHandler, emitToUser)
 	register(socket, toggleSessionCharacterActiveHandler, emitToUser)
 	register(socket, updateSessionCharacterVisibilityHandler, emitToUser)
+	register(socket, sessionsAccountVisibilityHandler, emitToUser)
 }

@@ -456,7 +456,8 @@
 				</div>
 				<div class="min-w-0 flex-1">
 					<div class="flex items-center justify-between gap-2">
-						<span class="font-semibold">LLM / Text Generation</span>
+						<span class="font-semibold">Large Language Models
+						</span>
 						<Icons.ChevronRight
 							size={16}
 							class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5"

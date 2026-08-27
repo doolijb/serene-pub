@@ -1059,7 +1059,7 @@
 				<div class="min-w-0 flex-1">
 					<div class="flex items-center justify-between gap-2">
 						<span class="font-semibold">
-							Session Prompts: Character
+							Chat Prompts: Character
 						</span>
 						<Icons.ChevronRight
 							size={16}
@@ -1100,7 +1100,7 @@
 				<div class="min-w-0 flex-1">
 					<div class="flex items-center justify-between gap-2">
 						<span class="font-semibold">
-							Session Prompts: Narrator
+							Chat Prompts: Narrator
 						</span>
 						<Icons.ChevronRight
 							size={16}
@@ -1188,13 +1188,13 @@
 					<Icons.ChevronLeft size={16} />
 				</button>
 				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
-					Session Prompts: Character
+					Chat Prompts: Character
 				</h2>
 			</div>
 			<div
 				class="mt-2 flex gap-2"
 				role="toolbar"
-				aria-label="Session prompt config actions"
+				aria-label="Chat prompt config actions"
 			>
 				<button
 					type="button"
@@ -1452,7 +1452,7 @@
 					<Icons.ChevronLeft size={16} />
 				</button>
 				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
-					Session Prompts: Narrator
+					Chat Prompts: Narrator
 				</h2>
 			</div>
 			<div

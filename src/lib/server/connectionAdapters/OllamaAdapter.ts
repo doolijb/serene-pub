@@ -552,7 +552,9 @@ const exports: AdapterExports = {
 	listModels,
 	testConnection,
 	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA],
-	samplingKeyMap: ollamaSamplingKeyMap
+	samplingKeyMap: ollamaSamplingKeyMap,
+	// 20 §9: per-model — /api/show reports 'tools'; emulated until a probe answers.
+	capabilities: { toolUse: "probed" }
 }
 
 export default exports

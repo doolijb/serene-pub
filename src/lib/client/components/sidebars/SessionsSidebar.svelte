@@ -14,8 +14,10 @@
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
+		/** The chat currently open in the main view — pinned and highlighted. */
+		sessionId?: number | null
 	}
-	let { onclose = $bindable() }: Props = $props()
+	let { onclose = $bindable(), sessionId = null }: Props = $props()
 
 	let sessions: Sockets.Sessions.List.Response["sessionList"] = $state([])
 	let isLoading = $state(true)
@@ -42,6 +44,15 @@
 	// Filtered sessions derived from search
 	let filteredSessions: Sockets.Sessions.List.Response["sessionList"] =
 		$state([])
+
+	// The open chat pinned to the top, so it is always at hand and never
+	// scrolled past. Highlight rides along via `active` on each item.
+	const orderedSessions = $derived.by(() => {
+		if (sessionId == null) return filteredSessions
+		const active = filteredSessions.filter((s) => s.id === sessionId)
+		if (!active.length) return filteredSessions
+		return [...active, ...filteredSessions.filter((s) => s.id !== sessionId)]
+	})
 
 	socket.on("sessions:list", (msg: Sockets.Sessions.List.Response) => {
 		sessions = msg.sessionList || []
@@ -111,6 +122,13 @@
 	}
 
 	function handleSessionClick(session: any) {
+		// Clicking the already-open chat a second time opens *into* it in the
+		// sidebar (its view panel: settings, participants, open) rather than
+		// re-navigating to where you already are.
+		if (session.id === sessionId) {
+			handleViewClick(session.id)
+			return
+		}
 		handleOpenSession(session.id)
 	}
 
@@ -401,9 +419,10 @@
 				/>
 			{:else}
 				<ul class="flex flex-col gap-2">
-					{#each filteredSessions as session}
+					{#each orderedSessions as session (session.id)}
 						<SessionListItem
 							{session}
+							active={session.id === sessionId}
 							onclick={handleSessionClick}
 							onEdit={handleEditClick}
 							onDelete={handleDeleteClick}

@@ -11,6 +11,7 @@
 
 import { eq } from "drizzle-orm"
 import { plugins, pluginHookInvocations } from "$lib/server/db/schema"
+import { hookSettingsFor } from "./settingsHost"
 import type { InvocationRecord, PluginDescriptor } from "./RuntimeManager"
 import type { RuntimeKind } from "./types"
 import {
@@ -34,6 +35,8 @@ interface PluginRow {
 	enabled: boolean
 	manifest?: PluginManifest | null
 	adminDenied?: string[] | null
+	storageQuotaOverride?: number | null
+	settings?: Record<string, unknown> | null
 }
 
 function rowToDescriptor(row: PluginRow): PluginDescriptor {
@@ -52,18 +55,28 @@ function rowToDescriptor(row: PluginRow): PluginDescriptor {
 		backends: backends.length ? backends : ["quickjs"],
 		backend,
 		sequential: row.sequential,
-		// Grants derive from the *effective* set (declared − admin-denied).
-		...capabilityGrants(row.manifest, row.adminDenied)
+		// Grants derive from the *effective* set (declared − admin-denied); an admin
+		// storage-quota override rides on top of the effective storage grant.
+		...capabilityGrants(row.manifest, row.adminDenied, row.storageQuotaOverride),
+		// Manifest-declared settings, resolved for the owning hook (12 §6).
+		...(() => {
+			const s = hookSettingsFor(row.manifest, row.settings)
+			return s ? { settings: s } : {}
+		})()
 	}
 }
 
 /** Storage + network grants from a row's effective permission set. */
 function capabilityGrants(
 	manifest: PluginManifest | null | undefined,
-	adminDenied: string[] | null | undefined
+	adminDenied: string[] | null | undefined,
+	storageQuotaOverride?: number | null
 ): { storageQuotaBytes?: number; networkHosts?: string[] } {
 	const eff = effectivePermissions(declaredPermissions(manifest), adminDenied)
-	return { storageQuotaBytes: storageGrant(eff), networkHosts: networkGrant(eff) }
+	return {
+		storageQuotaBytes: storageGrant(eff, storageQuotaOverride),
+		networkHosts: networkGrant(eff)
+	}
 }
 
 /** Every enabled plugin, as manager descriptors. */
@@ -192,6 +205,22 @@ export async function setAdminDenied(
 	await db
 		.update(plugins)
 		.set({ adminDenied: denied, updatedAt: new Date() })
+		.where(eq(plugins.pluginId, pluginId))
+}
+
+/**
+ * Set (or clear, with null) an admin's per-plugin storage-quota override. The
+ * value is stored raw; the sane-band clamp and the "storage must be granted"
+ * rule are applied at grant-derivation (storageGrant), the single point of truth.
+ */
+export async function setStorageQuotaOverride(
+	db: Db,
+	pluginId: string,
+	bytes: number | null
+): Promise<void> {
+	await db
+		.update(plugins)
+		.set({ storageQuotaOverride: bytes, updatedAt: new Date() })
 		.where(eq(plugins.pluginId, pluginId))
 }
 

@@ -101,12 +101,12 @@ const base = () => ({
 })
 
 describe("template context", () => {
-	it("produces the same character and persona blobs as the legacy path", () => {
+	it("produces the same character and persona blobs as the legacy path", async () => {
 		// Byte-identical, because the default templates render these as raw
 		// JSON: a difference in indentation is a difference in the prompt.
 		const c = session()
 		const expected = legacyBlobs({ ...base(), session: c })
-		const built = buildTemplateContext({ ...base(), session: c })
+		const built = await buildTemplateContext({ ...base(), session: c })
 
 		// Wrapped, because 0.6 moved the heading and fence off the template and
 		// onto the value. The legacy builder still emits the bare blob, so the
@@ -120,19 +120,19 @@ describe("template context", () => {
 		)
 	})
 
-	it("interpolates macros in descriptions, not just in the template", () => {
+	it("interpolates macros in descriptions, not just in the template", async () => {
 		// `{{user}}` inside a character card has to resolve before the card is
 		// stringified — after that it is JSON, and Handlebars will not reach in.
-		const built = buildTemplateContext(base())
+		const built = await buildTemplateContext(base())
 		expect(built.characters).toContain("A knight sworn to Bob.")
 		expect(built.characters).not.toContain("{{user}}")
 	})
 
-	it("interpolates the scenario it is given, and chooses no scenario itself", () => {
+	it("interpolates the scenario it is given, and chooses no scenario itself", async () => {
 		// Which scenario wins — the session's or the character's — is a rule with
 		// a group-session special case (index.ts:364-383). It stays upstream; this
 		// builder renders the winner.
-		const built = buildTemplateContext({
+		const built = await buildTemplateContext({
 			...base(),
 			scenario: "{{char}} meets {{user}} at the gate."
 		})
@@ -141,11 +141,11 @@ describe("template context", () => {
 		)
 	})
 
-	it("names only the characters it was told to name", () => {
+	it("names only the characters it was told to name", async () => {
 		// `characterNames` is the visible, active subset and is passed in;
 		// deriving it from the cards would name a hidden character in every
 		// prompt that renders `{{characterNames}}`.
-		const built = buildTemplateContext({
+		const built = await buildTemplateContext({
 			...base(),
 			characters: [alice, cara],
 			characterNames: ["Alice"]
@@ -153,7 +153,7 @@ describe("template context", () => {
 		expect(built.characterNames).toBe("Alice")
 		expect(built.characters).toContain("Cara")
 
-		const both = buildTemplateContext({
+		const both = await buildTemplateContext({
 			...base(),
 			characters: [alice, cara],
 			characterNames: ["Alice", "Cara"]
@@ -162,11 +162,11 @@ describe("template context", () => {
 		expect(both.personaNames).toBe("Bob")
 	})
 
-	it("exposes the narrator's configured name to the prompt texts", () => {
+	it("exposes the narrator's configured name to the prompt texts", async () => {
 		// Narrator-mode configs reference `{{narratorName}}` in their own text
 		// (index.ts:670-676). Losing it renders the literal handlebars into the
 		// system prompt.
-		const built = buildTemplateContext({
+		const built = await buildTemplateContext({
 			...base(),
 			narratorName: "The GM",
 			texts: { instructions: "You are {{narratorName}}." }
@@ -176,28 +176,28 @@ describe("template context", () => {
 		)
 	})
 
-	it("aliases char/character and user/persona, as the legacy shape does", () => {
-		const built = buildTemplateContext(base())
+	it("aliases char/character and user/persona, as the legacy shape does", async () => {
+		const built = await buildTemplateContext(base())
 		expect(built.char).toBe(built.character)
 		expect(built.user).toBe(built.persona)
 	})
 
-	it("carries no back-reference to a builder", () => {
+	it("carries no back-reference to a builder", async () => {
 		// `__promptBuilderInstance` was how the infill engines reached back into
 		// the builder mid-render. Its absence is the coupling being removed, not
 		// a field that was forgotten — a node cannot reach back into anything.
-		expect("__promptBuilderInstance" in buildTemplateContext(base())).toBe(
+		expect("__promptBuilderInstance" in (await buildTemplateContext(base()))).toBe(
 			false
 		)
 	})
 
 	describe("the three pairs of post-history text", () => {
-		it("keeps the config's instructions apart from the seed's", () => {
+		it("keeps the config's instructions apart from the seed's", async () => {
 			// The legacy path reads `postHistoryInstructions` for the top-level
 			// variable and `promptPostHistoryInstructions` for the one placed
 			// next to the seed (index.ts:437 vs :444). They come from different
 			// config fields; feeding one to both is the collapse this pins.
-			const built = buildTemplateContext({
+			const built = await buildTemplateContext({
 				...base(),
 				texts: {
 					postHistoryInstructions: "Top level.",
@@ -208,8 +208,8 @@ describe("template context", () => {
 			expect(built.postHistory!.instructions).toBe("Next to the seed.")
 		})
 
-		it("keeps the character's example dialogue apart from the config's", () => {
-			const built = buildTemplateContext({
+		it("keeps the character's example dialogue apart from the config's", async () => {
+			const built = await buildTemplateContext({
 				...base(),
 				texts: {
 					exampleDialogue: "Config examples.",
@@ -220,11 +220,11 @@ describe("template context", () => {
 			expect(built.postHistory!.exampleDialogue).toBe("Alice's examples.")
 		})
 
-		it("takes the speaker's own reinforcement text rather than looking it up", () => {
+		it("takes the speaker's own reinforcement text rather than looking it up", async () => {
 			// Resolved from the current character upstream. Searching the cast
 			// by display name — the earlier draft here — picks the wrong card
 			// the moment two characters share a nickname.
-			const built = buildTemplateContext({
+			const built = await buildTemplateContext({
 				...base(),
 				texts: { charPostHistory: "Alice never lies." }
 			})
@@ -233,8 +233,8 @@ describe("template context", () => {
 			)
 		})
 
-		it("reports whether there is anything to place at all", () => {
-			expect(buildTemplateContext(base()).postHistory!.hasContent).toBe(
+		it("reports whether there is anything to place at all", async () => {
+			expect((await buildTemplateContext(base())).postHistory!.hasContent).toBe(
 				false
 			)
 			// Any one of the three is enough, matching index.ts:447.
@@ -244,40 +244,42 @@ describe("template context", () => {
 				{ charExampleDialogue: "x" }
 			])
 				expect(
-					buildTemplateContext({ ...base(), texts }).postHistory!
+					(await buildTemplateContext({ ...base(), texts })).postHistory!
 						.hasContent
 				).toBe(true)
 			// The *top-level* one is not one of the three: it renders where the
 			// template puts it, not next to the seed.
 			expect(
-				buildTemplateContext({
+				(
+				await buildTemplateContext({
 					...base(),
 					texts: { postHistoryInstructions: "x" }
-				}).postHistory!.hasContent
+				})
+				).postHistory!.hasContent
 			).toBe(false)
 		})
 	})
 
-	it("an absent field renders as nothing rather than as undefined", () => {
-		const built = buildTemplateContext(base())
+	it("an absent field renders as nothing rather than as undefined", async () => {
+		const built = await buildTemplateContext(base())
 		expect(built.exampleDialogue).toBe("")
 		expect(built.postHistoryInstructions).toBe("")
 		expect(built.instructions).toBe("")
 	})
 
-	it("refuses lore it cannot bind rather than dropping it", () => {
+	it("refuses lore it cannot bind rather than dropping it", async () => {
 		// The bindings live on the session's lorebook. Without a session the entries
 		// would attach to nobody and the prompt would come out short with
 		// nothing to show for it.
-		expect(() =>
+		await expect(
 			buildTemplateContext({
 				...base(),
 				characterLore: [{ id: 1, name: "x", content: "y" } as any]
 			})
-		).toThrow(/without a session/)
+		).rejects.toThrow(/without a session/)
 	})
 
-	it("attaches bound character lore to the card that owns it", () => {
+	it("attaches bound character lore to the card that owns it", async () => {
 		const c = {
 			sessionCharacters: [{ character: { ...alice } }],
 			sessionPersonas: [{ persona: { ...bob } }],
@@ -286,7 +288,7 @@ describe("template context", () => {
 				lorebookBindings: [{ id: 3, characterId: 1 }]
 			}
 		}
-		const built = buildTemplateContext({
+		const built = await buildTemplateContext({
 			...base(),
 			session: c,
 			characterLore: [
@@ -329,8 +331,8 @@ describe("both relationship halves are laid out, not passed through", () => {
 		}
 	}
 
-	it("wraps each value the way its shipped layout says", () => {
-		const built = buildTemplateContext({
+	it("wraps each value the way its shipped layout says", async () => {
+		const built = await buildTemplateContext({
 			...base(),
 			relationshipsPerspectives: mine,
 			relationshipsKnown: theirs
@@ -349,10 +351,10 @@ describe("both relationship halves are laid out, not passed through", () => {
 		expect(built.relationshipsKnown).toContain("Rell")
 	})
 
-	it("keeps the two apart, so one can be present without the other", () => {
+	it("keeps the two apart, so one can be present without the other", async () => {
 		// The whole reason for the split: an install that wants how it is
 		// regarded but not its own view has to be able to have one block.
-		const built = buildTemplateContext({
+		const built = await buildTemplateContext({
 			...base(),
 			relationshipsKnown: theirs
 		} as any)
@@ -360,12 +362,12 @@ describe("both relationship halves are laid out, not passed through", () => {
 		expect(built.relationshipsKnown).not.toBe("")
 	})
 
-	it("renders nothing at all when the speaker has no relationships", () => {
+	it("renders nothing at all when the speaker has no relationships", async () => {
 		// `buildGraphContext` returns null on an install that never opened the
 		// graph, which is the common case and not an error. A heading above an
 		// empty fence would appear in every turn.
 		for (const empty of [null, undefined]) {
-			const built = buildTemplateContext({
+			const built = await buildTemplateContext({
 				...base(),
 				relationshipsPerspectives: empty,
 				relationshipsKnown: empty

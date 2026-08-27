@@ -61,7 +61,10 @@ export const connectionsList: Handler<
 				name: true,
 				type: true,
 				model: true,
-				baseUrl: true
+				baseUrl: true,
+				// So a picker can filter by what the endpoint is for (20 §14):
+				// a text-gen slot must not offer the embeddings connection.
+				modality: true
 			},
 			orderBy: (c, { asc }) => [asc(c.type), asc(c.name)]
 		})

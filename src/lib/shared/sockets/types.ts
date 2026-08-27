@@ -277,6 +277,77 @@ declare global {
 				backend: "quickjs" | "ses"
 				sequential: boolean
 				enabled: boolean
+				/** Whether the manifest declares a settings schema (12 §6). */
+				hasSettings: boolean
+				/**
+				 * Whether the runtime holds a loaded copy right now (warm) —
+				 * runtime truth from the live manager, never stored. Absent or
+				 * false when the runtime gate is off: nothing is ever loaded.
+				 */
+				warm?: boolean
+			}
+			/**
+			 * A plugin's settings surface (12 §6): the manifest's schema, the
+			 * stored values with every secret reduced to `{$secretSet}` —
+			 * plaintext never reaches a client — and whether the plugin is
+			 * ready or waiting on configuration.
+			 */
+			interface SettingsView {
+				/** The manifest-declared `SettingsSchema`, verbatim. */
+				schema: Record<string, any>
+				values: Record<string, unknown>
+				state:
+					| { state: "ready" }
+					| {
+							state: "needs-configuration"
+							missing: string[]
+							message: string
+					  }
+				/** Stored fields the current schema no longer declares. */
+				orphaned: string[]
+			}
+			namespace GetSettings {
+				interface Params {
+					pluginId: string
+				}
+				interface Response {
+					pluginId: string
+					/** Null: not installed, or declares no settings. */
+					settings: SettingsView | null
+					error?: string
+				}
+			}
+			/**
+			 * Drop a plugin's loaded copy — and a SES plugin's dedicated
+			 * worker — while keeping it installed and enabled; the next hook
+			 * call faults it back in cold. The manager defers the release
+			 * while calls are in flight. Distinct from disable (hooks stop
+			 * firing) and uninstall (the plugin is forgotten).
+			 */
+			namespace Unload {
+				interface Params {
+					pluginId: string
+				}
+				interface Response {
+					plugins: PluginRow[]
+					error?: string
+				}
+			}
+			namespace SetSettings {
+				interface Params {
+					pluginId: string
+					/**
+					 * Declared fields only. A secret is written as plaintext
+					 * (encrypted at the server's one write path), cleared
+					 * with null/"", and left unchanged by omission.
+					 */
+					values: Record<string, unknown>
+				}
+				interface Response {
+					pluginId: string
+					settings?: SettingsView | null
+					error?: string
+				}
 			}
 			/** One in-flight sandbox call, for the live runtime monitor. */
 			interface ActiveRow {
@@ -322,6 +393,13 @@ declare global {
 					backends: ("quickjs" | "ses")[]
 					sequential?: boolean
 					manifest?: Record<string, unknown>
+					/**
+					 * The plugin's client-side files (20 §12) — frame
+					 * documents and assets, base64. Replaced wholesale on
+					 * install like the bundle; unsafe paths are refused by
+					 * name in the response.
+					 */
+					files?: Array<{ path: string; mime: string; data: string }>
 				}
 				interface Response {
 					plugins: PluginRow[]
@@ -394,6 +472,20 @@ declare global {
 				accountAffecting: boolean
 				granted: boolean
 			}
+			/** The storage-quota picture for a plugin, for the admin override control. */
+			interface StorageQuota {
+				/** Storage is declared and not admin-denied. */
+				granted: boolean
+				/** Bytes the runtime enforces right now (override ?? declared). */
+				effectiveBytes: number | null
+				/** The manifest-declared quota (author-band-clamped), if any. */
+				declaredBytes: number | null
+				/** The admin override in force (bytes), or null for none. */
+				overrideBytes: number | null
+				/** The admin override band the value is clamped into. */
+				minBytes: number
+				maxBytes: number
+			}
 			namespace Permissions {
 				interface Params {
 					pluginId: string
@@ -401,6 +493,8 @@ declare global {
 				interface Response {
 					pluginId: string
 					permissions: PermState[]
+					/** Present when the plugin declares storage — drives the override control. */
+					storage?: StorageQuota
 				}
 			}
 			namespace SetPermission {
@@ -412,6 +506,19 @@ declare global {
 				interface Response {
 					pluginId: string
 					permissions: PermState[]
+					storage?: StorageQuota
+				}
+			}
+			namespace SetStorageQuota {
+				interface Params {
+					pluginId: string
+					/** New override in bytes, or null to clear it (revert to the manifest quota). */
+					bytes: number | null
+				}
+				interface Response {
+					pluginId: string
+					permissions: PermState[]
+					storage?: StorageQuota
 				}
 			}
 		}
@@ -724,6 +831,8 @@ declare global {
 						canEdit: boolean
 						isOwner: boolean
 						isGuest: boolean
+						/** The mode's display name — the card's "type" chip. */
+						modeName?: string
 						sessionCharacters?: (SelectSessionCharacter & {
 							character: Partial<SelectCharacter>
 						})[]
@@ -902,6 +1011,47 @@ declare global {
 				}
 			}
 			/**
+			 * The account-visibility view (design §4): from one participant's
+			 * seat, what of *their own* data this session exposes to everyone
+			 * else in it. A character/persona/lorebook a person owns becomes
+			 * viewable by every other participant — and readable by the
+			 * pipelines that build this session's prompts — the moment it is
+			 * bound in (mirrors `canViewCharacter`/`canViewPersona`). This is the
+			 * inverse of that access check, surfaced so a guest can see the
+			 * consequence of their contributions before making them. The seam
+			 * plugin events will plug into once account-affecting permissions
+			 * exist; it stands on its own transparency value now.
+			 */
+			namespace AccountVisibility {
+				interface Params {
+					sessionId: number
+				}
+				interface ExposedEntity {
+					id: number
+					name: string
+				}
+				interface Viewer {
+					userId: number
+					username: string
+					role: "owner" | "guest"
+				}
+				interface Response {
+					sessionId: number
+					/** The viewer's own relationship to the session. */
+					isOwner: boolean
+					isGuest: boolean
+					/** Everyone else who can see the exposed entities below. */
+					viewers: Viewer[]
+					/** The viewer's own data this session exposes, by kind. */
+					exposed: {
+						characters: ExposedEntity[]
+						personas: ExposedEntity[]
+						lorebooks: ExposedEntity[]
+					}
+					error?: string
+				}
+			}
+			/**
 			 * Fire a contributed function on a session (19 §4): the generic half
 			 * of the trigger surface. `respond` and `narrate` keep their
 			 * dedicated events (message lifecycle, streaming, instructions);
@@ -912,6 +1062,20 @@ declare global {
 				interface Params {
 					sessionId: number
 					function: string
+					/**
+					 * The message a `kind: 'menu'` trigger was pressed on
+					 * (19 §4). Verified to belong to the session, then rides
+					 * the run's input as `messageId` — the id-from-outside
+					 * shape 13 §10b types as `row-ids@1`. Absent for composer
+					 * (`kind: 'button'`) triggers, which have no subject.
+					 */
+					messageId?: number
+					/**
+					 * A block action's entered values (20 §6) — a form's
+					 * fields, a choice's context. Rides the run's input as
+					 * `payload`, shaped by the winning spec's input contract.
+					 */
+					payload?: Record<string, unknown>
 				}
 				interface Response {
 					sessionId: number
@@ -925,6 +1089,50 @@ declare global {
 			 * the session view renders beside the intrinsic composer. Presence
 			 * is data — retiring the contributing spec removes the button.
 			 */
+			/**
+			 * The session's frame surfaces (20 §12): a mode-declared
+			 * session-view that replaces core's log, and any enabled plugin's
+			 * declared panels. Frames are opaque-origin sandboxes fed over a
+			 * MessageChannel — the src is the plugin-ui route, CSP composed
+			 * from the plugin's grants.
+			 */
+			/**
+			 * The pipelines involved in a session (respond + enabled
+			 * contributed functions), for grouping the chat's settings by
+			 * pipeline. Each is a spec slug the config panel renders at
+			 * session scope.
+			 */
+			namespace Pipelines {
+				interface Params {
+					sessionId: number
+				}
+				interface Pipeline {
+					slug: string
+					label: string
+				}
+				interface Response {
+					sessionId: number
+					pipelines: Pipeline[]
+				}
+			}
+			namespace View {
+				interface Frame {
+					pluginId: string
+					src: string
+					title?: string
+					/** panels only. */
+					panelId?: string
+				}
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					/** Present when the mode declares a custom session view. */
+					sessionView?: Frame
+					panels: Frame[]
+				}
+			}
 			namespace Triggers {
 				interface Params {
 					sessionId: number
@@ -2537,6 +2745,8 @@ declare global {
 					templateId: number
 					name?: string
 					source?: string
+					/** Registered engine id; null/absent means core's default. */
+					engine?: string | null
 					sessionId?: number
 				}
 				interface Response {
@@ -2601,6 +2811,8 @@ declare global {
 					templateId: number
 					name?: string
 					source?: string
+					/** Registered engine id; null/absent means core's default. */
+					engine?: string | null
 					sessionId?: number
 				}
 				interface Response {
@@ -2671,6 +2883,12 @@ declare global {
 					/** Every declared pool, including the empty ones. */
 					contextPools?: LibraryPool[]
 					variablePools?: LibraryPool[]
+					/**
+					 * Every registered template engine — core's plus whatever
+					 * enabled extensions declare. The editor's picker renders
+					 * from this; a lone entry means no picker at all.
+					 */
+					engines?: Array<{ id: string; owner: string }>
 					error?: string
 				}
 			}
@@ -2697,6 +2915,8 @@ declare global {
 					poolId: string
 					name?: string
 					source?: string
+					/** Registered engine id; null/absent means core's default. */
+					engine?: string | null
 				}
 				interface CloneParams {
 					kind: Kind
@@ -2708,6 +2928,8 @@ declare global {
 					id: number
 					name?: string
 					source?: string
+					/** Registered engine id; null/absent means core's default. */
+					engine?: string | null
 				}
 				interface DeleteParams {
 					kind: Kind

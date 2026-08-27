@@ -73,7 +73,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:input/summarize-request@1": "118295257093fb",
 	"core:input/user-message@1": "8efb208dbb7a8",
 	"core:provider/embed-text@1": "1a2be2fe9ae5a9",
-	"core:provider/extract-cast@1": "1893b46d500ce4",
+	// Gained its two script hooks in 0.6-preview (migration 0146): `scripts`
+	// before over `content`, `castScripts` after over `cast` — the paste-rung
+	// half of replaceable cast extraction (ruling of 2026-08-26). Replacing
+	// the extractor itself stays a node rebind, never a script.
+	"core:provider/extract-cast@1": "921a1aa16cb79",
 	// Gained `currentCharacterId` in 0.6-preview (migration 0134): the §27l
 	// stop-string exclusion follows the next-speaker node's output through
 	// the host's payload-wins seam (19 §5).
@@ -94,7 +98,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:query/session-cast@1": "142e94006413af",
 	"core:query/world-lore@1": "110c27164fe03f",
 	"core:query/character-lore@1": "110c27164fe03f",
-	"core:query/session-history@1": "1cd3ef785272df",
+	// Gained the `channel` param in 0.6-preview (migration 0149, 20 §7);
+	// default 'main' reproduces the legacy read byte-for-byte.
+	"core:query/session-history@1": "2272f3cfb8f4b",
 	// ⚠ `core:query/graph-context@1` was here, and is gone rather than frozen.
 	// It split into the two below, because one node emitting both directions of
 	// the graph gave them one heading, one layout and one switch. Removing a
@@ -119,6 +125,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Gained a `variables` slot for its post-budget lore and history in
 	// 0.6-preview. Re-projected by migration 0108, on the same terms as 0107.
 	"core:task/assemble@2": "ec708761ef260",
+	// Tool calling's pure halves (20 §9), added 2026-08-26. New types — a
+	// row inserts and conflicts with nothing.
+	"core:task/advertise-tools@1": "b3b15a945f7e2",
+	"core:task/parse-tool-call@1": "213e18d434bbb",
 	"core:task/batch-messages@1": "1666e1b5864572",
 	// The narrator's half of the split (migration 0114). It shares this one's
 	// implementation and ports; what makes it a separate type is that it
@@ -143,8 +153,14 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:task/process-messages@1": "8d63ae74798bb",
 	"core:task/query-windows@1": "184fdf6f3a0762",
 	"core:task/rank-by-recency@1": "dffb14d273fdf",
-	"core:task/rank-hybrid@1": "1b57a9620c46d4",
-	"core:task/rank-semantic@1": "d6d78af40280e",
+	// Both re-projected by migration 0146. rank-hybrid gained the nine
+	// signal-weight fields — the tuning matrix `weights.ts` always held but
+	// nothing declared; rank-semantic gained `sourceBudget` and
+	// `defaultSourceBudget`, its last two undeclared constants. Every default
+	// reproduces the shipped constants exactly, so an untouched spec selects
+	// identically — `nodeParams.test.ts` and the parity corpus are the checks.
+	"core:task/rank-hybrid@1": "1f66a2626fd7a0",
+	"core:task/rank-semantic@1": "d3849f48f8442",
 	"core:task/render-entries@1": "7541eb6256ba5",
 	// The four next-speaker strategies (19 §5, U-C4) — one implementation,
 	// four ids, and one hash: the content hash strips display text, and what
@@ -173,6 +189,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:script:candidates/filter@1": "5921c6940b28f",
 	"core:script:candidates/rescore@1": "5921c6940b28f",
 	"core:script:context/transform@1": "1a74f953c2e773",
+	// The cast scope (2026-08-26): scripts over what extract-cast publishes.
+	// A new type — inserts a row, conflicts with nothing, needs no migration.
+	"core:script:cast/transform@1": "16b4355ec1eb01",
 	"test:task/passthrough@1": "cf73634860fe1",
 	"test:task/sloppy-stream@1": "13093e6bda129",
 	"test:task/slow@1": "cf73634860fe1"

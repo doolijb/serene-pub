@@ -182,12 +182,12 @@ describe("what ships", () => {
 		// code produced directly, inside the heading and fence the context
 		// template used to carry.
 		const lore = { "The Ashguard": "Riders who patrol the ash wastes." }
-		expect(renderVariable(layouts, "worldLore", lore)).toBe(
+		expect(await renderVariable(layouts, "worldLore", lore)).toBe(
 			"World lore: \n```json\n" + JSON.stringify(lore) + "\n```"
 		)
 		// Empty stays falsy, which is what keeps `{{#if worldLore}}` skipping
 		// the section rather than rendering an empty fenced block.
-		expect(renderVariable(layouts, "worldLore", undefined)).toBe("")
+		expect(await renderVariable(layouts, "worldLore", undefined)).toBe("")
 	})
 
 	it("back-fills a layout a config predates", async () => {
@@ -398,7 +398,7 @@ describe("the runtime resolves what the panel shows", () => {
 	it("renders through the selected layout", async () => {
 		const layouts = await resolvedLayouts(NARRATE_SPEC_ID)
 		const cast = [{ name: "Ash", description: "A rider." }]
-		expect(renderVariable(layouts as any, "characters", cast)).toBe(
+		expect(await renderVariable(layouts as any, "characters", cast)).toBe(
 			"Ash — A rider.\n"
 		)
 	})
@@ -409,7 +409,7 @@ describe("the runtime resolves what the panel shows", () => {
 		// TypeScript rendered.
 		const layouts = await resolvedLayouts(RESPOND_SPEC_ID)
 		const cast = [{ name: "Ash", description: "A rider." }]
-		expect(renderVariable(layouts as any, "characters", cast)).toBe(
+		expect(await renderVariable(layouts as any, "characters", cast)).toBe(
 			"Assistant Characters (AI-controlled):\n```json\n" +
 				JSON.stringify(cast, null, 2) +
 				"\n```"
@@ -421,7 +421,7 @@ describe("the runtime resolves what the panel shows", () => {
 		// in-code floor is what a deleted row actually costs: a customization,
 		// never a prompt.
 		const cast = [{ name: "Ash", description: "A rider." }]
-		expect(renderVariable(undefined, "characters", cast)).toBe(
+		expect(await renderVariable(undefined, "characters", cast)).toBe(
 			"Assistant Characters (AI-controlled):\n```json\n" +
 				JSON.stringify(cast, null, 2) +
 				"\n```"

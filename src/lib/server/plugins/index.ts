@@ -11,6 +11,7 @@
 import { RuntimeManager, type InvocationRecord } from "./RuntimeManager"
 import { loadEnabledPlugins, writeInvocation } from "./store"
 import { pluginsEnabled } from "./flag"
+import { syncPluginEngines } from "./engineHost"
 
 type Db = { select: any; insert: any; update: any; delete: any }
 
@@ -63,6 +64,14 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 				console.warn(
 					`[plugins] '${d.id}' startup hook failed (${r.outcome}): ${r.reason}`
 				)
+		}
+		// Manifest-declared template engines, registered as forwarding
+		// renderers. Best-effort like the startup hooks: a bad declaration
+		// warns and is skipped, and must not stall boot.
+		try {
+			await syncPluginEngines(db, mgr)
+		} catch (e) {
+			console.warn("[plugins] template-engine sync failed:", e)
 		}
 	}
 

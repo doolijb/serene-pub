@@ -276,10 +276,10 @@ describe("an install on a context config of its own", () => {
 			{}) as any
 		const lore = { "The Ashguard": "Riders who patrol the ash wastes." }
 
-		expect(renderVariable(layouts, "worldLore", lore)).toBe(
+		expect(await renderVariable(layouts, "worldLore", lore)).toBe(
 			JSON.stringify(lore)
 		)
-		expect(renderVariable(layouts, "worldLore", lore)).not.toContain(
+		expect(await renderVariable(layouts, "worldLore", lore)).not.toContain(
 			"World lore"
 		)
 	})

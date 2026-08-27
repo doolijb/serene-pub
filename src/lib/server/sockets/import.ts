@@ -1,5 +1,6 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
+import { insertLegacy } from "$lib/server/messages/store"
 import type { Handler } from "$lib/shared/events"
 import * as fsPromises from "fs/promises"
 import * as path from "path"
@@ -934,7 +935,7 @@ export const importExecuteSillyTavern: Handler<
 								history: msg.swipes
 							}
 						}
-						await db.insert(schema.sessionMessages).values({
+						await insertLegacy(db, {
 							sessionId: newSession.id,
 							userId,
 							characterId:
@@ -1069,7 +1070,7 @@ export const importExecuteSillyTavern: Handler<
 									history: msg.swipes
 								}
 							}
-							await db.insert(schema.sessionMessages).values({
+							await insertLegacy(db, {
 								sessionId: newSession.id,
 								userId,
 								characterId: charId,

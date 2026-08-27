@@ -7,7 +7,7 @@
  *
  *  1. Resolve the registry's `ownerPluginId` (an integer, `plugins.id`) to the
  *     runtime address everything else uses — the plugin's `namespace/name`
- *     string id — and the link's script type id to the hook's export name.
+ *     string id — and the link's script type id to the hook's exported name.
  *  2. Run the hook through `manager.callHook` and translate its richer result
  *     back into the `ScriptRunResult` shape the chain fold expects.
  *
@@ -16,12 +16,15 @@
  * back as `{ ok: false }`, never throws, so a chain absorbs an unservable link
  * as an error application and the turn continues.
  *
- * Hook-type-id convention (the contract the packager's registry projection
- * must honour): a plugin pipeline hook is pinned as `<pluginId>:<hook>@<v>`,
- * e.g. `acme/summarizer:trimContext@1`. `pluginId` is the `namespace/name`
- * address; `hook` is the exported hook function's name. The owning plugin is
- * already known from the registry row's `ownerPluginId`, so only the hook name
- * is parsed out here.
+ * **Why the hook name is looked up, not parsed.** A script type id follows the
+ * fixed grammar `<namespace>:script:<content>/<operation>@<major>` — the last
+ * segment is a *content contract* (`transform`, `filter`), shared across every
+ * hook of that shape, never a function name. So the type id cannot say which of
+ * a plugin's exported hooks implements a given link. That binding lives in the
+ * compiled manifest as `hookTypes: { [scriptTypeId]: exportedHookName }`, which
+ * the packager's registry projection writes when it lands a plugin's types. The
+ * port reads it from the stored manifest — the one source of truth — rather
+ * than guessing a convention that a settling manifest shape could contradict.
  */
 
 import { eq } from "drizzle-orm"
@@ -35,16 +38,25 @@ import type { ScriptRunResult } from "$lib/server/pipelines/scripts/host"
 
 type Db = { select: any }
 
-/** The hook export name from a plugin type id, or null if it is not one. */
-export function hookNameFromTypeId(typeId: string): string | null {
-	const at = typeId.lastIndexOf("@")
-	const body = at >= 0 ? typeId.slice(0, at) : typeId
-	const colon = body.lastIndexOf(":")
-	if (colon < 0) return null
-	const hook = body.slice(colon + 1)
-	// A hook name is a JS identifier; anything else (a core `content/operation`
-	// segment that slipped through, say) is not a plugin hook address.
-	return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(hook) ? hook : null
+/** What the port needs from an installed plugin, resolved once per owner. */
+interface OwnerResolution {
+	/** The runtime address — `namespace/name`. */
+	pluginId: string
+	/** `scriptTypeId → exported hook name`, from the compiled manifest. */
+	hookTypes: Record<string, string>
+}
+
+/** Read `hookTypes` off a stored manifest, tolerant of its json being anything. */
+export function hookTypesOf(manifest: unknown): Record<string, string> {
+	const raw =
+		manifest && typeof manifest === "object"
+			? (manifest as any).hookTypes
+			: undefined
+	if (!raw || typeof raw !== "object") return {}
+	const out: Record<string, string> = {}
+	for (const [typeId, hook] of Object.entries(raw as Record<string, unknown>))
+		if (typeof hook === "string" && hook) out[typeId] = hook
+	return out
 }
 
 const fail = (reason: string): ScriptRunResult => ({
@@ -61,30 +73,40 @@ export function makePluginHookDispatch(
 	// One resolution per owner for the life of the applier (one run). A plugin
 	// enabled or removed mid-run is not observed — the chain a run applies is
 	// the one resolved when it started, matching the script-row cache.
-	const idCache = new Map<number, string | null>()
-	async function runtimeIdFor(ownerPluginId: number): Promise<string | null> {
-		if (idCache.has(ownerPluginId)) return idCache.get(ownerPluginId)!
+	const cache = new Map<number, OwnerResolution | null>()
+	async function resolveOwner(
+		ownerPluginId: number
+	): Promise<OwnerResolution | null> {
+		if (cache.has(ownerPluginId)) return cache.get(ownerPluginId)!
 		const rows = await db
-			.select({ pluginId: plugins.pluginId })
+			.select({ pluginId: plugins.pluginId, manifest: plugins.manifest })
 			.from(plugins)
 			.where(eq(plugins.id, ownerPluginId))
 			.limit(1)
-		const id = (rows[0]?.pluginId as string | undefined) ?? null
-		idCache.set(ownerPluginId, id)
-		return id
+		const row = rows[0]
+		const resolution: OwnerResolution | null = row?.pluginId
+			? {
+					pluginId: row.pluginId as string,
+					hookTypes: hookTypesOf(row.manifest)
+				}
+			: null
+		cache.set(ownerPluginId, resolution)
+		return resolution
 	}
 
 	return {
 		async runHook(req: PluginHookRequest): Promise<ScriptRunResult> {
-			const pluginId = await runtimeIdFor(req.ownerPluginId)
-			if (!pluginId) return fail("this extension is no longer installed")
+			const owner = await resolveOwner(req.ownerPluginId)
+			if (!owner) return fail("this extension is no longer installed")
 
-			const hookName = hookNameFromTypeId(req.typeId)
+			const hookName = owner.hookTypes[req.typeId]
 			if (!hookName)
-				return fail(`not a plugin hook type id: ${req.typeId}`)
+				return fail(
+					`the extension declares no hook for ${req.typeId}`
+				)
 
 			const r = await manager.callHook(
-				pluginId,
+				owner.pluginId,
 				hookName,
 				{ value: req.value, extras: req.extras },
 				{

@@ -474,7 +474,9 @@ const exports: AdapterExports = {
 	testConnection,
 	listModels,
 	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.LM_STUDIO],
-	samplingKeyMap: lmStudioSamplingKeyMap
+	samplingKeyMap: lmStudioSamplingKeyMap,
+	// 20 §9: SP formats and parses; the grammar path works everywhere.
+	capabilities: { toolUse: "emulated" }
 }
 
 export default exports
