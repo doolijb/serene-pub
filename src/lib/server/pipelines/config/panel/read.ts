@@ -8,6 +8,7 @@
  * the instance default" rather than just showing a value.
  */
 
+import { valueDeclOf } from "@serene-pub/sdk"
 import { asc, eq } from "drizzle-orm"
 import { getFacet } from "@serene-pub/sdk"
 import { i18nText } from "$lib/server/pipelines/config/panel/declarations"
@@ -131,7 +132,10 @@ export async function listNamespaces(db: Db): Promise<NamespaceSummary[]> {
 			name: spec.name,
 			version: version.semver,
 			event: sub.event,
-			enabled: sub.enabled
+			enabled: sub.enabled,
+			// Catalogue claims (23 §4): straight off the version row. A null
+			// row is "unclassified", which is honest.
+			taxonomy: (version.taxonomy as any) ?? null
 		})
 	}
 	return out
@@ -305,6 +309,25 @@ export async function namespaceView(
 			...(d.quick ? { quick: true } : {}),
 			...(d.description ? { description: d.description } : {}),
 			control: d.control,
+			// The value declaration (24 T6c): the settings-schema entry
+			// bridged to the single-key vocabulary, so value-decl controls
+			// can render this option. Derived, never stored — absent for the
+			// controls the bridge does not cover (refs, scripts, templates).
+			...((dv) => (dv ? { decl: dv } : {}))(
+				valueDeclOf({
+					type:
+						d.control === "per-member"
+							? "perMember"
+							: d.control === "text"
+								? "string"
+								: d.control,
+					default: d.authorDefault,
+					min: d.min,
+					max: d.max,
+					of: d.of,
+					members: d.members
+				})
+			),
 			...(d.min != null ? { min: d.min } : {}),
 			...(d.max != null ? { max: d.max } : {}),
 			...(d.of ? { of: d.of } : {}),
@@ -516,6 +539,7 @@ export async function namespaceView(
 		version: at.semver,
 		event: sub.event,
 		enabled: sub.enabled,
+		taxonomy: at.taxonomy,
 		configs: (configRows as any[]).map((c) => ({
 			id: c.id,
 			name: c.name,
@@ -529,12 +553,12 @@ export async function namespaceView(
 				: null
 		})),
 		modeActions: await (async () => {
-			const { modeOfSpec, listModeTriggers } = await import(
-				"$lib/server/pipelines/entities/sessionModes"
+			const { genreOfSpec, listGenreTriggers } = await import(
+				"$lib/server/pipelines/entities/sessionGenres"
 			)
-			const modeId = await modeOfSpec(db as any, at.slug)
-			if (!modeId) return []
-			return (await listModeTriggers(db as any, modeId)).map((t) => ({
+			const genreId = await genreOfSpec(db as any, at.slug)
+			if (!genreId) return []
+			return (await listGenreTriggers(db as any, genreId)).map((t) => ({
 				function: t.function,
 				name: t.name,
 				specSlug: t.specSlug,

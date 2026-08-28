@@ -499,9 +499,9 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.Get.Params
 		response: Sockets.Sessions.Get.Response
 	}
-	"sessions:modes": {
-		params: Sockets.Sessions.Modes.Params
-		response: Sockets.Sessions.Modes.Response
+	"sessions:genres": {
+		params: Sockets.Sessions.Genres.Params
+		response: Sockets.Sessions.Genres.Response
 	}
 	"sessions:pipelines": {
 		params: Sockets.Sessions.Pipelines.Params
@@ -510,6 +510,70 @@ export type SocketEventMap = {
 	"sessions:view": {
 		params: Sockets.Sessions.View.Params
 		response: Sockets.Sessions.View.Response
+	}
+	"sessionGenres:list": {
+		params: Sockets.SessionAdmin.Genres.Params
+		response: Sockets.SessionAdmin.Genres.Response
+	}
+	"sessionGenres:update": {
+		params: Sockets.SessionAdmin.UpdateGenre.Params
+		response: Sockets.SessionAdmin.UpdateGenre.Response
+	}
+	"sessionGenres:detail": {
+		params: Sockets.SessionAdmin.GenreDetail.Params
+		response: Sockets.SessionAdmin.GenreDetail.Response
+	}
+	"sessionGenres:detail:error": {
+		params: never
+		response: Sockets.SessionAdmin.GenreDetail.Response
+	}
+	"pipelines:configsIndex": {
+		params: Sockets.Pipelines.ConfigsIndex.Params
+		response: Sockets.Pipelines.ConfigsIndex.Response
+	}
+	"sessionPresets:list": {
+		params: Sockets.SessionAdmin.Presets.Params
+		response: Sockets.SessionAdmin.Presets.Response
+	}
+	"sessionPresets:create": {
+		params: Sockets.SessionAdmin.CreatePreset.Params
+		response: Sockets.SessionAdmin.CreatePreset.Response
+	}
+	"sessionPresets:create:error": {
+		params: Sockets.SessionAdmin.CreatePreset.Response
+		response: Sockets.SessionAdmin.CreatePreset.Response
+	}
+	"sessionPresets:update": {
+		params: Sockets.SessionAdmin.UpdatePreset.Params
+		response: Sockets.SessionAdmin.UpdatePreset.Response
+	}
+	"sessionPresets:update:error": {
+		params: Sockets.SessionAdmin.UpdatePreset.Response
+		response: Sockets.SessionAdmin.UpdatePreset.Response
+	}
+	"sessionPresets:delete": {
+		params: Sockets.SessionAdmin.DeletePreset.Params
+		response: Sockets.SessionAdmin.DeletePreset.Response
+	}
+	"sessionPresets:delete:error": {
+		params: Sockets.SessionAdmin.DeletePreset.Response
+		response: Sockets.SessionAdmin.DeletePreset.Response
+	}
+	"sessions:adminList": {
+		params: Sockets.SessionAdmin.SessionsList.Params
+		response: Sockets.SessionAdmin.SessionsList.Response
+	}
+	"sessions:panelLayout:get": {
+		params: Sockets.Sessions.PanelLayout.Get.Params
+		response: Sockets.Sessions.PanelLayout.Get.Response
+	}
+	"sessions:surfaceIntent": {
+		params: Sockets.Sessions.SurfaceIntent.Push
+		response: Sockets.Sessions.SurfaceIntent.Push
+	}
+	"sessions:panelLayout:set": {
+		params: Sockets.Sessions.PanelLayout.Set.Params
+		response: Sockets.Sessions.PanelLayout.Set.Response
 	}
 	"sessions:triggers": {
 		params: Sockets.Sessions.Triggers.Params
@@ -535,9 +599,9 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.SetFunction.Params
 		response: Sockets.Sessions.SetFunction.Response
 	}
-	"sessions:upgradeMode": {
-		params: Sockets.Sessions.UpgradeMode.Params
-		response: Sockets.Sessions.UpgradeMode.Response
+	"sessions:upgradeGenre": {
+		params: Sockets.Sessions.UpgradeGenre.Params
+		response: Sockets.Sessions.UpgradeGenre.Response
 	}
 	"sessions:functionCandidates": {
 		params: Sockets.Sessions.Bindings.Candidates.Params
@@ -840,6 +904,22 @@ export type SocketEventMap = {
 	"pipelines:clearOption": {
 		params: Sockets.Pipelines.ClearOption.Params
 		response: Sockets.Pipelines.ClearOption.Response
+	}
+	"pipelines:setOptions": {
+		params: Sockets.Pipelines.SetOptions.Params
+		response: Sockets.Pipelines.SetOptions.Response
+	}
+	"pipelines:setOptions:error": {
+		params: Sockets.Pipelines.SetOptions.Response
+		response: Sockets.Pipelines.SetOptions.Response
+	}
+	"pipelines:run": {
+		params: Sockets.Pipelines.Run.Params
+		response: Sockets.Pipelines.Run.Response
+	}
+	"pipelines:run:error": {
+		params: Sockets.Pipelines.Run.Response
+		response: Sockets.Pipelines.Run.Response
 	}
 	"pipelines:clearOption:error": {
 		params: never
@@ -1605,6 +1685,14 @@ export type SocketEventMap = {
 	"systemSettings:updateScriptsEnabled": {
 		params: Sockets.SystemSettings.UpdateScriptsEnabled.Params
 		response: Sockets.SystemSettings.UpdateScriptsEnabled.Response
+	}
+	"systemSettings:updateLegacyConfigsVisible": {
+		params: Sockets.SystemSettings.UpdateLegacyConfigsVisible.Params
+		response: Sockets.SystemSettings.UpdateLegacyConfigsVisible.Response
+	}
+	"systemSettings:updateLegacyConfigsVisible:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"systemSettings:updateContextDebuggingEnabled": {
 		params: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Params

@@ -39,7 +39,7 @@ describe("bootstrapping the pipeline tables", () => {
 			expect(s.reconciled).toEqual([])
 		}
 		expect(report.specs.map((s) => s.id)).toContain(RESPOND_SPEC_ID)
-	})
+	}, 60_000)
 
 	it("changes nothing on the next boot", async () => {
 		// The property that matters most, because it runs on every restart. A

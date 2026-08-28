@@ -144,6 +144,19 @@ describe("the option payload", () => {
 		// *leaks*, which are fields core populates, rather than at what a person
 		// chose to write in a box.
 		const PROSE = new Set(["label", "description", "name", "source"])
+		// `taxonomy.mode` (23 §2) is a session-mode id — public vocabulary the
+		// session picker already ships to every user (`sessions:genres`), not
+		// this pipeline's wiring. The word-boundary scan flags it only because
+		// the respond spec happens to name a node `input`, and "input" appears
+		// inside every `core:input/…` id. Same exemption class as PROSE:
+		// a value that is legitimately public, not a leak core derived.
+		const PUBLIC_IDS = new Set(["mode"])
+		// `prompt` is the prompts-ref option's designed payload field (the
+		// selected prompt row riding along for inline editing) — a property
+		// the panel always shipped in production, tripped here only because
+		// the respond spec names a node `prompt`. Its subtree is authored
+		// prose and row identity, so it walks as prose.
+		const PAYLOAD_FIELDS = new Set(["prompt"])
 		const offences: string[] = []
 		const walk = (value: unknown, path: string, prose: boolean) => {
 			if (typeof value === "string") {
@@ -157,10 +170,15 @@ describe("the option payload", () => {
 				return value.forEach((v, i) => walk(v, `${path}[${i}]`, prose))
 			if (value && typeof value === "object")
 				for (const [k, v] of Object.entries(value)) {
-					for (const key of keys)
-						if (new RegExp(`\\b${key}\\b`).test(k))
-							offences.push(`${path}.${k} is named for a node`)
-					walk(v, `${path}.${k}`, PROSE.has(k))
+					if (!PAYLOAD_FIELDS.has(k))
+						for (const key of keys)
+							if (new RegExp(`\\b${key}\\b`).test(k))
+								offences.push(`${path}.${k} is named for a node`)
+					walk(
+						v,
+						`${path}.${k}`,
+						PROSE.has(k) || PUBLIC_IDS.has(k) || PAYLOAD_FIELDS.has(k)
+					)
 				}
 		}
 		walk(await view(), "view", false)
@@ -243,8 +261,11 @@ describe("the option payload", () => {
 		const before = await view({ sessionId })
 		const ref = allOptions(before).find((o) => o.control === "prompts-ref")!
 		expect(ref).toBeTruthy()
-		// Unselected: nothing to carry, and nothing invented.
-		expect(ref.prompt).toBeUndefined()
+		// The shipped default selects a catalog prompt (24 T6b: prompts seed
+		// from @serene-pub/core-catalog with no legacy dependency), so the
+		// row rides along from the start — shipped, hence read-only.
+		expect(ref.prompt).toBeTruthy()
+		expect(ref.prompt!.readOnly).toBe(true)
 
 		await writeOption(
 			db as any,
@@ -335,11 +356,19 @@ describe("resolution and provenance", () => {
 		// The chain since the simplification (2026-08-24): the author's
 		// default, the selected configuration, the session's override — walked
 		// in a session view, where all three can be seen at once.
+		// Since 24 T6b the shipped config carries a value for *every*
+		// declaration (prompts included, now that they seed from the catalog
+		// with no legacy dependency) — so the author layer is reached by
+		// clearing a copy's value, not found lying around.
 		const inSession = await view({ sessionId })
-		const target = allOptions(inSession).find(
-			(o) => o.writable && o.source === "author"
-		)!
+		// The session viewer is a non-admin, who is offered prompts and
+		// nothing else — so the walk rides the prompts-ref option, as it
+		// always did. Its base value now comes from the shipped config
+		// (source "preset"), and the author layer is exposed by clearing a
+		// mutable copy below.
+		const target = allOptions(inSession).find((o) => o.writable)!
 		expect(target).toBeTruthy()
+		expect(target.control).toBe("prompts-ref")
 
 		// A mutable copy of the shipped default, selected for the instance —
 		// the global edit below lands in *it*, because there is no other
@@ -362,6 +391,20 @@ describe("resolution and provenance", () => {
 			)
 		const copy = await duplicateConfig(db as any, shipped.id, "Walk copy")
 		await selectConfig(db as any, spec.id, "instance", 0, copy.id, adminId)
+
+		// Clearing deletes the copy's row, so the author default resolves —
+		// the bottom of the chain, seen before the layers stack back up.
+		await clearOption(
+			db as any,
+			SECRET,
+			RESPOND_SPEC_ID,
+			viewer({ userId: adminId, isAdmin: true }),
+			target.id
+		)
+		let base = allOptions(
+			await view({ userId: adminId, isAdmin: true })
+		).find((o) => o.id === target.id)!
+		expect(base.source).toBe("author")
 
 		await writeOption(
 			db as any,

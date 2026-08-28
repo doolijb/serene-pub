@@ -22,10 +22,10 @@
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
-	listModeTriggers,
+	listGenreTriggers,
 	listSpeakerStrategies,
 	resolveFunctionSpec
-} from "$lib/server/pipelines/entities/sessionModes"
+} from "$lib/server/pipelines/entities/sessionGenres"
 
 type Db = { select: any; insert: any; update: any; delete: any }
 
@@ -49,18 +49,18 @@ export async function bindFunction(
 	db: Db,
 	opts: {
 		scope: ScopeAddress
-		modeId: string
+		genreId: string
 		functionKey: string
 		specSlug: string | null
 		userId: number
 	}
 ): Promise<{ error?: string }> {
-	const { scope, modeId, functionKey, specSlug, userId } = opts
+	const { scope, genreId, functionKey, specSlug, userId } = opts
 
 	const where = and(
 		eq(schema.pipelineFunctionBindings.scopeKind, scope.kind),
 		eq(schema.pipelineFunctionBindings.scopeId, scope.id),
-		eq(schema.pipelineFunctionBindings.modeId, modeId),
+		eq(schema.pipelineFunctionBindings.genreId, genreId),
 		eq(schema.pipelineFunctionBindings.functionKey, functionKey)
 	)
 
@@ -79,7 +79,7 @@ export async function bindFunction(
 	// Eligibility: bind only among what serves. Resolution re-checks this on
 	// every read; the setter checks it so the refusal happens where the
 	// person is.
-	const serves = await functionCandidates(db, modeId, functionKey)
+	const serves = await functionCandidates(db, genreId, functionKey)
 	if (!serves.includes(specSlug))
 		return {
 			error: `'${specSlug}' does not serve '${functionKey}' for this mode.`
@@ -99,7 +99,7 @@ export async function bindFunction(
 		await db.insert(schema.pipelineFunctionBindings).values({
 			scopeKind: scope.kind,
 			scopeId: scope.id,
-			modeId,
+			genreId,
 			functionKey,
 			specId: spec.id,
 			updatedBy: userId
@@ -119,13 +119,13 @@ export async function bindFunction(
  */
 export async function functionCandidates(
 	db: Db,
-	modeId: string,
+	genreId: string,
 	functionKey: string
 ): Promise<string[]> {
 	if (functionKey === "respond") {
 		// The bucket, via the resolver run once per spec is wasteful — the
 		// trigger list cannot answer this one, so ask the bucket directly.
-		const [bareType, versionStr] = modeId.split("@")
+		const [bareType, versionStr] = genreId.split("@")
 		const specs = await db.select().from(schema.pipelineSpecs)
 		const versions = await db
 			.select()
@@ -154,7 +154,7 @@ export async function functionCandidates(
 		}
 		return out
 	}
-	const triggers = await listModeTriggers(db, modeId)
+	const triggers = await listGenreTriggers(db, genreId)
 	return [
 		...new Set(
 			triggers
@@ -352,14 +352,14 @@ export async function setSessionSpeakerStrategy(
 ): Promise<{ error?: string }> {
 	// Which spec serves respond for this session — the strategy lives in it.
 	const [session] = await db
-		.select({ modeId: schema.sessions.modeId })
+		.select({ genreId: schema.sessions.genreId })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, opts.sessionId))
 		.limit(1)
 	if (!session) return { error: "That session no longer exists." }
 	const specSlug = await resolveFunctionSpec(
 		db as any,
-		session.modeId ?? "core:input/user-message@1",
+		session.genreId ?? "core:genre/chat",
 		"respond",
 		{ sessionId: opts.sessionId }
 	)
@@ -396,14 +396,14 @@ export async function getSessionSpeakerStrategy(
 ): Promise<string | null> {
 	try {
 		const [session] = await db
-			.select({ modeId: schema.sessions.modeId })
+			.select({ genreId: schema.sessions.genreId })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, sessionId))
 			.limit(1)
 		if (!session) return null
 		const specSlug = await resolveFunctionSpec(
 			db as any,
-			session.modeId ?? "core:input/user-message@1",
+			session.genreId ?? "core:genre/chat",
 			"respond",
 			{ sessionId }
 		)

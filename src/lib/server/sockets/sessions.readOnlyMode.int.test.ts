@@ -62,7 +62,7 @@ describe("a session whose mode is not registered", () => {
 			.values({
 				userId: user.id,
 				isGroup: false,
-				modeId: "chariot.gone:input/vanished@1"
+				genreId: "chariot.gone:input/vanished@1"
 			} as any)
 			.returning()
 

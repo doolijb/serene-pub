@@ -26,6 +26,7 @@ import {
 	GRAPH_BUILD_SPEC_ID,
 	NARRATE_SPEC_ID,
 	RESPOND_SPEC_ID,
+	SUMMARIZE_CHARACTER_SPEC_ID,
 	SUMMARIZE_HISTORY_SPEC_ID,
 	SUMMARIZE_SCENE_SPEC_ID,
 	SUMMARIZE_WORLD_SPEC_ID
@@ -78,9 +79,26 @@ const promptsIn = async (slug: string) => {
 		.where(eq(schema.pipelinePrompts.specId, id!))
 }
 
+/**
+ * A spec whose active version declares no prompts-ref slots ships no prompt
+ * and its config selects none — create-chat (identity + shape, no LLM step
+ * yet) is the first such spec. Derived from the declarations, not a list.
+ */
+const isPromptless = async (slug: string) => {
+	const [row] = await db
+		.select()
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.slug, slug))
+	if (!row?.activeVersionId) return false
+	const { declarations } = await import("$lib/server/pipelines/config/panel")
+	const decls = await declarations(db as any, row.activeVersionId)
+	return !decls.some((d: any) => d.control === "prompts-ref")
+}
+
 describe("every namespace arrives usable", () => {
 	it("ships a prompt for each pipeline that has a prompts slot", async () => {
 		for (const entry of CORE_SPECS) {
+			if (await isPromptless(entry.slug)) continue
 			const prompts = await promptsIn(entry.slug)
 			expect(
 				prompts.length,
@@ -92,6 +110,7 @@ describe("every namespace arrives usable", () => {
 
 	it("ships a config for each, pointing at one of that namespace's prompts", async () => {
 		for (const entry of CORE_SPECS) {
+			if (await isPromptless(entry.slug)) continue
 			const specId = await specIdOf(entry.slug)
 			const [config] = await db
 				.select()
@@ -137,6 +156,80 @@ describe("every namespace arrives usable", () => {
 			(p: any) => p.name
 		)
 		for (const name of world) expect(respond.has(name)).toBe(false)
+	})
+})
+
+describe("the catalog matches the legacy seeds — the drift canary (24 T6b)", () => {
+	/**
+	 * The catalog is the system of record now; the deprecated legacy tables
+	 * still seed their copies from db/defaults.ts. Until legacy is deleted,
+	 * the two must agree byte-for-byte — this is the old SOURCES mapping from
+	 * the pre-T6b seeder, kept here as the transformation under test.
+	 */
+	const str = (v: unknown): string => (typeof v === "string" ? v : "")
+	const chatFields = (row: any) => ({
+		systemPrompt: str(row.systemPrompt),
+		postHistoryInstructions: str(row.postHistoryInstructions)
+	})
+	const narratorFields = (row: any) => ({
+		...chatFields(row),
+		narratorName: str(row.narratorName) || "Narrator"
+	})
+	const summarizeFields = (row: any) => ({
+		batch: str(row.batchSystemPrompt),
+		synth: str(row.synthSystemPrompt),
+		name: str(row.nameSystemPrompt)
+	})
+	const LEGACY_SOURCES: Array<{
+		specSlug: string
+		table: any
+		fields: (row: any) => Record<string, string>
+	}> = [
+		{ specSlug: RESPOND_SPEC_ID, table: schema.promptConfigs, fields: chatFields },
+		{
+			specSlug: NARRATE_SPEC_ID,
+			table: schema.narratorPromptConfigs,
+			fields: narratorFields
+		},
+		{
+			specSlug: SUMMARIZE_WORLD_SPEC_ID,
+			table: schema.worldSummarizeConfigs,
+			fields: summarizeFields
+		},
+		{
+			specSlug: SUMMARIZE_CHARACTER_SPEC_ID,
+			table: schema.characterSummarizeConfigs,
+			fields: summarizeFields
+		},
+		{
+			specSlug: SUMMARIZE_SCENE_SPEC_ID,
+			table: schema.sceneSummarizeConfigs,
+			fields: (r: any) => ({
+				...summarizeFields(r),
+				characterExtraction: str(r.characterExtractionSystemPrompt)
+			})
+		},
+		{
+			specSlug: SUMMARIZE_HISTORY_SPEC_ID,
+			table: schema.sceneSummarizeConfigs,
+			fields: summarizeFields
+		}
+	]
+
+	it("every legacy shipped row has a byte-identical catalog prompt", async () => {
+		const { CORE_PROMPTS } = await import("@serene-pub/core-catalog")
+		const byKey = new Map(CORE_PROMPTS.map((p) => [p.seedKey, p]))
+		for (const source of LEGACY_SOURCES) {
+			const rows = await db.select().from(source.table)
+			for (const row of rows as any[]) {
+				if (!row.seedKey) continue
+				const seedKey = `pipeline-prompt:${source.specSlug}:${row.seedKey}`
+				const catalog = byKey.get(seedKey)
+				expect(catalog, `${seedKey} missing from CORE_PROMPTS`).toBeTruthy()
+				expect(catalog!.name).toBe(row.name)
+				expect(catalog!.fields).toEqual(source.fields(row))
+			}
+		}
 	})
 })
 

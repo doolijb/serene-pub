@@ -21,6 +21,22 @@ const passphraseSchema = z
 		"Passphrase must contain at least one special character"
 	)
 
+/**
+ * The account-management handlers (list/create/update/delete) exist only when
+ * accounts do. With accounts off the instance is single-user: there is no
+ * roster to manage, and the admin Users page hides — but the socket surface
+ * must refuse too, not just the UI. Self-scoped handlers (users:current:*)
+ * stay live either way; the sole user still owns their profile.
+ */
+async function requireAccountsEnabled() {
+	const settings = await db.query.systemSettings.findFirst({
+		where: eq(schema.systemSettings.id, 1),
+		columns: { isAccountsEnabled: true }
+	})
+	if (!settings?.isAccountsEnabled)
+		throw new Error("Accounts are disabled on this instance.")
+}
+
 // Display name validation schema
 const displayNameSchema = z
 	.string()
@@ -480,6 +496,7 @@ export const usersList: Handler<
 	event: "users:list",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		await requireAccountsEnabled()
 		const currentUserId = socket.user!.id
 
 		// Get current user to check admin status
@@ -536,6 +553,7 @@ export const usersCreate: Handler<
 		if (!currentUser || !currentUser.isAdmin) {
 			throw new Error("Admin privileges required")
 		}
+		await requireAccountsEnabled()
 
 		// Validate required fields
 		if (!params.username) {
@@ -607,6 +625,7 @@ export const usersUpdate: Handler<
 		if (!currentUser || !currentUser.isAdmin) {
 			throw new Error("Admin privileges required")
 		}
+		await requireAccountsEnabled()
 
 		// Check if user exists
 		const targetUser = await db.query.users.findFirst({
@@ -701,6 +720,7 @@ export const usersDelete: Handler<
 		if (!currentUser || !currentUser.isAdmin) {
 			throw new Error("Admin privileges required")
 		}
+		await requireAccountsEnabled()
 
 		// Check if user exists
 		const targetUser = await db.query.users.findFirst({

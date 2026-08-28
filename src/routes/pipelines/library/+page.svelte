@@ -414,7 +414,7 @@
 				Everything the pipelines are built from, and what is using it.
 			</p>
 		</div>
-		<a class="btn btn-sm preset-tonal-surface" href="/pipelines">
+		<a class="btn btn-sm preset-tonal-surface" href="/admin/pipelines">
 			<Icons.ArrowLeft size={16} /> Pipelines
 		</a>
 	</header>
@@ -448,7 +448,7 @@
 				{#each view.pipelines as p (p.slug)}
 					<a
 						class="card bg-surface-100-800 hover:preset-tonal-primary flex items-center gap-3 p-3"
-						href="/pipelines/{p.slug}"
+						href="/admin/pipelines/{p.slug}"
 					>
 						<Icons.Workflow size={18} class="shrink-0" />
 						<div class="min-w-0 flex-1">

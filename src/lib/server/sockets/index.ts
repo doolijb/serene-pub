@@ -50,6 +50,7 @@ import { registerActivityHandlers } from "./activity"
 import { registerCustomThemeHandlers } from "./customThemes"
 import { registerCardSourceHandlers } from "./cardSources"
 import { registerPipelineHandlers } from "./pipelines"
+import { registerSessionAdminHandlers } from "./sessionAdmin"
 import { archivedWrite } from "./legacyArchive"
 
 export function connectSockets(io: {
@@ -113,6 +114,7 @@ export function connectSockets(io: {
 		registerActivityHandlers(socket)
 		registerCustomThemeHandlers(socket, emitToUser, register)
 		registerPipelineHandlers(socket, emitToUser, register)
+		registerSessionAdminHandlers(socket, emitToUser, register)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }

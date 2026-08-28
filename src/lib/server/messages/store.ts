@@ -179,7 +179,11 @@ async function upsertProjection(
 			target: schema.messages.id,
 			set: {
 				sessionId: message.sessionId,
-				channel: nativeKind ? existing.channel : message.channel,
+				// Channel is native/creation-time info the legacy row cannot
+				// express, so the mirror never changes it once set — a
+				// greeting seeded onto a custom channel (20 §7) stays there
+				// through every later legacy update.
+				channel: existing ? existing.channel : message.channel,
 				kind: nativeKind ? existing.kind : message.kind,
 				version: message.version,
 				userId: message.userId,

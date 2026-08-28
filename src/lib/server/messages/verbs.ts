@@ -57,15 +57,15 @@ export async function verbRefusal(
 ): Promise<string | null> {
 	try {
 		const [session] = await db
-			.select({ modeId: schema.sessions.modeId })
+			.select({ genreId: schema.sessions.genreId })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, sessionId))
 			.limit(1)
-		if (!session?.modeId) return null
-		const { getSessionMode } = await import(
-			"$lib/server/pipelines/entities/sessionModes"
+		if (!session?.genreId) return null
+		const { getSessionGenre } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		const mode = await getSessionMode(db as any, session.modeId)
+		const mode = await getSessionGenre(db as any, session.genreId)
 		if (!mode) return null
 		if (resolveMessageVerbs(mode.shape)[verb]) return null
 		return (

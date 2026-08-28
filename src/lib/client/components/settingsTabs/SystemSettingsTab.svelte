@@ -237,6 +237,21 @@
 		})
 	}
 
+	// ── Legacy configs visibility ────────────────────────────────────────────
+
+	function handleLegacyConfigsVisibleClick(event: { checked: boolean }) {
+		if (!userCtx.user?.isAdmin) {
+			toaster.error({
+				title: "Access denied",
+				description: "Admin privileges required"
+			})
+			return
+		}
+		socket?.emit("systemSettings:updateLegacyConfigsVisible", {
+			visible: event.checked
+		})
+	}
+
 	// ── Account functions ────────────────────────────────────────────────────
 
 	function handleEnableAccountsClick(event: { checked: boolean }) {
@@ -850,6 +865,38 @@
 						{systemSettingsCtx.settings?.contextDebuggingEnabled
 							? "Context Debugging Enabled"
 							: "Enable Context Debugging"}
+					</Switch.Label>
+				</Switch>
+			</div>
+		</div>
+
+		<!-- Legacy Configs -->
+		<div class="card preset-tonal space-y-4 p-4">
+			<h3 class="text-lg font-semibold">Legacy Configs</h3>
+			<p class="text-muted-foreground text-sm">
+				Show the Legacy panel holding the 0.5 archives — the old
+				Context Configs and Prompt Configs, kept readable. Nothing in
+				0.6 builds a prompt from them; hide the panel when you are done
+				referring back. The rows themselves stay either way.
+			</p>
+			<div class="flex items-center gap-2">
+				<Switch
+					name="show-legacy-configs"
+					checked={systemSettingsCtx.settings
+						?.legacyPromptConfigsVisible !== false}
+					onCheckedChange={handleLegacyConfigsVisibleClick}
+				>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+					<Switch.Label class="font-semibold">
+						{systemSettingsCtx.settings?.legacyPromptConfigsVisible !==
+						false
+							? "Legacy Configs Shown"
+							: "Show Legacy Configs"}
 					</Switch.Label>
 				</Switch>
 			</div>

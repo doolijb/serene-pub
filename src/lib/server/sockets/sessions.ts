@@ -347,12 +347,12 @@ async function buildSessionsListFor(
 	// The mode display name per session — the "type" the card shows (Chat,
 	// or a custom mode). One registry read, mapped; best-effort, so a
 	// registry that never synced just leaves the label off.
-	const { listSessionModes, STANDARD_MODE_ID } = await import(
-		"$lib/server/pipelines/entities/sessionModes"
+	const { listSessionGenres, STANDARD_GENRE_ID } = await import(
+		"$lib/server/pipelines/entities/sessionGenres"
 	)
-	const modeNames = new Map(
-		(await listSessionModes(db as any).catch(() => [])).map((m) => [
-			m.modeId,
+	const genreNames = new Map(
+		(await listSessionGenres(db as any).catch(() => [])).map((m) => [
+			m.genreId,
 			m.name
 		])
 	)
@@ -365,8 +365,8 @@ async function buildSessionsListFor(
 			isOwner,
 			isGuest,
 			canEdit: isOwner || isGuest,
-			modeName:
-				modeNames.get(session.modeId ?? STANDARD_MODE_ID) ?? "Chat",
+			genreName:
+				genreNames.get(session.genreId ?? STANDARD_GENRE_ID) ?? "Chat",
 			// sessionCharacters/sessionPersonas rows can have a null character/
 			// persona when the linked row was deleted (the FK is nullable,
 			// onDelete: "set null") — filter those out, matching the same
@@ -491,23 +491,54 @@ export const sessionsCreateHandler: Handler<
 			}
 		}
 
+		// Preset resolution (23 §9): when the client starts from a preset, the
+		// preset picks the type — the server derives genreId from it (never
+		// trusting a client-supplied pair to agree) and refuses presets or
+		// types an admin has hidden. An absent settings row means available:
+		// types are visible until someone hides them, same as sessionAdmin.
+		{
+			const presetId = (params.session as any).presetId ?? null
+			if (presetId != null) {
+				const [preset] = await db
+					.select()
+					.from(schema.sessionPresets)
+					.where(eq(schema.sessionPresets.id, presetId))
+					.limit(1)
+				if (!preset || !preset.enabled)
+					throw new Error("That session preset is not available.")
+				const [typeSetting] = await db
+					.select()
+					.from(schema.sessionGenreSettings)
+					.where(
+						eq(
+							schema.sessionGenreSettings.genreId,
+							preset.genreId
+						)
+					)
+					.limit(1)
+				if (typeSetting && !typeSetting.enabled)
+					throw new Error("That session type is not available.")
+				;(params.session as any).genreId = preset.genreId
+			}
+		}
+
 		// Creation validates against the mode's declared shape (19 §6). The
 		// default mode is the F29 floor, whose shape states today's behaviour
 		// exactly — so every current creation passes trivially, and the seam
 		// is live for the day a picker offers a mode with real constraints.
 		let declaredFieldKeys: string[] = []
 		{
-			const { getSessionMode, shapeViolations, STANDARD_MODE_ID } =
-				await import("$lib/server/pipelines/entities/sessionModes")
-			const modeId = (params.session as any).modeId ?? STANDARD_MODE_ID
-			const mode = await getSessionMode(db as any, modeId)
+			const { getSessionGenre, shapeViolations, STANDARD_GENRE_ID } =
+				await import("$lib/server/pipelines/entities/sessionGenres")
+			const genreId = (params.session as any).genreId ?? STANDARD_GENRE_ID
+			const mode = await getSessionGenre(db as any, genreId)
 			// The F29 spirit: the standard mode is the floor, available even
 			// when the type registry never synced (a bootstrap conflict
 			// disables pipelines, never sessionting — DECOMPOSITION §19). Only a
 			// *non-standard* mode this build does not register refuses.
-			if (!mode && modeId !== STANDARD_MODE_ID)
+			if (!mode && genreId !== STANDARD_GENRE_ID)
 				throw new Error(
-					`'${modeId}' is not a session mode this build registers.`
+					`'${genreId}' is not a session mode this build registers.`
 				)
 			if (mode) {
 				const violations = shapeViolations(mode.shape, {
@@ -530,9 +561,9 @@ export const sessionsCreateHandler: Handler<
 		// Field values only under names the mode declares (19 §1) — the same
 		// filter runTurn applies at supply, applied at write so the row never
 		// carries keys nothing declared.
-		;(sessionDataWithoutTags as any).modeFields = Object.fromEntries(
+		;(sessionDataWithoutTags as any).genreFields = Object.fromEntries(
 			Object.entries(
-				((params.session as any).modeFields ?? {}) as Record<
+				((params.session as any).genreFields ?? {}) as Record<
 					string,
 					unknown
 				>
@@ -575,43 +606,69 @@ export const sessionsCreateHandler: Handler<
 				}))
 			)
 		}
-		// Insert a first message for every character assigned to the session, ordered by position
-		const sessionCharacters = await db.query.sessionCharacters.findMany({
-			where: (cc, { eq }) => eq(cc.sessionId, newSession.id),
-			with: { character: true },
-			orderBy: (cc, { asc }) => asc(cc.position ?? 0)
-		})
-		const sessionPersona = await db.query.sessionPersonas.findFirst({
-			where: (cp, { eq, and, isNotNull }) =>
-				and(eq(cp.sessionId, newSession.id), isNotNull(cp.personaId)),
-			with: { persona: true },
-			orderBy: (cp, { asc }) => asc(cp.position ?? 0)
-		})
-		for (const cc of sessionCharacters) {
-			if (!cc.character) continue
-			const greetings = buildCharacterFirstSessionMessage({
-				character: cc.character,
-				persona: sessionPersona?.persona,
-				isGroup: !!newSession.isGroup
-			})
-			if (greetings.length > 0) {
-				const newMessage: InsertSessionMessage = {
-					userId,
+		// Creation as a run (24 §12, T8): the genre's create pipeline answers
+		// `session-created` — greeting seeding is its nodes now, receipted
+		// like any other run. Dispatch keys on (genre, event); nothing serving
+		// is a normal state (a transitional input-type genre has no create
+		// pipeline), and the imperative floor below covers it — the F29
+		// posture: creation must never fail because pipeline infrastructure
+		// did.
+		const { getSessionGenre, STANDARD_GENRE_ID } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
+		)
+		const genreId = newSession.genreId ?? STANDARD_GENRE_ID
+		let seededByPipeline = false
+		try {
+			const { dispatchSessionEvent } = await import(
+				"$lib/server/pipelines/runtime/sessionEvents"
+			)
+			const createRequest = {
+				genreId,
+				presetId: newSession.presetId ?? null,
+				characterIds,
+				personaIds,
+				lorebookId: params.session.lorebookId ?? null
+			}
+			const dispatched = await dispatchSessionEvent(db, {
+				sessionId: newSession.id,
+				userId,
+				genreId,
+				event: "session-created",
+				input: {
+					main: createRequest,
+					sessionScope: { sessionId: newSession.id, userId },
 					sessionId: newSession.id,
-					personaId: null,
-					characterId: cc.character.id,
-					role: "assistant",
-					content: greetings[0],
-					isGenerating: false,
-					metadata: {
-						isGreeting: true,
-						swipes: {
-							currentIdx: 0,
-							history: greetings as any // Patch: force string[]
-						}
-					}
+					request: createRequest,
+					fields: (sessionDataWithoutTags as any).genreFields ?? {}
 				}
-				await insertLegacy(db, newMessage)
+			})
+			seededByPipeline =
+				!!dispatched && (dispatched.receipt as any)?.outcome !== "err"
+		} catch (err) {
+			console.warn(
+				"session-created pipeline failed; seeding greetings imperatively:",
+				err
+			)
+		}
+
+		if (!seededByPipeline) {
+			// The floor: the same halves the pipeline's nodes call, invoked
+			// directly, honoring the genre shape's greeting declaration.
+			const greetingShape = (await getSessionGenre(db as any, genreId))
+				?.shape?.greeting
+			if (greetingShape?.enabled !== false) {
+				const { collectSessionGreetings, writeSessionGreetings } =
+					await import("$lib/server/sessions/greetings")
+				const { entries } = await collectSessionGreetings(
+					db,
+					newSession.id
+				)
+				await writeSessionGreetings(db, {
+					sessionId: newSession.id,
+					userId,
+					entries,
+					channel: greetingShape?.channel ?? "main"
+				})
 			}
 		}
 
@@ -868,18 +925,18 @@ export const sessionsDeleteHandler: Handler<
  * only, hide the picker": the mode system failing must never block sessionting.
  */
 export const sessionsModesHandler: Handler<
-	Sockets.Sessions.Modes.Params,
-	Sockets.Sessions.Modes.Response
+	Sockets.Sessions.Genres.Params,
+	Sockets.Sessions.Genres.Response
 > = {
-	event: "sessions:modes",
+	event: "sessions:genres",
 	handler: async (socket, _params, emitToUser) => {
-		const { listSessionModes } = await import(
-			"$lib/server/pipelines/entities/sessionModes"
+		const { listSessionGenres } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		const res: Sockets.Sessions.Modes.Response = {
-			modes: (await listSessionModes(db as any)) as any
+		const res: Sockets.Sessions.Genres.Response = {
+			genres: (await listSessionGenres(db as any)) as any
 		}
-		emitToUser("sessions:modes", res)
+		emitToUser("sessions:genres", res)
 		return res
 	}
 }
@@ -890,31 +947,31 @@ export const sessionsModesHandler: Handler<
  * sentences, and the target's shape is validated like creation's.
  */
 export const sessionsUpgradeModeHandler: Handler<
-	Sockets.Sessions.UpgradeMode.Params,
-	Sockets.Sessions.UpgradeMode.Response
+	Sockets.Sessions.UpgradeGenre.Params,
+	Sockets.Sessions.UpgradeGenre.Response
 > = {
-	event: "sessions:upgradeMode",
+	event: "sessions:upgradeGenre",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		const base = { sessionId: params.sessionId, modeId: params.modeId }
+		const base = { sessionId: params.sessionId, genreId: params.genreId }
 		const access = await checkSessionAccess(params.sessionId, userId)
 		if (!access.hasAccess || !access.isOwner) {
 			const res = { ...base, error: "Session not found." }
-			emitToUser("sessions:upgradeMode", res)
+			emitToUser("sessions:upgradeGenre", res)
 			return res
 		}
-		const { upgradeSessionMode } = await import(
-			"$lib/server/pipelines/entities/sessionModes"
+		const { upgradeSessionGenre } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		const { error } = await upgradeSessionMode(
+		const { error } = await upgradeSessionGenre(
 			db as any,
 			params.sessionId,
-			params.modeId
+			params.genreId
 		)
-		const res: Sockets.Sessions.UpgradeMode.Response = error
+		const res: Sockets.Sessions.UpgradeGenre.Response = error
 			? { ...base, error }
 			: base
-		emitToUser("sessions:upgradeMode", res)
+		emitToUser("sessions:upgradeGenre", res)
 		if (!error) await sessionsListHandler.handler(socket, {}, emitToUser)
 		return res
 	}
@@ -938,26 +995,26 @@ export const sessionsFunctionCandidatesHandler: Handler<
 			resolved: null
 		}
 		if (access.hasAccess) {
-			const { resolveFunctionSpec, STANDARD_MODE_ID } = await import(
-				"$lib/server/pipelines/entities/sessionModes"
+			const { resolveFunctionSpec, STANDARD_GENRE_ID } = await import(
+				"$lib/server/pipelines/entities/sessionGenres"
 			)
 			const { functionCandidates } = await import(
 				"$lib/server/pipelines/entities/bindings"
 			)
 			const [session] = await db
-				.select({ modeId: schema.sessions.modeId })
+				.select({ genreId: schema.sessions.genreId })
 				.from(schema.sessions)
 				.where(eq(schema.sessions.id, params.sessionId))
 				.limit(1)
-			const modeId = session?.modeId ?? STANDARD_MODE_ID
+			const genreId = session?.genreId ?? STANDARD_GENRE_ID
 			res.candidates = await functionCandidates(
 				db as any,
-				modeId,
+				genreId,
 				params.function
 			)
 			res.resolved = await resolveFunctionSpec(
 				db as any,
-				modeId,
+				genreId,
 				params.function,
 				{ sessionId: params.sessionId }
 			)
@@ -992,14 +1049,14 @@ export const sessionsBindFunctionHandler: Handler<
 		if (!access.hasAccess || !access.isOwner)
 			return fail("Session not found.")
 
-		const { STANDARD_MODE_ID } = await import(
-			"$lib/server/pipelines/entities/sessionModes"
+		const { STANDARD_GENRE_ID } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		const { bindFunction } = await import(
 			"$lib/server/pipelines/entities/bindings"
 		)
 		const [session] = await db
-			.select({ modeId: schema.sessions.modeId })
+			.select({ genreId: schema.sessions.genreId })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, params.sessionId))
 			.limit(1)
@@ -1008,7 +1065,7 @@ export const sessionsBindFunctionHandler: Handler<
 				scopeKind === "instance"
 					? { kind: "instance", id: 0 }
 					: { kind: "session", id: params.sessionId },
-			modeId: session?.modeId ?? STANDARD_MODE_ID,
+			genreId: session?.genreId ?? STANDARD_GENRE_ID,
 			functionKey: params.function,
 			specSlug: params.specSlug,
 			userId
@@ -1035,7 +1092,7 @@ export const sessionsSpeakerStrategiesHandler: Handler<
 		}
 		if (access.hasAccess) {
 			const { listSpeakerStrategies } = await import(
-				"$lib/server/pipelines/entities/sessionModes"
+				"$lib/server/pipelines/entities/sessionGenres"
 			)
 			const { getSessionSpeakerStrategy } = await import(
 				"$lib/server/pipelines/entities/bindings"
@@ -1127,23 +1184,23 @@ export const sessionsTriggerFunctionHandler: Handler<
 
 				const {
 					resolveFunctionSpec,
-					STANDARD_MODE_ID,
-					modeFieldsFor,
-					sessionModeAvailable
-				} = await import("$lib/server/pipelines/entities/sessionModes")
+					STANDARD_GENRE_ID,
+					genreFieldsFor,
+					sessionGenreAvailable
+				} = await import("$lib/server/pipelines/entities/sessionGenres")
 				// Read-only when the mode is missing (19 §6) — a trigger is a
 				// new turn like any other.
-				const modeCheck = await sessionModeAvailable(
+				const modeCheck = await sessionGenreAvailable(
 					db as any,
 					params.sessionId
 				)
 				if (!modeCheck.available) return fail(modeCheck.reason!)
 				const [session] = await db
-					.select({ modeId: schema.sessions.modeId })
+					.select({ genreId: schema.sessions.genreId })
 					.from(schema.sessions)
 					.where(eq(schema.sessions.id, params.sessionId))
 					.limit(1)
-				const modeId = session?.modeId ?? STANDARD_MODE_ID
+				const genreId = session?.genreId ?? STANDARD_GENRE_ID
 
 				// Checked here and not only in the view (19 §3). Hiding a
 				// button is a presentation choice; refusing the fire is what
@@ -1157,12 +1214,12 @@ export const sessionsTriggerFunctionHandler: Handler<
 				// checkbox that does not exist. Not-offered falls through to
 				// the resolution refusal below, which names the real problem.
 				const { listSessionFunctions } = await import(
-					"$lib/server/pipelines/entities/sessionModes"
+					"$lib/server/pipelines/entities/sessionGenres"
 				)
 				const offered = await listSessionFunctions(
 					db as any,
 					params.sessionId,
-					modeId,
+					genreId,
 					userId
 				)
 				const mine = offered.find((f) => f.function === params.function)
@@ -1174,7 +1231,7 @@ export const sessionsTriggerFunctionHandler: Handler<
 
 				const specId = await resolveFunctionSpec(
 					db as any,
-					modeId,
+					genreId,
 					params.function,
 					{ sessionId: params.sessionId }
 				)
@@ -1228,7 +1285,7 @@ export const sessionsTriggerFunctionHandler: Handler<
 							sessionId: params.sessionId,
 							currentCharacterId: null
 						},
-						fields: await modeFieldsFor(db as any, params.sessionId)
+						fields: await genreFieldsFor(db as any, params.sessionId)
 					}
 				})
 				if (receipt.outcome !== "ok") {
@@ -1280,16 +1337,16 @@ export const sessionsPipelinesHandler: Handler<
 			const {
 				resolveFunctionSpec,
 				enabledSessionFunctions,
-				STANDARD_MODE_ID
+				STANDARD_GENRE_ID
 			} = await import(
-				"$lib/server/pipelines/entities/sessionModes"
+				"$lib/server/pipelines/entities/sessionGenres"
 			)
 			const [session] = await db
-				.select({ modeId: schema.sessions.modeId })
+				.select({ genreId: schema.sessions.genreId })
 				.from(schema.sessions)
 				.where(eq(schema.sessions.id, params.sessionId))
 				.limit(1)
-			const modeId = session?.modeId ?? STANDARD_MODE_ID
+			const genreId = session?.genreId ?? STANDARD_GENRE_ID
 
 			const nameOf = async (slug: string): Promise<string | null> => {
 				const [row] = await db
@@ -1315,7 +1372,7 @@ export const sessionsPipelinesHandler: Handler<
 			// The reply pipeline is always involved; then every function the
 			// session actually has switched on (19 §4) — narrate included.
 			await add(
-				await resolveFunctionSpec(db, modeId, "respond", {
+				await resolveFunctionSpec(db, genreId, "respond", {
 					sessionId: params.sessionId
 				}),
 				"Respond"
@@ -1323,12 +1380,12 @@ export const sessionsPipelinesHandler: Handler<
 			const fns = await enabledSessionFunctions(
 				db as any,
 				params.sessionId,
-				modeId,
+				genreId,
 				userId
 			)
 			for (const fn of fns)
 				await add(
-					await resolveFunctionSpec(db, modeId, fn.function, {
+					await resolveFunctionSpec(db, genreId, fn.function, {
 						sessionId: params.sessionId
 					}),
 					fn.name
@@ -1356,7 +1413,8 @@ export const sessionsViewHandler: Handler<
 		const access = await checkSessionAccess(params.sessionId, userId)
 		const res: Sockets.Sessions.View.Response = {
 			sessionId: params.sessionId,
-			panels: []
+			panels: [],
+			modePanels: []
 		}
 		if (access.hasAccess) {
 			const { surfacesOf, frameSrc } = await import(
@@ -1385,17 +1443,17 @@ export const sessionsViewHandler: Handler<
 
 			// The mode's declared session-view, when its plugin is enabled
 			// and declares the surface.
-			const { getSessionMode, STANDARD_MODE_ID } = await import(
-				"$lib/server/pipelines/entities/sessionModes"
+			const { getSessionGenre, STANDARD_GENRE_ID } = await import(
+				"$lib/server/pipelines/entities/sessionGenres"
 			)
 			const [session] = await db
-				.select({ modeId: schema.sessions.modeId })
+				.select({ genreId: schema.sessions.genreId })
 				.from(schema.sessions)
 				.where(eq(schema.sessions.id, params.sessionId))
 				.limit(1)
-			const mode = await getSessionMode(
+			const mode = await getSessionGenre(
 				db as any,
-				session?.modeId ?? STANDARD_MODE_ID
+				session?.genreId ?? STANDARD_GENRE_ID
 			)
 			const viewPlugin = (mode?.shape as any)?.view
 			if (typeof viewPlugin === "string") {
@@ -1410,8 +1468,137 @@ export const sessionsViewHandler: Handler<
 						title: decl.title ?? owner.name
 					}
 			}
+
+			// The mode's declared surface-grid panels (21). Passed through
+			// verbatim; a frame surface gets its `src` resolved only when the
+			// owning plugin is installed (absent → the client placeholders it).
+			const declaredPanels = (mode?.shape as any)?.panels
+			if (Array.isArray(declaredPanels)) {
+				for (const p of declaredPanels) {
+					if (!p || typeof p.id !== "string") continue
+					const panel: Sockets.Sessions.View.ModePanel = {
+						id: p.id,
+						title: typeof p.title === "string" ? p.title : p.id,
+						icon: typeof p.icon === "string" ? p.icon : undefined,
+						role: p.role === "primary" ? "primary" : "secondary",
+						surface: p.surface,
+						channels: Array.isArray(p.channels)
+							? p.channels
+							: undefined,
+						layout:
+							p.layout && typeof p.layout === "object"
+								? p.layout
+								: undefined,
+						defaultActive: !!p.defaultActive
+					}
+					if (
+						p.surface?.kind === "frame" &&
+						typeof p.surface.pluginId === "string" &&
+						typeof p.surface.entry === "string"
+					) {
+						const owner = enabled.find(
+							(e) => e.pluginId === p.surface.pluginId
+						)
+						if (owner)
+							panel.src = frameSrc(
+								p.surface.pluginId,
+								p.surface.entry
+							)
+					}
+					res.modePanels.push(panel)
+				}
+			}
 		}
 		emitToUser("sessions:view", res)
+		return res
+	}
+}
+
+/**
+ * Read the caller's surface-grid layout for a session (21 §10). No row yet →
+ * an empty blob; the client then derives its default layout from the mode's
+ * declared panels. Access-gated like every other session read.
+ */
+export const sessionsPanelLayoutGetHandler: Handler<
+	Sockets.Sessions.PanelLayout.Get.Params,
+	Sockets.Sessions.PanelLayout.Get.Response
+> = {
+	event: "sessions:panelLayout:get",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const access = await checkSessionAccess(params.sessionId, userId)
+		let layout: Record<string, unknown> = {}
+		if (access.hasAccess) {
+			const [row] = await db
+				.select({ layout: schema.sessionPanelLayouts.layout })
+				.from(schema.sessionPanelLayouts)
+				.where(
+					and(
+						eq(
+							schema.sessionPanelLayouts.sessionId,
+							params.sessionId
+						),
+						eq(schema.sessionPanelLayouts.userId, userId)
+					)
+				)
+				.limit(1)
+			if (row?.layout && typeof row.layout === "object")
+				layout = row.layout as Record<string, unknown>
+		}
+		const res: Sockets.Sessions.PanelLayout.Get.Response = {
+			sessionId: params.sessionId,
+			layout
+		}
+		emitToUser("sessions:panelLayout:get", res)
+		return res
+	}
+}
+
+/**
+ * Persist the caller's surface-grid layout for a session (21 §10). One row per
+ * (user, session); upsert. The `layout` blob is stored verbatim — its shape is
+ * the client surface manager's business, forward-compatible by design.
+ */
+export const sessionsPanelLayoutSetHandler: Handler<
+	Sockets.Sessions.PanelLayout.Set.Params,
+	Sockets.Sessions.PanelLayout.Set.Response
+> = {
+	event: "sessions:panelLayout:set",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const access = await checkSessionAccess(params.sessionId, userId)
+		let ok = false
+		let error: string | undefined
+		if (!access.hasAccess) {
+			error = "No access to this session"
+		} else if (!params.layout || typeof params.layout !== "object") {
+			error = "Invalid layout"
+		} else {
+			await db
+				.insert(schema.sessionPanelLayouts)
+				.values({
+					sessionId: params.sessionId,
+					userId,
+					layout: params.layout
+				})
+				.onConflictDoUpdate({
+					target: [
+						schema.sessionPanelLayouts.userId,
+						schema.sessionPanelLayouts.sessionId
+					],
+					set: {
+						layout: params.layout,
+						updatedAt: new Date()
+					}
+				})
+			ok = true
+		}
+		const res: Sockets.Sessions.PanelLayout.Set.Response = {
+			sessionId: params.sessionId,
+			ok,
+			error
+		}
+		emitToUser("sessions:panelLayout:set", res)
 		return res
 	}
 }
@@ -1435,11 +1622,11 @@ export const sessionsTriggersHandler: Handler<
 			triggers: []
 		}
 		if (access.hasAccess) {
-			const { enabledSessionFunctions, STANDARD_MODE_ID } = await import(
-				"$lib/server/pipelines/entities/sessionModes"
+			const { enabledSessionFunctions, STANDARD_GENRE_ID } = await import(
+				"$lib/server/pipelines/entities/sessionGenres"
 			)
 			const [session] = await db
-				.select({ modeId: schema.sessions.modeId })
+				.select({ genreId: schema.sessions.genreId })
 				.from(schema.sessions)
 				.where(eq(schema.sessions.id, params.sessionId))
 				.limit(1)
@@ -1450,7 +1637,7 @@ export const sessionsTriggersHandler: Handler<
 			res.triggers = (await enabledSessionFunctions(
 				db as any,
 				params.sessionId,
-				session?.modeId ?? STANDARD_MODE_ID
+				session?.genreId ?? STANDARD_GENRE_ID
 			)) as any
 		}
 		emitToUser("sessions:triggers", res)
@@ -1480,18 +1667,18 @@ export const sessionsPresetsHandler: Handler<
 			options: []
 		}
 		if (access.hasAccess) {
-			const { listSessionPresets, STANDARD_MODE_ID } = await import(
-				"$lib/server/pipelines/entities/sessionModes"
+			const { listSessionPresets, STANDARD_GENRE_ID } = await import(
+				"$lib/server/pipelines/entities/sessionGenres"
 			)
 			const [session] = await db
-				.select({ modeId: schema.sessions.modeId })
+				.select({ genreId: schema.sessions.genreId })
 				.from(schema.sessions)
 				.where(eq(schema.sessions.id, params.sessionId))
 				.limit(1)
 			const r = await listSessionPresets(
 				db as any,
 				params.sessionId,
-				session?.modeId ?? STANDARD_MODE_ID,
+				session?.genreId ?? STANDARD_GENRE_ID,
 				{ userId, isAdmin: !!socket.user!.isAdmin }
 			)
 			res.specSlug = r.specSlug
@@ -1532,11 +1719,11 @@ export const sessionsChoosePresetHandler: Handler<
 				error: "Session not found."
 			})
 
-		const { chooseSessionPreset, STANDARD_MODE_ID } = await import(
-			"$lib/server/pipelines/entities/sessionModes"
+		const { chooseSessionPreset, STANDARD_GENRE_ID } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		const [session] = await db
-			.select({ modeId: schema.sessions.modeId })
+			.select({ genreId: schema.sessions.genreId })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, params.sessionId))
 			.limit(1)
@@ -1544,7 +1731,7 @@ export const sessionsChoosePresetHandler: Handler<
 		const r = await chooseSessionPreset(
 			db as any,
 			params.sessionId,
-			session?.modeId ?? STANDARD_MODE_ID,
+			session?.genreId ?? STANDARD_GENRE_ID,
 			params.configId,
 			{ userId, isAdmin: !!socket.user!.isAdmin }
 		)
@@ -1580,26 +1767,26 @@ export const sessionsFunctionsHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const access = await checkSessionAccess(params.sessionId, userId)
-		const { listSessionFunctions, STANDARD_MODE_ID } = await import(
-			"$lib/server/pipelines/entities/sessionModes"
+		const { listSessionFunctions, STANDARD_GENRE_ID } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		const [session] = await db
-			.select({ modeId: schema.sessions.modeId })
+			.select({ genreId: schema.sessions.genreId })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, params.sessionId))
 			.limit(1)
-		const modeId = session?.modeId ?? STANDARD_MODE_ID
+		const genreId = session?.genreId ?? STANDARD_GENRE_ID
 
 		const res: Sockets.Sessions.Functions.Response = {
 			sessionId: params.sessionId,
-			modeId,
+			genreId,
 			functions: []
 		}
 		if (access.hasAccess && access.isOwner)
 			res.functions = (await listSessionFunctions(
 				db as any,
 				params.sessionId,
-				modeId,
+				genreId,
 				userId
 			)) as any
 		res.canAddOutsidePreset = !!socket.user!.isAdmin
@@ -1636,20 +1823,20 @@ export const sessionsSetFunctionHandler: Handler<
 				error: "Session not found."
 			})
 
-		const { setSessionFunction, STANDARD_MODE_ID } = await import(
-			"$lib/server/pipelines/entities/sessionModes"
+		const { setSessionFunction, STANDARD_GENRE_ID } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		const [session] = await db
-			.select({ modeId: schema.sessions.modeId })
+			.select({ genreId: schema.sessions.genreId })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, params.sessionId))
 			.limit(1)
-		const modeId = session?.modeId ?? STANDARD_MODE_ID
+		const genreId = session?.genreId ?? STANDARD_GENRE_ID
 
 		const r = await setSessionFunction(
 			db as any,
 			params.sessionId,
-			modeId,
+			genreId,
 			params.function,
 			!!params.enabled,
 			{ userId, isAdmin: !!socket.user!.isAdmin }
@@ -1978,34 +2165,34 @@ export const sessionsUpdateHandler: Handler<
 					samplingConfigId,
 					promptConfigId,
 					narratorPromptConfigId,
-					modeFields
+					genreFields
 				} = params.session
 
 				// Mode field values, filtered to the keys the session's mode
-				// declares (19 §1) — same write rule as creation. `modeId`
+				// declares (19 §1) — same write rule as creation. `genreId`
 				// itself is deliberately absent from this allowlist: switching
 				// a session's mode is a policy question 19 §10 leaves open, not an
 				// update field.
-				let modeFieldsPatch: Record<string, unknown> | undefined
-				if (modeFields !== undefined) {
-					const { getSessionMode, STANDARD_MODE_ID } = await import(
-						"$lib/server/pipelines/entities/sessionModes"
+				let genreFieldsPatch: Record<string, unknown> | undefined
+				if (genreFields !== undefined) {
+					const { getSessionGenre, STANDARD_GENRE_ID } = await import(
+						"$lib/server/pipelines/entities/sessionGenres"
 					)
 					const [row] = await db
-						.select({ modeId: schema.sessions.modeId })
+						.select({ genreId: schema.sessions.genreId })
 						.from(schema.sessions)
 						.where(eq(schema.sessions.id, params.session.id!))
 						.limit(1)
-					const mode = await getSessionMode(
+					const mode = await getSessionGenre(
 						db as any,
-						row?.modeId ?? STANDARD_MODE_ID
+						row?.genreId ?? STANDARD_GENRE_ID
 					)
 					const declared = Object.keys(
 						(mode?.shape as any)?.fields ?? {}
 					)
-					modeFieldsPatch = Object.fromEntries(
+					genreFieldsPatch = Object.fromEntries(
 						Object.entries(
-							(modeFields ?? {}) as Record<string, unknown>
+							(genreFields ?? {}) as Record<string, unknown>
 						).filter(([k]) => declared.includes(k))
 					)
 				}
@@ -2032,8 +2219,8 @@ export const sessionsUpdateHandler: Handler<
 						...(narratorPromptConfigId !== undefined
 							? { narratorPromptConfigId }
 							: {}),
-						...(modeFieldsPatch !== undefined
-							? { modeFields: modeFieldsPatch }
+						...(genreFieldsPatch !== undefined
+							? { genreFields: genreFieldsPatch }
 							: {}),
 						updatedAt: new Date().toISOString()
 					})
@@ -2042,6 +2229,38 @@ export const sessionsUpdateHandler: Handler<
 				// Process tags after session update
 				await processSessionTags(params.session.id!, tags, userId)
 			}
+
+			// Membership deltas dispatch as member events (24 §5) after the
+			// sync — snapshots rather than per-branch bookkeeping, so revives,
+			// permission-blocked removals and upserts all count what actually
+			// changed. A genre's pipelines bind by declaring (genre,
+			// member-added/removed); nothing serves today, and the dispatch
+			// resolving to nothing costs one SELECT.
+			const memberSnapshot = async () => {
+				const ccs = await db.query.sessionCharacters.findMany({
+					where: (cc, { eq }) => eq(cc.sessionId, params.session.id!)
+				})
+				const cps = await db.query.sessionPersonas.findMany({
+					where: (cp, { eq }) => eq(cp.sessionId, params.session.id!)
+				})
+				return {
+					characters: new Set(
+						ccs
+							.filter((c) => !c.removedAt && c.characterId != null)
+							.map((c) => c.characterId as number)
+					),
+					personas: new Set(
+						cps
+							.filter((c) => !c.removedAt && c.personaId != null)
+							.map((c) => c.personaId as number)
+					)
+				}
+			}
+			const membersBefore =
+				params.characterIds !== undefined ||
+				params.personaIds !== undefined
+					? await memberSnapshot()
+					: null
 
 			// Sync sessionCharacters if provided
 			if (params.characterIds !== undefined) {
@@ -2278,6 +2497,77 @@ export const sessionsUpdateHandler: Handler<
 								}
 							})
 					}
+				}
+			}
+
+			// The member events (24 §5), best-effort: a failed dispatch must
+			// never fail the update that caused it.
+			if (membersBefore) {
+				try {
+					const after = await memberSnapshot()
+					const deltas: Array<{
+						event: "member-added" | "member-removed"
+						kind: "character" | "persona"
+						id: number
+					}> = []
+					for (const id of after.characters)
+						if (!membersBefore.characters.has(id))
+							deltas.push({
+								event: "member-added",
+								kind: "character",
+								id
+							})
+					for (const id of membersBefore.characters)
+						if (!after.characters.has(id))
+							deltas.push({
+								event: "member-removed",
+								kind: "character",
+								id
+							})
+					for (const id of after.personas)
+						if (!membersBefore.personas.has(id))
+							deltas.push({
+								event: "member-added",
+								kind: "persona",
+								id
+							})
+					for (const id of membersBefore.personas)
+						if (!after.personas.has(id))
+							deltas.push({
+								event: "member-removed",
+								kind: "persona",
+								id
+							})
+					if (deltas.length) {
+						const [row] = await db
+							.select({ genreId: schema.sessions.genreId })
+							.from(schema.sessions)
+							.where(eq(schema.sessions.id, params.session.id!))
+							.limit(1)
+						const { dispatchSessionEvent } = await import(
+							"$lib/server/pipelines/runtime/sessionEvents"
+						)
+						for (const delta of deltas) {
+							const member = { kind: delta.kind, id: delta.id }
+							await dispatchSessionEvent(db, {
+								sessionId: params.session.id!,
+								userId,
+								genreId: row?.genreId ?? "core:genre/chat",
+								event: delta.event,
+								input: {
+									main: member,
+									member,
+									sessionScope: {
+										sessionId: params.session.id!,
+										userId
+									},
+									sessionId: params.session.id!
+								}
+							})
+						}
+					}
+				} catch (err) {
+					console.warn("member-event dispatch failed:", err)
 				}
 			}
 
@@ -3067,10 +3357,10 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 			// stays, no new turn starts. The standard mode is the F29 floor,
 			// so this can never block ordinary sessionting.
 			{
-				const { sessionModeAvailable } = await import(
-					"$lib/server/pipelines/entities/sessionModes"
+				const { sessionGenreAvailable } = await import(
+					"$lib/server/pipelines/entities/sessionGenres"
 				)
-				const modeCheck = await sessionModeAvailable(
+				const modeCheck = await sessionGenreAvailable(
 					db as any,
 					sessionId
 				)
@@ -4267,95 +4557,8 @@ export const sessionMessageHandler: Handler<
 	}
 }
 
-// Builds the sessionMessage history for the first session message of a character, with history swipes for the user to choose from
-function buildCharacterFirstSessionMessage({
-	character,
-	persona,
-	isGroup
-}: {
-	character: SelectCharacter
-	persona: SelectPersona | undefined | null
-	isGroup: boolean
-}): string[] {
-	if (dev) {
-		console.log(
-			"Building first session message for character:",
-			character.name,
-			"with persona:",
-			persona?.name
-		)
-	}
-	const history: string[] = []
-	const engine = new InterpolationEngine()
-	const context = engine.createInterpolationContext({
-		currentCharacterName: resolveCharacterName(character),
-		currentPersonaName: persona?.name || "User"
-	})
-	if (dev) {
-		console.log("Interpolation context:", context)
-	}
-	if (!isGroup || !character.groupOnlyGreetings?.length) {
-		if (character.firstMessage) {
-			const interpolated = engine.interpolateString(
-				character.firstMessage.trim(),
-				context
-			)!
-			if (dev) {
-				console.log(
-					"Interpolated firstMessage:",
-					character.firstMessage.trim(),
-					"->",
-					interpolated
-				)
-			}
-			history.push(interpolated)
-		}
-		if (character.alternateGreetings) {
-			history.push(
-				...character.alternateGreetings.map((g) => {
-					const interpolated = engine.interpolateString(
-						g.trim(),
-						context
-					)!
-					if (dev) {
-						console.log(
-							"Interpolated alternateGreeting:",
-							g.trim(),
-							"->",
-							interpolated
-						)
-					}
-					return interpolated
-				})
-			)
-		}
-	} else if (character.groupOnlyGreetings?.length) {
-		// If this is a group session, use only group greetings
-		history.push(
-			...character.groupOnlyGreetings.map((g) => {
-				const interpolated = engine.interpolateString(
-					g.trim(),
-					context
-				)!
-				if (dev) {
-					console.log(
-						"Interpolated groupOnlyGreeting:",
-						g.trim(),
-						"->",
-						interpolated
-					)
-				}
-				return interpolated
-			})
-		)
-	} else {
-		// Fallback firstMessage if no greetings are available
-		history.push(
-			`Sits down at the table, "I didn't think you'd show up so soon."`
-		)
-	}
-	return history
-}
+// Greeting construction moved to $lib/server/sessions/greetings (24 T8) —
+// one implementation behind the create pipeline's nodes and the floor alike.
 
 // =============================================
 // TYPE-SAFE CHAT HANDLERS
@@ -5337,6 +5540,8 @@ export function registerSessionHandlers(
 	register(socket, sessionsModesHandler, emitToUser)
 	register(socket, sessionsTriggersHandler, emitToUser)
 	register(socket, sessionsViewHandler, emitToUser)
+	register(socket, sessionsPanelLayoutGetHandler, emitToUser)
+	register(socket, sessionsPanelLayoutSetHandler, emitToUser)
 	register(socket, sessionsPipelinesHandler, emitToUser)
 	register(socket, sessionsTriggerFunctionHandler, emitToUser)
 	register(socket, sessionsPresetsHandler, emitToUser)

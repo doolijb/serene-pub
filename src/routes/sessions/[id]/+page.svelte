@@ -27,6 +27,9 @@
 	import { sceneImages } from "$lib/client/stores/sceneImages"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
+	import SurfaceGrid from "$lib/client/components/surfaces/SurfaceGrid.svelte"
+	import { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
+	import type { LayoutBlob } from "$lib/client/surfaces/types"
 
 	let session: Sockets.Sessions.Get.Response["session"] | undefined = $state()
 	let pagination: Sockets.Sessions.Get.Response["pagination"] | undefined =
@@ -156,8 +159,121 @@
 	// falls back to core's log with no error.
 	let sessionFrames = $state<Sockets.Sessions.View.Response | null>(null)
 	const sessionViewFrame = $derived(sessionFrames?.sessionView ?? null)
+
+	// ── Surface grid (plan 21) ──────────────────────────────────────
+	// The modular session layout: the conversation is the primary panel, and
+	// scene portraits / sample widgets flow into container-responsive tracks
+	// beside it. Availability = the mode's declared panels (from sessions:view)
+	// merged with core's defaults below; placement is this user's, persisted.
+	const surfaceManager = new SurfaceManager()
+	let panelViewLoaded = $state(false)
+	let panelLayoutLoaded = $state(false)
+	let panelLayoutBlob = $state<LayoutBlob>({})
+
+	/**
+	 * Core's default panels for the standard chat — the scene portraits (moved
+	 * out of the fixed viewport overlays) plus two temporary sample artifacts
+	 * (plan 21) that exercise the framework. A custom mode's own panels arrive
+	 * via `sessions:view.modePanels` and are merged on top (mode wins by id).
+	 */
+	const CORE_DEFAULT_PANELS: Sockets.Sessions.View.ModePanel[] = [
+		{
+			id: "scene-portraits",
+			title: "Scene Portraits",
+			icon: "Users",
+			role: "secondary",
+			surface: { kind: "native", component: "scene-portraits" },
+			layout: { span: { ideal: 1 }, minInline: 200 },
+			defaultActive: true
+		},
+		{
+			id: "sample-map",
+			title: "Map (sample)",
+			icon: "Map",
+			role: "secondary",
+			surface: { kind: "native", component: "sample-map" },
+			// A view onto the `map` channel: a node writing there pops it open.
+			channels: ["map"],
+			layout: { span: { ideal: 1 }, minInline: 220 },
+			defaultActive: false
+		},
+		{
+			id: "sample-notes",
+			title: "Tasks (sample)",
+			icon: "ListTodo",
+			role: "secondary",
+			surface: { kind: "native", component: "sample-notes" },
+			// A view onto the `tasks` channel — the ST-style mission-list case.
+			channels: ["tasks"],
+			layout: { span: { ideal: 1 }, minInline: 200 },
+			defaultActive: false
+		},
+		{
+			// A live *iframe* panel (temporary test artifact, plan 21 §7): a
+			// sandboxed opaque-origin frame speaking the frame protocol. Add it
+			// from the drawer's + menu, then move/drawer it — its counter never
+			// resets, proving the grid never reloads the iframe. `src` is set
+			// directly here (a real plugin panel gets its src from the server).
+			id: "sample-frame",
+			title: "Frame (sample)",
+			icon: "AppWindow",
+			role: "secondary",
+			surface: {
+				kind: "frame",
+				pluginId: "dev/sample-frame",
+				entry: "dev-frame-panel.html"
+			},
+			src: "/dev-frame-panel.html",
+			channels: ["main"],
+			layout: { span: { ideal: 1 }, minInline: 240 },
+			defaultActive: false
+		}
+	]
+
+	function persistPanelLayout(blob: LayoutBlob) {
+		if (sessionId == null) return
+		panelLayoutBlob = blob
+		socket.emit("sessions:panelLayout:set", {
+			sessionId,
+			layout: blob as Record<string, unknown>
+		})
+	}
+
+	/** (Re)seed the manager once both the panel set and the saved layout land. */
+	function initSurfaceManagerIfReady() {
+		if (!panelViewLoaded || !panelLayoutLoaded) return
+		const byId = new Map<string, Sockets.Sessions.View.ModePanel>()
+		for (const p of CORE_DEFAULT_PANELS) byId.set(p.id, p)
+		for (const p of sessionFrames?.modePanels ?? []) byId.set(p.id, p) // mode wins
+		surfaceManager.init(
+			sessionId,
+			[...byId.values()],
+			panelLayoutBlob,
+			persistPanelLayout
+		)
+	}
+
 	function handleSessionsView(res: Sockets.Sessions.View.Response) {
-		if (res.sessionId === sessionId) sessionFrames = res
+		if (res.sessionId !== sessionId) return
+		sessionFrames = res
+		panelViewLoaded = true
+		initSurfaceManagerIfReady()
+	}
+
+	function handleSessionsPanelLayoutGet(
+		res: Sockets.Sessions.PanelLayout.Get.Response
+	) {
+		if (res.sessionId !== sessionId) return
+		panelLayoutBlob = (res.layout ?? {}) as LayoutBlob
+		panelLayoutLoaded = true
+		initSurfaceManagerIfReady()
+	}
+
+	/** Explicit surface intents (21 §9): a node/action opened or closed panels. */
+	function handleSurfaceIntent(res: Sockets.Sessions.SurfaceIntent.Push) {
+		if (res.sessionId !== sessionId) return
+		for (const id of res.open ?? []) surfaceManager.applyOpenIntent(id)
+		for (const id of res.close ?? []) surfaceManager.applyCloseIntent(id)
 	}
 	/** Frame actions ride the same audited path as every contributed button. */
 	function handleFrameAction(
@@ -176,9 +292,9 @@
 	// The mode's shape (19 §1–§2): what capabilities exist for this session at
 	// all. Null — an unknown mode, or a registry that never synced — means
 	// today's behaviour exactly, the F29 posture the creation form shares.
-	let modesList: Sockets.Sessions.Modes.Response["modes"] = $state([])
+	let modesList: Sockets.Sessions.Genres.Response["genres"] = $state([])
 	let modeShape = $derived(
-		modesList.find((m) => m.modeId === ((session as any)?.modeId ?? ""))
+		modesList.find((m) => m.genreId === ((session as any)?.genreId ?? ""))
 			?.shape ?? null
 	)
 	// `composer: 'none'` — a purely trigger-driven mode: the tabs (triggers,
@@ -190,9 +306,9 @@
 	// in-flight fetch must not flash the banner over a healthy session.
 	let modeMissing = $derived(
 		modesList.length > 0 &&
-			!!(session as any)?.modeId &&
-			(session as any).modeId !== "core:input/user-message@1" &&
-			!modesList.some((m) => m.modeId === (session as any).modeId)
+			!!(session as any)?.genreId &&
+			(session as any).genreId !== "core:genre/chat" &&
+			!modesList.some((m) => m.genreId === (session as any).genreId)
 	)
 	// A capability the shape omits (or caps at zero) does not exist for the
 	// session: no persona requirement on send, no character-response mechanics.
@@ -685,7 +801,14 @@
 			lastSeenMessageId = null
 			lastSeenMessageContent = ""
 			loadingOlderMessages = false
+			// Surface grid re-seeds for the new session (plan 21): re-fetch its
+			// panel set + this user's saved layout, and re-init once both land.
+			panelViewLoaded = false
+			panelLayoutLoaded = false
+			panelLayoutBlob = {}
 			socket.emit("sessions:get", { id: sessionId, limit: 25 })
+			socket.emit("sessions:view", { sessionId })
+			socket.emit("sessions:panelLayout:get", { sessionId })
 			// console.log('Debug - Emitting getSessionResponseOrder for sessionId:', sessionId)
 			socket.emit("sessions:getResponseOrder", { sessionId })
 		}
@@ -1184,6 +1307,11 @@
 					newMessage = msg.userDraft
 				}
 				loadingOlderMessages = false
+				// Autopopulate panels for any channel already present in the
+				// loaded history (21 §9) — a session reopened with `tasks`
+				// messages shows its Tasks panel without waiting for a new one.
+				for (const m of session.sessionMessages)
+					surfaceManager.activateForChannel((m as any).channel)
 			}
 			pagination = msg.pagination
 			// Auto-scroll is handled by the $effect
@@ -1218,6 +1346,11 @@
 					...currentSession,
 					sessionMessages: updatedMessages.sort((a, b) => a.id - b.id)
 				}
+				// Channel-driven autopopulation (21 §9): a message on a
+				// non-main channel flows in the panel that views that channel.
+				surfaceManager.activateForChannel(
+					(sessionMessage as any).channel
+				)
 			}
 			// Refresh response order when messages change
 			socket.emit("sessions:getResponseOrder", { sessionId })
@@ -1404,8 +1537,8 @@
 		modeTriggers = msg.triggers || []
 	}
 
-	function handleSessionsModesPage(msg: Sockets.Sessions.Modes.Response) {
-		modesList = msg.modes || []
+	function handleSessionsModesPage(msg: Sockets.Sessions.Genres.Response) {
+		modesList = msg.genres || []
 	}
 
 	function handleSessionsTriggerFunction(
@@ -1517,8 +1650,10 @@
 		socket.on("sessions:getNarratorName", handleSessionsGetNarratorName)
 		socket.on("sessions:triggers", handleSessionsTriggers)
 		socket.on("sessions:view", handleSessionsView)
+		socket.on("sessions:panelLayout:get", handleSessionsPanelLayoutGet)
+		socket.on("sessions:surfaceIntent", handleSurfaceIntent)
 		socket.on("sessions:triggerFunction", handleSessionsTriggerFunction)
-		socket.on("sessions:modes", handleSessionsModesPage)
+		socket.on("sessions:genres", handleSessionsModesPage)
 
 		socket.emit("scenes:scenedMessageIds", { sessionId })
 		socket.emit("scenes:list", {
@@ -1528,7 +1663,8 @@
 		// shape, which gates what the view renders at all (19 §2).
 		socket.emit("sessions:triggers", { sessionId })
 		socket.emit("sessions:view", { sessionId })
-		socket.emit("sessions:modes", {})
+		socket.emit("sessions:panelLayout:get", { sessionId })
+		socket.emit("sessions:genres", {})
 
 		// Cleanup function
 		return () => {
@@ -1577,10 +1713,16 @@
 			socket.off("sessions:triggers", handleSessionsTriggers)
 			socket.off("sessions:view", handleSessionsView)
 			socket.off(
+				"sessions:panelLayout:get",
+				handleSessionsPanelLayoutGet
+			)
+			socket.off("sessions:surfaceIntent", handleSurfaceIntent)
+			socket.off(
 				"sessions:triggerFunction",
 				handleSessionsTriggerFunction
 			)
-			socket.off("sessions:modes", handleSessionsModesPage)
+			socket.off("sessions:genres", handleSessionsModesPage)
+			surfaceManager.destroy()
 		}
 	})
 
@@ -1721,6 +1863,16 @@
 				/>
 			</div>
 		{:else}
+		<!-- The surface grid (plan 21): the conversation is the primary panel;
+		     scene portraits and sample widgets flow into container-responsive
+		     tracks beside it, resize, drawer, and persist per user. -->
+		<SurfaceGrid
+			manager={surfaceManager}
+			{sessionId}
+			{session}
+			onFrameAction={handleFrameAction}
+		>
+			{#snippet primaryChildren()}
 		<SessionContainer
 			{session}
 			{pagination}
@@ -2018,7 +2170,7 @@
 								This session is read-only.
 							</p>
 							<p>
-								Its mode ({(session as any)?.modeId}) is not
+								Its mode ({(session as any)?.genreId}) is not
 								installed. Messages are safe to read; new turns
 								resume when the mode returns.
 							</p>
@@ -2106,6 +2258,8 @@
 				{/if}
 			{/snippet}
 		</SessionContainer>
+			{/snippet}
+		</SurfaceGrid>
 		{/if}
 	</div>
 

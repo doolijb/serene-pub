@@ -64,7 +64,8 @@ let sessionId: number
 let userId: number
 let characterId: number
 
-const STANDARD = "core:input/user-message@1"
+// The standard genre's own id (24 §3) — the id sessions carry.
+const STANDARD = "core:genre/chat"
 const CORE_NARRATE = "core:spec/narrate"
 const STAGE_NARRATE = "chariot.stage:spec/dramatic-narrate"
 
@@ -148,7 +149,7 @@ beforeAll(async () => {
 			contributes: {
 				triggers: [
 					{
-						mode: STANDARD,
+						genre: STANDARD,
 						function: "narrate",
 						kind: "button",
 						i18n: { en: "Dramatize" }
@@ -166,7 +167,7 @@ beforeAll(async () => {
 describe("function bindings (19 §3)", () => {
 	it("the binding selects among the eligible — session scope beats the companion default", async () => {
 		const { resolveFunctionSpec } = await import(
-			"$lib/server/pipelines/entities/sessionModes"
+			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		const { bindFunction, functionCandidates } = await import(
 			"$lib/server/pipelines/entities/bindings"
@@ -185,7 +186,7 @@ describe("function bindings (19 §3)", () => {
 		// This session picks the foreign contributor.
 		const bound = await bindFunction(db as any, {
 			scope: { kind: "session", id: sessionId },
-			modeId: STANDARD,
+			genreId: STANDARD,
 			functionKey: "narrate",
 			specSlug: STAGE_NARRATE,
 			userId
@@ -206,7 +207,7 @@ describe("function bindings (19 §3)", () => {
 
 	it("an ineligible bind refuses at write; a bind gone stale falls through at read", async () => {
 		const { resolveFunctionSpec } = await import(
-			"$lib/server/pipelines/entities/sessionModes"
+			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		const { bindFunction } = await import(
 			"$lib/server/pipelines/entities/bindings"
@@ -215,7 +216,7 @@ describe("function bindings (19 §3)", () => {
 		// The respond spec does not serve narrate.
 		const refused = await bindFunction(db as any, {
 			scope: { kind: "session", id: sessionId },
-			modeId: STANDARD,
+			genreId: STANDARD,
 			functionKey: "narrate",
 			specSlug: "core:spec/respond",
 			userId
@@ -249,7 +250,7 @@ describe("function bindings (19 §3)", () => {
 			.where(eq(schema.pipelineSpecs.id, spec.id))
 		const cleared = await bindFunction(db as any, {
 			scope: { kind: "session", id: sessionId },
-			modeId: STANDARD,
+			genreId: STANDARD,
 			functionKey: "narrate",
 			specSlug: null,
 			userId

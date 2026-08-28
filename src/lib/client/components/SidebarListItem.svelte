@@ -12,6 +12,15 @@
 		itemType?: string // e.g., "Character", "Session", "Persona"
 		totalItems?: number // Total items in the list for context
 		currentIndex?: number // Current position in list
+		/**
+		 * The Skeleton preset for the card as a whole (bg/text/border as one
+		 * coherent, theme-aware style). Swapped — not layered — so a caller can
+		 * mark an item active with `preset-filled-primary-500` without stacking
+		 * two presets whose CSS-source order would decide the winner.
+		 */
+		preset?: string
+		/** The hover preset; dropped when a caller wants a fixed active look. */
+		hoverPreset?: string
 	}
 
 	let {
@@ -24,7 +33,9 @@
 		classes = "",
 		itemType = "Item",
 		totalItems,
-		currentIndex
+		currentIndex,
+		preset = "preset-tonal",
+		hoverPreset = "hover:preset-filled-surface-300-700"
 	}: Props = $props()
 
 	// Create comprehensive aria-label
@@ -44,7 +55,7 @@
 </script>
 
 <div
-	class="card preset-tonal hover:preset-filled-surface-300-700 relative flex w-full gap-2 overflow-hidden rounded-lg py-2 pr-3 pl-2 {classes}"
+	class="card {preset} {hoverPreset} relative flex w-full gap-2 overflow-hidden rounded-lg py-2 pr-3 pl-2 {classes}"
 	role="listitem"
 >
 	<div class="relative flex min-w-0 flex-1 gap-2">

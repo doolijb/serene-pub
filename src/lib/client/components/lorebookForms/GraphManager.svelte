@@ -660,7 +660,7 @@
 				{#if userCtx?.user?.isAdmin}
 					<a
 						class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
-						href="/pipelines/{encodeURIComponent(
+						href="/admin/pipelines/{encodeURIComponent(
 							GRAPH_PIPELINE_SLUG
 						)}"
 						title="Versions, publish state and run history"

@@ -14,10 +14,10 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import {
-	STANDARD_MODE_ID,
+	STANDARD_GENRE_ID,
 	sessionShapeFacts,
-	getSessionMode,
-	listSessionModes,
+	getSessionGenre,
+	listSessionGenres,
 	listSessionFunctions,
 	listSessionPresets,
 	chooseSessionPreset,
@@ -25,14 +25,14 @@ import {
 	enabledSessionFunctions,
 	setSessionFunction,
 	setPresetActions,
-	listModeTriggers,
+	listGenreTriggers,
 	listSpeakerStrategies,
-	modeFieldsFor,
-	sessionModeAvailable,
+	genreFieldsFor,
+	sessionGenreAvailable,
 	resolveFunctionSpec,
 	shapeViolations,
-	upgradeSessionMode
-} from "$lib/server/pipelines/entities/sessionModes"
+	upgradeSessionGenre
+} from "$lib/server/pipelines/entities/sessionGenres"
 import { NARRATE_SPEC_ID } from "$lib/server/pipelines/specs/narrate"
 import { RESPOND_SPEC_ID } from "$lib/server/pipelines/specs/respond"
 
@@ -45,8 +45,8 @@ beforeAll(async () => {
 
 describe("the picker", () => {
 	it("lists exactly the shape-bearing input types — the F29 floor among them", async () => {
-		const modes = await listSessionModes(db as any)
-		const standard = modes.find((m) => m.modeId === STANDARD_MODE_ID)
+		const modes = await listSessionGenres(db as any)
+		const standard = modes.find((m) => m.genreId === STANDARD_GENRE_ID)
 		expect(standard).toBeTruthy()
 		// The one place "Chat" survives: it is the standard MODE's display
 		// name (ruled 2026-08-24) — the container is a session.
@@ -65,7 +65,7 @@ describe("the picker", () => {
 		})
 		// Non-mode input types are not modes: summarize-request has no shape.
 		expect(
-			modes.some((m) => m.modeId.startsWith("core:input/summarize"))
+			modes.some((m) => m.genreId.startsWith("core:input/summarize"))
 		).toBe(false)
 	})
 })
@@ -93,9 +93,9 @@ describe("the shape validator", () => {
 			hasLorebook: true
 		})
 		expect(violations).toEqual([
-			"this mode has no characters — the session has 5",
-			"this mode needs at least 1 persona — the session has 0",
-			"this mode has no lorebook attachment — the session has one"
+			"this genre has no characters — the session has 5",
+			"this genre needs at least 1 persona — the session has 0",
+			"this genre has no lorebook attachment — the session has one"
 		])
 	})
 
@@ -107,7 +107,7 @@ describe("the shape validator", () => {
 				personas: 40,
 				hasLorebook: false
 			})
-		).toEqual(["this mode has no characters — the session has 1"])
+		).toEqual(["this genre has no characters — the session has 1"])
 	})
 })
 
@@ -124,9 +124,9 @@ describe("existing sessions", () => {
 
 		// The column default is the backfill: rows created with no knowledge
 		// of modes land on the F29 floor.
-		expect(session.modeId).toBe(STANDARD_MODE_ID)
+		expect(session.genreId).toBe(STANDARD_GENRE_ID)
 
-		const mode = await getSessionMode(db as any, session.modeId)
+		const mode = await getSessionGenre(db as any, session.genreId)
 		const facts = await sessionShapeFacts(db as any, session.id)
 		expect(shapeViolations(mode!.shape, facts)).toEqual([])
 	})
@@ -135,7 +135,7 @@ describe("existing sessions", () => {
 describe("function routing (19 §3, U-C3)", () => {
 	it("respond is the bucket: the entry node pins the mode's type", async () => {
 		expect(
-			await resolveFunctionSpec(db as any, STANDARD_MODE_ID, "respond")
+			await resolveFunctionSpec(db as any, STANDARD_GENRE_ID, "respond")
 		).toBe(RESPOND_SPEC_ID)
 	})
 
@@ -145,7 +145,7 @@ describe("function routing (19 §3, U-C3)", () => {
 		// declaration from the spec would break this test — not a string
 		// comparison in generateResponse.
 		expect(
-			await resolveFunctionSpec(db as any, STANDARD_MODE_ID, "narrate")
+			await resolveFunctionSpec(db as any, STANDARD_GENRE_ID, "narrate")
 		).toBe(NARRATE_SPEC_ID)
 	})
 
@@ -153,7 +153,7 @@ describe("function routing (19 §3, U-C3)", () => {
 		expect(
 			await resolveFunctionSpec(
 				db as any,
-				STANDARD_MODE_ID,
+				STANDARD_GENRE_ID,
 				"summon-dragon"
 			)
 		).toBe(null)
@@ -202,8 +202,8 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 			.values({
 				userId: user.id,
 				isGroup: false,
-				modeId: "chariot.dungeon:input/crawl@1",
-				modeFields: {
+				genreId: "chariot.dungeon:input/crawl@1",
+				genreFields: {
 					difficulty: "hard",
 					torchCount: 3,
 					// A key no shape declares — stale from an imagined
@@ -214,13 +214,13 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 			} as any)
 			.returning()
 
-		expect(await modeFieldsFor(db as any, session.id)).toEqual({
+		expect(await genreFieldsFor(db as any, session.id)).toEqual({
 			difficulty: "hard",
 			torchCount: 3
 		})
 
 		// An extension mode's card text takes the same road as core's.
-		const crawl = await getSessionMode(
+		const crawl = await getSessionGenre(
 			db as any,
 			"chariot.dungeon:input/crawl@1"
 		)
@@ -237,10 +237,10 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 			.values({
 				userId: user.id,
 				isGroup: false,
-				modeFields: { anything: "at all" }
+				genreFields: { anything: "at all" }
 			} as any)
 			.returning()
-		expect(await modeFieldsFor(db as any, session.id)).toEqual({})
+		expect(await genreFieldsFor(db as any, session.id)).toEqual({})
 	})
 })
 
@@ -284,7 +284,7 @@ describe("the swap list (19 §5, U-C4)", () => {
 
 describe("the trigger set (19 §4, U-C5)", () => {
 	it("the narrate button is a row: contributed by the narrate spec, for the standard mode", async () => {
-		const triggers = await listModeTriggers(db as any, STANDARD_MODE_ID)
+		const triggers = await listGenreTriggers(db as any, STANDARD_GENRE_ID)
 		expect(triggers).toEqual([
 			{
 				function: "narrate",
@@ -313,13 +313,13 @@ describe("the trigger set (19 §4, U-C5)", () => {
 			.set({ activeVersionId: null })
 			.where(eq(schema.pipelineSpecs.id, spec.id))
 		try {
-			const gone = await listModeTriggers(db as any, STANDARD_MODE_ID)
+			const gone = await listGenreTriggers(db as any, STANDARD_GENRE_ID)
 			expect(gone).toEqual([])
 			// And routing agrees in the same breath: the same rows feed both.
 			expect(
 				await resolveFunctionSpec(
 					db as any,
-					STANDARD_MODE_ID,
+					STANDARD_GENRE_ID,
 					"narrate"
 				)
 			).toBe(null)
@@ -372,8 +372,8 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 			.values({
 				userId: user.id,
 				isGroup: false,
-				modeId: "chariot.dungeon:input/crawl@1",
-				modeFields: { difficulty: "hard", torchCount: 3 }
+				genreId: "chariot.dungeon:input/crawl@1",
+				genreFields: { difficulty: "hard", torchCount: 3 }
 			} as any)
 			.returning()
 		await db
@@ -381,28 +381,28 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 			.values({ sessionId: session.id, personaId: persona.id })
 
 		// A cross-type swap refuses, however well the cast would fit.
-		const swap = await upgradeSessionMode(
+		const swap = await upgradeSessionGenre(
 			db as any,
 			session.id,
-			STANDARD_MODE_ID
+			STANDARD_GENRE_ID
 		)
-		expect(swap.error).toContain("keeps its mode for life")
+		expect(swap.error).toContain("keeps its genre for life")
 
 		// The upgrade along the same type passes, and the field values ride.
 		expect(
-			await upgradeSessionMode(
+			await upgradeSessionGenre(
 				db as any,
 				session.id,
 				"chariot.dungeon:input/crawl@2"
 			)
 		).toEqual({})
-		expect(await modeFieldsFor(db as any, session.id)).toEqual({
+		expect(await genreFieldsFor(db as any, session.id)).toEqual({
 			difficulty: "hard",
 			torchCount: 3
 		})
 
 		// Versions move one way.
-		const down = await upgradeSessionMode(
+		const down = await upgradeSessionGenre(
 			db as any,
 			session.id,
 			"chariot.dungeon:input/crawl@1"
@@ -420,7 +420,7 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 			i18n: { name: { en: "Dungeon Crawl III" } },
 			sessionShape: { personas: { min: 0, max: 0 } }
 		} as any)
-		const tightened = await upgradeSessionMode(
+		const tightened = await upgradeSessionGenre(
 			db as any,
 			session.id,
 			"chariot.dungeon:input/crawl@3"
@@ -441,10 +441,10 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 			.values({
 				userId: user.id,
 				isGroup: false,
-				modeId: "chariot.gone:input/vanished@1"
+				genreId: "chariot.gone:input/vanished@1"
 			} as any)
 			.returning()
-		const check = await sessionModeAvailable(db as any, orphan.id)
+		const check = await sessionGenreAvailable(db as any, orphan.id)
 		expect(check.available).toBe(false)
 		expect(check.reason).toContain("read-only")
 		expect(check.reason).toContain("chariot.gone:input/vanished@1")
@@ -455,11 +455,11 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 			.values({
 				userId: user.id,
 				isGroup: false,
-				modeId: "chariot.dungeon:input/crawl@1"
+				genreId: "chariot.dungeon:input/crawl@1"
 			} as any)
 			.returning()
 		expect(
-			(await sessionModeAvailable(db as any, crawler.id)).available
+			(await sessionGenreAvailable(db as any, crawler.id)).available
 		).toBe(true)
 
 		// The standard mode is the F29 floor — available by definition.
@@ -468,7 +468,7 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 			.values({ userId: user.id, isGroup: false })
 			.returning()
 		expect(
-			(await sessionModeAvailable(db as any, standard.id)).available
+			(await sessionGenreAvailable(db as any, standard.id)).available
 		).toBe(true)
 	})
 })
@@ -495,7 +495,7 @@ describe("session actions resolve through session, preset, then default", () => 
 		userId = u.id
 		const [c] = await db
 			.insert(schema.sessions)
-			.values({ userId, isGroup: false, modeId: STANDARD_MODE_ID })
+			.values({ userId, isGroup: false, genreId: STANDARD_GENRE_ID })
 			.returning()
 		sessionId = c.id
 	}, 30_000)
@@ -505,7 +505,7 @@ describe("session actions resolve through session, preset, then default", () => 
 			await listSessionFunctions(
 				db as any,
 				sessionId,
-				STANDARD_MODE_ID,
+				STANDARD_GENRE_ID,
 				userId
 			)
 		).find((f) => f.function === "narrate")!
@@ -514,7 +514,7 @@ describe("session actions resolve through session, preset, then default", () => 
 		const all = await listSessionFunctions(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			userId
 		)
 		expect(all.map((f) => f.function)).toContain("narrate")
@@ -537,7 +537,7 @@ describe("session actions resolve through session, preset, then default", () => 
 		const r = await setSessionFunction(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			"narrate",
 			false,
 			{ userId, isAdmin: false }
@@ -553,7 +553,7 @@ describe("session actions resolve through session, preset, then default", () => 
 		const live = await enabledSessionFunctions(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			userId
 		)
 		expect(live.map((f) => f.function)).not.toContain("narrate")
@@ -563,7 +563,7 @@ describe("session actions resolve through session, preset, then default", () => 
 		await setSessionFunction(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			"narrate",
 			true,
 			{ userId, isAdmin: false }
@@ -585,7 +585,7 @@ describe("session actions resolve through session, preset, then default", () => 
 		const r = await setSessionFunction(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			"teleport",
 			true,
 			{ userId, isAdmin: true }
@@ -628,7 +628,7 @@ describe("a preset decides what a session includes", () => {
 		userId = u.id
 		const [c] = await db
 			.insert(schema.sessions)
-			.values({ userId, isGroup: false, modeId: STANDARD_MODE_ID })
+			.values({ userId, isGroup: false, genreId: STANDARD_GENRE_ID })
 			.returning()
 		sessionId = c.id
 
@@ -662,7 +662,7 @@ describe("a preset decides what a session includes", () => {
 			await listSessionFunctions(
 				db as any,
 				sessionId,
-				STANDARD_MODE_ID,
+				STANDARD_GENRE_ID,
 				userId
 			)
 		).find((f) => f.function === "narrate")!
@@ -675,7 +675,7 @@ describe("a preset decides what a session includes", () => {
 		const r = await setSessionFunction(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			"narrate",
 			true,
 			{ userId, isAdmin: false }
@@ -688,7 +688,7 @@ describe("a preset decides what a session includes", () => {
 		const r = await setSessionFunction(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			"narrate",
 			true,
 			{ userId, isAdmin: true }
@@ -699,7 +699,7 @@ describe("a preset decides what a session includes", () => {
 			await listSessionFunctions(
 				db as any,
 				sessionId,
-				STANDARD_MODE_ID,
+				STANDARD_GENRE_ID,
 				userId
 			)
 		).find((f) => f.function === "narrate")!
@@ -721,7 +721,7 @@ describe("a preset decides what a session includes", () => {
 		const r = await setSessionFunction(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			"narrate",
 			false,
 			{ userId, isAdmin: false }
@@ -774,7 +774,7 @@ describe("a session runs on a preset", () => {
 		userId = u.id
 		const [c] = await db
 			.insert(schema.sessions)
-			.values({ userId, isGroup: false, modeId: STANDARD_MODE_ID })
+			.values({ userId, isGroup: false, genreId: STANDARD_GENRE_ID })
 			.returning()
 		sessionId = c.id
 
@@ -795,7 +795,7 @@ describe("a session runs on a preset", () => {
 		const r = await listSessionPresets(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			{
 				userId,
 				isAdmin: false
@@ -812,7 +812,7 @@ describe("a session runs on a preset", () => {
 		const set = await chooseSessionPreset(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			extraId,
 			{ userId, isAdmin: false }
 		)
@@ -821,7 +821,7 @@ describe("a session runs on a preset", () => {
 		const r = await listSessionPresets(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			{
 				userId,
 				isAdmin: false
@@ -851,7 +851,7 @@ describe("a session runs on a preset", () => {
 		const asUser = await listSessionPresets(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			{ userId, isAdmin: false }
 		)
 		expect(asUser.options.map((o) => o.configId)).not.toContain(extraId)
@@ -861,7 +861,7 @@ describe("a session runs on a preset", () => {
 		const asAdmin = await listSessionPresets(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			{ userId, isAdmin: true }
 		)
 		const found = asAdmin.options.find((o) => o.configId === extraId)
@@ -872,7 +872,7 @@ describe("a session runs on a preset", () => {
 		const denied = await chooseSessionPreset(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			extraId,
 			{ userId, isAdmin: false }
 		)
@@ -882,7 +882,7 @@ describe("a session runs on a preset", () => {
 		const allowed = await chooseSessionPreset(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			extraId,
 			{ userId, isAdmin: true }
 		)
@@ -903,7 +903,7 @@ describe("a session runs on a preset", () => {
 		const r = await chooseSessionPreset(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			foreign.id,
 			{ userId, isAdmin: true }
 		)
@@ -921,7 +921,7 @@ describe("a session runs on a preset", () => {
 		await chooseSessionPreset(
 			db as any,
 			sessionId,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			extraId,
 			{
 				userId,
@@ -933,7 +933,7 @@ describe("a session runs on a preset", () => {
 			await listSessionFunctions(
 				db as any,
 				sessionId,
-				STANDARD_MODE_ID,
+				STANDARD_GENRE_ID,
 				userId
 			)
 		).find((f) => f.function === "narrate")!
@@ -961,7 +961,7 @@ describe("the respond bucket is read *and* write", () => {
 	it("resolves the standard mode to the reply pipeline", async () => {
 		const slug = await resolveFunctionSpec(
 			db as any,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			"respond"
 		)
 		expect(slug).toBe(RESPOND_SPEC_ID)
@@ -1005,14 +1005,14 @@ describe("the respond bucket is read *and* write", () => {
 		await db.insert(schema.pipelineFunctionBindings).values({
 			scopeKind: "instance",
 			scopeId: 0,
-			modeId: STANDARD_MODE_ID,
+			genreId: STANDARD_GENRE_ID,
 			functionKey: "respond",
 			specId: graph.id
 		})
 		try {
 			const slug = await resolveFunctionSpec(
 				db as any,
-				STANDARD_MODE_ID,
+				STANDARD_GENRE_ID,
 				"respond"
 			)
 			expect(slug).toBe(RESPOND_SPEC_ID)
@@ -1030,13 +1030,13 @@ describe("the respond bucket is read *and* write", () => {
 			.returning()
 		const [c] = await db
 			.insert(schema.sessions)
-			.values({ userId: u.id, isGroup: false, modeId: STANDARD_MODE_ID })
+			.values({ userId: u.id, isGroup: false, genreId: STANDARD_GENRE_ID })
 			.returning()
 
 		const pipeline = await sessionPipeline(
 			db as any,
 			c.id,
-			STANDARD_MODE_ID,
+			STANDARD_GENRE_ID,
 			u.id
 		)
 		expect(pipeline?.specSlug).toBe(RESPOND_SPEC_ID)

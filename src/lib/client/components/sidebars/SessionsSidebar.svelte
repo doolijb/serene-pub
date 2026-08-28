@@ -121,6 +121,13 @@
 		}
 	}
 
+	function handleViewLorebook(lorebookId: number) {
+		// Same deep-link the Activity sidebar uses: stash the id and open the
+		// Lorebooks panel, which consumes the digest to land on that book.
+		panelsCtx.digest.lorebookId = lorebookId
+		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+	}
+
 	function handleSessionClick(session: any) {
 		// Clicking the already-open chat a second time opens *into* it in the
 		// sidebar (its view panel: settings, participants, open) rather than
@@ -345,6 +352,7 @@
 				onBack={() => (viewingId = null)}
 				onEdit={handleEditFromView}
 				onOpen={() => handleOpenSession(viewingId!)}
+				onViewLorebook={handleViewLorebook}
 			/>
 		{/key}
 	{:else}

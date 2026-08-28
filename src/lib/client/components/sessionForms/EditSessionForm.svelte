@@ -21,10 +21,10 @@
 	import PipelineConfigOptions from "../pipelines/PipelineConfigOptions.svelte"
 
 	// The F29 floor (19 §2) — stated here rather than imported from the
-	// server-only sessionModes module. When "sessions:modes" returns nothing (a
+	// server-only sessionModes module. When "sessions:genres" returns nothing (a
 	// registry that never synced), the form behaves exactly as before modes
 	// existed: no picker, every section shown, today's save rules.
-	const STANDARD_MODE_ID = "core:input/user-message@1"
+	const STANDARD_GENRE_ID = "core:genre/chat"
 
 	// Zod validation schema
 	const sessionSchema = z.object({
@@ -83,8 +83,8 @@
 					samplingConfigId?: number | null
 					promptConfigId?: number | null
 					narratorPromptConfigId?: number | null
-					modeId?: string
-					modeFields?: Record<string, unknown>
+					genreId?: string
+					genreFields?: Record<string, unknown>
 				}
 				characterIds: number[]
 				personaIds: number[]
@@ -106,8 +106,8 @@
 					samplingConfigId?: number | null
 					promptConfigId?: number | null
 					narratorPromptConfigId?: number | null
-					modeId?: string
-					modeFields?: Record<string, unknown>
+					genreId?: string
+					genreFields?: Record<string, unknown>
 				}
 				characterIds: number[]
 				personaIds: number[]
@@ -127,15 +127,15 @@
 	let narratorPromptConfigId: number | null = $state(null)
 
 	// CHAT MODE (19 §2, U-C2)
-	let modesList: Sockets.Sessions.Modes.Response["modes"] = $state([])
-	let modeId: string = $state(STANDARD_MODE_ID)
-	let modeFields: Record<string, unknown> = $state({})
+	let modesList: Sockets.Sessions.Genres.Response["genres"] = $state([])
+	let genreId: string = $state(STANDARD_GENRE_ID)
+	let genreFields: Record<string, unknown> = $state({})
 
 	// The selected mode's shape, or null when the mode is unknown to this
 	// build — in which case the form falls back to today's behaviour (every
 	// capability shown), the F29 posture.
 	let modeShape = $derived(
-		modesList.find((m) => m.modeId === modeId)?.shape ?? null
+		modesList.find((m) => m.genreId === genreId)?.shape ?? null
 	)
 	// A capability the shape omits (or caps at zero) does not exist for the
 	// session: its section disappears rather than rendering an un-fillable
@@ -155,12 +155,12 @@
 	// *server* permits, and relaxing the form here would change today's
 	// creation UX, which the parity posture forbids.
 	let charactersFloor = $derived(
-		!modeShape || modeId === STANDARD_MODE_ID
+		!modeShape || genreId === STANDARD_GENRE_ID
 			? 1
 			: (modeShape.characters?.min ?? 0)
 	)
 	let personasFloor = $derived(
-		!modeShape || modeId === STANDARD_MODE_ID
+		!modeShape || genreId === STANDARD_GENRE_ID
 			? 1
 			: (modeShape.personas?.min ?? 0)
 	)
@@ -339,8 +339,8 @@
 		const _samplingConfigId = sessionSamplingConfigId
 		const _promptConfigId = sessionPromptConfigId
 		const _narratorPromptConfigId = narratorPromptConfigId
-		const _modeId = modeId
-		const _modeFields = JSON.parse(JSON.stringify(modeFields))
+		const _genreId = genreId
+		const _genreFields = JSON.parse(JSON.stringify(genreFields))
 		data = {
 			session: {
 				id: session?.id,
@@ -353,8 +353,8 @@
 				samplingConfigId: _samplingConfigId,
 				promptConfigId: _promptConfigId,
 				narratorPromptConfigId: _narratorPromptConfigId,
-				modeId: _modeId,
-				modeFields: _modeFields
+				genreId: _genreId,
+				genreFields: _genreFields
 			},
 			characterIds: _selectedCharacters.map((cc) => cc.id),
 			personaIds: _selectedPersonas.map((cp) => cp.id),
@@ -542,9 +542,9 @@
 		}
 
 		if (session && session.id) {
-			// modeId rides in `data` but the server ignores it on update —
+			// genreId rides in `data` but the server ignores it on update —
 			// switching an existing session's mode is an open policy question
-			// (19 §10). modeFields does land, filtered to declared keys.
+			// (19 §10). genreFields does land, filtered to declared keys.
 			const updateSession: Sockets.Sessions.Update.Params = {
 				...data!,
 				session: {
@@ -564,8 +564,8 @@
 					samplingConfigId: sessionSamplingConfigId,
 					promptConfigId: sessionPromptConfigId,
 					narratorPromptConfigId: narratorPromptConfigId,
-					modeId,
-					modeFields
+					genreId,
+					genreFields
 				},
 				characterIds,
 				personaIds,
@@ -721,8 +721,8 @@
 			sessionSamplingConfigId = session.samplingConfigId ?? null
 			sessionPromptConfigId = session.promptConfigId ?? null
 			narratorPromptConfigId = session.narratorPromptConfigId ?? null
-			modeId = (session as any).modeId ?? STANDARD_MODE_ID
-			modeFields = ((session as any).modeFields ?? {}) as Record<
+			genreId = (session as any).genreId ?? STANDARD_GENRE_ID
+			genreFields = ((session as any).genreFields ?? {}) as Record<
 				string,
 				unknown
 			>
@@ -743,8 +743,8 @@
 		lorebookList = msg.lorebookList || []
 	}
 
-	const handleSessionsModes = (msg: Sockets.Sessions.Modes.Response) => {
-		modesList = msg.modes || []
+	const handleSessionsModes = (msg: Sockets.Sessions.Genres.Response) => {
+		modesList = msg.genres || []
 	}
 
 	// The swap list (19 §5): which next-speaker strategy runs this session's
@@ -889,7 +889,7 @@
 	})
 
 	const handleSessionsUpgradeMode = (
-		msg: Sockets.Sessions.UpgradeMode.Response
+		msg: Sockets.Sessions.UpgradeGenre.Response
 	) => {
 		if (msg.sessionId !== session?.id) return
 		if (msg.error) {
@@ -913,22 +913,22 @@
 	// higher version, offered when one is registered.
 	let modeUpgradeTarget = $derived.by(() => {
 		if (!session) return null
-		const current = modeParts(modeId)
+		const current = modeParts(genreId)
 		let best: (typeof modesList)[number] | null = null
 		for (const m of modesList) {
-			const p = modeParts(m.modeId)
+			const p = modeParts(m.genreId)
 			if (p.bare !== current.bare || p.version <= current.version)
 				continue
-			if (!best || p.version > modeParts(best.modeId).version) best = m
+			if (!best || p.version > modeParts(best.genreId).version) best = m
 		}
 		return best
 	})
 
 	function upgradeMode() {
 		if (!session?.id || !modeUpgradeTarget) return
-		socket.emit("sessions:upgradeMode", {
+		socket.emit("sessions:upgradeGenre", {
 			sessionId: session.id,
-			modeId: modeUpgradeTarget.modeId
+			genreId: modeUpgradeTarget.genreId
 		})
 	}
 
@@ -938,9 +938,9 @@
 	let latestModes = $derived.by(() => {
 		const byBare = new Map<string, (typeof modesList)[number]>()
 		for (const m of modesList) {
-			const p = modeParts(m.modeId)
+			const p = modeParts(m.genreId)
 			const held = byBare.get(p.bare)
-			if (!held || modeParts(held.modeId).version < p.version)
+			if (!held || modeParts(held.genreId).version < p.version)
 				byBare.set(p.bare, m)
 		}
 		return [...byBare.values()]
@@ -963,7 +963,7 @@
 	)
 
 	function chooseMode(id: string) {
-		modeId = id
+		genreId = id
 		reconcileToMode()
 		modeChosen = true
 	}
@@ -1003,11 +1003,11 @@
 	 * refusal never fires from stale UI state.
 	 */
 	function reconcileToMode() {
-		const shape = modesList.find((m) => m.modeId === modeId)?.shape
+		const shape = modesList.find((m) => m.genreId === genreId)?.shape
 		if (!shape) return // unknown mode: today's behaviour, nothing to trim
 		const declared = shape.fields ?? {}
-		modeFields = Object.fromEntries(
-			Object.entries(modeFields).filter(([k]) => k in declared)
+		genreFields = Object.fromEntries(
+			Object.entries(genreFields).filter(([k]) => k in declared)
 		)
 		const charMax = shape.characters
 			? (shape.characters.max ?? Infinity)
@@ -1208,9 +1208,9 @@
 		socket.emit("personas:list", {})
 		socket.emit("lorebooks:list", {})
 		socket.emit("tags:list", {})
-		socket.on("sessions:modes", handleSessionsModes)
-		socket.emit("sessions:modes", {})
-		socket.on("sessions:upgradeMode", handleSessionsUpgradeMode)
+		socket.on("sessions:genres", handleSessionsModes)
+		socket.emit("sessions:genres", {})
+		socket.on("sessions:upgradeGenre", handleSessionsUpgradeMode)
 		socket.on("sessions:speakerStrategies", handleSessionsSpeakerStrategies)
 		socket.on("sessions:accountVisibility", handleAccountVisibility)
 		socket.on("sessions:pipelines", handleSessionsPipelines)
@@ -1254,8 +1254,8 @@
 			"sessions:reassignRemovedParticipant",
 			handleReassignRemovedParticipant
 		)
-		socket.off("sessions:modes", handleSessionsModes)
-		socket.off("sessions:upgradeMode", handleSessionsUpgradeMode)
+		socket.off("sessions:genres", handleSessionsModes)
+		socket.off("sessions:upgradeGenre", handleSessionsUpgradeMode)
 		socket.off(
 			"sessions:speakerStrategies",
 			handleSessionsSpeakerStrategies
@@ -1367,11 +1367,11 @@
 			session for its life.
 		</p>
 		<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-			{#each latestModes as mode (mode.modeId)}
+			{#each latestModes as mode (mode.genreId)}
 				<button
 					type="button"
 					class="preset-tonal hover:preset-tonal-primary flex flex-col items-start gap-1 rounded-lg p-4 text-left"
-					onclick={() => chooseMode(mode.modeId)}
+					onclick={() => chooseMode(mode.genreId)}
 				>
 					<span class="font-semibold">{mode.name}</span>
 					{#if mode.description}
@@ -1458,15 +1458,15 @@
 				<select
 					id="sessionMode"
 					class="select w-full"
-					bind:value={modeId}
+					bind:value={genreId}
 					onchange={() => {
 						// Data follows the type: refit fields, participants and
 						// the lorebook to the newly selected shape.
 						reconcileToMode()
 					}}
 				>
-					{#each latestModes as mode (mode.modeId)}
-						<option value={mode.modeId}>{mode.name}</option>
+					{#each latestModes as mode (mode.genreId)}
+						<option value={mode.genreId}>{mode.name}</option>
 					{/each}
 				</select>
 			</div>
@@ -1475,12 +1475,12 @@
 				<span class="font-semibold">Session Mode</span>
 				<div class="flex items-center gap-2">
 					<span class="preset-tonal rounded-lg px-3 py-2 text-sm">
-						{modesList.find((m) => m.modeId === modeId)?.name ??
-							modeId}
+						{modesList.find((m) => m.genreId === genreId)?.name ??
+							genreId}
 					</span>
 					<button
 						class="btn btn-sm preset-filled-primary-500 shrink-0"
-						title="Upgrade to {modeUpgradeTarget.modeId}"
+						title="Upgrade to {modeUpgradeTarget.genreId}"
 						onclick={upgradeMode}
 					>
 						<Icons.ArrowUpCircle size={14} />
@@ -1488,7 +1488,7 @@
 					</button>
 				</div>
 				<p class="text-surface-700-300 text-xs">
-					A newer version of this mode is available ({modeUpgradeTarget.modeId}).
+					A newer version of this mode is available ({modeUpgradeTarget.genreId}).
 					Upgrading keeps the session and its settings.
 				</p>
 			</div>
@@ -2283,7 +2283,7 @@
 							<p class="font-semibold">Mode Settings</p>
 							<SchemaForm
 								schema={modeFieldDecls as any}
-								bind:values={modeFields}
+								bind:values={genreFields}
 							/>
 						</div>
 					{/if}

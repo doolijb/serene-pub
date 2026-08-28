@@ -1,12 +1,19 @@
 /**
- * Session modes, read from rows (19 §0–§2).
+ * Session genres, read from rows (19 §0–§2, re-anchored by 24 §3).
  *
- * The mode *is* the input type: a registry row of kind `input` whose
- * `session_shape` is present. The picker is one SELECT; the bucket for a mode is
- * every spec pinning the type and matching the primary-write signature; and
- * this module is the one place the shape's meaning is interpreted — the
- * validator here is what session creation and mode switching both call, so the
- * two can never disagree about what a shape permits.
+ * **The genre owns its id** (ruled 2026-08-28, revising 23 §7): sessions hold
+ * `core:genre/chat`, and the create pipeline is the genre's required member —
+ * the published spec whose input lock declares `event: session-created` for
+ * that genre. Its version row carries the genre declaration (`genre` column:
+ * name, family, shape) and the lock (`input_genre`/`input_event` columns), so
+ * every "what is this session" check stays a SELECT, and dispatch keys on
+ * (genre, event) rather than tunneling through input types.
+ *
+ * Transitional union: a plugin that ships a shape-bearing *input type* and no
+ * create spec still gets a genre, read from the registry as before — minus
+ * the standard input, whose identity moved (listing both would show Chat
+ * twice). The picker stays one-or-two SELECTs; this module stays the one
+ * place the shape's meaning is interpreted.
  */
 
 import { and, asc, eq } from "drizzle-orm"
@@ -15,8 +22,15 @@ import type { SessionShape } from "@serene-pub/sdk"
 
 type Db = { select: any; insert: any; update: any; delete: any }
 
-/** The F29 floor: always present, the default and the backfill. */
-export const STANDARD_MODE_ID = "core:input/user-message@1"
+/** The F29 floor: always present, the default and the backfill (24 §3). */
+export const STANDARD_GENRE_ID = "core:genre/chat"
+
+/** The spellings the floor wore before 24 §3; read-compat only. */
+export const LEGACY_STANDARD_GENRE_IDS = [
+	"core:spec/create-chat",
+	"core:input/user-message@1"
+] as const
+export const LEGACY_STANDARD_GENRE_ID = "core:input/user-message@1"
 
 /**
  * The primary write a session mode's pipeline must perform (19 §0).
@@ -32,9 +46,9 @@ export const STANDARD_MODE_ID = "core:input/user-message@1"
  */
 const CHAT_WRITE_TYPE = "core:consumer/create-message"
 
-export interface SessionMode {
-	/** The mode id — the pinned input type id. */
-	modeId: string
+export interface SessionGenre {
+	/** The genre id (24 §3) — or transitionally an input-type id. */
+	genreId: string
 	name: string
 	/**
 	 * The picker card's subtitle, from the row's display text. Never required
@@ -43,34 +57,83 @@ export interface SessionMode {
 	 * row exists, absence just renders a plainer card.
 	 */
 	description: string
+	family?: string
 	shape: SessionShape
+	/** The event surface (24 §5), off the genre declaration row. */
+	events?: Record<string, { required?: boolean; open?: boolean }>
 }
 
 const en = (v: unknown): string =>
 	typeof v === "string" ? v : ((v as any)?.en ?? "")
 
-/** Every mode this build registers — the picker's one SELECT. */
-export async function listSessionModes(db: Db): Promise<SessionMode[]> {
+/** Every genre this build registers — create specs, then unclaimed inputs. */
+export async function listSessionGenres(db: Db): Promise<SessionGenre[]> {
+	// The genres themselves (24 §3): published create pipelines, the genre id
+	// from the input lock, the declaration on the version row.
+	const specRows = await db
+		.select({
+			slug: schema.pipelineSpecs.slug,
+			activeVersionId: schema.pipelineSpecs.activeVersionId,
+			versionId: schema.pipelineSpecVersions.id,
+			genre: schema.pipelineSpecVersions.genre,
+			inputGenre: schema.pipelineSpecVersions.inputGenre,
+			inputEvent: schema.pipelineSpecVersions.inputEvent,
+			taxonomy: schema.pipelineSpecVersions.taxonomy
+		})
+		.from(schema.pipelineSpecs)
+		.innerJoin(
+			schema.pipelineSpecVersions,
+			eq(schema.pipelineSpecVersions.specId, schema.pipelineSpecs.id)
+		)
+		.orderBy(asc(schema.pipelineSpecs.id))
+	const fromSpecs: SessionGenre[] = (specRows as any[])
+		.filter(
+			(r) =>
+				r.activeVersionId === r.versionId &&
+				r.inputEvent === "session-created" &&
+				r.inputGenre &&
+				r.genre?.shape
+		)
+		.map((r) => ({
+			genreId: r.inputGenre,
+			name: en(r.genre?.name) || r.inputGenre,
+			description: en(r.genre?.description),
+			family: typeof r.genre?.family === "string" ? r.genre.family : undefined,
+			shape: r.genre.shape as SessionShape,
+			events: (r.genre?.events ?? undefined) as
+				| Record<string, { required?: boolean; open?: boolean }>
+				| undefined
+		}))
+
+	// Transitional: plugin genres still declared on input types, minus the
+	// standard input whose identity moved (listing both shows Chat twice).
 	const rows = await db
 		.select()
 		.from(schema.pipelineTypeRegistry)
 		.where(eq(schema.pipelineTypeRegistry.kind, "input"))
 		.orderBy(asc(schema.pipelineTypeRegistry.id))
-	return (rows as any[])
-		.filter((r) => r.status === "live" && r.sessionShape)
+	const fromInputs: SessionGenre[] = (rows as any[])
+		.filter(
+			(r) =>
+				r.status === "live" &&
+				r.sessionShape &&
+				`${r.typeId}@${r.version}` !== LEGACY_STANDARD_GENRE_ID
+		)
 		.map((r) => ({
-			modeId: `${r.typeId}@${r.version}`,
+			genreId: `${r.typeId}@${r.version}`,
 			name: en(r.i18n?.name) || r.typeId,
 			description: en(r.i18n?.description),
 			shape: r.sessionShape as SessionShape
 		}))
+
+	return [...fromSpecs, ...fromInputs]
 }
 
-export async function getSessionMode(
+export async function getSessionGenre(
 	db: Db,
-	modeId: string
-): Promise<SessionMode | null> {
-	return (await listSessionModes(db)).find((m) => m.modeId === modeId) ?? null
+	genreId: string
+): Promise<SessionGenre | null> {
+	return (await listSessionGenres(db)).find((m) => m.genreId === genreId) ?? null
 }
 
 /**
@@ -96,21 +159,21 @@ export function shapeViolations(
 		const max = cap ? cap.max : 0 // absent capability: none permitted
 		if (count < min)
 			out.push(
-				`this mode needs at least ${min} ${label}${min === 1 ? "" : "s"} — the session has ${count}`
+				`this genre needs at least ${min} ${label}${min === 1 ? "" : "s"} — the session has ${count}`
 			)
 		if (max != null && count > max)
 			out.push(
 				max === 0
-					? `this mode has no ${label}s — the session has ${count}`
-					: `this mode allows at most ${max} ${label}${max === 1 ? "" : "s"} — the session has ${count}`
+					? `this genre has no ${label}s — the session has ${count}`
+					: `this genre allows at most ${max} ${label}${max === 1 ? "" : "s"} — the session has ${count}`
 			)
 	}
 	bound("character", session.characters, shape.characters)
 	bound("persona", session.personas, shape.personas)
 	if (shape.lorebook === "required" && !session.hasLorebook)
-		out.push("this mode requires a lorebook and the session has none")
+		out.push("this genre requires a lorebook and the session has none")
 	if (!shape.lorebook && session.hasLorebook)
-		out.push("this mode has no lorebook attachment — the session has one")
+		out.push("this genre has no lorebook attachment — the session has one")
 	return out
 }
 
@@ -150,27 +213,27 @@ export async function sessionShapeFacts(
  * `{}`, never a failed turn — and a session on the F29 floor with no registry
  * rows behaves exactly as before fields existed.
  */
-export async function modeFieldsFor(
+export async function genreFieldsFor(
 	db: Db,
 	sessionId: number
 ): Promise<Record<string, unknown>> {
 	try {
 		const [session] = await db
 			.select({
-				modeId: schema.sessions.modeId,
-				modeFields: schema.sessions.modeFields
+				genreId: schema.sessions.genreId,
+				genreFields: schema.sessions.genreFields
 			})
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, sessionId))
 			.limit(1)
 		if (!session) return {}
-		const mode = await getSessionMode(
+		const mode = await getSessionGenre(
 			db,
-			session.modeId ?? STANDARD_MODE_ID
+			session.genreId ?? STANDARD_GENRE_ID
 		)
 		const declared = Object.keys((mode?.shape as any)?.fields ?? {})
 		if (!declared.length) return {}
-		const stored = (session.modeFields ?? {}) as Record<string, unknown>
+		const stored = (session.genreFields ?? {}) as Record<string, unknown>
 		return Object.fromEntries(
 			declared.filter((k) => k in stored).map((k) => [k, stored[k]])
 		)
@@ -180,11 +243,11 @@ export async function modeFieldsFor(
 }
 
 /** `ns:kind/name@N` → the bare type and its integer version. */
-export function parseModeId(modeId: string): {
+export function parseGenreId(genreId: string): {
 	bareType: string
 	version: number
 } {
-	const [bareType, versionStr] = modeId.split("@")
+	const [bareType, versionStr] = genreId.split("@")
 	return { bareType: bareType!, version: Number(versionStr ?? 1) }
 }
 
@@ -204,37 +267,37 @@ export function parseModeId(modeId: string): {
  * supply side filters to the current version's declared keys, so a dropped
  * field goes inert and an added one starts empty.
  */
-export async function upgradeSessionMode(
+export async function upgradeSessionGenre(
 	db: Db,
 	sessionId: number,
-	targetModeId: string
+	targetGenreId: string
 ): Promise<{ error?: string }> {
 	const [session] = await db
-		.select({ modeId: schema.sessions.modeId })
+		.select({ genreId: schema.sessions.genreId })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	if (!session) return { error: "That session no longer exists." }
-	const currentId = session.modeId ?? STANDARD_MODE_ID
-	if (currentId === targetModeId) return {}
+	const currentId = session.genreId ?? STANDARD_GENRE_ID
+	if (currentId === targetGenreId) return {}
 
-	const current = parseModeId(currentId)
-	const target = parseModeId(targetModeId)
+	const current = parseGenreId(currentId)
+	const target = parseGenreId(targetGenreId)
 	if (current.bareType !== target.bareType)
 		return {
 			error:
-				`A session keeps its mode for life — '${currentId}' cannot become ` +
-				`'${targetModeId}'. Modes upgrade along their own type only.`
+				`A session keeps its genre for life — '${currentId}' cannot become ` +
+				`'${targetGenreId}'. Genres upgrade along their own type only.`
 		}
 	if (target.version <= current.version)
 		return {
-			error: `'${targetModeId}' is not an upgrade of '${currentId}' — versions move one way.`
+			error: `'${targetGenreId}' is not an upgrade of '${currentId}' — versions move one way.`
 		}
 
-	const mode = await getSessionMode(db, targetModeId)
+	const mode = await getSessionGenre(db, targetGenreId)
 	if (!mode)
 		return {
-			error: `'${targetModeId}' is not a session mode this build registers.`
+			error: `'${targetGenreId}' is not a session genre this build registers.`
 		}
 	const violations = shapeViolations(
 		mode.shape,
@@ -247,7 +310,7 @@ export async function upgradeSessionMode(
 
 	await db
 		.update(schema.sessions)
-		.set({ modeId: targetModeId })
+		.set({ genreId: targetGenreId })
 		.where(eq(schema.sessions.id, sessionId))
 	return {}
 }
@@ -264,29 +327,29 @@ export async function upgradeSessionMode(
  * The standard mode is the F29 floor — available by definition, registry or
  * no registry — so this can never make ordinary sessionting worse than today.
  */
-export async function sessionModeAvailable(
+export async function sessionGenreAvailable(
 	db: Db,
 	sessionId: number
-): Promise<{ available: boolean; modeId: string; reason?: string }> {
+): Promise<{ available: boolean; genreId: string; reason?: string }> {
 	const [session] = await db
-		.select({ modeId: schema.sessions.modeId })
+		.select({ genreId: schema.sessions.genreId })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	const modeId = session?.modeId ?? STANDARD_MODE_ID
-	if (modeId === STANDARD_MODE_ID) return { available: true, modeId }
+	const genreId = session?.genreId ?? STANDARD_GENRE_ID
+	if (genreId === STANDARD_GENRE_ID) return { available: true, genreId }
 	try {
-		if (await getSessionMode(db, modeId)) return { available: true, modeId }
+		if (await getSessionGenre(db, genreId)) return { available: true, genreId }
 	} catch {
 		// A failed read refuses the turn rather than guessing — the reason
 		// below says what to check.
 	}
 	return {
 		available: false,
-		modeId,
+		genreId,
 		reason:
-			`This session's mode ('${modeId}') is not installed, so the session is ` +
-			`read-only. Its messages are safe; new turns resume when the mode returns.`
+			`This session's genre ('${genreId}') is not installed, so the session is ` +
+			`read-only. Its messages are safe; new turns resume when the genre returns.`
 	}
 }
 
@@ -307,7 +370,7 @@ export interface SpeakerStrategy {
  * Membership is the shape, not a list — a task whose `main` publishes
  * `speaker-selection@1` *is* a strategy, so an extension's appears beside
  * core's by being registered, exactly as a session mode does. Same one-SELECT
- * posture as `listSessionModes`, and the same F29 footing: an empty registry
+ * posture as `listSessionGenres`, and the same F29 footing: an empty registry
  * returns an empty list and nothing downstream blocks on it.
  */
 export async function listSpeakerStrategies(
@@ -332,7 +395,7 @@ export async function listSpeakerStrategies(
 
 /* --- function routing (19 §3, U-C3) ----------------------------------- */
 
-export interface ModeTrigger {
+export interface GenreTrigger {
 	/** The function key the trigger fires — what routing resolves (§3). */
 	function: string
 	kind: string
@@ -374,10 +437,10 @@ const namespaceOf = (id: string): string => {
  * fact disagreeing. Retiring a spec's version removes its triggers here and
  * its routing there in the same breath — no UI code involved.
  */
-export async function listModeTriggers(
+export async function listGenreTriggers(
 	db: Db,
-	modeId: string
-): Promise<ModeTrigger[]> {
+	genreId: string
+): Promise<GenreTrigger[]> {
 	try {
 		// ⚠ Ordered. The tie-break below is "first-published", and an
 		// unordered SELECT makes that whatever order the heap returns —
@@ -393,7 +456,7 @@ export async function listModeTriggers(
 			.select()
 			.from(schema.pipelineSpecVersions)
 			.where(eq(schema.pipelineSpecVersions.status, "published"))
-		const out: ModeTrigger[] = []
+		const out: GenreTrigger[] = []
 		for (const s of specs as any[]) {
 			if (s.activeVersionId == null) continue
 			const v = (versions as any[]).find(
@@ -402,9 +465,9 @@ export async function listModeTriggers(
 			const triggers = (v?.contributes as any)?.triggers
 			if (!Array.isArray(triggers)) continue
 			for (const t of triggers) {
-				if (t?.mode !== modeId) continue
+				if ((t?.genre ?? t?.mode) !== genreId) continue
 				const origin =
-					namespaceOf(s.slug) === namespaceOf(modeId)
+					namespaceOf(s.slug) === namespaceOf(genreId)
 						? "companion"
 						: "attachment"
 				out.push({
@@ -445,13 +508,20 @@ export async function listModeTriggers(
  */
 export async function resolveFunctionSpec(
 	db: Db,
-	modeId: string,
+	genreId: string,
 	functionKey: string,
 	scope?: { sessionId?: number | null }
 ): Promise<string | null> {
 	try {
-		const [bareType, versionStr] = modeId.split("@")
-		const modeNamespace = modeId.split(":")[0]
+		/**
+		 * A genre id carries no `@`; a transitional input-type genre does.
+		 * Dispatch for genre ids keys on the input lock — (genre, event) as
+		 * columns (24 §3/§4); the type-matching path below serves only the
+		 * transitional plugin genres.
+		 */
+		const [bareType, versionStr] = genreId.split("@")
+		const isGenreId = versionStr === undefined
+		const genreNamespace = genreId.split(":")[0]
 
 		// ⚠ Ordered. The tie-break below is "first-published", and an
 		// unordered SELECT makes that whatever order the heap returns —
@@ -478,41 +548,50 @@ export async function resolveFunctionSpec(
 		const candidates: Array<{ slug: string; namespace: string }> = []
 
 		if (functionKey === "respond") {
-			/**
-			 * The bucket: entry input pins the mode's type **and** the version
-			 * matches the primary-write signature (19 §0).
-			 *
-			 * ⚠ The second half was missing, and it is not academic.
-			 * `core:spec/graph-build` pins `core:input/user-message@1` — it
-			 * reads a session the same way a reply does — but it writes a *graph
-			 * proposal*, not a message. Without the signature check it sat in
-			 * the standard mode's respond bucket, so "which pipeline answers a
-			 * message" could resolve to the graph builder. `generateResponse`
-			 * asks this resolver, so that is the session path, not a panel.
-			 *
-			 * 19 §0 states the rule plainly: "a spec pinning a shape-bearing
-			 * input without the primary consumer fails the lifecycle
-			 * signature". Membership is structural, and the structure is both
-			 * ends of the pipeline — what it reads and what it writes.
-			 */
 			for (const s of specs as any[]) {
 				const v = activeBySpec.get(s.id)
 				if (!v) continue
+				/**
+				 * The bucket, genre-first (24 §4): the input lock declares
+				 * (genre, event) as columns, so membership is a field check —
+				 * this spec answers `message-respond` for this genre.
+				 */
+				if (isGenreId) {
+					if (
+						v.inputGenre !== genreId ||
+						v.inputEvent !== "message-respond"
+					)
+						continue
+				} else {
+					/**
+					 * Transitional (plugin input-type genres): entry input pins
+					 * the genre's type — and the primary-write signature below
+					 * still applies (19 §0), because `graph-build` reads a
+					 * session exactly as a reply does and must not answer one.
+					 */
+					const nodes = await db
+						.select()
+						.from(schema.pipelineNodes)
+						.where(eq(schema.pipelineNodes.specVersionId, v.id))
+					const entry = (nodes as any[])
+						.filter((n) => n.kind === "input")
+						.sort((a, b) => a.position - b.position)[0]
+					if (
+						!entry ||
+						entry.typeId !== bareType ||
+						String(entry.typeVersion) !== versionStr
+					)
+						continue
+				}
+				/**
+				 * Both paths: membership is structural at both ends — what the
+				 * pipeline reads (above) and what it writes (19 §0). A spec in
+				 * the bucket must write a session message.
+				 */
 				const nodes = await db
 					.select()
 					.from(schema.pipelineNodes)
 					.where(eq(schema.pipelineNodes.specVersionId, v.id))
-				// The first *input* node, not the first node at position 0 —
-				// the entry is a kind, not a coordinate.
-				const entry = (nodes as any[])
-					.filter((n) => n.kind === "input")
-					.sort((a, b) => a.position - b.position)[0]
-				if (
-					!entry ||
-					entry.typeId !== bareType ||
-					String(entry.typeVersion) !== versionStr
-				)
-					continue
 				const writesAMessage = (nodes as any[]).some(
 					(n) => n.kind === "consumer" && n.typeId === CHAT_WRITE_TYPE
 				)
@@ -530,7 +609,8 @@ export async function resolveFunctionSpec(
 				if (
 					triggers.some(
 						(t: any) =>
-							t?.mode === modeId && t?.function === functionKey
+							(t?.genre ?? t?.mode) === genreId &&
+							t?.function === functionKey
 					)
 				)
 					candidates.push({
@@ -554,7 +634,7 @@ export async function resolveFunctionSpec(
 			.from(schema.pipelineFunctionBindings)
 			.where(
 				and(
-					eq(schema.pipelineFunctionBindings.modeId, modeId),
+					eq(schema.pipelineFunctionBindings.genreId, genreId),
 					eq(schema.pipelineFunctionBindings.functionKey, functionKey)
 				)
 			)) as any[]
@@ -573,7 +653,7 @@ export async function resolveFunctionSpec(
 			if (slug && eligible.has(slug)) return slug
 		}
 
-		const companion = candidates.find((c) => c.namespace === modeNamespace)
+		const companion = candidates.find((c) => c.namespace === genreNamespace)
 		return (companion ?? candidates[0]!).slug
 	} catch {
 		return null
@@ -582,7 +662,7 @@ export async function resolveFunctionSpec(
 
 // ── Which of a mode's functions a session actually has (19 §3) ─────────────────
 
-export interface SessionFunction extends ModeTrigger {
+export interface SessionFunction extends GenreTrigger {
 	/** The answer in force, after all three layers. */
 	enabled: boolean
 	/**
@@ -637,7 +717,7 @@ export interface SessionFunction extends ModeTrigger {
 export async function sessionPipeline(
 	db: Db,
 	sessionId: number,
-	modeId: string,
+	genreId: string,
 	userId?: number | null
 ): Promise<{
 	specId: number
@@ -646,7 +726,7 @@ export async function sessionPipeline(
 	configName: string | null
 } | null> {
 	try {
-		const specSlug = await resolveFunctionSpec(db, modeId, "respond", {
+		const specSlug = await resolveFunctionSpec(db, genreId, "respond", {
 			sessionId
 		})
 		if (!specSlug) return null
@@ -678,11 +758,37 @@ export async function sessionPipeline(
 async function presetActionsFor(
 	db: Db,
 	sessionId: number,
-	modeId: string,
+	genreId: string,
 	userId?: number | null
 ): Promise<{ configId: number | null; included: string[] | null }> {
 	try {
-		const pipeline = await sessionPipeline(db, sessionId, modeId, userId)
+		// The session preset is the ruled home of action curation (24 §1,
+		// admin IA 2026-08-28): a session born from a preset reads that
+		// preset's list. The config-row path below survives as the fallback
+		// for sessions with no preset, until the legacy squat retires fully.
+		const [session] = await db
+			.select({ presetId: schema.sessions.presetId })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, sessionId))
+			.limit(1)
+		if (session?.presetId != null) {
+			const [preset] = await db
+				.select({
+					includedActions: schema.sessionPresets.includedActions
+				})
+				.from(schema.sessionPresets)
+				.where(eq(schema.sessionPresets.id, session.presetId))
+				.limit(1)
+			if (preset) {
+				const raw = preset.includedActions
+				return {
+					configId: null,
+					included: Array.isArray(raw) ? raw.map(String) : null
+				}
+			}
+		}
+
+		const pipeline = await sessionPipeline(db, sessionId, genreId, userId)
 		if (!pipeline?.configId) return { configId: null, included: null }
 
 		const [config] = await db
@@ -722,24 +828,24 @@ async function presetActionsFor(
 export async function listSessionFunctions(
 	db: Db,
 	sessionId: number,
-	modeId: string,
+	genreId: string,
 	userId?: number | null
 ): Promise<SessionFunction[]> {
-	const available = await listModeTriggers(db, modeId)
+	const available = await listGenreTriggers(db, genreId)
 	const rows = await db
 		.select()
 		.from(schema.sessionFunctions)
 		.where(
 			and(
 				eq(schema.sessionFunctions.sessionId, sessionId),
-				eq(schema.sessionFunctions.modeId, modeId)
+				eq(schema.sessionFunctions.genreId, genreId)
 			)
 		)
 	const stated = new Map<string, boolean>(
 		(rows as any[]).map((r) => [r.functionKey as string, !!r.enabled])
 	)
 
-	const preset = await presetActionsFor(db, sessionId, modeId, userId)
+	const preset = await presetActionsFor(db, sessionId, genreId, userId)
 
 	return available
 		.map((t) => {
@@ -779,18 +885,18 @@ export async function listSessionFunctions(
  * The functions actually in force — what the session view renders and what
  * `triggerFunction` will fire.
  *
- * Both callers go through this rather than filtering `listModeTriggers`
- * themselves, for the reason `listModeTriggers` and `resolveFunctionSpec`
+ * Both callers go through this rather than filtering `listGenreTriggers`
+ * themselves, for the reason `listGenreTriggers` and `resolveFunctionSpec`
  * already share their criteria: a button whose press is refused, or a
  * fireable function with no button, are two halves of one fact disagreeing.
  */
 export async function enabledSessionFunctions(
 	db: Db,
 	sessionId: number,
-	modeId: string,
+	genreId: string,
 	userId?: number | null
 ): Promise<SessionFunction[]> {
-	return (await listSessionFunctions(db, sessionId, modeId, userId)).filter(
+	return (await listSessionFunctions(db, sessionId, genreId, userId)).filter(
 		(f) => f.enabled
 	)
 }
@@ -822,32 +928,32 @@ export interface SetSessionFunctionResult {
 export async function setSessionFunction(
 	db: Db,
 	sessionId: number,
-	modeId: string,
+	genreId: string,
 	functionKey: string,
 	enabled: boolean,
 	actor?: { userId?: number | null; isAdmin?: boolean }
 ): Promise<SetSessionFunctionResult> {
 	const [session] = await db
-		.select({ modeId: schema.sessions.modeId })
+		.select({ genreId: schema.sessions.genreId })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	if (!session) return { ok: false, error: "that session no longer exists" }
 
-	const sessionMode = session.modeId ?? STANDARD_MODE_ID
-	if (sessionMode !== modeId)
+	const sessionGenre = session.genreId ?? STANDARD_GENRE_ID
+	if (sessionGenre !== genreId)
 		return {
 			ok: false,
 			error:
-				`this session is in ${sessionMode}, not ${modeId} — a function choice is ` +
-				`stored against the mode it was made under, so one written against ` +
-				`another mode could never apply`
+				`this session is in ${sessionGenre}, not ${genreId} — a function choice is ` +
+				`stored against the genre it was made under, so one written against ` +
+				`another genre could never apply`
 		}
 
 	const available = await listSessionFunctions(
 		db,
 		sessionId,
-		modeId,
+		genreId,
 		actor?.userId
 	)
 	const decl = available.find((t) => t.function === functionKey)
@@ -855,8 +961,8 @@ export async function setSessionFunction(
 		return {
 			ok: false,
 			error:
-				`no spec contributes '${functionKey}' to ${modeId}. A session can only ` +
-				`turn on what its mode was offered — install or publish a spec that ` +
+				`no spec contributes '${functionKey}' to ${genreId}. A session can only ` +
+				`turn on what its genre was offered — install or publish a spec that ` +
 				`contributes it, and it appears here.`
 		}
 
@@ -880,7 +986,7 @@ export async function setSessionFunction(
 
 	const where = and(
 		eq(schema.sessionFunctions.sessionId, sessionId),
-		eq(schema.sessionFunctions.modeId, modeId),
+		eq(schema.sessionFunctions.genreId, genreId),
 		eq(schema.sessionFunctions.functionKey, functionKey)
 	)
 
@@ -907,7 +1013,7 @@ export async function setSessionFunction(
 	else
 		await db
 			.insert(schema.sessionFunctions)
-			.values({ sessionId, modeId, functionKey, enabled })
+			.values({ sessionId, genreId, functionKey, enabled })
 
 	return { ok: true, enabled }
 }
@@ -925,7 +1031,7 @@ export async function setSessionFunction(
  * is the second answer this codebase keeps finding at the point where the two
  * disagree.
  */
-export async function modeOfSpec(
+export async function genreOfSpec(
 	db: Db,
 	specSlug: string
 ): Promise<string | null> {
@@ -937,6 +1043,17 @@ export async function modeOfSpec(
 			.limit(1)
 		if (!spec?.activeVersionId) return null
 
+		// The input lock answers directly (24 §4).
+		const [version] = await db
+			.select({
+				inputGenre: schema.pipelineSpecVersions.inputGenre
+			})
+			.from(schema.pipelineSpecVersions)
+			.where(eq(schema.pipelineSpecVersions.id, spec.activeVersionId))
+			.limit(1)
+		if (version?.inputGenre) return version.inputGenre
+
+		// Transitional: a shape-bearing entry input type is a genre.
 		const nodes = await db
 			.select()
 			.from(schema.pipelineNodes)
@@ -946,7 +1063,7 @@ export async function modeOfSpec(
 			.sort((a, b) => a.position - b.position)[0]
 		if (!entry) return null
 
-		const modeId = `${entry.typeId}@${entry.typeVersion}`
+		const genreId = `${entry.typeId}@${entry.typeVersion}`
 		// Only a *shape-bearing* input type is a mode. Checked against the
 		// registry rather than assumed, so a pipeline whose entry is an
 		// ordinary input does not acquire a mode by having one.
@@ -963,7 +1080,7 @@ export async function modeOfSpec(
 				)
 			)
 			.limit(1)
-		return row?.sessionShape ? modeId : null
+		return row?.sessionShape ? genreId : null
 	} catch {
 		return null
 	}
@@ -1005,15 +1122,15 @@ export async function setPresetActions(
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.id, config.specId))
 			.limit(1)
-		const modeId = spec ? await modeOfSpec(db, spec.slug) : null
-		const offered = modeId ? await listModeTriggers(db, modeId) : []
+		const genreId = spec ? await genreOfSpec(db, spec.slug) : null
+		const offered = genreId ? await listGenreTriggers(db, genreId) : []
 		const keys = new Set(offered.map((t) => t.function))
 		const unknown = patch.includedActions.filter((k) => !keys.has(k))
 		if (unknown.length)
 			return {
 				ok: false,
 				error:
-					`nothing contributes '${unknown[0]}' to this pipeline's mode, so ` +
+					`nothing contributes '${unknown[0]}' to this pipeline's genre, so ` +
 					`including it would put a key in the list that can never match.`
 			}
 	}
@@ -1060,14 +1177,14 @@ export interface PresetOption {
 export async function listSessionPresets(
 	db: Db,
 	sessionId: number,
-	modeId: string,
+	genreId: string,
 	viewer: { userId?: number | null; isAdmin?: boolean }
 ): Promise<{
 	specSlug: string | null
 	selectedId: number | null
 	options: PresetOption[]
 }> {
-	const pipeline = await sessionPipeline(db, sessionId, modeId, viewer.userId)
+	const pipeline = await sessionPipeline(db, sessionId, genreId, viewer.userId)
 	if (!pipeline) return { specSlug: null, selectedId: null, options: [] }
 
 	const rows = await db
@@ -1108,15 +1225,15 @@ export async function listSessionPresets(
 export async function chooseSessionPreset(
 	db: Db,
 	sessionId: number,
-	modeId: string,
+	genreId: string,
 	configId: number,
 	viewer: { userId?: number | null; isAdmin?: boolean }
 ): Promise<{ ok: boolean; error?: string }> {
-	const pipeline = await sessionPipeline(db, sessionId, modeId, viewer.userId)
+	const pipeline = await sessionPipeline(db, sessionId, genreId, viewer.userId)
 	if (!pipeline)
 		return {
 			ok: false,
-			error: "no pipeline serves this session's mode, so there is nothing to configure"
+			error: "no pipeline serves this session's genre, so there is nothing to configure"
 		}
 
 	const [config] = await db

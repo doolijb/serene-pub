@@ -1,0 +1,129 @@
+<!doctype html>
+<!--
+  TEMPORARY TEST ARTIFACT (plan 21). A self-contained frame-panel demo that
+  speaks the surface-grid frame protocol v1. Its job is to make the load-bearing
+  claim *visible*: because the grid never reparents, moving/resizing/drawering
+  this iframe does NOT reload it — so the "alive for" counter below keeps
+  climbing across every move instead of resetting to 0. Suspend (collapse it, or
+  drawer it and open another) pauses the counter without a reload; resume
+  continues it. Delete this file + its panel entry once real plugin frames land.
+-->
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>Frame panel demo</title>
+		<style>
+			:root {
+				color-scheme: light dark;
+				font-family: system-ui, sans-serif;
+			}
+			body {
+				margin: 0;
+				padding: 12px;
+				display: flex;
+				flex-direction: column;
+				gap: 10px;
+				font-size: 13px;
+			}
+			.big {
+				font-size: 30px;
+				font-weight: 700;
+				font-variant-numeric: tabular-nums;
+			}
+			.muted {
+				opacity: 0.6;
+				font-size: 11px;
+			}
+			.pill {
+				display: inline-block;
+				padding: 2px 8px;
+				border-radius: 999px;
+				background: color-mix(in srgb, canvasText 12%, transparent);
+			}
+			ul {
+				margin: 0;
+				padding-left: 16px;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="muted">Frame panel (sandboxed, opaque origin)</div>
+		<div>
+			alive for <span class="big" id="secs">0</span> s
+			<span class="pill" id="state">running</span>
+		</div>
+		<div class="muted">
+			Move / resize / drawer me — the counter never resets, proving the
+			grid didn't reload the iframe.
+		</div>
+		<div>
+			<div class="muted">Props from host:</div>
+			<pre id="props" class="pill" style="white-space: pre-wrap">—</pre>
+		</div>
+		<div>
+			<div class="muted">
+				Messages on my channel(s):
+				<span id="chan">—</span>
+			</div>
+			<ul id="msgs"></ul>
+		</div>
+
+		<script>
+			let port = null
+			let secs = 0
+			let running = true
+			const $ = (id) => document.getElementById(id)
+
+			setInterval(() => {
+				if (!running) return
+				secs += 1
+				$("secs").textContent = String(secs)
+			}, 1000)
+
+			function onHostMessage(m) {
+				if (!m || typeof m !== "object") return
+				switch (m.t) {
+					case "suspend":
+						running = false
+						$("state").textContent = "suspended"
+						break
+					case "resume":
+						running = true
+						$("state").textContent = "running"
+						break
+					case "props":
+						$("props").textContent = JSON.stringify(
+							m.props ?? {},
+							null,
+							1
+						)
+						break
+					case "channel": {
+						$("chan").textContent = m.channel
+						const ul = $("msgs")
+						ul.innerHTML = ""
+						for (const msg of (m.messages ?? []).slice(-5)) {
+							const li = document.createElement("li")
+							li.textContent =
+								(msg.speakerLabel ? msg.speakerLabel + ": " : "") +
+								(msg.content ?? "").slice(0, 80)
+							ul.appendChild(li)
+						}
+						break
+					}
+				}
+			}
+
+			// The host posts { t: "init" } with the MessageChannel port. We
+			// reply "ready" and then listen on the port for everything else.
+			window.addEventListener("message", (e) => {
+				const m = e.data
+				if (m && m.t === "init" && e.ports && e.ports[0]) {
+					port = e.ports[0]
+					port.onmessage = (ev) => onHostMessage(ev.data)
+					port.postMessage({ t: "ready" })
+				}
+			})
+		</script>
+	</body>
+</html>

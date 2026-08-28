@@ -650,6 +650,12 @@
 			<Icons.BookOpen size={16} />
 			Documentation
 		</a>
+		{#if userCtx.user?.isAdmin}
+			<a href="/admin" class="btn btn-sm preset-filled-surface-400-600">
+				<Icons.ShieldCheck size={16} />
+				Administration
+			</a>
+		{/if}
 	</div>
 
 	<!-- Loading state while socket data arrives -->

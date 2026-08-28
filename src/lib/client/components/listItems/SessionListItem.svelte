@@ -51,9 +51,9 @@
 	itemType="Session"
 	onclick={handleClick}
 	{contentTitle}
-	classes={active
-		? `preset-filled-primary-500/20 ring-primary-500 ring-2 ${classes}`
-		: classes}
+	{classes}
+	preset={active ? "preset-filled-primary-500" : "preset-tonal"}
+	hoverPreset={active ? "" : "hover:preset-filled-surface-300-700"}
 >
 	{#snippet content()}
 		<div class="relative w-fit">
@@ -95,20 +95,14 @@
 				<span class="truncate text-left font-semibold">
 					{session.name || "Untitled Session"}
 				</span>
-				{#if session.modeName}
+				{#if session.genreName}
 					<!-- The session's type (its mode): "Chat", or a custom
-					     mode a plugin added. -->
+					     mode a plugin added. The active card is filled-primary,
+					     which is itself the "open" signal — no extra tag. -->
 					<span
 						class="preset-tonal-secondary shrink-0 rounded-full px-2 py-0.5 text-[10px] leading-none font-medium"
 					>
-						{session.modeName}
-					</span>
-				{/if}
-				{#if active}
-					<span
-						class="text-primary-500 shrink-0 text-[10px] font-semibold tracking-wide uppercase"
-					>
-						Open
+						{session.genreName}
 					</span>
 				{/if}
 			</div>

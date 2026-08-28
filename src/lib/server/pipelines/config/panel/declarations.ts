@@ -328,6 +328,8 @@ export interface Published {
 	slug: string
 	name: string
 	semver: string
+	/** Catalogue claims (23 §2), or null = unclassified. */
+	taxonomy: { zone?: string; role?: string; mode?: string } | null
 }
 
 export async function published(
@@ -353,7 +355,8 @@ export async function published(
 		specVersionId: version.id,
 		slug: spec.slug,
 		name: spec.name,
-		semver: version.semver
+		semver: version.semver,
+		taxonomy: (version.taxonomy as any) ?? null
 	}
 }
 

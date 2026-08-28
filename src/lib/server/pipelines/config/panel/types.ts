@@ -67,6 +67,8 @@ export interface ConfigOption {
 	quick?: boolean
 	description?: string
 	control: string
+	/** The value declaration (24 T6c) — single-key, for value-decl controls. */
+	decl?: Record<string, Record<string, unknown>>
 	min?: number
 	max?: number
 	of?: readonly string[]
@@ -252,6 +254,8 @@ export interface NamespaceSummary {
 	version: string
 	event: string | null
 	enabled: boolean
+	/** Catalogue claims (23 §2), or null = unclassified. */
+	taxonomy: { zone?: string; role?: string; mode?: string } | null
 }
 
 /**
@@ -340,6 +344,8 @@ export interface Decl {
 	 */
 	description?: string
 	control: string
+	/** The value declaration (24 T6c) — single-key, for value-decl controls. */
+	decl?: Record<string, Record<string, unknown>>
 	min?: number
 	max?: number
 	of?: readonly string[]

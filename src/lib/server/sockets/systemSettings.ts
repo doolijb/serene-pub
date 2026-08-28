@@ -169,6 +169,42 @@ export const systemSettingsUpdateContextDebuggingEnabled: Handler<
 	}
 }
 
+/**
+ * Show or hide the Legacy configs panel — the 0.5 archives (context/prompt
+ * configs). The column has gated the nav since the changeover; this is the
+ * write the admin Settings page needed. Hiding is for when somebody is done
+ * referring back; the rows themselves stay until the tables go in 0.8.0.
+ */
+export const systemSettingsUpdateLegacyConfigsVisible: Handler<
+	Sockets.SystemSettings.UpdateLegacyConfigsVisible.Params,
+	Sockets.SystemSettings.UpdateLegacyConfigsVisible.Response
+> = {
+	event: "systemSettings:updateLegacyConfigsVisible",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		try {
+			await db
+				.update(schema.systemSettings)
+				.set({ legacyPromptConfigsVisible: params.visible })
+				.where(eq(schema.systemSettings.id, 1))
+			const res: Sockets.SystemSettings.UpdateLegacyConfigsVisible.Response =
+				{
+					success: true,
+					visible: params.visible
+				}
+			emitToUser("systemSettings:updateLegacyConfigsVisible", res)
+			await systemSettingsGet.handler(socket, {}, emitToUser)
+			return res
+		} catch (error: any) {
+			console.error("Update legacy configs visible error:", error)
+			emitToUser("systemSettings:updateLegacyConfigsVisible:error", {
+				error: "Failed to update the legacy configs setting"
+			})
+			throw error
+		}
+	}
+}
+
 export const systemSettingsUpdateAccountsEnabled: Handler<
 	Sockets.SystemSettings.UpdateAccountsEnabled.Params,
 	Sockets.SystemSettings.UpdateAccountsEnabled.Response
@@ -277,5 +313,6 @@ export function registerSystemSettingsHandlers(
 	register(socket, systemSettingsUpdateSummarizationEnabled, emitToUser)
 	register(socket, systemSettingsUpdateScriptsEnabled, emitToUser)
 	register(socket, systemSettingsUpdateContextDebuggingEnabled, emitToUser)
+	register(socket, systemSettingsUpdateLegacyConfigsVisible, emitToUser)
 	register(socket, systemSettingsUpdateAccountsEnabled, emitToUser)
 }

@@ -128,7 +128,7 @@
 		<PanelToolbar label="Pipeline management" class="mt-2 mb-4">
 			<a
 				class="btn btn-sm preset-tonal-primary flex-1"
-				href="/pipelines/{encodeURIComponent(slug)}"
+				href="/admin/pipelines/{encodeURIComponent(slug)}"
 			>
 				<Icons.Settings2 size={16} /> Manage pipeline
 			</a>

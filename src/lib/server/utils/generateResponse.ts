@@ -136,10 +136,10 @@ export async function generateResponse({
 	// floor, so ordinary sessions can never trip it. Checked before the "queued"
 	// write so the message row never flips to generating.
 	{
-		const { sessionModeAvailable } = await import(
-			"$lib/server/pipelines/entities/sessionModes"
+		const { sessionGenreAvailable } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		const modeCheck = await sessionModeAvailable(db as any, sessionId)
+		const modeCheck = await sessionGenreAvailable(db as any, sessionId)
 		if (!modeCheck.available) {
 			await persistGenerationErrorRow(
 				socket.io,
@@ -436,14 +436,14 @@ export async function generateResponse({
 		// the function, which dies with the trigger-driven UI (U-C5). A null
 		// resolution (registry never synced) falls to the F29 floor — routing
 		// failing degrades to built-in behaviour, never blocks the turn.
-		const { resolveFunctionSpec, STANDARD_MODE_ID } = await import(
-			"$lib/server/pipelines/entities/sessionModes"
+		const { resolveFunctionSpec, STANDARD_GENRE_ID } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		const functionKey = isNarratorResponseMode ? "narrate" : "respond"
 		const specId =
 			(await resolveFunctionSpec(
 				db,
-				(session as any).modeId ?? STANDARD_MODE_ID,
+				(session as any).genreId ?? STANDARD_GENRE_ID,
 				functionKey,
 				// The binding selects (19 §3, simplified 2026-08-24): this
 				// session's choice among the eligible, else the instance's,

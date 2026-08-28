@@ -71,7 +71,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:consumer/update-message@1": "f912a25836fda",
 	"core:input/message-created@1": "f90c5108c7e82",
 	"core:input/summarize-request@1": "118295257093fb",
-	"core:input/user-message@1": "8efb208dbb7a8",
+	// Gained the `greeting` field on its sessionShape (20, migration 0151) —
+	// the default greeting-on-creation behaviour stated, not changed.
+	"core:input/user-message@1": "1a716679673b88",
+	"core:input/session-created@1": "18daad12cc8870",
+	"core:query/session-greetings@1": "5c57ecc64e730",
+	"core:consumer/seed-greetings@1": "1247e34e381a2f",
 	"core:provider/embed-text@1": "1a2be2fe9ae5a9",
 	// Gained its two script hooks in 0.6-preview (migration 0146): `scripts`
 	// before over `content`, `castScripts` after over `cast` — the paste-rung

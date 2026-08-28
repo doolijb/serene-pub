@@ -10,10 +10,19 @@
 		onBack: () => void
 		onEdit: () => void
 		onOpen: () => void
+		/** Open the session's connected lorebook, when it has one. */
+		onViewLorebook?: (lorebookId: number) => void
 		canEdit?: boolean
 	}
 
-	let { sessionId, onBack, onEdit, onOpen, canEdit = true }: Props = $props()
+	let {
+		sessionId,
+		onBack,
+		onEdit,
+		onOpen,
+		onViewLorebook,
+		canEdit = true
+	}: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -47,6 +56,7 @@
 			.filter(Boolean) ?? []
 	)
 	let tags = $derived((session as any)?.tags ?? [])
+	let lorebookId = $derived((session as any)?.lorebookId ?? null)
 </script>
 
 <div class="flex h-full flex-col gap-0 overflow-hidden">
@@ -184,6 +194,31 @@
 						{/each}
 					</div>
 				</section>
+			{/if}
+		</div>
+
+		<!-- Below the details: quick actions for this chat. Edit opens the
+		     settings form; View lorebook appears only when one is connected. -->
+		<div class="shrink-0 flex flex-col gap-2 pt-3">
+			{#if canEdit}
+				<button
+					class="btn btn-sm preset-tonal-surface w-full justify-start"
+					onclick={onEdit}
+					type="button"
+				>
+					<Icons.Pencil size={16} aria-hidden="true" />
+					Edit chat
+				</button>
+			{/if}
+			{#if lorebookId != null && onViewLorebook}
+				<button
+					class="btn btn-sm preset-tonal-surface w-full justify-start"
+					onclick={() => onViewLorebook?.(lorebookId)}
+					type="button"
+				>
+					<Icons.BookMarked size={16} aria-hidden="true" />
+					View lorebook
+				</button>
 			{/if}
 		</div>
 	{:else}

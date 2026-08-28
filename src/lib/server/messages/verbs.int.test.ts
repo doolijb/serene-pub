@@ -36,7 +36,7 @@ beforeAll(async () => {
 		.values({
 			userId: user.id,
 			isGroup: false,
-			modeId: "chariot.dice:input/encounter@1"
+			genreId: "chariot.dice:input/encounter@1"
 		})
 		.returning()
 	hardcoreSessionId = hardcore.id

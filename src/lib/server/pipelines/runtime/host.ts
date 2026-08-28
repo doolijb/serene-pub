@@ -263,6 +263,24 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						.limit(1)
 				}
 
+				case "session_greetings": {
+					// The create pipeline's read (24 §12, T8): the cast's
+					// greeting entries, interpolated, position-ordered. The
+					// implementation lives in sessions/greetings.ts — one
+					// implementation behind the declared node.
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return []
+					const { collectSessionGreetings } = await import(
+						"$lib/server/sessions/greetings"
+					)
+					const { entries } = await collectSessionGreetings(
+						db,
+						sessionId
+					)
+					return entries
+				}
+
 				case "summarize_source": {
 					/**
 					 * The messages a summary is drawn from, with sender *names*.
@@ -922,6 +940,33 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						isGenerating: false
 					})
 					return { id: row.id, sessionId: row.sessionId }
+				}
+
+				case "core:consumer/seed-greetings": {
+					// The create pipeline's write (24 §12, T8) — the same
+					// implementation the imperative path used, behind the
+					// declared node. Empty greetings are an ordinary state.
+					const sessionId = p.sessionId ?? scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to write to — the run was started without a session scope`
+						)
+					const userId = p.userId ?? scope.userId
+					if (userId === undefined || userId === null)
+						throw new HostScopeError(
+							`${node.key} has no user to write as — the run was started without a user scope`
+						)
+					const { writeSessionGreetings } = await import(
+						"$lib/server/sessions/greetings"
+					)
+					const ids = await writeSessionGreetings(db as any, {
+						sessionId,
+						userId,
+						entries: Array.isArray(p.greetings) ? p.greetings : [],
+						channel:
+							typeof p.channel === "string" ? p.channel : "main"
+					})
+					return { ids, count: ids.length, sessionId }
 				}
 
 				case "core:consumer/update-message": {

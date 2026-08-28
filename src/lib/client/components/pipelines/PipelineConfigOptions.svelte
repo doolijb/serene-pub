@@ -27,6 +27,16 @@
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import ShareBar from "$lib/client/components/pipelines/ShareBar.svelte"
+	// The value-decl controls (24 T6c): the simple editors live in
+	// @serene-pub/controls now — one component per value-type id, the render
+	// leg of the four-way registry. This panel keeps the behavioural wiring
+	// (drafts, set/clear, write scopes); the components are presentational.
+	import {
+		BooleanControl,
+		NumberControl,
+		SelectControl,
+		TextControl
+	} from "@serene-pub/controls"
 
 	interface Props {
 		slug: string
@@ -77,6 +87,20 @@
 		 * the wording or the weights: "just the selectors."
 		 */
 		selectorsOnly?: boolean
+		/**
+		 * Draft mode (22 §2.1): value edits go to the host's pending map
+		 * instead of the database — every `set`/`clear` becomes a callback,
+		 * and nothing writes until the host's explicit Save. The prompt/
+		 * template/layout sub-editors keep their own explicit Save flows (they
+		 * edit shared entity rows, not this configuration) — but the *selection*
+		 * a clone makes rides the draft like any other value.
+		 */
+		onDraftSet?: (option: Sockets.Pipelines.Option, value: unknown) => void
+		onDraftClear?: (option: Sockets.Pipelines.Option) => void
+		/** The host's pending values, overlaid onto what renders. */
+		pending?: Record<string, unknown>
+		/** Option ids queued to reset to inherited. */
+		pendingClears?: string[]
 	}
 
 	let {
@@ -88,8 +112,15 @@
 		granular = false,
 		showConfigPicker = true,
 		editsConfigId,
-		selectorsOnly = false
+		selectorsOnly = false,
+		onDraftSet,
+		onDraftClear,
+		pending,
+		pendingClears
 	}: Props = $props()
+
+	/** Draft mode is simply "the host gave us somewhere to put edits". */
+	const draftMode = $derived(!!onDraftSet)
 
 	/** The controls that are pure selectors — what `selectorsOnly` keeps. */
 	const SELECTOR_CONTROLS = new Set([
@@ -189,6 +220,10 @@
 		editsConfigId != null ? { configId: editsConfigId } : {}
 
 	function set(option: Sockets.Pipelines.Option, value: unknown) {
+		if (onDraftSet) {
+			onDraftSet(option, value)
+			return
+		}
 		socket.emit("pipelines:setOption", {
 			slug,
 			optionId: option.id,
@@ -199,6 +234,10 @@
 	}
 
 	function clear(option: Sockets.Pipelines.Option) {
+		if (onDraftClear) {
+			onDraftClear(option)
+			return
+		}
 		socket.emit("pipelines:clearOption", {
 			slug,
 			optionId: option.id,
@@ -577,14 +616,7 @@
 		const opt = res.pipeline.steps
 			.flatMap((s) => [...s.options, ...s.advanced])
 			.find((o) => o.id === optionId)
-		if (opt)
-			socket.emit("pipelines:setOption", {
-				slug,
-				optionId,
-				value: res.promptId,
-				sessionId,
-				...targetOf()
-			})
+		if (opt) set(opt, res.promptId)
 		// No draft is seeded: the copy's text is the original's, the editor is
 		// always on screen, and the refreshed view carries the copy's row —
 		// so the boxes fill themselves and stay clean until someone types.
@@ -603,14 +635,7 @@
 		const opt = res.pipeline.steps
 			.flatMap((s) => [...s.options, ...s.advanced])
 			.find((o) => o.id === optionId)
-		if (opt)
-			socket.emit("pipelines:setOption", {
-				slug,
-				optionId,
-				value: res.templateId,
-				sessionId,
-				...targetOf()
-			})
+		if (opt) set(opt, res.templateId)
 		delete layoutDrafts[optionId]
 	}
 	// Create and clone answer the same way, and select the new row for this
@@ -628,14 +653,7 @@
 		const opt = res.pipeline.steps
 			.flatMap((s) => [...s.options, ...s.advanced])
 			.find((o) => o.id === optionId)
-		if (opt)
-			socket.emit("pipelines:setOption", {
-				slug,
-				optionId,
-				value: res.templateId,
-				sessionId,
-				...targetOf()
-			})
+		if (opt) set(opt, res.templateId)
 		delete templateDrafts[optionId]
 	}
 	// The server's refusals are written for a person — "connections stay
@@ -733,14 +751,46 @@
 		(detail?.facets ?? []).filter((f) => f.simple).map((f) => f.id)
 	)
 
+	/**
+	 * The draft overlaid onto what renders (22 §2.1): a pending value shows as
+	 * the value, a pending reset shows as the inherited default. The overlay
+	 * lives at this one derivation so every read downstream — rows, groups,
+	 * controls — sees the draft without knowing it exists.
+	 */
+	const overlay = (
+		o: Sockets.Pipelines.Option
+	): Sockets.Pipelines.Option => {
+		if (!draftMode) return o
+		if (pendingClears?.includes(o.id))
+			return {
+				...o,
+				value: o.authorDefault ?? null,
+				overriddenHere: false,
+				source: "author"
+			}
+		if (pending && o.id in pending)
+			return { ...o, value: pending[o.id], overriddenHere: true }
+		return o
+	}
+
+	/** Is this option carrying an unsaved edit? Drives the pending marker. */
+	const isPending = (id: string) =>
+		!!(pending && id in pending) || !!pendingClears?.includes(id)
+
 	/** One step in the builder's inspector; all of them in the sidebar. */
-	const visibleSteps = $derived(
-		!detail
-			? []
-			: stepKey != null
+	const visibleSteps = $derived.by(() => {
+		if (!detail) return []
+		const steps =
+			stepKey != null
 				? detail.steps.filter((s) => s.key === stepKey)
 				: detail.steps
-	)
+		if (!draftMode) return steps
+		return steps.map((s) => ({
+			...s,
+			options: s.options.map(overlay),
+			advanced: s.advanced.map(overlay)
+		}))
+	})
 
 	/**
 	 * Options paired with the step they came from.
@@ -881,7 +931,9 @@
 	/** Overrides the label where two options in one group share a name. */
 	labelOverride?: string
 )}
-	<div class="flex flex-col gap-1">
+	<!-- The wrapper carries the option's address so a host's search or diff
+	     view can scroll to it (22 §2.3/§2.6). -->
+	<div class="flex flex-col gap-1" data-option-id={option.id}>
 		<div class="flex items-center justify-between gap-2">
 			<label
 				class="min-w-0 flex-1 truncate text-sm font-medium"
@@ -889,6 +941,15 @@
 			>
 				{labelOverride ?? option.label}
 			</label>
+
+			{#if draftMode && isPending(option.id)}
+				<span
+					class="preset-tonal-warning shrink-0 rounded-full px-1.5 py-0.5 text-[0.65rem] font-semibold"
+					title="Unsaved — lands with Save all"
+				>
+					pending
+				</span>
+			{/if}
 
 			<!-- Provenance, but only when it is worth a word.
 			     "your value" on every field is noise; "set by an
@@ -947,7 +1008,7 @@
 				{option.value ? String(option.value) : "—"}
 				<span class="not-italic">(admin only)</span>
 			</p>
-		{:else if option.control === "text" || option.control === "template"}
+		{:else if option.control === "template"}
 			<!-- An empty template is not an empty setting: it means the step
 			     renders with its built-in wording. Saying so is the difference
 			     between "nothing is configured here" and "nothing is
@@ -955,10 +1016,8 @@
 			<textarea
 				id="opt-{option.id}"
 				class="textarea w-full font-mono text-xs"
-				placeholder={option.control === "template"
-					? "Empty — using the built-in wording"
-					: undefined}
-				rows={option.control === "template" ? 8 : 4}
+				placeholder="Empty — using the built-in wording"
+				rows={8}
 				value={drafts[option.id] ??
 					(option.value == null ? "" : String(option.value))}
 				oninput={(e) => (drafts[option.id] = e.currentTarget.value)}
@@ -971,58 +1030,35 @@
 					else set(option, next)
 				}}
 			></textarea>
-		{:else if option.control === "boolean"}
-			<label class="flex items-center gap-2 text-sm">
-				<input
-					id="opt-{option.id}"
-					type="checkbox"
-					class="checkbox"
-					checked={!!option.value}
-					onchange={(e) => set(option, e.currentTarget.checked)}
-				/>
-				<span class="text-muted">
-					{option.value ? "On" : "Off"}
-				</span>
-			</label>
-		{:else if option.control === "enum"}
-			<!-- Labels come from `members` when the declaration carried them.
-			     Without it the raw stored value is what shows, and `rag` is
-			     not a word anybody chose to read. -->
-			{@const labels = new Map(
-				(option.members ?? []).map((m) => [m.key, m])
-			)}
-			<select
+		{:else if (option.control === "text" || option.control === "string") && option.decl}
+			<TextControl
 				id="opt-{option.id}"
-				class="select w-full"
-				value={option.value == null ? "" : String(option.value)}
-				onchange={(e) => set(option, e.currentTarget.value)}
-			>
-				{#each option.of ?? [] as choice}
-					<option value={choice}>
-						{labels.get(choice)?.label ?? choice}
-					</option>
-				{/each}
-			</select>
-			{#if labels.get(String(option.value))?.description}
-				<p class="text-muted mt-1 text-xs">
-					{labels.get(String(option.value))!.description}
-				</p>
-			{/if}
-		{:else if option.control === "number" || option.control === "integer"}
-			<!-- Typed text goes through `drafts` so the fresh view after a
-			     write reconciles the box to what actually resolved — a value
-			     the chain rejects or reshapes must not linger on screen. -->
-			<input
+				decl={option.decl}
+				value={option.value}
+				oncommit={(next) =>
+					next === undefined ? clear(option) : set(option, next)}
+			/>
+		{:else if option.control === "boolean" && option.decl}
+			<BooleanControl
 				id="opt-{option.id}"
-				type="number"
-				class="input w-full"
-				min={option.min}
-				max={option.max}
-				step={option.control === "integer" ? 1 : "any"}
-				value={drafts[option.id] ??
-					(option.value == null ? "" : String(option.value))}
-				oninput={(e) => (drafts[option.id] = e.currentTarget.value)}
-				onchange={(e) => numeric(option, e.currentTarget.value)}
+				decl={option.decl}
+				value={option.value}
+				oncommit={(next) => set(option, next)}
+			/>
+		{:else if option.control === "enum" && option.decl}
+			<SelectControl
+				id="opt-{option.id}"
+				decl={option.decl}
+				value={option.value}
+				oncommit={(next) => set(option, next)}
+			/>
+		{:else if (option.control === "number" || option.control === "integer") && option.decl}
+			<NumberControl
+				id="opt-{option.id}"
+				decl={option.decl}
+				value={option.value}
+				oncommit={(next) =>
+					next === undefined ? clear(option) : set(option, next)}
 			/>
 		{:else if option.control === "share"}
 			<!-- Normalised, so there is no invalid state to report: the total is
@@ -1593,7 +1629,7 @@
 				{:else if !option.choices?.length}
 					<p class="text-muted text-xs">
 						Nothing fits this step yet — write one on the
-						<a class="underline" href="/pipelines/scripts">
+						<a class="underline" href="/admin/scripts">
 							scripts page
 						</a>
 						.
@@ -1640,7 +1676,7 @@
 				{#if option.choices?.length}
 					<a
 						class="text-muted text-xs underline"
-						href="/pipelines/scripts"
+						href="/admin/scripts"
 					>
 						Manage scripts
 					</a>
@@ -1761,10 +1797,22 @@
 	<!-- Grouped by what a setting *is*, not by which step computes it. A group
 	     with nothing visible to this viewer is skipped rather than shown
 	     empty — for a non-admin that usually leaves just the prompt. -->
-	<div class="space-y-3">
+	<!-- The wrapper measures the host this panel actually has — the builder's
+	     full-width inspector, its 25rem map rail, or the session sidebar —
+	     and the groups flow two columns only when that host is wide (22
+	     §2.5). A container query on its OWN box, because the pane's width
+	     says nothing about the rail's. -->
+	<div class="inspector-pane">
+	<div class="option-groups space-y-3">
 		{#each stepGroups as group (group.key)}
 			<section class="card preset-tonal space-y-3 p-3">
-				<h3 class="text-sm font-semibold">{group.label}</h3>
+				{#if stepKey == null}
+					<!-- The sidebar shows every step, so each card needs its
+					     name. The builder shows one — its host already titles
+					     it ("Chat · step 1 of 7"), and repeating it inside the
+					     card said everything twice. -->
+					<h3 class="text-sm font-semibold">{group.label}</h3>
+				{/if}
 				{#each group.facets as facet (facet.label)}
 					{#if showFacetHeadings(group)}
 						<p
@@ -1817,5 +1865,33 @@
 			</details>
 		{/if}
 	</div>
+	</div>
 	{/if}
 {/if}
+
+<style>
+	.inspector-pane {
+		container-type: inline-size;
+	}
+	/* Two columns only when this panel's own host is wide — the builder's
+	   list-mode inspector. The 25rem map rail and the session sidebar never
+	   reach the floor, so they stay a single column untouched.
+
+	   The columns run INSIDE each step's card, over its option rows — the
+	   builder shows one step at a time, so one card is usually all there is
+	   and splitting the card list would just halve it. Headings and the
+	   show-more button span both columns; a row never splits. */
+	@container (min-width: 66rem) {
+		.option-groups :global(section.card) {
+			columns: 2;
+			column-gap: 1.5rem;
+		}
+		.option-groups :global(section.card > h3),
+		.option-groups :global(section.card > button) {
+			column-span: all;
+		}
+		.option-groups :global(section.card > *) {
+			break-inside: avoid;
+		}
+	}
+</style>

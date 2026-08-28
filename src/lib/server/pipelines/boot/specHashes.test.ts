@@ -36,6 +36,29 @@ import { CORE_SPECS } from "$lib/server/pipelines/specs"
  * instead of a hash quietly moving underneath a version that did not.
  */
 const PUBLISHED: Record<string, string> = {
+	// 1.0.0: the standard session type as a create spec (23 §7) — the F29
+	// floor's shape moves from the input descriptor to this document.
+	"core:spec/create-chat@2.2.0": "fa56525a69fb9",
+	"core:spec/create-chat@2.1.0": "ea80f2679383c",
+	"core:spec/create-chat@2.0.0": "a6281141b21ea",
+	"core:spec/respond@1.15.0": "f8768da5723e3",
+	"core:spec/narrate@1.9.0": "1f7a1f6da815d7",
+	// Pre-24 (the genre rename): superseded, kept for the drift check.
+	"core:spec/create-chat@1.0.0": "e176f2e63375",
+	// 1.14.0 / 1.8.0: mode references re-keyed to the create spec (23 §7) —
+	// taxonomy.mode and narrate's contributed trigger now name
+	// core:spec/create-chat instead of the input type.
+	"core:spec/respond@1.14.0": "4e7dcba7841ab",
+	"core:spec/narrate@1.8.0": "124ccd9f3b3758",
+	// 1.13.0 / 1.7.0 / 1.3.0 / 1.2.0: the catalogue claims (23 §2) —
+	// `taxonomy` {zone, role, mode} rides every document.
+	"core:spec/respond@1.13.0": "f7c71609c1181",
+	"core:spec/narrate@1.7.0": "1e8300f1868ebe",
+	"core:spec/summarize-world@1.3.0": "192c5827940c72",
+	"core:spec/summarize-character@1.3.0": "10eebb63259167",
+	"core:spec/summarize-scene@1.3.0": "146ddf1045ab62",
+	"core:spec/summarize-history@1.3.0": "63e75e889b660",
+	"core:spec/graph-build@1.2.0": "1d9e569016efb3",
 	// 1.12.0: the session rename (0141) — session-scope/-history/-cast ids
 	// and sessionId/sessionScope ports ripple into every pinned type.
 	"core:spec/respond@1.12.0": "72df744027f6d",

@@ -382,8 +382,21 @@ export function coreBindings(): Bindings {
 		// Input *is* (01 §2).
 		"core:input/user-message@1": async (input: any) => ok(input),
 		"core:input/message-created@1": async (input: any) => ok(input),
+		"core:input/session-created@1": async (input: any) => ok(input),
 
 		// ── Queries ─────────────────────────────────────────────────────────
+		/**
+		 * The create pipeline's read (24 §12, T8): what the cast wants to say
+		 * first. The host owns the implementation (interpolation, group
+		 * greetings, the fallback line) — see sessions/greetings.ts.
+		 */
+		"core:query/session-greetings@1": async (input: any, ctx: any) => {
+			const greetings = await ctx.read("session_greetings", {
+				sessionId: input?.scope?.sessionId
+			})
+			return ok({ main: greetings, greetings })
+		},
+
 		"core:query/session-history@1": async (input: any, ctx: any) => {
 			const messages = await ctx.read("session_messages", {
 				sessionId: input?.scope?.sessionId,
@@ -1439,6 +1452,8 @@ export function coreBindings(): Bindings {
 		// The binding describes the write; the host performs it. Returning the
 		// payload unchanged is the correct implementation, not a stub.
 		"core:consumer/create-message@1": async (input: any, ctx: any) =>
+			ok(await ctx.commit(input)),
+		"core:consumer/seed-greetings@1": async (input: any, ctx: any) =>
 			ok(await ctx.commit(input)),
 		"core:consumer/update-message@1": async (input: any, ctx: any) =>
 			ok(await ctx.commit(input)),

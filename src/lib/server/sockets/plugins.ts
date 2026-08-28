@@ -213,6 +213,26 @@ export const pluginsInstall: Handler<
 	event: "plugins:install",
 	handler: async (socket, params, emitToUser) => {
 		requireAdmin(socket, emitToUser)
+		// Requirements first (24 §10, T7b): what the package references but
+		// does not ship must exist here, or the install refuses with names —
+		// a missing dependency found now is a sentence; found at runtime it
+		// is a broken session.
+		{
+			const { missingRequirements, requirementsOf } = await import(
+				"$lib/server/plugins/requirements"
+			)
+			const missing = await missingRequirements(
+				db,
+				requirementsOf(params.manifest)
+			)
+			if (missing.length) {
+				const msg =
+					`This package requires ${missing.join(", ")} — not installed ` +
+					`on this instance. Install what it builds on first.`
+				emitToUser("error", { error: msg })
+				throw new Error(msg)
+			}
+		}
 		// `backends` is a compiled fact: run the bundle on both sandboxes and
 		// take the set it actually loads on, ignoring any author claim.
 		const conf = await checkConformance(params.bundleSource)

@@ -36,7 +36,7 @@ import {
 	scriptExtras,
 	scriptsEnabledFor
 } from "$lib/server/pipelines/scripts/chains"
-import { modeFieldsFor } from "$lib/server/pipelines/entities/sessionModes"
+import { genreFieldsFor } from "$lib/server/pipelines/entities/sessionGenres"
 import { pluginsEnabled } from "$lib/server/plugins/flag"
 import { getManager } from "$lib/server/plugins"
 import { makePluginHookDispatch } from "$lib/server/plugins/hookDispatch"
@@ -311,8 +311,8 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 			},
 			// The mode's declared fields, supplied back (19 §1): session settings
 			// wrote them to the row; this is where they enter the run, filtered
-			// to the shape's declared keys — see modeFieldsFor.
-			fields: await modeFieldsFor(request.db, request.sessionId)
+			// to the shape's declared keys — see genreFieldsFor.
+			fields: await genreFieldsFor(request.db, request.sessionId)
 		},
 		seed: request.seed,
 		runId: request.runId,

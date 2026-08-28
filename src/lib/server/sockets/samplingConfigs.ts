@@ -120,7 +120,12 @@ export const samplingConfigsListHandler: Handler<
 			columns: {
 				id: true,
 				name: true,
-				isImmutable: true
+				isImmutable: true,
+				// The admin changelist's glanceable columns (22-adjacent):
+				// the three numbers people actually compare presets by.
+				temperature: true,
+				contextTokens: true,
+				responseTokens: true
 			},
 			orderBy: (w, { asc, desc }) => [desc(w.isImmutable), asc(w.name)]
 		})

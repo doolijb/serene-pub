@@ -105,9 +105,17 @@ export async function saveDocument(
 					canonicalHash: hash,
 					status: opts.publish ? "published" : "draft",
 					publishedAt: opts.publish ? new Date() : null,
-					mode: (doc.mode as Record<string, any>) ?? null,
+					genre:
+						(doc.genre as Record<string, any>) ??
+						// Pre-rename documents spelled it `mode` (24 §2).
+						((doc as any).mode as Record<string, any>) ??
+						null,
+					inputGenre: doc.input?.genre ?? null,
+					inputEvent: doc.input?.event ?? null,
 					contributes:
-						(doc.contributes as Record<string, any>) ?? null
+						(doc.contributes as Record<string, any>) ?? null,
+					taxonomy:
+						(doc.taxonomy as Record<string, any>) ?? null
 				})
 				.returning()
 		)[0]
@@ -123,6 +131,8 @@ export async function saveDocument(
 					max: b.max ?? null,
 					overRef: (b.over as Record<string, any>) ?? null,
 					repeatWhile: (b.repeatWhile as Record<string, any>) ?? null,
+					onRef: (b.on as Record<string, any>) ?? null,
+					routes: (b.routes as Record<string, any>) ?? null,
 					position: b.position
 				}))
 			)
@@ -352,8 +362,17 @@ export async function loadDocument(
 		schemaVersion: version.schemaVersion as 1,
 		id: spec.slug,
 		version: version.semver,
-		...(version.mode ? { mode: version.mode } : {}),
+		...(version.genre ? { genre: version.genre } : {}),
+		...(version.inputGenre || version.inputEvent
+			? {
+					input: {
+						...(version.inputGenre ? { genre: version.inputGenre } : {}),
+						...(version.inputEvent ? { event: version.inputEvent } : {})
+					}
+				}
+			: {}),
 		...(version.contributes ? { contributes: version.contributes } : {}),
+		...(version.taxonomy ? { taxonomy: version.taxonomy } : {}),
 		subscribes: subscriptionRows.map((s: any) => s.eventRef),
 		includes: includeRows.map((i: any) => ({
 			key: i.key,
@@ -388,6 +407,8 @@ export async function loadDocument(
 			...(b.overRef ? { over: b.overRef } : {}),
 			...(b.max !== null ? { max: b.max } : {}),
 			...(b.repeatWhile ? { repeatWhile: b.repeatWhile } : {}),
+			...(b.onRef ? { on: b.onRef } : {}),
+			...(b.routes ? { routes: b.routes } : {}),
 			chains: chainsOf(nodeRows, b.blockId),
 			...(b.parentBlockId ? { blockId: b.parentBlockId } : {}),
 			position: b.position

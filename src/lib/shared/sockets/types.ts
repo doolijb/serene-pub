@@ -815,6 +815,156 @@ declare global {
 			}
 		}
 
+		/**
+		 * The session catalogue's admin half (23 §9): types (create specs),
+		 * presets (the bundle users pick), and the all-users sessions list.
+		 */
+		namespace SessionAdmin {
+			interface GenreRow {
+				/** The create spec's slug — the session type (23 §7). */
+				slug: string
+				name: string
+				description: string
+				family: string
+				/** May users start sessions of this type? */
+				enabled: boolean
+				defaultPresetId: number | null
+				presetCount: number
+				/** The genre's create pipeline slug (24 §3); null for transitional input-type genres. */
+				createSpecSlug: string | null
+			}
+			namespace Genres {
+				interface Params {}
+				interface Response {
+					genres: GenreRow[]
+				}
+			}
+			namespace UpdateGenre {
+				interface Params {
+					slug: string
+					enabled?: boolean
+					defaultPresetId?: number | null
+				}
+				interface Response {
+					slug: string
+					ok: boolean
+					error?: string
+				}
+			}
+			namespace GenreDetail {
+				interface Params {
+					genreId: string
+				}
+				interface Slot {
+					event: string
+					required: boolean
+					open: boolean
+					/** Pipelines whose input lock answers this slot. */
+					candidates: { slug: string; name: string }[]
+				}
+				interface Response {
+					genre?: {
+						genreId: string
+						name: string
+						description: string
+						family: string
+						shape: Record<string, unknown>
+						createSpecSlug: string | null
+					}
+					slots: Slot[]
+					presets: PresetRow[]
+					sessionCount: number
+					error?: string
+				}
+			}
+			interface PresetRow {
+				id: number
+				name: string
+				description: string | null
+				genreId: string
+				/**
+				 * The event bindings (24 §1): event → {spec, config?}. `config`
+				 * is a pipeline_configs id; absent = the spec's shipped default.
+				 */
+				bindings: Record<string, { spec: string; config?: number }>
+				primarySlug: string | null
+				configSelections: Record<string, number>
+				includedActions: string[] | null
+				enabled: boolean
+				isDefault: boolean
+				isImmutable: boolean
+			}
+			namespace Presets {
+				interface Params {}
+				interface Response {
+					presets: PresetRow[]
+				}
+			}
+			namespace CreatePreset {
+				interface Params {
+					name: string
+					genreId: string
+					description?: string
+					/** Copy this preset's selections instead of starting bare. */
+					fromPresetId?: number
+				}
+				interface Response {
+					preset?: PresetRow
+					error?: string
+				}
+			}
+			namespace UpdatePreset {
+				interface Params {
+					id: number
+					name?: string
+					description?: string | null
+					bindings?: Record<string, { spec: string; config?: number }>
+					primarySlug?: string | null
+					configSelections?: Record<string, number>
+					includedActions?: string[] | null
+					enabled?: boolean
+					isDefault?: boolean
+				}
+				interface Response {
+					preset?: PresetRow
+					error?: string
+				}
+			}
+			namespace DeletePreset {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					id: number
+					ok: boolean
+					error?: string
+				}
+			}
+			namespace SessionsList {
+				interface Params {
+					limit?: number
+				}
+				interface Row {
+					id: number
+					name: string | null
+					userId: number | null
+					username: string
+					genreId: string
+					genreName: string
+					presetId: number | null
+					presetName: string | null
+					isGroup: boolean
+					characterCount: number
+					personaCount: number
+					messageCount: number
+					updatedAt: string | null
+				}
+				interface Response {
+					sessions: Row[]
+				}
+			}
+		}
+
 		// Sessions namespace
 		namespace Sessions {
 			namespace List {
@@ -832,7 +982,7 @@ declare global {
 						isOwner: boolean
 						isGuest: boolean
 						/** The mode's display name — the card's "type" chip. */
-						modeName?: string
+						genreName?: string
 						sessionCharacters?: (SelectSessionCharacter & {
 							character: Partial<SelectCharacter>
 						})[]
@@ -938,15 +1088,15 @@ declare global {
 			 * version. The target's shape is still validated; refusals are
 			 * sentences.
 			 */
-			namespace UpgradeMode {
+			namespace UpgradeGenre {
 				interface Params {
 					sessionId: number
 					/** The target pin — same bare type, higher version. */
-					modeId: string
+					genreId: string
 				}
 				interface Response {
 					sessionId: number
-					modeId: string
+					genreId: string
 					error?: string
 				}
 			}
@@ -1123,6 +1273,33 @@ declare global {
 					/** panels only. */
 					panelId?: string
 				}
+				/**
+				 * A mode-declared panel (21) as it crosses the wire — mirrors the
+				 * SDK `PanelDecl`, plus a resolved `src` when the surface is a
+				 * frame whose plugin is installed (absent → the frame is missing
+				 * and the client shows a placeholder, never an error).
+				 */
+				interface ModePanel {
+					id: string
+					title: string
+					icon?: string
+					role?: "primary" | "secondary"
+					surface:
+						| { kind: "native"; component: string }
+						| { kind: "frame"; pluginId: string; entry: string }
+					/** Resolved frame document URL; frame surfaces only. */
+					src?: string
+					channels?: string[]
+					layout?: {
+						span?: { ideal?: number; min?: number; max?: number }
+						minInline?: number
+						minBlock?: number
+						collapsible?: boolean
+						closable?: boolean
+						prefer?: "grid" | "drawer"
+					}
+					defaultActive?: boolean
+				}
 				interface Params {
 					sessionId: number
 				}
@@ -1131,6 +1308,52 @@ declare global {
 					/** Present when the mode declares a custom session view. */
 					sessionView?: Frame
 					panels: Frame[]
+					/** The mode's declared surface-grid panels (21). */
+					modePanels: ModePanel[]
+				}
+			}
+			/**
+			 * The per-user surface-grid layout row (21 §10). Activation +
+			 * placement only; availability is `View.modePanels`. The `layout`
+			 * blob's shape is owned by the client surface manager and stored
+			 * verbatim — the server never interprets it.
+			 */
+			/**
+			 * A server→client surface intent (21 §9): a node/action asked to
+			 * open or close panels in the caller's grid. A *proposal* — the
+			 * client's per-user layout decides — carried out of band from the
+			 * message stream for the general case (the common case rides the
+			 * message's own channel, no event needed). Panels named here are
+			 * declared panel ids; unknown ids are ignored.
+			 */
+			namespace SurfaceIntent {
+				interface Push {
+					sessionId: number
+					open?: string[]
+					close?: string[]
+				}
+			}
+			namespace PanelLayout {
+				namespace Get {
+					interface Params {
+						sessionId: number
+					}
+					interface Response {
+						sessionId: number
+						/** `{}` when the user has no saved layout yet. */
+						layout: Record<string, unknown>
+					}
+				}
+				namespace Set {
+					interface Params {
+						sessionId: number
+						layout: Record<string, unknown>
+					}
+					interface Response {
+						sessionId: number
+						ok: boolean
+						error?: string
+					}
 				}
 			}
 			namespace Triggers {
@@ -1201,7 +1424,7 @@ declare global {
 				interface Response {
 					sessionId: number
 					/** The mode the answers are stored against. */
-					modeId: string
+					genreId: string
 					/**
 					 * Whether this viewer may switch on an action the preset
 					 * leaves out. Sent rather than inferred client-side: the
@@ -1243,11 +1466,11 @@ declare global {
 					error?: string
 				}
 			}
-			namespace Modes {
+			namespace Genres {
 				interface Params {}
 				interface Response {
-					modes: {
-						modeId: string
+					genres: {
+						genreId: string
 						name: string
 						/** The picker card's subtitle; empty when undeclared. */
 						description: string
@@ -2245,6 +2468,8 @@ declare global {
 			interface Option {
 				id: string
 				label: string
+				/** The value declaration (24 T6c) — single-key, for value-decl controls. */
+				decl?: Record<string, Record<string, unknown>>
 				/**
 				 * What *kind* of setting this is — `prompts`, `variables`,
 				 * `weights`, `review` — as the descriptor declared it. The
@@ -2442,6 +2667,16 @@ declare global {
 				version: string
 				event: string | null
 				enabled: boolean
+				/**
+				 * Catalogue claims (23 §2) — declared metadata, never parsed
+				 * from the slug. Null = unclassified, which sorts last and
+				 * says so.
+				 */
+				taxonomy: {
+					zone?: string
+					role?: string
+					genre?: string
+				} | null
 			}
 			interface NamespaceDetail extends Namespace {
 				configs: NamedConfig[]
@@ -2531,6 +2766,46 @@ declare global {
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			/**
+			 * The builder's Save all (22 §3): the whole draft in one request —
+			 * sets and clears together, answered with one refreshed view on
+			 * `pipelines:get` like the per-option events. Entries apply in
+			 * order and the first refusal stops the batch: a partially applied
+			 * draft with an error names exactly where it stopped.
+			 */
+			namespace SetOptions {
+				interface Params {
+					slug: string
+					sessionId?: number
+					/** Edit this configuration itself rather than the resolved target. */
+					configId?: number
+					set: { optionId: string; value: unknown }[]
+					clear: string[]
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
+					error?: string
+					/** How many writes landed before an error stopped the batch. */
+					applied?: number
+				}
+			}
+			/**
+			 * One run's full receipt (22 §3) — the node-by-node record the
+			 * summary row compresses. Admin-and-owner gated like the runs
+			 * list; the receipt names node keys, which this surface may do
+			 * (05 §0a binds the sidebar, not the admin).
+			 */
+			namespace Run {
+				interface Params {
+					runId: string
+				}
+				interface Response {
+					run?: Runs.Response["runs"][number] & {
+						receipt: Record<string, unknown>
+					}
 					error?: string
 				}
 			}
@@ -3061,6 +3336,26 @@ declare global {
 				}
 			}
 			/** The management page: versions, publish state, and the boot diagnostic. */
+			/** The configurations inventory (admin IA 2026-08-28): every named
+			 * config across every spec, with its dependents — the reverse edges
+			 * the workspaces cannot show. Editing stays in the workspace. */
+			namespace ConfigsIndex {
+				interface Params {}
+				interface Row {
+					id: number
+					name: string
+					specSlug: string
+					specName: string
+					isDefault: boolean
+					isImmutable: boolean
+					usedByPresets: number
+					usedBySessions: number
+					updatedAt: string | null
+				}
+				interface Response {
+					configs: Row[]
+				}
+			}
 			namespace Detail {
 				interface Params {
 					slug: string
@@ -3138,6 +3433,29 @@ declare global {
 								max: number | null
 								/** The port this iterates over, e.g. `batches`. */
 								over: string | null
+								/** Which block this one nests inside; null = the spine. */
+								parentBlockId: string | null
+								/**
+								 * loop only — the port whose truthiness repeats
+								 * the body ("repeats while generate.hasToolCalls").
+								 * The renderable half of the construct (20 §10).
+								 */
+								repeatWhile: string | null
+								/** route only — the routed port ("routes on parse.call"). */
+								on: string | null
+								/**
+								 * route only — each branch's declared predicate,
+								 * keyed by chain name. Declarations, never code.
+								 */
+								routes: Record<
+									string,
+									{
+										path?: string
+										equals?: unknown
+										truthy?: boolean
+										default?: boolean
+									}
+								> | null
 								/**
 								 * The `ConfigStep` that configures the block itself.
 								 *
@@ -4343,6 +4661,20 @@ declare global {
 				interface Response {
 					success: boolean
 					enabled: boolean
+				}
+			}
+			/**
+			 * Show or hide the Legacy configs panel (the 0.5 archives). The
+			 * column has existed since the changeover — this is the write the
+			 * admin Settings page needed; the nav already honors the read.
+			 */
+			namespace UpdateLegacyConfigsVisible {
+				interface Params {
+					visible: boolean
+				}
+				interface Response {
+					success: boolean
+					visible: boolean
 				}
 			}
 		}

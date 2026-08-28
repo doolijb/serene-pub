@@ -34,6 +34,17 @@ beforeAll(async () => {
 
 	const dbModule = await import("$lib/server/db")
 	testDb = dbModule.db as unknown as TestDb
+
+	// The admin roster handlers refuse outright when accounts are off (the
+	// single-user posture has no roster) — these tests are about what happens
+	// *within* a multi-user instance, so turn accounts on.
+	await testDb
+		.insert(schema.systemSettings)
+		.values({ id: 1, isAccountsEnabled: true })
+		.onConflictDoUpdate({
+			target: schema.systemSettings.id,
+			set: { isAccountsEnabled: true }
+		})
 }, 60_000)
 
 afterAll(async () => {

@@ -239,15 +239,20 @@ describe("core's specs", () => {
 				).toBeTruthy()
 			}
 
-			// And the prompt it points at is a real, shipped, immutable row.
-			const prompts = await db
-				.select()
-				.from(schema.pipelinePrompts)
-				.where(eq(schema.pipelinePrompts.specId, spec.id))
-			expect(
-				prompts.some((p: any) => p.isImmutable),
-				`${entry.slug} has no shipped prompt row`
-			).toBe(true)
+			// And the prompt it points at is a real, shipped, immutable row —
+			// for specs that declare prompt slots at all. A promptless spec
+			// (create-chat is one: identity + shape, no LLM step yet) rightly
+			// ships nothing here.
+			if (promptDecls.length > 0) {
+				const prompts = await db
+					.select()
+					.from(schema.pipelinePrompts)
+					.where(eq(schema.pipelinePrompts.specId, spec.id))
+				expect(
+					prompts.some((p: any) => p.isImmutable),
+					`${entry.slug} has no shipped prompt row`
+				).toBe(true)
+			}
 		}
 	})
 

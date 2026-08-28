@@ -110,6 +110,14 @@ export async function bootstrapPipelines(db: any): Promise<BootstrapReport> {
 	}
 
 	try {
+		// The hook contract check (24 §11): the catalog declares, core
+		// implements, and a mismatch in either direction refuses the boot
+		// before anything seeds — a packaging error, not a runtime state.
+		const { assertHookCompleteness } = await import(
+			"$lib/server/pipelines/boot/coreHooks"
+		)
+		assertHookCompleteness()
+
 		// Every type the running build knows about. Importing the contracts is
 		// what registers them, so this is a fact about the code rather than a
 		// list anyone maintains.
@@ -166,6 +174,13 @@ export async function bootstrapPipelines(db: any): Promise<BootstrapReport> {
 	}
 
 	report.specs = await seedCoreSpecs(db)
+
+	// After the specs: a preset names a type by slug, and the slug's spec row
+	// must exist for the Types admin page to resolve it (23 §9).
+	const { seedSessionPresets } = await import(
+		"$lib/server/pipelines/boot/seed"
+	)
+	await seedSessionPresets(db)
 
 	// Last, and only once. Everything it writes references a spec, a prompt or a
 	// config that the three steps above had to create first.

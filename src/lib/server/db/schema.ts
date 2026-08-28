@@ -1785,20 +1785,23 @@ export const sessions = pgTable(
 		name: text("name"), // Optional session/group name
 		isGroup: boolean("is_group").notNull(), // 1 for group session, 0 for 1:1
 		/**
-		 * The session's mode — a shape-bearing input type id (19 §0). Every session
+		 * The session's genre (24 §3) — a genre id (`core:genre/chat`), or
+		 * transitionally a plugin's shape-bearing input-type id. Every session
 		 * has one; the default is the F29 floor, which is also the backfill
-		 * for every session created before modes existed. Creation validates the
-		 * cast and fields against the mode's declared shape.
+		 * for every session created before genres existed. Creation validates
+		 * the cast and fields against the genre's declared shape.
 		 */
-		modeId: text("mode_id").notNull().default("core:input/user-message@1"),
+		genreId: text("genre_id").notNull().default("core:genre/chat"),
+		/** The session preset this session was born from (23 §9); null = ad-hoc. */
+		presetId: integer("preset_id"),
 		/**
-		 * Values for the mode's declared `fields` (19 §1), keyed by field
+		 * Values for the genre's declared `fields` (19 §1), keyed by field
 		 * name. Rendered in session settings from the shape's SettingsSchema and
 		 * supplied back through the input node's published document — the
-		 * whole round trip. Keys the mode does not declare are dropped at the
-		 * supply side, so a mode switch cannot smuggle stale facts.
+		 * whole round trip. Keys the genre does not declare are dropped at the
+		 * supply side, so a genre switch cannot smuggle stale facts.
 		 */
-		modeFields: json("mode_fields")
+		genreFields: json("genre_fields")
 			.notNull()
 			.default({})
 			.$type<Record<string, unknown>>(),
@@ -2955,13 +2958,26 @@ export const pipelineSpecVersions = pgTable(
 		/** Clones remember their origin, so an upstream diff is possible later. */
 		derivedFromSpecVersionId: integer("derived_from_spec_version_id"),
 		migratedFrom: text("migrated_from"),
-		mode: json("mode").$type<Record<string, any> | null>(),
+		/** The genre declaration a create pipeline carries (24 §3; renamed from `mode`). */
+		genre: json("genre").$type<Record<string, any> | null>(),
+		/**
+		 * The usage lock (24 §4), as columns so dispatch by (genre, event) is
+		 * a SELECT: the input node's declared { genre, event }.
+		 */
+		inputGenre: text("input_genre"),
+		inputEvent: text("input_event"),
 		/**
 		 * Contributed surfaces (19 §3–§4) — the version's `contributes` block,
 		 * stored like `mode` so function routing and the trigger UI are
 		 * SELECTs over rows, never document loads.
 		 */
 		contributes: json("contributes").$type<Record<string, any> | null>(),
+		/**
+		 * Catalogue claims (23 §2) — {zone?, role?, mode?}, stored like `mode`
+		 * and `contributes` so the admin's sorting is a SELECT, never a
+		 * document load. Claims, not identity: they may change on republish.
+		 */
+		taxonomy: json("taxonomy").$type<Record<string, any> | null>(),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		publishedAt: timestamp("published_at")
 	},
@@ -2999,6 +3015,10 @@ export const pipelineBlocks = pgTable(
 		/** For map: where the items come from. For loop: the predicate port. */
 		overRef: json("over_ref").$type<Record<string, any> | null>(),
 		repeatWhile: json("repeat_while").$type<Record<string, any> | null>(),
+		/** route only — the routed value, a stored port reference (20 §10). */
+		onRef: json("on_ref").$type<Record<string, any> | null>(),
+		/** route only — each chain's declared predicate, keyed by chain name. */
+		routes: json("routes").$type<Record<string, any> | null>(),
 		position: integer("position").notNull().default(0)
 	},
 	(t) => [
@@ -3008,15 +3028,18 @@ export const pipelineBlocks = pgTable(
 		),
 		check(
 			"pipeline_blocks_kind_check",
-			sql`${t.kind} IN ('async', 'map', 'loop')`
+			sql`${t.kind} IN ('async', 'map', 'loop', 'route')`
 		),
 		// Repetition without a bound is not expressible (F9, 13 §1). Enforced
 		// here as well as at publish, because the row is the system of record
 		// and an unbounded loop reaching it through any other path is the one
-		// failure the whole design refuses to allow.
+		// failure the whole design refuses to allow. Async and route are
+		// exempt because neither repeats: a fan-out runs each lane once, a
+		// route fires a subset of its branches once (20 §10) — the constraint
+		// predated route blocks and refused every routed spec at the row.
 		check(
 			"pipeline_blocks_bounded_check",
-			sql`${t.kind} = 'async' OR ${t.max} IS NOT NULL`
+			sql`${t.kind} IN ('async', 'route') OR ${t.max} IS NOT NULL`
 		)
 	]
 )
@@ -3463,8 +3486,8 @@ export const sessionFunctions = pgTable(
 		sessionId: integer("session_id")
 			.notNull()
 			.references(() => sessions.id, { onDelete: "cascade" }),
-		/** The full mode id the choice was made under. */
-		modeId: text("mode_id").notNull(),
+		/** The full genre id the choice was made under. */
+		genreId: text("genre_id").notNull(),
 		/** The function key — `narrate`, `summarize-scene`, … (19 §3). */
 		functionKey: text("function_key").notNull(),
 		enabled: boolean("enabled").notNull(),
@@ -3474,7 +3497,7 @@ export const sessionFunctions = pgTable(
 	(t) => [
 		uniqueIndex("session_functions_session_mode_fn_idx").on(
 			t.sessionId,
-			t.modeId,
+			t.genreId,
 			t.functionKey
 		)
 	]
@@ -3502,8 +3525,8 @@ export const pipelineFunctionBindings = pgTable(
 		scopeKind: text("scope_kind").notNull(), // instance | user | session
 		/** Zero at instance scope — half of the uniqueness rule (see node overrides). */
 		scopeId: integer("scope_id").notNull().default(0),
-		/** Which sessions this binding shapes — bindings are mode-scoped like presets. */
-		modeId: text("mode_id").notNull(),
+		/** Which sessions this binding shapes — bindings are genre-scoped like presets. */
+		genreId: text("genre_id").notNull(),
 		functionKey: text("function_key").notNull(),
 		specId: integer("spec_id")
 			.notNull()
@@ -3517,7 +3540,7 @@ export const pipelineFunctionBindings = pgTable(
 		uniqueIndex("pipeline_function_bindings_addr_idx").on(
 			t.scopeKind,
 			t.scopeId,
-			t.modeId,
+			t.genreId,
 			t.functionKey
 		),
 		check(
@@ -4420,6 +4443,131 @@ export const pipelinePresetValuesRelations = relations(
 		preset: one(pipelinePresets, {
 			fields: [pipelinePresetValues.presetId],
 			references: [pipelinePresets.id]
+		})
+	})
+)
+
+/**
+ * Per-user, per-session surface-grid layout (21 §10). Availability is
+ * declaration (the mode's `SessionShape.panels` + plugin `surfaces.panels[]`),
+ * recomputed and never stored; only *activation + placement* live here, and
+ * only for the panels a user has actually touched or that a `surface:open`
+ * intent activated for them. No row → the client derives defaults from the
+ * mode's declared panels. One row per (user, session).
+ *
+ * `layout` stores **relative** order/priority + sparse per-tier size overrides,
+ * never absolute grid columns, so a hand-tuned wide layout degrades sanely when
+ * the content box narrows a tier (21 §5).
+ */
+export const sessionPanelLayouts = pgTable(
+	"session_panel_layouts",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		sessionId: integer("session_id")
+			.notNull()
+			.references(() => sessions.id, { onDelete: "cascade" }),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		/**
+		 * `{ active: [{ id, order, span, collapsed, drawered }],
+		 *    tierSizeOverrides: { [tier]: { [panelId]: fr } } }`.
+		 * Shape owned by the client surface manager (21); the server stores it
+		 * verbatim and never interprets it — a forward-compatible blob.
+		 */
+		layout: json("layout")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [
+		uniqueIndex("session_panel_layouts_user_session_idx").on(
+			t.userId,
+			t.sessionId
+		)
+	]
+)
+
+/**
+ * Session presets (23 §9) — the bundle a person actually chooses to start a
+ * session: which type (create spec), optionally which primary variant, which
+ * pipeline configurations, which actions. The preset semantics that used to
+ * squat on `pipeline_configs` (`enabled`, `includedActions`) live here now;
+ * pipeline configs go back to being value-sets against one spec.
+ */
+export const sessionPresets = pgTable(
+	"session_presets",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** Never a fixed id (seed rule): seeds match on this key. */
+		seedKey: text("seed_key").unique(),
+		name: text("name").notNull(),
+		description: text("description"),
+		/** The session genre — a genre id (24 §3). */
+		genreId: text("genre_id").notNull(),
+		/** Variant primary's slug; null = the type's default primary. */
+		primarySlug: text("primary_slug"),
+		/**
+		 * The event bindings (24 §1): event → {spec, config?}. The preset
+		 * editor's model — required slots must be bound for the preset to be
+		 * enabled; validated against the input locks at write.
+		 */
+		bindings: json("bindings")
+			.notNull()
+			.default({})
+			.$type<Record<string, { spec: string; config?: number }>>(),
+		/** specSlug → pipeline_configs.id, per involved pipeline. */
+		configSelections: json("config_selections")
+			.notNull()
+			.default({})
+			.$type<Record<string, number>>(),
+		/** The curation formerly on pipeline_configs. Null = the companion rule. */
+		includedActions: json("included_actions").$type<string[] | null>(),
+		/** Optional pre-fill for creation (fields, lorebook policy…). */
+		defaults: json("defaults").$type<Record<string, unknown> | null>(),
+		/** May users pick it? Disabled presets stay for admins and history. */
+		enabled: boolean("enabled").notNull().default(true),
+		isDefault: boolean("is_default").notNull().default(false),
+		isImmutable: boolean("is_immutable").notNull().default(false),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [index("session_presets_genre_idx").on(t.genreId)]
+)
+
+/**
+ * Per-genre administration (23 §9, renamed 24 §2): may users start sessions
+ * of this genre, and which preset a bare "new session" of it uses. One row
+ * per genre id, absent row = enabled with no declared default.
+ */
+export const sessionGenreSettings = pgTable("session_genre_settings", {
+	genreId: text("genre_id").primaryKey(),
+	enabled: boolean("enabled").notNull().default(true),
+	defaultPresetId: integer("default_preset_id"),
+	updatedAt: timestamp("updated_at")
+		.notNull()
+		.defaultNow()
+		.$onUpdate(() => new Date())
+})
+
+export const sessionPanelLayoutsRelations = relations(
+	sessionPanelLayouts,
+	({ one }) => ({
+		session: one(sessions, {
+			fields: [sessionPanelLayouts.sessionId],
+			references: [sessions.id]
+		}),
+		user: one(users, {
+			fields: [sessionPanelLayouts.userId],
+			references: [users.id]
 		})
 	})
 )

@@ -212,6 +212,71 @@ export const pipelinesClearOption: Handler<
 	}
 }
 
+/**
+ * The builder's Save all (22 §3): a whole draft in one request. Entries apply
+ * in order through the same `writeOption`/`clearOption` every per-option event
+ * uses — same scope resolution, same refusals — and the first refusal stops
+ * the batch with a count of what landed, so a partial apply is named rather
+ * than silent. One refreshed view answers on `pipelines:get`, not one per
+ * entry.
+ */
+export const pipelinesSetOptions: Handler<
+	Sockets.Pipelines.SetOptions.Params,
+	Sockets.Pipelines.SetOptions.Response
+> = {
+	event: "pipelines:setOptions",
+	handler: async (socket, params, emitToUser) => {
+		const secret = await instanceSecret()
+		const viewer = await viewerFor(socket, params.sessionId)
+		let applied = 0
+		try {
+			for (const entry of params.set ?? []) {
+				await writeOption(
+					db as any,
+					secret,
+					params.slug,
+					viewer,
+					entry.optionId,
+					entry.value,
+					params.configId
+				)
+				applied++
+			}
+			for (const optionId of params.clear ?? []) {
+				await clearOption(
+					db as any,
+					secret,
+					params.slug,
+					viewer,
+					optionId,
+					params.configId
+				)
+				applied++
+			}
+		} catch (err) {
+			const res = { error: refusal(err), applied }
+			emitToUser("pipelines:setOptions:error", res)
+			// The view refreshes even on a partial apply — what landed is
+			// real, and a stale panel over fresh rows is the worse outcome.
+			await emitView(
+				socket,
+				emitToUser,
+				"pipelines:get",
+				params.slug,
+				params.sessionId
+			)
+			return res
+		}
+		return (await emitView(
+			socket,
+			emitToUser,
+			"pipelines:get",
+			params.slug,
+			params.sessionId
+		)) as Sockets.Pipelines.SetOptions.Response
+	}
+}
+
 /* ------------------------------------------------------------------ *
  * Named-config CRUD — the builder's save/duplicate/rename/delete
  *
@@ -356,7 +421,7 @@ export const pipelinesSetPresetActions: Handler<
 		try {
 			const config = await configInSpec(params.slug, params.configId)
 			const { setPresetActions } = await import(
-				"$lib/server/pipelines/entities/sessionModes"
+				"$lib/server/pipelines/entities/sessionGenres"
 			)
 			const r = await setPresetActions(db as any, config.id, {
 				...(params.includedActions !== undefined
@@ -2107,6 +2172,26 @@ export const pipelinesDetail: Handler<
 						b.overRef && typeof b.overRef === "object"
 							? ((b.overRef as any).port ?? null)
 							: null,
+					// Nesting and the renderable halves of loop/route
+					// (22 §3): the port names label the constructs — "repeats
+					// while hasToolCalls", "routes on call" — and the routes
+					// table lets each branch show its predicate. Ports only,
+					// like `over`: the node half of a reference stays server-
+					// side (05 §0a discipline, kept even where this surface
+					// may name topology).
+					parentBlockId: b.parentBlockId ?? null,
+					repeatWhile:
+						b.repeatWhile && typeof b.repeatWhile === "object"
+							? ((b.repeatWhile as any).port ?? null)
+							: null,
+					on:
+						b.onRef && typeof b.onRef === "object"
+							? ((b.onRef as any).port ?? null)
+							: null,
+					routes:
+						b.routes && typeof b.routes === "object"
+							? (b.routes as Record<string, any>)
+							: null,
 					// Blocks are addressed by their id in the same key space as
 					// nodes, so the panel's own indexing already gave this one a
 					// step — it just had nothing pointing at it.
@@ -2215,6 +2300,56 @@ export const pipelinesRuns: Handler<
 }
 
 /**
+ * One run's full receipt (22 §3) — the node-by-node record the summary row
+ * compresses: per-node outcomes, timings, tokens, script applications, halt
+ * reasons. Gated the same way the list is: your runs, nobody else's. The
+ * receipt names node keys, which the admin surface may (05 §0a binds the
+ * sidebar, not this page).
+ */
+export const pipelinesRun: Handler<
+	Sockets.Pipelines.Run.Params,
+	Sockets.Pipelines.Run.Response
+> = {
+	event: "pipelines:run",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const [r] = await db
+			.select()
+			.from(schema.pipelineRuns)
+			.where(
+				and(
+					eq(schema.pipelineRuns.runId, params.runId),
+					eq(schema.pipelineRuns.userId, userId)
+				)
+			)
+			.limit(1)
+		if (!r) {
+			const res = { error: "No such run." }
+			emitToUser("pipelines:run:error", res)
+			return res
+		}
+		const res: Sockets.Pipelines.Run.Response = {
+			run: {
+				id: (r as any).id,
+				runId: (r as any).runId,
+				specSlug: (r as any).specSlug,
+				outcome: (r as any).outcome,
+				haltNodeKey: (r as any).haltNodeKey,
+				haltReason: (r as any).haltReason,
+				elapsedMs: (r as any).elapsedMs,
+				tokensSpent: (r as any).tokensSpent,
+				isPreview: (r as any).isPreview,
+				messageId: (r as any).messageId,
+				startedAt: new Date((r as any).startedAt).toISOString(),
+				receipt: ((r as any).receipt ?? {}) as Record<string, unknown>
+			}
+		}
+		emitToUser("pipelines:run", res)
+		return res
+	}
+}
+
+/**
  * Everything parked and waiting on this person. Sent on request so a client
  * that reconnects catches up — the push (`pipelines:reviewRequested`) is for
  * the moment it happens, this is for everything it missed.
@@ -2266,6 +2401,74 @@ export const pipelinesResolveReview: Handler<
 	}
 }
 
+
+/**
+ * The configurations inventory (admin IA 2026-08-28): every named config
+ * across every spec, with its dependents — the reverse edges no workspace can
+ * show. An index, deliberately not an editor: editing stays in the owning
+ * workspace, one surface per fact.
+ */
+export const pipelinesConfigsIndex: Handler<
+	Sockets.Pipelines.ConfigsIndex.Params,
+	Sockets.Pipelines.ConfigsIndex.Response
+> = {
+	event: "pipelines:configsIndex",
+	handler: async (socket, _params, emitToUser) => {
+		if (!socket.user?.isAdmin) throw new Error("Unauthorized")
+		const configs = await db
+			.select()
+			.from(schema.pipelineConfigs)
+			.orderBy(asc(schema.pipelineConfigs.id))
+		const specs = await db.select().from(schema.pipelineSpecs)
+		const specById = new Map(
+			(specs as any[]).map((s) => [s.id, { slug: s.slug, name: s.name }])
+		)
+
+		// Dependents: presets whose bindings reference the config…
+		const presets = await db.select().from(schema.sessionPresets)
+		const presetCount = new Map<number, number>()
+		for (const p of presets as any[])
+			for (const b of Object.values(
+				(p.bindings ?? {}) as Record<string, { config?: number }>
+			))
+				if (b?.config != null)
+					presetCount.set(b.config, (presetCount.get(b.config) ?? 0) + 1)
+
+		// …and sessions whose scope selection points at it.
+		const selections = await db
+			.select()
+			.from(schema.pipelineConfigSelections)
+		const sessionCount = new Map<number, number>()
+		for (const sel of selections as any[])
+			if (sel.scopeKind === "session" && sel.configId != null)
+				sessionCount.set(
+					sel.configId,
+					(sessionCount.get(sel.configId) ?? 0) + 1
+				)
+
+		const res: Sockets.Pipelines.ConfigsIndex.Response = {
+			configs: (configs as any[]).map((c) => ({
+				id: c.id,
+				name: c.name,
+				specSlug: specById.get(c.specId)?.slug ?? String(c.specId),
+				specName:
+					specById.get(c.specId)?.name ??
+					specById.get(c.specId)?.slug ??
+					String(c.specId),
+				isDefault: !!c.isDefault,
+				isImmutable: !!c.isImmutable,
+				usedByPresets: presetCount.get(c.id) ?? 0,
+				usedBySessions: sessionCount.get(c.id) ?? 0,
+				updatedAt: c.updatedAt
+					? new Date(c.updatedAt).toISOString()
+					: null
+			}))
+		}
+		emitToUser("pipelines:configsIndex", res)
+		return res
+	}
+}
+
 export function registerPipelineHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -2286,9 +2489,12 @@ export function registerPipelineHandlers(
 	)
 
 	register(socket, pipelinesList, emitToUser)
+	register(socket, pipelinesConfigsIndex, emitToUser)
 	register(socket, pipelinesGet, emitToUser)
 	register(socket, pipelinesSetOption, emitToUser)
 	register(socket, pipelinesClearOption, emitToUser)
+	register(socket, pipelinesSetOptions, emitToUser)
+	register(socket, pipelinesRun, emitToUser)
 	register(socket, pipelinesSelectConfig, emitToUser)
 	register(socket, pipelinesCreateConfig, emitToUser)
 	register(socket, pipelinesSetPresetActions, emitToUser)

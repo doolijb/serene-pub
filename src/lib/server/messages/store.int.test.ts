@@ -317,3 +317,24 @@ describe("the mirror survives concurrent updates (streaming)", () => {
 		expect(checkMapInvariant(m)).toEqual([])
 	})
 })
+
+describe("the mirror preserves a set channel (20 §7 greetings)", () => {
+	it("a non-main channel survives later legacy updates", async () => {
+		const row = await insertLegacy(db, {
+			sessionId,
+			role: "assistant",
+			content: "Welcome, traveller.",
+			metadata: { isGreeting: true }
+		})
+		// Redirect natively — as the greeting-on-creation path does.
+		await db
+			.update(schema.messages)
+			.set({ channel: "intro" })
+			.where(eq(schema.messages.id, row.id))
+		expect((await getMessage(db, row.id))!.channel).toBe("intro")
+
+		// A later legacy update (e.g. an edit) must not reset it to 'main'.
+		await updateLegacy(db, row.id, { isEdited: true })
+		expect((await getMessage(db, row.id))!.channel).toBe("intro")
+	})
+})

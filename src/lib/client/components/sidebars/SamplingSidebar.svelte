@@ -12,9 +12,17 @@
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
+		/** Deep-link: select this config instead of the system default (admin change pages). */
+		initialSelectedId?: number | null
+		/** Deep-link: open the new-config flow on mount (admin create page). */
+		startNew?: boolean
 	}
 
-	let { onclose = $bindable() }: Props = $props()
+	let {
+		onclose = $bindable(),
+		initialSelectedId = null,
+		startNew = false
+	}: Props = $props()
 
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
@@ -28,8 +36,11 @@
 	// (systemSettingsCtx.settings.defaultSamplingConfigId), same value every
 	// admin sees. Seed the initial selection from it; the samplingConfigs:get
 	// effect below fetches the full editable config once this is set.
+	// svelte-ignore state_referenced_locally — deliberate initial seed.
 	let selectedSamplingId: number | null = $state(
-		systemSettingsCtx.settings?.defaultSamplingConfigId ?? null
+		initialSelectedId ??
+			systemSettingsCtx.settings?.defaultSamplingConfigId ??
+			null
 	)
 
 	let sampling: SelectSamplingConfig | undefined = $state()
@@ -329,6 +340,8 @@
 		)
 
 		socket.emit("samplingConfigs:list", {})
+		// Admin create page deep-link: open the new-config flow immediately.
+		if (startNew) handleNew()
 	})
 
 	onDestroy(() => {

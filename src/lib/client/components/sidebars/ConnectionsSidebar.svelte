@@ -26,9 +26,13 @@
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
+		/** Deep-link: open the new-connection flow on mount (admin create page).
+		 *  Selecting a specific connection rides `panelsCtx.digest.connectionId`,
+		 *  the mechanism that already exists for it. */
+		startNew?: boolean
 	}
 
-	let { onclose = $bindable() }: Props = $props()
+	let { onclose = $bindable(), startNew = false }: Props = $props()
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
 	)
@@ -411,6 +415,9 @@
 		if (connection?.type === "ollama" && connection.baseUrl) {
 			handleRefreshModels()
 		}
+
+		// Admin create page deep-link: open the new-connection flow at once.
+		if (startNew) handleNew()
 	})
 
 	onDestroy(() => {
@@ -834,7 +841,7 @@
 											Write stop scripts on the
 											<a
 												class="underline"
-												href="/pipelines/scripts"
+												href="/admin/scripts"
 											>
 												scripts page
 											</a>

@@ -23,7 +23,7 @@
  */
 
 import { allTypes } from "@serene-pub/sdk"
-import { and, eq } from "drizzle-orm"
+import { and, eq, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
 import { reconcileConfigs } from "$lib/server/pipelines/config/named"
@@ -84,6 +84,32 @@ const UNCAUSED_EVENTS: CoreEvent[] = [
 		family: "action",
 		affectsUser: false,
 		description: "A scheduled moment arrived."
+	},
+	// The session lifecycle events (24 §5). ACTION family: a person created
+	// the session or changed its membership — no Consumer causes these.
+	{
+		slug: "core:event/session-created",
+		version: 1,
+		family: "action",
+		affectsUser: false,
+		description:
+			"A session was created — the genre's create pipeline answers this."
+	},
+	{
+		slug: "core:event/member-added",
+		version: 1,
+		family: "action",
+		affectsUser: false,
+		description:
+			"A character or persona joined a session; the payload carries which."
+	},
+	{
+		slug: "core:event/member-removed",
+		version: 1,
+		family: "action",
+		affectsUser: false,
+		description:
+			"A character or persona left a session; the payload carries which."
 	}
 ]
 
@@ -282,6 +308,19 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 		const action = existing.length > 0 ? "present" : "published"
 		if (action === "published")
 			await saveDocument(db, doc, { publish: true, name: entry.name })
+		else
+			// The display name is display, not content: a copyedit in the
+			// catalog reaches existing installs without a version bump —
+			// the same rule the type registry applies to i18n.
+			await db
+				.update(schema.pipelineSpecs)
+				.set({ name: entry.name })
+				.where(
+					and(
+						eq(schema.pipelineSpecs.slug, doc.id),
+						ne(schema.pipelineSpecs.name, entry.name)
+					)
+				)
 
 		out.push({
 			id: doc.id,
@@ -321,4 +360,65 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 	}
 
 	return out
+}
+
+/**
+ * The floor preset (23 §9): "Chat" — the standard type, everything default.
+ * Matched on seedKey, never a fixed id (a seeded row at a hardcoded id once
+ * overwrote a user's sampling config on upgrade; the rule exists for a
+ * reason). Immutable like the shipped configs: duplicate to change.
+ */
+export async function seedSessionPresets(
+	db: Db
+): Promise<{ created: number; present: number }> {
+	// The catalog declares the shipped presets (24 T6b) — one list, mapped
+	// into the row shape there so the announcement and the seed cannot
+	// disagree. Matched on seedKey, never a fixed id (the standing rule).
+	const { CORE_PRESET_SEEDS } = await import("@serene-pub/core-catalog")
+	const SEEDS = CORE_PRESET_SEEDS
+	let created = 0
+	let present = 0
+	for (const seed of SEEDS) {
+		const existing = await db
+			.select({ id: schema.sessionPresets.id })
+			.from(schema.sessionPresets)
+			.where(eq(schema.sessionPresets.seedKey, seed.seedKey))
+			.limit(1)
+		if (existing.length) {
+			present++
+			continue
+		}
+		await db.insert(schema.sessionPresets).values(seed)
+		created++
+	}
+
+	// Backfill (24, admin IA): rows that predate the bindings column get
+	// theirs composed against the input locks — session-created from the
+	// genre's create pipeline, message-respond from the stored primary (or
+	// the lock's answer). One-time and idempotent; pre-release migrations
+	// squash, so this reconcile is the migration.
+	const { resolveSessionEventSpec } = await import(
+		"$lib/server/pipelines/runtime/sessionEvents"
+	)
+	const rows = await db.select().from(schema.sessionPresets)
+	for (const row of rows as any[]) {
+		if (row.bindings && Object.keys(row.bindings).length) continue
+		const bindings: Record<string, { spec: string }> = {}
+		const create = await resolveSessionEventSpec(
+			db,
+			row.genreId,
+			"session-created"
+		)
+		if (create) bindings["session-created"] = { spec: create }
+		const respond =
+			row.primarySlug ??
+			(await resolveSessionEventSpec(db, row.genreId, "message-respond"))
+		if (respond) bindings["message-respond"] = { spec: respond }
+		if (Object.keys(bindings).length)
+			await db
+				.update(schema.sessionPresets)
+				.set({ bindings })
+				.where(eq(schema.sessionPresets.id, row.id))
+	}
+	return { created, present }
 }

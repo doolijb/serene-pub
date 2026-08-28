@@ -28,7 +28,6 @@
 	import { Theme } from "$lib/client/consts/Theme"
 	import OllamaIcon from "./icons/OllamaIcon.svelte"
 	import { page } from "$app/state"
-	import { sceneImages } from "$lib/client/stores/sceneImages"
 
 	interface Props {
 		children?: Snippet
@@ -169,7 +168,12 @@
 		// that navigates to a different page, where staying fullscreen
 		// would cover up the page it just navigated to.
 		fullscreenPanel: null,
-		wideContent: false,
+		// Persisted per browser: the width toggle is a lasting preference, not
+		// a per-visit whim. Guarded for SSR; the write lives in an $effect
+		// below (effects never run server-side).
+		wideContent:
+			typeof localStorage !== "undefined" &&
+			localStorage.getItem("serene-pub:wideContent") === "true",
 		openPanel,
 		closePanel,
 		onLeftPanelClose: undefined,
@@ -219,6 +223,16 @@
 		}
 	})
 	let systemSettingsCtx: SystemSettingsCtx = $state({ settings: undefined })
+
+	// Persist the width toggle (see wideContent's init above).
+	$effect(() => {
+		try {
+			localStorage.setItem(
+				"serene-pub:wideContent",
+				String(panelsCtx.wideContent)
+			)
+		} catch {}
+	})
 	let ollamaSettingsCtx: OllamaSettingsCtx = $state({ settings: undefined })
 	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state({
 		settings: undefined
@@ -972,33 +986,10 @@
 				aria-hidden="true"
 			></div>
 		{/if}
-		<!-- Character scene image overlays — fixed at z-[2] so sidebars (z-10) always paint on top -->
-		{#if $sceneImages.left}
-			<div
-				class="pointer-events-none fixed bottom-0 left-0 z-[2] hidden w-1/4 lg:block"
-				style="height: 80svh;"
-				aria-hidden="true"
-			>
-				<img
-					src={$sceneImages.left}
-					alt=""
-					class="h-full w-full object-contain object-bottom drop-shadow-xl"
-				/>
-			</div>
-		{/if}
-		{#if $sceneImages.right}
-			<div
-				class="pointer-events-none fixed right-0 bottom-0 z-[2] hidden w-1/4 lg:block"
-				style="height: 80svh;"
-				aria-hidden="true"
-			>
-				<img
-					src={$sceneImages.right}
-					alt=""
-					class="h-full w-full object-contain object-bottom drop-shadow-xl"
-				/>
-			</div>
-		{/if}
+		<!-- Character scene portraits moved into the session surface grid as a
+		     panel (plan 21) — they no longer paint as fixed viewport overlays
+		     here. The `sceneImages` store is still the set path (the avatar
+		     gallery writes it); `ScenePortraitsPanel` is now their display. -->
 		<div
 			class="relative z-10 flex h-svh max-w-full min-w-full flex-1 flex-col overflow-hidden lg:flex-row lg:gap-2"
 		>
@@ -1164,6 +1155,7 @@
 							{:else if panelsCtx.rightPanel === "sessions"}
 								<SessionsSidebar
 									bind:onclose={panelsCtx.onRightPanelClose}
+									sessionId={sessionIdInView}
 								/>
 							{:else if panelsCtx.rightPanel === "lorebooks"}
 								<LorebooksSidebar
@@ -1245,6 +1237,7 @@
 					{:else if panelsCtx.mobilePanel === "sessions"}
 						<SessionsSidebar
 							bind:onclose={panelsCtx.onMobilePanelClose}
+							sessionId={sessionIdInView}
 						/>
 					{:else if panelsCtx.mobilePanel === "pipelines"}
 						<PipelinesSidebar
