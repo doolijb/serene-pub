@@ -171,7 +171,7 @@
 	<p class="text-surface-600-400 text-sm">Loading receipt…</p>
 {:else if openRun}
 	<section
-		class="card preset-tonal flex flex-col gap-2 p-3"
+		class="card preset-filled-surface-100-900 flex flex-col gap-2 p-3"
 		aria-label="Run receipt"
 	>
 		<div class="flex flex-wrap items-baseline gap-2">

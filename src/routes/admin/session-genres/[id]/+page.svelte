@@ -106,7 +106,7 @@
 	<p class="text-surface-600-400 text-sm">Loading…</p>
 {:else if !detail?.genre}
 	<div
-		class="card preset-tonal text-surface-600-400 px-3 py-8 text-center text-sm"
+		class="card preset-filled-surface-100-900 text-surface-600-400 px-3 py-8 text-center text-sm"
 	>
 		{detail?.error ?? "This genre no longer exists."}
 	</div>
@@ -119,15 +119,15 @@
 		{/if}
 
 		<div class="stat-row">
-			<div class="card preset-tonal p-3">
+			<div class="card preset-filled-surface-100-900 p-3">
 				<p class={LEGEND}>Presets</p>
 				<p class="text-xl font-semibold">{detail.presets.length}</p>
 			</div>
-			<div class="card preset-tonal p-3">
+			<div class="card preset-filled-surface-100-900 p-3">
 				<p class={LEGEND}>Sessions</p>
 				<p class="text-xl font-semibold">{detail.sessionCount}</p>
 			</div>
-			<div class="card preset-tonal p-3">
+			<div class="card preset-filled-surface-100-900 p-3">
 				<p class={LEGEND}>Event slots</p>
 				<p class="text-xl font-semibold">{detail.slots.length}</p>
 			</div>
@@ -272,7 +272,7 @@
 			</AdminList>
 		</section>
 
-		<section class="card preset-tonal p-3">
+		<section class="card preset-filled-surface-100-900 p-3">
 			<p class={LEGEND}>Shape</p>
 			<pre
 				class="bg-surface-200-800 mt-2 overflow-x-auto rounded p-2 font-mono text-[11px]">{JSON.stringify(

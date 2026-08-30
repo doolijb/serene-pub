@@ -20,7 +20,7 @@
 </div>
 
 <div
-	class="form-max card preset-tonal p-3 shadow-sm"
+	class="form-max card preset-filled-surface-100-900 p-3 shadow-sm"
 >
 	<SamplingSidebar startNew />
 </div>

@@ -31,7 +31,7 @@
 	}
 </script>
 
-<section class="card preset-tonal p-3" aria-label="Published versions">
+<section class="card preset-filled-surface-100-900 p-3" aria-label="Published versions">
 	<h3 class="text-surface-600-400 text-sm font-semibold">
 		Published versions ({versions.length})
 	</h3>

@@ -4,37 +4,71 @@
 // CORS/ACAO headers the way XHR/polling is — only server-side rejection of
 // the handshake actually stops a malicious page's WebSocket from connecting).
 //
-// Matches by HOSTNAME rather than full origin (scheme+port), since the
-// Socket.IO server always runs on a different port than the main app
-// (SOCKETS_PORT vs PORT) — a legitimate same-site browser tab's Origin
-// header is therefore always "cross-port" from the socket server's point of
-// view. Hostname-only matching lets every already-documented hosting recipe
-// (direct, reverse-proxy-same-host, Cloudflare Tunnel) keep working without
-// new required config, while still closing the "any website gets a socket
-// connection" gap.
-// Hostnames that are always reached over HTTPS (eg. a tunnel/reverse-proxy
-// domain) — single source of truth, also used by loadSockets.server.ts for
-// getPublicSocketsEndpoint()'s protocol auto-detection.
-export function getHttpsHosts(): string[] {
-	return (process.env.SOCKETS_HTTPS_HOSTS || "")
+// ONE allowlist governs the whole app. Socket.IO is attached to the same HTTP
+// server that serves the pages, so a legitimate browser tab's socket handshake
+// is genuinely same-origin — there is no longer a second port, a second
+// hostname, or a separate socket-only allowlist to keep in sync with this one.
+//
+// Still matched by HOSTNAME rather than full origin: a deployment reached over
+// both http (LAN) and https (proxy/tunnel) is one deployment, and requiring the
+// scheme to match would break the zero-config default for no security gain —
+// the attack this defends against is a *different site* opening a socket, and a
+// different site differs by hostname.
+/** Always allowed; this instance reached from the machine it runs on. */
+const BUILTIN_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1"] as const
+
+/**
+ * Where an allowed host came from. Provenance is the whole point of surfacing
+ * this: "chat.example.com is allowed" is not actionable, "chat.example.com is
+ * allowed because ALLOWED_ORIGINS says so" is.
+ */
+export type AllowedHostSource = "builtin" | "env"
+
+export interface AllowedHostEntry {
+	hostname: string
+	source: AllowedHostSource
+}
+
+function getEnvAllowedHosts(): string[] {
+	return (process.env.ALLOWED_ORIGINS || "")
 		.split(",")
 		.map((h) => h.trim().toLowerCase())
 		.filter(Boolean)
+		.filter((h) => h !== "*")
+}
+
+/**
+ * Every host on the allowlist, with where it came from.
+ *
+ * The single source of truth for both the enforcement set below and the admin
+ * surface — deriving one from the other is what stops the page from confidently
+ * describing an allowlist that isn't the one being consulted.
+ *
+ * Note what is deliberately NOT here: the zero-config same-hostname rule. An
+ * Origin matching the request's own Host is allowed without appearing on any
+ * list, so rendering it as an entry would be a lie about a hostname nobody
+ * configured. It is a rule, and the UI states it as one.
+ */
+export function listAllowedHosts(): AllowedHostEntry[] {
+	const seen = new Set<string>()
+	const entries: AllowedHostEntry[] = []
+	for (const hostname of BUILTIN_ALLOWED_HOSTS) {
+		seen.add(hostname)
+		entries.push({ hostname, source: "builtin" })
+	}
+	for (const hostname of getEnvAllowedHosts()) {
+		if (seen.has(hostname)) continue
+		seen.add(hostname)
+		entries.push({ hostname, source: "env" })
+	}
+	return entries
 }
 
 function getAllowedOriginHosts(): Set<string> {
-	const hosts = new Set<string>(["localhost", "127.0.0.1", "::1"])
-	for (const h of getHttpsHosts()) hosts.add(h)
-	for (const h of (process.env.SOCKETS_ALLOWED_ORIGINS || "")
-		.split(",")
-		.map((h) => h.trim().toLowerCase())
-		.filter(Boolean)) {
-		hosts.add(h)
-	}
-	return hosts
+	return new Set(listAllowedHosts().map((e) => e.hostname))
 }
 
-/** `SOCKETS_ALLOWED_ORIGINS=*` opts out of the allowlist entirely — meant
+/** `ALLOWED_ORIGINS=*` opts out of the allowlist entirely — meant
  * for deployments (Docker Compose's shipped default) that have already made
  * their own network-exposure decision via port mapping/reverse proxy, where
  * an additional check inside the app is redundant friction. Exported so
@@ -42,7 +76,7 @@ function getAllowedOriginHosts(): Set<string> {
  * disabled-accounts mode (see the round-12 remediation plan's §9) —
  * reused rather than re-implementing the same env-var check there. */
 export function isWildcardAllowed(): boolean {
-	return (process.env.SOCKETS_ALLOWED_ORIGINS || "")
+	return (process.env.ALLOWED_ORIGINS || "")
 		.split(",")
 		.map((h) => h.trim())
 		.includes("*")
@@ -80,7 +114,7 @@ export function isLocalNetworkAddress(
  * an internet-reachable instance with accounts disabled (both defaults)
  * would otherwise auto-attach any such connection to the first admin user
  * with no token at all — see the comment in auth.ts. Set
- * `SOCKETS_ALLOWED_ORIGINS=*` to trust these from anywhere (the Docker
+ * `ALLOWED_ORIGINS=*` to trust these from anywhere (the Docker
  * Compose default, since that deployment already made its own
  * network-exposure decision).
  */
@@ -111,7 +145,7 @@ export function isMissingOriginAllowed(
  * isMissingOriginAllowed itself a live, exercised function rather than a
  * dead export sitting next to a passing test file. With ADDRESS_HEADER
  * unset, this is exactly isMissingOriginAllowed(socket.handshake.address) —
- * byte-identical to today's behavior. If SOCKETS_ALLOWED_ORIGINS=* is set,
+ * byte-identical to today's behavior. If ALLOWED_ORIGINS=* is set,
  * isMissingOriginAllowed returns true unconditionally for every address, so
  * every hop (including a completely absent header) passes and this
  * correctly goes vacuously true — the right behavior for an explicit
@@ -156,7 +190,7 @@ export function isLocalThroughProxy(socket: {
  * Deliberately gates on isLocalNetworkAddress here, NOT isMissingOriginAllowed
  * (unlike isLocalThroughProxy above) — this is not an oversight. Do not
  * "harmonize" the two: isMissingOriginAllowed returns true unconditionally
- * for every address once SOCKETS_ALLOWED_ORIGINS=* is set. If this function
+ * for every address once ALLOWED_ORIGINS=* is set. If this function
  * delegated to it too, a wildcard deployment would trust ANY remote peer's
  * claimed X-Forwarded-For value, letting rotating spoofed headers evade the
  * handshake rate limiter entirely for free. The wildcard is an *origin*
@@ -204,15 +238,16 @@ export function warnIfSocketAddressHeaderUnset(headers: Record<string, any>) {
  * docs. */
 export function describeOriginAllowlistConfig(): string {
 	if (isWildcardAllowed()) {
-		return "Socket allowed origins: * (all origins and non-browser clients allowed — SOCKETS_ALLOWED_ORIGINS=*)"
+		return "Allowed origins: * (all origins and non-browser clients allowed — ALLOWED_ORIGINS=*)"
 	}
-	const explicitHosts = (process.env.SOCKETS_ALLOWED_ORIGINS || "")
-		.split(",")
-		.map((h) => h.trim())
-		.filter(Boolean)
+	// Built from listAllowedHosts() rather than re-reading the env, so this log
+	// line and the admin page can never disagree about what is in effect.
+	const explicitHosts = listAllowedHosts()
+		.filter((e) => e.source === "env")
+		.map((e) => e.hostname)
 	const extra =
 		explicitHosts.length > 0 ? ` + ${explicitHosts.join(", ")}` : ""
-	return `Socket allowed origins: same-hostname (zero-config) + local network for non-browser clients${extra}`
+	return `Allowed origins: same-hostname (zero-config) + local network for non-browser clients${extra}`
 }
 
 /**
@@ -231,10 +266,25 @@ export function describeOriginAllowlistConfig(): string {
  * admin needing to enumerate hosts anywhere. A genuinely cross-origin page's
  * Origin is the *attacker's* hostname, which never matches the Host header
  * of a request aimed at this server, so this doesn't weaken the check.
- * SOCKETS_HTTPS_HOSTS / SOCKETS_ALLOWED_ORIGINS remain as an explicit
- * allowlist on top, for setups where Host genuinely doesn't match (eg. a
- * PUBLIC_SOCKETS_ENDPOINT override pointing at a different hostname).
+ * ALLOWED_ORIGINS remains as an explicit allowlist on top, for the rare setup
+ * where Origin and Host genuinely differ — a proxy rewriting Host, say. With
+ * Socket.IO attached to the app's own server, an ordinary tab never needs it.
  */
+/**
+ * Strip the brackets WHATWG URL puts around an IPv6 hostname.
+ *
+ * `new URL("https://[::1]:3000").hostname` is `"[::1]"`, but every place this
+ * app writes an IPv6 host — the built-in list, ALLOWED_ORIGINS, a Host header
+ * once its port is removed — uses the bare form. Without this the `::1` entry
+ * could never match anything, which is exactly what it was doing.
+ */
+function normalizeHostname(hostname: string): string {
+	return hostname
+		.trim()
+		.toLowerCase()
+		.replace(/^\[|\]$/g, "")
+}
+
 export function isOriginAllowed(
 	origin: string | null | undefined,
 	requestHost?: string | null
@@ -242,12 +292,13 @@ export function isOriginAllowed(
 	if (isWildcardAllowed()) return true
 	if (!origin) return true
 	try {
-		const originHostname = new URL(origin).hostname.toLowerCase()
+		const originHostname = normalizeHostname(new URL(origin).hostname)
 		if (requestHost) {
-			const requestHostname = requestHost
-				.split(":")[0]
-				.trim()
-				.toLowerCase()
+			// A Host header for IPv6 is "[::1]:3000" — splitting on the first
+			// colon would leave "[" — so the port is stripped from the right.
+			const requestHostname = normalizeHostname(
+				requestHost.trim().replace(/:\d+$/, "")
+			)
 			if (originHostname === requestHostname) return true
 		}
 		return getAllowedOriginHosts().has(originHostname)

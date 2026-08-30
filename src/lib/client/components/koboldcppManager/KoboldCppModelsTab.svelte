@@ -264,7 +264,7 @@
 				findConnectionForModel(model.name)?.id ===
 				systemSettingsCtx.settings?.defaultConnectionId}
 			{@const existingConn = findConnectionForModel(model.name)}
-			<div class="card preset-tonal flex flex-col gap-2 p-4">
+			<div class="card preset-filled-surface-100-900 flex flex-col gap-2 p-4">
 				<div class="flex items-center justify-between">
 					<h4 class="font-semibold">
 						{#if isDefault}

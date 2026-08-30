@@ -21,6 +21,13 @@
 		session?: unknown
 		/** In the drawer overlay? Hides the drawer-pin, adds a close-drawer. */
 		inDrawer?: boolean
+		/**
+		 * Which host owns placement. "grid" (default) shows the pack-era
+		 * controls (reorder, send-to-drawer); "zone" hosts (SessionLayout)
+		 * own placement themselves, so the title bar keeps only collapse +
+		 * close and the drawered flag never suspends a frame.
+		 */
+		chrome?: "grid" | "zone"
 		/** The primary conversation body, supplied by the session page. */
 		primaryChildren?: Snippet
 		onFrameAction?: (
@@ -36,6 +43,7 @@
 		sessionId,
 		session,
 		inDrawer = false,
+		chrome = "grid",
 		primaryChildren,
 		onFrameAction
 	}: Props = $props()
@@ -61,7 +69,9 @@
 	// suspended, never unmounted, so its state and port survive (21 §7).
 	let suspended = $derived(
 		instance.collapsed ||
-			(instance.drawered && manager.drawerOpenId !== instance.id)
+			(chrome === "grid" &&
+				instance.drawered &&
+				manager.drawerOpenId !== instance.id)
 	)
 	// What crosses into the frame must be (a) minimal — the frame gets what
 	// the host chooses, same posture as the session-view lane — and (b) plain
@@ -111,7 +121,9 @@
 
 		<!-- Controls: reorder / pin-to-drawer / close. Primary shows none. -->
 		{#if instance.role !== "primary"}
-			{#if inDrawer}
+			{#if chrome === "zone"}
+				<!-- zone hosts place panels; no reorder/drawer controls -->
+			{:else if inDrawer}
 				<button
 					class="hover:preset-tonal-primary text-surface-600-400 rounded p-0.5 transition-colors"
 					onclick={() => manager.closeDrawer()}

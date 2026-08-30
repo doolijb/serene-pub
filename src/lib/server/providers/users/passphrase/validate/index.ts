@@ -1,16 +1,20 @@
 import { schema, db } from "$lib/server/db"
-import { encrypt } from "../encrypt"
+import { encryptSync } from "../encrypt"
+import { verifyPassphrase } from "../kdf"
+import { set } from "../set"
 import { eq, and, isNull } from "drizzle-orm"
-import { timingSafeEqual } from "crypto"
 
-// Both hashes are hex-encoded PBKDF2 digests of equal length, so a plain
-// string comparison would still be constant-time in practice — but using
-// timingSafeEqual removes any doubt/dependency on that always holding.
-function hashesMatch(a: string, b: string): boolean {
-	const bufA = Buffer.from(a)
-	const bufB = Buffer.from(b)
-	if (bufA.length !== bufB.length) return false
-	return timingSafeEqual(bufA, bufB)
+/**
+ * The retired PBKDF2 scheme, kept only to verify rows written before the move
+ * to Argon2id/scrypt. Synchronous by necessity — `verifyPassphrase` picks the
+ * scheme from the stored digest, so this has to be callable inline.
+ */
+function legacyPbkdf2(
+	passphrase: string,
+	salt: string,
+	iterations: number
+): string {
+	return encryptSync({ passphrase, salt, iterations })
 }
 
 /**
@@ -37,13 +41,30 @@ export async function validate({
 
 	if (!res) return false
 
-	// Encrypt passphrase with salt and iterations from database
-	const hash = await encrypt({
-		passphrase,
+	const result = verifyPassphrase(passphrase, res.hash, {
 		salt: res.salt,
-		iterations: parseInt(res.iterations)
+		iterations: parseInt(res.iterations),
+		// Only computed when the stored row is a legacy PBKDF2 digest.
+		verify: () =>
+			legacyPbkdf2(passphrase, res.salt, parseInt(res.iterations))
 	})
 
-	// Compare encrypted passphrase with hash from database
-	return hashesMatch(hash, res.hash)
+	if (!result.valid) return false
+
+	// Transparent upgrade: a correct passphrase is the one moment the plaintext
+	// is available, so a legacy PBKDF2 row is rewritten with the current scheme
+	// here. Deliberately not fatal — a failed rehash must not turn a valid
+	// sign-in into a rejected one; it will simply be retried next time.
+	if (result.needsRehash) {
+		try {
+			await set({ tx, userId, passphrase })
+			console.log(
+				`[auth] upgraded passphrase hashing for user ${userId} from pbkdf2`
+			)
+		} catch (err) {
+			console.warn("[auth] passphrase rehash failed:", err)
+		}
+	}
+
+	return true
 }

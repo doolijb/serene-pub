@@ -39,6 +39,17 @@ export interface AuthenticatedSocket extends Socket {
 		// Add other user fields as needed
 	}
 	isAuthenticated: boolean
+	/**
+	 * The `user_tokens` row backing this connection, or null when accounts are
+	 * disabled. Needed to record that this specific session cleared its second
+	 * factor (26 §10) — the fact lives on the row, not in the cookie.
+	 */
+	tokenId: string | null
+	/**
+	 * This session owes a second factor. While true, sockets/index.ts refuses
+	 * every handler outside MFA_PENDING_ALLOWED_EVENTS.
+	 */
+	mfaPending: boolean
 	io?: any // Add io property for socket server reference
 }
 
@@ -110,7 +121,7 @@ export async function authMiddleware(
 			// connection look local.
 			if (!isLocalThroughProxy(socket)) {
 				console.log(
-					`Socket connection with no Origin header from "${clientAddress}" — rejecting (not a local-network address; set SOCKETS_ALLOWED_ORIGINS=* to allow non-browser clients from anywhere)`
+					`Socket connection with no Origin header from "${clientAddress}" — rejecting (not a local-network address; set ALLOWED_ORIGINS=* to allow non-browser clients from anywhere)`
 				)
 				socket.disconnect()
 				return next(new Error("Origin not allowed"))
@@ -145,6 +156,11 @@ export async function authMiddleware(
 
 			if (fallbackUser) {
 				socket.user = fallbackUser
+				// No second factor when there are no accounts to attach one
+				// to. Set explicitly rather than left undefined so the gate in
+				// sockets/index.ts reads a real value on every path.
+				socket.tokenId = null
+				socket.mfaPending = false
 				if (!joinUserRoomWithCap(socket, fallbackUser.id)) {
 					return next(new Error("Too many concurrent connections"))
 				}
@@ -221,6 +237,21 @@ export async function authMiddleware(
 			isAdmin: authResult.user.isAdmin || false
 		}
 		socket.isAuthenticated = true
+
+		// Second factor (26 §10). The connection is allowed either way — the
+		// client has to be able to submit a code over this same socket — but
+		// while this is true, sockets/index.ts refuses every handler outside a
+		// small allowlist. Rejecting the handshake instead would leave the user
+		// with no transport to verify over.
+		//
+		// For a user without 2FA enabled this is false, which is what keeps the
+		// whole mechanism invisible on the overwhelming majority of instances.
+		socket.tokenId = payload.id as string
+		const { isMfaPending } = await import("$lib/server/auth/totp/service")
+		socket.mfaPending = await isMfaPending(
+			authResult.user.id,
+			socket.tokenId
+		)
 
 		// Join user-specific room
 		if (!joinUserRoomWithCap(socket, authResult.user.id)) {

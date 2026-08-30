@@ -216,13 +216,13 @@
 	<p class="text-surface-600-400 text-sm">Loading…</p>
 {:else if !row}
 	<div
-		class="card preset-tonal text-surface-600-400 px-3 py-8 text-center text-sm"
+		class="card preset-filled-surface-100-900 text-surface-600-400 px-3 py-8 text-center text-sm"
 	>
 		This script no longer exists.
 		<a class="underline" href="/admin/scripts">Back to the list</a>.
 	</div>
 {:else}
-	<div class="form-max card preset-tonal flex flex-col gap-3 p-4 shadow-sm">
+	<div class="form-max card preset-filled-surface-100-900 flex flex-col gap-3 p-4 shadow-sm">
 		{#if type?.description}
 			<p class="text-surface-600-400 text-xs">{type.description}</p>
 		{/if}

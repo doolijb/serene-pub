@@ -26,6 +26,11 @@ export type RelationshipVisibility = "secret" | "acknowledged" | "public"
 import { GroupReplyStrategies } from "../../shared/constants/GroupReplyStrategies"
 import { SessionCharacterVisibility } from "../../shared/constants/SessionCharacterVisibility"
 import { SessionTypes } from "../../shared/constants/SessionTypes"
+import type {
+	TunnelMode,
+	TunnelProvider,
+	TunnelStatus
+} from "../../shared/constants/Tunnels"
 
 export const users = pgTable(
 	"users",
@@ -205,7 +210,21 @@ export const userTokens = pgTable("user_tokens", {
 	createdAt: timestamp("created_at").notNull().defaultNow(),
 	expiresAt: timestamp("expires_at").notNull(),
 	browser: varchar("browser", { length: 256 }).notNull(),
-	os: varchar("os", { length: 256 }).notNull()
+	os: varchar("os", { length: 256 }).notNull(),
+	/**
+	 * When this session cleared the second factor (26 §10). NULL means it has
+	 * not — for a user with TOTP enabled, that is "authenticated by password
+	 * but not yet fully authenticated".
+	 *
+	 * No token reissuance is needed on verification: the PASETO cookie only
+	 * ever carried a reference to this row, never session state, so the row is
+	 * the single place the fact needs to live.
+	 *
+	 * A timestamp rather than a boolean on purpose — it is what makes step-up
+	 * re-authentication possible later (a sensitive action requiring a *fresh*
+	 * verification, not "logged in at some point") without a schema change.
+	 */
+	mfaVerifiedAt: timestamp("mfa_verified_at")
 })
 
 export const usersTokenRelations = relations(userTokens, ({ many, one }) => ({
@@ -2357,6 +2376,17 @@ export const systemSettings = pgTable("system_settings", {
 		"default_narrator_prompt_config_id"
 	).references(() => narratorPromptConfigs.id, { onDelete: "set null" }),
 	isAccountsEnabled: boolean("is_accounts_enabled").notNull().default(false),
+	/**
+	 * SHA-256 of the last `SERENE_PUB_RECOVERY_KEY` that was applied (26 §10,
+	 * tier 3). One column is the entire one-time-use mechanism: on boot, a key
+	 * whose hash differs from this is applied and recorded; a key that matches
+	 * has already been used and is ignored, so the variables can sit in `.env`
+	 * inertly instead of reverting the user's password on every restart.
+	 *
+	 * A hash, not the key: it is an operator-chosen secret and there is no
+	 * reason to keep it readable at rest.
+	 */
+	recoveryKeyHash: text("recovery_key_hash"),
 	vectorizationEnabled: boolean("vectorization_enabled")
 		.notNull()
 		.default(false),
@@ -4156,7 +4186,9 @@ export const plugins = pgTable(
 		 * a sane admin band [1 KB … 2 GB]. Denying the `storage` permission still wins:
 		 * an override can raise/lower a *granted* quota, never revive a denied one.
 		 */
-		storageQuotaOverride: bigint("storage_quota_override", { mode: "number" }),
+		storageQuotaOverride: bigint("storage_quota_override", {
+			mode: "number"
+		}),
 		/**
 		 * Stored values for the manifest-declared settings schema (12 §6,
 		 * 13 §6). Values only — the schema lives in the manifest. A `secret`
@@ -4176,10 +4208,7 @@ export const plugins = pgTable(
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
 	(t) => [
-		check(
-			"plugins_backend_check",
-			sql`${t.backend} IN ('quickjs', 'ses')`
-		)
+		check("plugins_backend_check", sql`${t.backend} IN ('quickjs', 'ses')`)
 	]
 )
 
@@ -4494,6 +4523,69 @@ export const sessionPanelLayouts = pgTable(
 )
 
 /**
+ * Widget styles (PLAN 25, ruled 2026-08-30) — the skins a session widget wears.
+ * One table for both the presets a widget ships (`source: "system"`) and the
+ * styles users create (`source: "user"`), told apart by `source`/`ownerUserId`.
+ *
+ * `slug` is the stable reference target a saved layout pins with its id+slug
+ * `WidgetStyleRef`. For system rows it is the reseed-stable `systemStyleSlug`
+ * (`<widgetId>:<presetSlug>`); the seed reconciler upserts and prunes system
+ * rows by matching on it, NEVER on a numeric id (the codified seed rule) — and
+ * every write it makes is scoped `source = 'system'`, so a user row can never be
+ * overwritten or pruned by a reseed even if it shared a slug.
+ *
+ * Visibility governs who may SEE/USE a row (management is owner + admin):
+ *   system  → everyone; managed only by the reconciler.
+ *   private → the owner only.
+ *   shared  → everyone on the instance; managed by owner + admin.
+ */
+export const widgetStyles = pgTable(
+	"widget_styles",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** Stable, reseed-safe reference target for a layout's style pin. */
+		slug: text("slug").notNull().unique(),
+		/** The widget this styles (WidgetDecl/PanelDecl id). */
+		widgetSlug: text("widget_slug").notNull(),
+		/** 'system' = shipped+seeded (reconciler-managed); 'user' = hand-made. */
+		source: text("source").notNull().default("user"),
+		/** null for system rows; the creator for user rows. */
+		ownerUserId: integer("owner_user_id").references(() => users.id, {
+			onDelete: "cascade"
+		}),
+		/** 'system' | 'private' | 'shared' — who may see/use it. */
+		visibility: text("visibility").notNull().default("private"),
+		title: text("title").notNull(),
+		/** Scoped skin CSS injected into the widget container / frame document. */
+		css: text("css").notNull().default(""),
+		/** Design-token overrides (CSS custom properties). */
+		vars: json("vars")
+			.notNull()
+			.default({})
+			.$type<Record<string, string>>(),
+		/** Provenance: the app/plugin version that last seeded a system row. */
+		seededByVersion: text("seeded_by_version"),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [
+		index("widget_styles_widget_idx").on(t.widgetSlug),
+		index("widget_styles_owner_idx").on(t.ownerUserId),
+		check(
+			"widget_styles_source_check",
+			sql`${t.source} IN ('system', 'user')`
+		),
+		check(
+			"widget_styles_visibility_check",
+			sql`${t.visibility} IN ('system', 'private', 'shared')`
+		)
+	]
+)
+
+/**
  * Session presets (23 §9) — the bundle a person actually chooses to start a
  * session: which type (create spec), optionally which primary variant, which
  * pipeline configurations, which actions. The preset semantics that used to
@@ -4567,6 +4659,199 @@ export const sessionPanelLayoutsRelations = relations(
 		}),
 		user: one(users, {
 			fields: [sessionPanelLayouts.userId],
+			references: [users.id]
+		})
+	})
+)
+
+// ─── Remote access (plan 26) ─────────────────────────────────────────────────
+
+/**
+ * Instance-level network identity (26 §2). Deliberately thin: a stable anchor
+ * for instance-scoped, non-model-provider settings — tunnels today — and NOT a
+ * home for Ollama/KoboldCPP, which stay exactly where they are. Whether those
+ * ever migrate here is a separate decision plan 26 explicitly does not make.
+ *
+ * Exactly one row exists today: the seeded `local` server. Matched on `slug`,
+ * never on `id` — see db/defaults.ts for why matching on id was unsafe.
+ */
+export const servers = pgTable("servers", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	/** Stable seed identity; the seeded row is "local". */
+	slug: text("slug").notNull().unique(),
+	name: text("name").notNull(),
+	/** True only for "local". App code refuses deletion of a seeded server. */
+	isSeeded: boolean("is_seeded").notNull().default(false),
+	createdAt: timestamp("created_at").notNull().defaultNow()
+})
+
+/**
+ * How the local server becomes reachable from outside (26 §3).
+ *
+ * **Its own table, not a row shape under `connections`, on purpose.** A
+ * connection credential gates what a model says; a tunnel credential gates
+ * whether this entire instance is reachable from the public internet. Nothing
+ * in the script/hook/plugin broker may ever read, write, enable, or attach to a
+ * tunnel row — not as a revocable permission grant, but as a surface the broker
+ * never exposes at all. That isolation is enforced at four layers: this table,
+ * its own encryption keyInfo (TUNNEL_CREDENTIAL_KEY_INFO), its own socket
+ * namespace (sockets/tunnels.ts), and never being wired into contrib/ dispatch.
+ * If a later refactor is tempted to fold this into `connections` for
+ * convenience, don't — that convenience is the mistake this table prevents.
+ */
+export const tunnels = pgTable(
+	"tunnels",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		serverId: integer("server_id")
+			.notNull()
+			.references(() => servers.id, { onDelete: "cascade" }),
+		/**
+		 * Open text, not a pg enum (26 §7), so adding a provider later is a data
+		 * change rather than a migration. See shared/constants/Tunnels.ts.
+		 */
+		provider: text("provider").notNull().$type<TunnelProvider>(),
+		/**
+		 * Redundant with `provider` while only Cloudflare is implemented, and kept
+		 * separate anyway: most UI/supervisor logic branches on mode, not provider,
+		 * and that split shouldn't need a schema change to introduce.
+		 */
+		mode: text("mode").notNull().$type<TunnelMode>(),
+		/**
+		 * EncryptedToken envelope (AES-256-GCM via tokenCrypto.ts, keyed with
+		 * TUNNEL_CREDENTIAL_KEY_INFO). Null for ephemeral providers, which have no
+		 * credential at all. Write-only: never redisplayed to the client, same
+		 * convention as every other API-key field in the app.
+		 */
+		credential: json("credential").$type<{
+			ciphertext: string
+			iv: string
+			authTag: string
+		} | null>(),
+		/** The custom domain, or the last-observed ephemeral URL's hostname. */
+		hostname: text("hostname"),
+		enabled: boolean("enabled").notNull().default(false),
+		/**
+		 * Start this tunnel on app boot (26 §4). Defaults to false, and that
+		 * default is load-bearing: an instance that silently republishes itself to
+		 * the internet after a restart or a `docker compose up` is exactly the
+		 * surprise this feature exists to avoid. Only an explicit admin action sets
+		 * it. Auto-start is not a privileged path — it re-checks every gate
+		 * `tunnels:enable` checks, and runs *after* TTL reconciliation.
+		 */
+		autoStart: boolean("auto_start").notNull().default(false),
+		/** Supervisor-written, not admin-editable. */
+		status: text("status")
+			.notNull()
+			.default("stopped")
+			.$type<TunnelStatus>(),
+		lastError: text("last_error"),
+		/**
+		 * The admin's saved preference, which persists across enable/disable
+		 * cycles. Null = no expiry. Distinct from `expiresAt` on purpose.
+		 */
+		ttlSeconds: integer("ttl_seconds"),
+		/**
+		 * The computed deadline for the *current* run — recomputed as
+		 * now() + ttlSeconds on every off -> on transition (including auto-start),
+		 * so re-enabling never inherits a stale deadline.
+		 */
+		expiresAt: timestamp("expires_at"),
+		startedAt: timestamp("started_at"),
+		stoppedAt: timestamp("stopped_at"),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [
+		/**
+		 * At most one enabled tunnel per server (26 §3). A partial unique index
+		 * rather than an app-level check because the failure it prevents is real
+		 * and physical: two tunnel processes fighting over the same local port.
+		 * Partial (WHERE enabled) so any number of disabled rows can coexist.
+		 */
+		uniqueIndex("tunnels_one_enabled_per_server")
+			.on(t.serverId)
+			.where(sql`${t.enabled}`)
+	]
+)
+
+export const serversRelations = relations(servers, ({ many }) => ({
+	tunnels: many(tunnels)
+}))
+
+export const tunnelsRelations = relations(tunnels, ({ one }) => ({
+	server: one(servers, {
+		fields: [tunnels.serverId],
+		references: [servers.id]
+	})
+}))
+
+// ─── Two-factor authentication (plan 26 §10) ─────────────────────────────────
+
+/**
+ * One TOTP enrolment per user.
+ *
+ * `enabledAt` stays NULL between generating a secret and the user proving they
+ * can produce a code from it. That gap is the whole reason the column exists:
+ * an enrolment that took effect before it was verified would lock a user out of
+ * their own account using a secret they never successfully scanned.
+ */
+export const userTotp = pgTable("user_totp", {
+	userId: integer("user_id")
+		.primaryKey()
+		.references(() => users.id, { onDelete: "cascade" }),
+	/** EncryptedToken envelope, keyed with TOTP_SECRET_KEY_INFO. */
+	secret: json("secret")
+		.notNull()
+		.$type<{ ciphertext: string; iv: string; authTag: string }>(),
+	/** NULL until the first live code is confirmed. */
+	enabledAt: timestamp("enabled_at"),
+	/**
+	 * Anti-replay. A TOTP code stays valid for its 30-second step plus the
+	 * drift window either side, so an intercepted code has a ~90s life unless
+	 * the step it belongs to is burned on first use.
+	 */
+	lastUsedStep: integer("last_used_step"),
+	createdAt: timestamp("created_at").notNull().defaultNow()
+})
+
+/**
+ * Single-use recovery codes.
+ *
+ * Hashed, never encrypted: this is a verify-by-compare secret, and nothing
+ * needs to read the original back. Rows are kept after use rather than deleted
+ * so "how many are left" stays answerable and a used code can never silently
+ * become valid again.
+ */
+export const userTotpRecoveryCodes = pgTable(
+	"user_totp_recovery_codes",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		codeHash: text("code_hash").notNull(),
+		usedAt: timestamp("used_at"),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [index("user_totp_recovery_codes_user_idx").on(t.userId)]
+)
+
+export const userTotpRelations = relations(userTotp, ({ one }) => ({
+	user: one(users, {
+		fields: [userTotp.userId],
+		references: [users.id]
+	})
+}))
+
+export const userTotpRecoveryCodesRelations = relations(
+	userTotpRecoveryCodes,
+	({ one }) => ({
+		user: one(users, {
+			fields: [userTotpRecoveryCodes.userId],
 			references: [users.id]
 		})
 	})

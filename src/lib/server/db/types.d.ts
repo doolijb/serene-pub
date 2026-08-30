@@ -38,6 +38,11 @@ export global {
 	export type InsertConnection = typeof schema.connections.$inferInsert
 	export type UpdateConnection = Partial<SelectConnection> & { id: number }
 
+	// Widget style types (PLAN 25)
+	export type SelectWidgetStyle = typeof schema.widgetStyles.$inferSelect
+	export type InsertWidgetStyle = typeof schema.widgetStyles.$inferInsert
+	export type UpdateWidgetStyle = Partial<SelectWidgetStyle> & { id: number }
+
 	// Context Config types
 	export type SelectContextConfig = typeof schema.contextConfigs.$inferSelect
 	export type InsertContextConfig = typeof schema.contextConfigs.$inferInsert
@@ -251,6 +256,16 @@ export global {
 	export type UpdateGraphBuildConfig = Partial<SelectGraphBuildConfig> & {
 		id: number
 	}
+
+	// Server types (plan 26)
+	export type SelectServer = typeof schema.servers.$inferSelect
+	export type InsertServer = typeof schema.servers.$inferInsert
+	export type UpdateServer = Partial<SelectServer> & { id: number }
+
+	// Tunnel types (plan 26)
+	export type SelectTunnel = typeof schema.tunnels.$inferSelect
+	export type InsertTunnel = typeof schema.tunnels.$inferInsert
+	export type UpdateTunnel = Partial<SelectTunnel> & { id: number }
 
 	// Convenient re-exports of narrative graph inline types for server-side handlers
 	export type NarrativeNodeShape = Sockets.NarrativeGraph.NarrativeNode

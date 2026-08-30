@@ -33,6 +33,16 @@ const IV_LENGTH = 12
 export const CHARAVAULT_KEY_INFO = "serene-pub:cardSourceToken:v1"
 export const CONNECTION_API_KEY_INFO = "serene-pub:connectionApiKey:v1"
 export const VECTORIZATION_API_KEY_INFO = "serene-pub:vectorizationApiKey:v1"
+/**
+ * Tunnel provider credentials (26 §11) — a Cloudflare connector token and
+ * friends. Its own class, not folded in with connection API keys, because it
+ * guards a categorically different thing: a connection key gates what a model
+ * says, a tunnel credential gates whether this instance is reachable from the
+ * public internet at all.
+ */
+export const TUNNEL_CREDENTIAL_KEY_INFO = "serene-pub:tunnelCredential:v1"
+/** TOTP shared secrets (26 §11). */
+export const TOTP_SECRET_KEY_INFO = "serene-pub:totpSecret:v1"
 
 function deriveKey(keyInfo: string): Buffer {
 	const secret = getCryptoSecretKey()

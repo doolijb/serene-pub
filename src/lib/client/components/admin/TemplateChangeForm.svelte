@@ -223,7 +223,7 @@
 	<p class="text-surface-600-400 text-sm">Loading…</p>
 {:else if id != null && !row}
 	<div
-		class="card preset-tonal text-surface-600-400 px-3 py-8 text-center text-sm"
+		class="card preset-filled-surface-100-900 text-surface-600-400 px-3 py-8 text-center text-sm"
 	>
 		This template no longer exists.
 		<a class="underline" href={basePath}>Back to the list</a>.
@@ -231,7 +231,7 @@
 {:else}
 	<div class="form-max flex flex-col gap-4">
 		<div
-			class="card preset-tonal flex flex-col gap-3 p-4 shadow-sm"
+			class="card preset-filled-surface-100-900 flex flex-col gap-3 p-4 shadow-sm"
 		>
 			<div class="field-row">
 				<label class="flex flex-col gap-1 text-sm">
@@ -334,7 +334,7 @@
 
 		{#if preview}
 			<div
-				class="card preset-tonal flex flex-col gap-2 p-4 text-sm shadow-sm"
+				class="card preset-filled-surface-100-900 flex flex-col gap-2 p-4 text-sm shadow-sm"
 			>
 				<h3 class="text-sm font-semibold">Preview</h3>
 				{#if preview.error}

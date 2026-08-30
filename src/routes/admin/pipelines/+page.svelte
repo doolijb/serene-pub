@@ -416,24 +416,24 @@
 		<!-- The zero state: the instance overview. -->
 		<div class="flex flex-col gap-3">
 			<div class="grid grid-cols-2 gap-2">
-				<div class="card preset-tonal p-3">
+				<div class="card preset-filled-surface-100-900 p-3">
 					<p class="{LEGEND}">Published</p>
 					<p class="text-xl font-semibold">{list.length}</p>
 				</div>
-				<div class="card preset-tonal p-3">
+				<div class="card preset-filled-surface-100-900 p-3">
 					<p class="{LEGEND}">Enabled</p>
 					<p class="text-xl font-semibold">
 						{enabledCount} / {list.length}
 					</p>
 				</div>
-				<div class="card preset-tonal col-span-2 p-3">
+				<div class="card preset-filled-surface-100-900 col-span-2 p-3">
 					<p class="{LEGEND}">Runs ok</p>
 					<p class="text-xl font-semibold">
 						{okCount} / {runs.length}
 					</p>
 				</div>
 			</div>
-			<div class="card preset-tonal p-3">
+			<div class="card preset-filled-surface-100-900 p-3">
 				<p class="{LEGEND} mb-2">Recent runs</p>
 				{#if runs.length}
 					<ul class="flex flex-col gap-1.5">
@@ -488,7 +488,7 @@
 			{/if}
 
 			<!-- identity -->
-			<div class="card preset-tonal flex flex-col gap-2 p-3">
+			<div class="card preset-filled-surface-100-900 flex flex-col gap-2 p-3">
 				<div class="flex items-start gap-2">
 					<div class="min-w-0 flex-1">
 						<h3 class="truncate text-base font-semibold">
@@ -575,7 +575,7 @@
 				<p class="text-surface-600-400 text-sm">Loading…</p>
 			{:else}
 				<!-- versions + structure -->
-				<div class="card preset-tonal flex flex-col gap-1.5 p-3">
+				<div class="card preset-filled-surface-100-900 flex flex-col gap-1.5 p-3">
 					<p class="{LEGEND}">Published</p>
 					<p class="text-sm">
 						{#if activeVersion}
@@ -613,7 +613,7 @@
 				</div>
 
 				<!-- configurations -->
-				<div class="card preset-tonal flex flex-col gap-1.5 p-3">
+				<div class="card preset-filled-surface-100-900 flex flex-col gap-1.5 p-3">
 					<p class="{LEGEND}">
 						Configurations ({configDetail?.configs.length ?? "…"})
 					</p>
@@ -665,7 +665,7 @@
 				</div>
 
 				<!-- run health -->
-				<div class="card preset-tonal flex flex-col gap-1.5 p-3">
+				<div class="card preset-filled-surface-100-900 flex flex-col gap-1.5 p-3">
 					<p class="{LEGEND}">Recent runs</p>
 					{#if healthFor(selected.slug, 10).length}
 						<ul class="flex flex-col gap-1">
@@ -788,7 +788,7 @@
 		>
 			{#if threePane}
 				<aside
-					class="card preset-tonal sticky top-4 max-h-[80vh] overflow-y-auto p-2"
+					class="card preset-filled-surface-100-900 sticky top-4 max-h-[80vh] overflow-y-auto p-2"
 					aria-label="Pipeline facets"
 				>
 					{@render facets()}
@@ -797,7 +797,7 @@
 
 			{#if !narrow || !selectedSlug}
 				<section
-					class="card preset-tonal min-w-0 p-2"
+					class="card preset-filled-surface-100-900 min-w-0 p-2"
 					aria-label="Pipelines"
 				>
 					<div class="relative m-1 mb-2">

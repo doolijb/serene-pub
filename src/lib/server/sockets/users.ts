@@ -3,6 +3,7 @@ import { eq, and, desc, isNull, or, like, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { Handler } from "$lib/shared/events"
 import { z } from "zod"
+import { passphraseSchema } from "$lib/shared/validation/passphrase"
 import * as passphrase from "$lib/server/providers/users/passphrase"
 import { cookies } from "$lib/server/auth"
 import * as userTokens from "$lib/server/providers/users/tokens"
@@ -10,16 +11,6 @@ import { loginRateLimit } from "$lib/server/services/loginRateLimit"
 
 // Passphrase validation schema. Max length bounds the PBKDF2 cost an
 // attacker-supplied passphrase can force the server to pay.
-const passphraseSchema = z
-	.string()
-	.min(10, "Passphrase must be at least 10 characters long")
-	.max(128, "Passphrase must be at most 128 characters long")
-	.regex(/[a-z]/, "Passphrase must contain at least one lowercase letter")
-	.regex(/[A-Z]/, "Passphrase must contain at least one uppercase letter")
-	.regex(
-		/[^a-zA-Z0-9]/,
-		"Passphrase must contain at least one special character"
-	)
 
 /**
  * The account-management handlers (list/create/update/delete) exist only when

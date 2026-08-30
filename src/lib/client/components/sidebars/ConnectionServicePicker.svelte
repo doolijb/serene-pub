@@ -67,7 +67,7 @@
 	<Portal>
 		<Combobox.Positioner class="z-[1000]!">
 			<Combobox.Content
-				class="card preset-tonal-surface bg-surface-100-900 max-h-72 w-[26rem] max-w-[90vw] overflow-y-auto p-1 shadow-xl"
+				class="card preset-filled-surface-100-900-surface bg-surface-100-900 max-h-72 w-[26rem] max-w-[90vw] overflow-y-auto p-1 shadow-xl"
 			>
 				{#if groups.length === 0}
 					<p class="text-surface-700-300 p-2 text-sm">

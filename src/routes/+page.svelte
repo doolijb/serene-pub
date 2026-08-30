@@ -1499,7 +1499,7 @@
 									</button>
 								{/if}
 								<div
-									class="card preset-tonal-surface flex flex-col gap-2 p-5"
+									class="card preset-filled-surface-100-900-surface flex flex-col gap-2 p-5"
 								>
 									<div
 										class="flex items-center gap-2 font-bold"
@@ -1637,7 +1637,7 @@
 									</button>
 								{/if}
 								<div
-									class="card preset-tonal-surface flex flex-col gap-2 p-5"
+									class="card preset-filled-surface-100-900-surface flex flex-col gap-2 p-5"
 								>
 									<div
 										class="flex items-center gap-2 font-bold"

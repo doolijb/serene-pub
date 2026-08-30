@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
+	import TotpSettings from "./TotpSettings.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { getContext, onMount, onDestroy } from "svelte"
 	import { goto } from "$app/navigation"
@@ -364,7 +365,7 @@
 </script>
 
 <div class="flex flex-col gap-4">
-	<div class="card preset-tonal divide-surface-300-700 divide-y p-4">
+	<div class="card preset-filled-surface-100-900 divide-surface-300-700 divide-y p-4">
 		<div class="flex flex-col gap-2 pb-4">
 			<p class="text-muted-foreground text-sm">
 				Shows every field on the character form (advanced/less-common
@@ -459,7 +460,7 @@
 	</div>
 
 	<!-- Document View Section -->
-	<div class="card preset-tonal p-4">
+	<div class="card preset-filled-surface-100-900 p-4">
 		<h3 class="mb-2 text-lg font-semibold">Document View</h3>
 		<p class="text-surface-700-300 mb-3 text-sm">
 			A simplified, high-contrast, keyboard- and screen-reader-friendly
@@ -495,7 +496,7 @@
 
 	<!-- Import Section -->
 	{#if userCtx.user?.isAdmin && !systemSettingsCtx.settings?.isAndroidWrapper}
-		<div class="card preset-tonal p-4">
+		<div class="card preset-filled-surface-100-900 p-4">
 			<h3 class="mb-4 text-lg font-semibold">Data Import</h3>
 			<p class="text-surface-700-300 mb-3 text-sm">
 				Import your characters, personas, sessions, and lorebooks from
@@ -514,7 +515,9 @@
 
 	<!-- User Profile Section - Only show when accounts are enabled -->
 	{#if systemSettingsCtx.settings?.isAccountsEnabled && userCtx.user}
-		<div class="card preset-tonal p-4">
+		<TotpSettings />
+
+		<div class="card preset-filled-surface-100-900 p-4">
 			<h3 class="mb-4 text-lg font-semibold">User Profile</h3>
 
 			<!-- Display Name -->

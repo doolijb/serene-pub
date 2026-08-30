@@ -1,6 +1,9 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { getContext, onMount, onDestroy } from "svelte"
+	// Shared hover signal — lets the session's "Layout" pull-tab reveal itself
+	// only while this nav bar is hovered. See navHover.svelte.ts.
+	import { navHover } from "$lib/client/sessionLayout/navHover.svelte"
 
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
 	let vectorizationCtx: VectorizationCtx = $state(
@@ -52,7 +55,14 @@
 	})
 </script>
 
-<header class="w-full">
+<!-- Hover tracking only (reveals the session Layout tab); the <header> already
+     carries an implicit banner role. -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<header
+	class="w-full"
+	onmouseenter={() => (navHover.over = true)}
+	onmouseleave={() => (navHover.over = false)}
+>
 	<!-- Height: the mobile bar is sized by the 44px hamburger, so `py-2` made it
 	     60px against desktop's 40px. `py-0.5` brings it to 48px — still a full
 	     44px tap target, just without the extra 12px of dead band above the

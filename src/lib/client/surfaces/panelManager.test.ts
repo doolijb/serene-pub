@@ -75,6 +75,29 @@ describe("SurfaceManager — explicit intents + persistence", () => {
 		vi.useRealTimers()
 	})
 
+	it("couriers the widget grid: init reads it, setWidgetGrid persists it in the blob", async () => {
+		vi.useFakeTimers()
+		const save = vi.fn()
+		const m = new SurfaceManager()
+		// init rehydrates from the blob…
+		m.init(1, PANELS, { widgetGrid: { version: 1, seeded: true } }, save)
+		expect(m.widgetGrid).toEqual({ version: 1, seeded: true })
+		// …and an edit persists (debounced) verbatim inside the same blob.
+		m.setWidgetGrid({ version: 1, edited: true })
+		vi.advanceTimersByTime(500)
+		expect(save).toHaveBeenCalledOnce()
+		expect(save.mock.calls[0][0].widgetGrid).toEqual({
+			version: 1,
+			edited: true
+		})
+		vi.useRealTimers()
+	})
+
+	it("omits widgetGrid from the blob when never set", () => {
+		const m = make()
+		expect("widgetGrid" in m.toBlob()).toBe(false)
+	})
+
 	it("applyCloseIntent deactivates a panel", () => {
 		const m = make()
 		m.activate("tasks")

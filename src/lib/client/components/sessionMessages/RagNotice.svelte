@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { getSocket } from "$lib/client/sockets/socketInstance"
 
 	interface Props {
 		sessionId: number
@@ -9,7 +9,7 @@
 
 	let { sessionId, totalMessages }: Props = $props()
 
-	const socket = skio.get()!
+	const socket = getSocket()!
 
 	type RagStatus = Sockets.Vectorization.CheckRagStatus.Response
 	let ragStatus: RagStatus | null = $state(null)

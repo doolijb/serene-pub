@@ -23,7 +23,7 @@
 			<Icons.Users size={20} /> Users
 		</h2>
 	</div>
-	<div class="card preset-tonal max-w-2xl p-6">
+	<div class="card preset-filled-surface-100-900 max-w-2xl p-6">
 		<p class="flex items-center gap-2 font-medium">
 			<Icons.UserX size={18} class="text-warning-500" />
 			Accounts are turned off

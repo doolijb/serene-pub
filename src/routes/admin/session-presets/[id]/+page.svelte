@@ -200,14 +200,14 @@
 	<p class="text-surface-600-400 text-sm">Loading…</p>
 {:else if !row}
 	<div
-		class="card preset-tonal text-surface-600-400 px-3 py-8 text-center text-sm"
+		class="card preset-filled-surface-100-900 text-surface-600-400 px-3 py-8 text-center text-sm"
 	>
 		This preset no longer exists.
 		<a class="underline" href="/admin/session-presets">Back to the list</a>.
 	</div>
 {:else}
 	<div class="form-max flex flex-col gap-4">
-		<div class="card preset-tonal flex flex-col gap-3 p-4 shadow-sm">
+		<div class="card preset-filled-surface-100-900 flex flex-col gap-3 p-4 shadow-sm">
 			<div class="field-row">
 				<label class="flex flex-col gap-1 text-sm">
 					<span class="font-medium">Name</span>
@@ -256,7 +256,7 @@
 		</div>
 
 		<!-- ── the bindings: the genre's event slots, filled ─────────── -->
-		<section class="card preset-tonal flex flex-col gap-3 p-4 shadow-sm">
+		<section class="card preset-filled-surface-100-900 flex flex-col gap-3 p-4 shadow-sm">
 			<div>
 				<h3 class="text-sm font-semibold">Event bindings</h3>
 				<p class="text-surface-600-400 text-xs">
@@ -376,7 +376,7 @@
 		</section>
 
 		{#if enabled && missingRequired.length}
-			<div class="card preset-tonal-warning flex items-start gap-2 p-3">
+			<div class="card preset-filled-surface-100-900-warning flex items-start gap-2 p-3">
 				<Icons.TriangleAlert size={16} class="mt-0.5 shrink-0" />
 				<p class="text-sm">
 					An enabled preset must bind its required slots — missing:

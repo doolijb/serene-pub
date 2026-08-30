@@ -1763,7 +1763,7 @@
 	{/if}
 
 	{#if showConfigPicker && detail.configs.length}
-		<div class="card preset-tonal mb-3 space-y-2 p-3">
+		<div class="card preset-filled-surface-100-900 mb-3 space-y-2 p-3">
 			<p class="text-sm font-semibold">Configuration</p>
 			<select
 				class="select w-full"
@@ -1805,7 +1805,7 @@
 	<div class="inspector-pane">
 	<div class="option-groups space-y-3">
 		{#each stepGroups as group (group.key)}
-			<section class="card preset-tonal space-y-3 p-3">
+			<section class="card preset-filled-surface-100-900 space-y-3 p-3">
 				{#if stepKey == null}
 					<!-- The sidebar shows every step, so each card needs its
 					     name. The builder shows one — its host already titles
@@ -1848,7 +1848,7 @@
 		{/each}
 
 		{#if tuning.length}
-			<details class="card preset-tonal p-3">
+			<details class="card preset-filled-surface-100-900 p-3">
 				<summary
 					class="text-muted flex cursor-pointer items-center gap-1 text-xs font-medium select-none"
 				>

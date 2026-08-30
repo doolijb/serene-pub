@@ -103,7 +103,7 @@
 {#if loading}
 	<p class="text-surface-600-400 text-sm">Loading…</p>
 {:else}
-	<div class="form-max card preset-tonal flex flex-col gap-3 p-4 shadow-sm">
+	<div class="form-max card preset-filled-surface-100-900 flex flex-col gap-3 p-4 shadow-sm">
 		<label class="flex flex-col gap-1 text-sm">
 			<span class="font-medium">Name</span>
 			<input

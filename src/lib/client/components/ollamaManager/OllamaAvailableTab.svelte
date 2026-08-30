@@ -359,7 +359,7 @@
 			{@const installed = isModelInstalled(model.pull)}
 			{@const active = isModelActive(model.pull)}
 			{@const downloading = currentlyDownloading.has(model.pull)}
-			<div class="card preset-tonal p-4">
+			<div class="card preset-filled-surface-100-900 p-4">
 				<div class="flex flex-col gap-3">
 					<!-- Header with name and VRAM tier -->
 					<!-- Hugging Face repo ids ("mradermacher/Roleplay-Mistral-…")
@@ -491,7 +491,7 @@
 		{#each availableModels as model}
 			{@const installed = isModelInstalled(model.name)}
 			{@const active = isModelActive(model.name)}
-			<div class="card preset-tonal p-4">
+			<div class="card preset-filled-surface-100-900 p-4">
 				<div class="flex flex-col gap-2">
 					<!-- Header with name and badges -->
 					<div class="flex items-start justify-between">

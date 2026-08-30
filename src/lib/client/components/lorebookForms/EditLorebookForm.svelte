@@ -219,7 +219,7 @@
 			</div>
 			<!-- Name is already shown in the sidebar's header above these
 			     tabs — repeating it here would just be noise. -->
-			<section class="card preset-tonal space-y-1 p-3">
+			<section class="card preset-filled-surface-100-900 space-y-1 p-3">
 				<p
 					class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 				>

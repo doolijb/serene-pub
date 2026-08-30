@@ -1047,7 +1047,7 @@
 
 		<!-- Session Prompts card -->
 		<button
-			class="card preset-tonal hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
+			class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
 			onclick={() => (view = "session")}
 		>
 			<div class="flex items-start gap-3">
@@ -1088,7 +1088,7 @@
 
 		<!-- Session Prompts: Narrator card -->
 		<button
-			class="card preset-tonal hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
+			class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
 			onclick={() => (view = "narrator")}
 		>
 			<div class="flex items-start gap-3">
@@ -1132,7 +1132,7 @@
 		{#if systemSettingsCtx.settings?.summarizationEnabled}
 			{#each [{ v: "world" as const, label: "World Lore Summarization", desc: "System instructions for world lore summarization.", icon: Icons.Globe, activeName: activeWorldName }, { v: "character" as const, label: "Character Lore Summarization", desc: "System instructions for character lore summarization.", icon: Icons.User, activeName: activeCharacterName }, { v: "scene" as const, label: "Scene Summarization", desc: "System instructions for scene summarization.", icon: Icons.Film, activeName: activeSceneName }, { v: "graph" as const, label: "Narrative Graph Build", desc: "Per-step instructions and model overrides for building the relationship graph.", icon: Icons.Share2, activeName: activeGraphName }] as card}
 				<button
-					class="card preset-tonal hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
+					class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
 					onclick={() => (view = card.v)}
 				>
 					<div class="flex items-start gap-3">

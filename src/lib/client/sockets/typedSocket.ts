@@ -1,4 +1,4 @@
-import * as skio from "sveltekit-io"
+import { getSocket } from "./socketInstance"
 
 // Type mapping for socket events - this maps event names to their param/response types
 export type SocketEventMap = {
@@ -825,6 +825,108 @@ export type SocketEventMap = {
 	}
 
 	// Sampling Config events
+	// Two-factor authentication (plan 26 §10).
+	"totp:status": {
+		params: Sockets.Totp.Status.Params
+		response: Sockets.Totp.Status.Response
+	}
+	"totp:enroll:begin": {
+		params: Sockets.Totp.EnrollBegin.Params
+		response: Sockets.Totp.EnrollBegin.Response
+	}
+	"totp:enroll:confirm": {
+		params: Sockets.Totp.EnrollConfirm.Params
+		response: Sockets.Totp.EnrollConfirm.Response
+	}
+	"totp:verify": {
+		params: Sockets.Totp.Verify.Params
+		response: Sockets.Totp.Verify.Response
+	}
+	"totp:regenerateCodes": {
+		params: Sockets.Totp.RegenerateCodes.Params
+		response: Sockets.Totp.RegenerateCodes.Response
+	}
+	"totp:disable": {
+		params: Sockets.Totp.Disable.Params
+		response: Sockets.Totp.Disable.Response
+	}
+	"totp:adminClear": {
+		params: Sockets.Totp.AdminClear.Params
+		response: Sockets.Totp.AdminClear.Response
+	}
+	"totp:status:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"totp:enroll:begin:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"totp:enroll:confirm:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"totp:verify:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"totp:regenerateCodes:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"totp:disable:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"totp:adminClear:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
+	// Allowed hosts (plan 26 §9) — read-only surface.
+	"allowedHosts:get": {
+		params: Sockets.AllowedHosts.Get.Params
+		response: Sockets.AllowedHosts.Get.Response
+	}
+	"allowedHosts:get:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
+	// Tunnels (plan 26) — its own namespace, never folded into Connections.
+	"tunnels:get": {
+		params: Sockets.Tunnels.Get.Params
+		response: Sockets.Tunnels.Get.Response
+	}
+	"tunnels:updateConfig": {
+		params: Sockets.Tunnels.UpdateConfig.Params
+		response: Sockets.Tunnels.UpdateConfig.Response
+	}
+	"tunnels:enable": {
+		params: Sockets.Tunnels.Enable.Params
+		response: Sockets.Tunnels.Enable.Response
+	}
+	"tunnels:disable": {
+		params: Sockets.Tunnels.Disable.Params
+		response: Sockets.Tunnels.Disable.Response
+	}
+	"tunnels:get:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"tunnels:updateConfig:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"tunnels:enable:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"tunnels:disable:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
 	"samplingConfigs:list": {
 		params: Sockets.SamplingConfigs.List.Params
 		response: Sockets.SamplingConfigs.List.Response
@@ -2354,7 +2456,7 @@ export interface TypedSocket {
 
 // Create a typed socket wrapper
 export function createTypedSocket(): TypedSocket {
-	const socket = skio.get() as any
+	const socket = getSocket() as any
 
 	if (!socket) {
 		throw new Error(

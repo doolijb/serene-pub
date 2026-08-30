@@ -1,7 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import Avatar from "$lib/client/components/Avatar.svelte"
 	import MessageComposer from "$lib/client/components/sessionMessages/MessageComposer.svelte"
 	import MessageControls from "$lib/client/components/sessionMessages/MessageControls.svelte"
 	import MessagePartsView from "$lib/client/components/sessionMessages/MessagePartsView.svelte"
@@ -154,6 +153,31 @@
 				: null
 	)
 	const isGreeting = $derived(!!msg.metadata?.isGreeting)
+	// Two independent classifications the style packs (sessionLayout skins) key
+	// off. The one SessionMessage renders every layout; these attributes are
+	// what a bubbles/compact/moonlit skin uses for alignment, colour and
+	// avatar placement.
+	//   data-msg-role   = user | assistant | narration  (who's speaking, by turn)
+	//   data-msg-author = persona | character | narrator (which entity kind)
+	// They usually agree (a persona speaks as 'user', a character as 'assistant')
+	// but are kept separate so a skin can leverage either — e.g. impersonation,
+	// or group chats where the split matters.
+	const msgRole = $derived(
+		msg.isNarratorResponse
+			? "narration"
+			: msg.role === "user"
+				? "user"
+				: "assistant"
+	)
+	const msgAuthor = $derived(
+		msg.isNarratorResponse
+			? "narrator"
+			: msg.personaId != null
+				? "persona"
+				: msg.characterId != null
+					? "character"
+					: "unknown"
+	)
 	const canControl = $derived(canControlMessage(msg))
 	const showSwipes = $derived(showSwipeControls(msg, isGreeting))
 	const canSwipeRightVal = $derived(canSwipeRight(msg, isGreeting))
@@ -240,14 +264,17 @@
      role="article" below is what actually carries the semantics. -->
 <div
 	id="message-{msg.id}"
-	class="{isSummarizationMode
-		? isSelected
-			? 'preset-filled-secondary-100-900'
-			: 'preset-tonal-surface opacity-60'
-		: 'preset-filled-primary-50-950'} {isEditing
-		? 'ring-warning-500/70 shadow-lg ring-2'
-		: ''} flex flex-col rounded-lg p-2 transition-colors duration-150"
+	class="sp-msg transition-colors duration-150"
 	class:opacity-50={!isSummarizationMode && msg.isHidden && !isEditing}
+	data-msg-role={msgRole}
+	data-msg-author={msgAuthor}
+	data-msg-state={isEditing
+		? "editing"
+		: isSummarizationMode
+			? isSelected
+				? "selected"
+				: "dim"
+			: "normal"}
 	tabindex="-1"
 	role="article"
 	aria-label="Message {index + 1} of {session.sessionMessages
@@ -258,51 +285,55 @@
 		100
 	)}{msg.content.length > 100 ? '...' : ''}"
 >
-	<div class="flex items-start justify-between gap-2">
-		<div class="group flex min-w-0 flex-1 gap-2">
 			<!-- `flex` rather than the default inline formatting context: the
 			     avatar button is inline-block, so in a block wrapper it sat on a
 			     text baseline and left ~6px of descender space underneath. That
 			     padded every character message's header to 70px against a
 			     narrator message's 64px, for no visible reason. -->
-			<span class="flex shrink-0">
-				{#if msg.isNarratorResponse}
-					<span
-						class="bg-primary-500/10 text-primary-500 flex h-12 w-12 items-center justify-center rounded-full lg:h-[4em] lg:w-[4em]"
-						title={narratorDisplayName}
-					>
-						<Icons.CloudSun size="1.5em" />
-					</span>
-				{:else}
-					<!-- Make avatar clickable -->
-					<button
-						class="m-0 w-fit p-0"
-						onclick={() => onAvatarClick(character)}
-						title="View Avatar"
-					>
-						<Avatar
-							char={character || undefined}
-							size="w-12 h-12 lg:w-[4em] lg:h-[4em]"
+		<span class="sp-msg-avatar shrink-0">
+			{#if msg.isNarratorResponse}
+				<span class="sp-msg-avatar-glyph" title={narratorDisplayName} aria-hidden="true">
+					<Icons.CloudSun size="1.5em" />
+				</span>
+			{:else}
+				<!-- Avatar rendered directly (not the reusable Avatar component):
+				     Skeleton hard-sizes its avatar root, which fought the layout
+				     CSS. A plain img/glyph lets each style pack own size and shape. -->
+				<button
+					class="sp-msg-avatar-btn"
+					onclick={() => onAvatarClick(character)}
+					title="View Avatar"
+					aria-label="View avatar"
+				>
+					{#if character?.avatar}
+						<img
+							class="sp-msg-avatar-img"
+							src={character.avatar}
+							alt={resolveCharacterName(character, "Unknown")}
 						/>
-					</button>
-				{/if}
-			</span>
-			<div class="flex min-w-0 flex-1 flex-col">
+					{:else}
+						<span class="sp-msg-avatar-glyph" aria-hidden="true">
+							<Icons.UserRound size="1.5em" />
+						</span>
+					{/if}
+				</button>
+			{/if}
+		</span>
 				<!-- msg-ctrl-row pins this line to exactly one control-height and
 				     centers its contents, so the name's optical center lands on
 				     the same y as the "..." button's. This replaces the two `mt-1`
 				     nudges that used to fake it for the adjacent icons only. -->
-				<span class="msg-ctrl-row min-w-0 gap-1">
+				<div class="sp-msg-identity msg-ctrl-row min-w-0 gap-1">
 					{#if msg.isNarratorResponse}
 						<span
-							class="funnel-display mx-0 min-w-0 truncate px-0 text-[1.1em] font-bold"
+							class="sp-msg-name funnel-display mx-0 min-w-0 truncate px-0 text-[1.1em] font-bold"
 							title={narratorDisplayName}
 						>
 							{narratorDisplayName}
 						</span>
 					{:else}
 						<button
-							class="funnel-display mx-0 min-w-0 truncate px-0 text-[1.1em] font-bold hover:underline"
+							class="sp-msg-name funnel-display mx-0 min-w-0 truncate px-0 text-[1.1em] font-bold hover:underline"
 							onclick={(e) => onCharacterNameClick(msg)}
 							title={resolveCharacterName(character, "Unknown")}
 						>
@@ -340,12 +371,10 @@
 							{/if}
 						</span>
 					{/if}
-				</span>
-			</div>
-		</div>
+				</div>
 
 		{#if isEditing}
-			<div class="msg-ctrl-col">
+			<div class="sp-msg-controls msg-ctrl-col">
 				<!-- msg-ctrl-btn-labeled, not msg-ctrl-btn: it is the same
 				     fixed box on mobile (so the header height contract in
 				     app.css holds) and only widens to fit the word on lg.
@@ -378,7 +407,7 @@
 				</div>
 			</div>
 		{:else}
-			<div class="msg-ctrl-col">
+			<div class="sp-msg-controls msg-ctrl-col">
 				<div class="msg-ctrl-row flex-wrap justify-end gap-2">
 					{#if messageControls}
 						{@render messageControls(msg)}
@@ -458,8 +487,8 @@
 				{/if}
 			</div>
 		{/if}
-	</div>
 
+	<div class="sp-msg-content">
 	<!-- Extra instructions block (Narrator's optional per-trigger focus note).
 	     Suppressed when parts render: the section part carries it there. -->
 	{#if hasNarratorInstructions && !partsNative}
@@ -561,7 +590,7 @@
 			scrollContainer: "#session-history"
 		}}
 	>
-		<div class="flex h-fit rounded p-2 text-left">
+		<div class="sp-msg-body flex h-fit text-left">
 			{#if msg.error}
 				{#if msg.content}
 					<div class="rendered-session-message-content mb-2">
@@ -699,6 +728,7 @@
 				</div>
 			{/if}
 		</div>
+	</div>
 	</div>
 </div>
 

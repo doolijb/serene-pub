@@ -198,7 +198,7 @@
 		<Portal>
 			<Popover.Positioner class="z-[1000]!">
 				<Popover.Content
-					class="card preset-tonal-surface flex max-w-[16rem] flex-col gap-1 p-2"
+					class="card preset-filled-surface-100-900-surface flex max-w-[16rem] flex-col gap-1 p-2"
 				>
 					{#each INSERTABLE_CARD_OPTIONS as option}
 						<button
@@ -249,7 +249,7 @@
 						<Portal>
 							<Popover.Positioner class="z-[1000]!">
 								<Popover.Content
-									class="card preset-tonal-surface max-w-xs p-2 text-sm"
+									class="card preset-filled-surface-100-900-surface max-w-xs p-2 text-sm"
 								>
 									{describeBlock(card)}
 								</Popover.Content>
@@ -302,7 +302,7 @@
 						<Portal>
 							<Popover.Positioner class="z-[1000]!">
 								<Popover.Content
-									class="card preset-tonal-surface max-w-xs p-2 text-sm"
+									class="card preset-filled-surface-100-900-surface max-w-xs p-2 text-sm"
 								>
 									Outputs a single value. Unescaped ({"{{{"}...{"}}}"})
 									renders raw text/HTML; escaped ({"{{"}...{"}}"})

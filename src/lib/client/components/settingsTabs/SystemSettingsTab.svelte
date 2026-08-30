@@ -617,7 +617,7 @@
 {#if !!systemSettingsCtx.settings && userCtx.user?.isAdmin}
 	<div class="flex flex-col gap-6">
 		{#if systemSettingsCtx.settings?.isAndroidWrapper}
-			<div class="card preset-tonal space-y-4 p-4">
+			<div class="card preset-filled-surface-100-900 space-y-4 p-4">
 				<h3 class="text-lg font-semibold">Local Model Managers</h3>
 				<p class="text-muted-foreground text-sm">
 					Ollama Manager and KoboldCPP Manager aren't available in the
@@ -631,7 +631,7 @@
 			</div>
 		{:else}
 			<!-- Ollama Manager Settings -->
-			<div class="card preset-tonal space-y-4 p-4">
+			<div class="card preset-filled-surface-100-900 space-y-4 p-4">
 				<h3 class="text-lg font-semibold">Ollama Manager</h3>
 
 				<div class="flex items-center gap-2">
@@ -659,7 +659,7 @@
 			</div>
 
 			<!-- KoboldCPP Manager Settings -->
-			<div class="card preset-tonal space-y-4 p-4">
+			<div class="card preset-filled-surface-100-900 space-y-4 p-4">
 				<h3 class="text-lg font-semibold">KoboldCPP Manager</h3>
 
 				<div class="flex items-center gap-2">
@@ -743,7 +743,7 @@
 			</div>
 
 			<!-- Embeddings Settings -->
-			<div class="card preset-tonal space-y-4 p-4">
+			<div class="card preset-filled-surface-100-900 space-y-4 p-4">
 				<h3 class="text-lg font-semibold">Embeddings</h3>
 
 				<p class="text-muted-foreground text-sm">
@@ -776,7 +776,7 @@
 		{/if}
 
 		<!-- Scripts (the fourth paradigm's kill switch, 18 §10) -->
-		<div class="card preset-tonal space-y-4 p-4">
+		<div class="card preset-filled-surface-100-900 space-y-4 p-4">
 			<h3 class="text-lg font-semibold">Scripts</h3>
 
 			<p class="text-muted-foreground text-sm">
@@ -806,7 +806,7 @@
 		</div>
 
 		<!-- Summarization Settings -->
-		<div class="card preset-tonal space-y-4 p-4">
+		<div class="card preset-filled-surface-100-900 space-y-4 p-4">
 			<h3 class="text-lg font-semibold">Summarization</h3>
 
 			<p class="text-muted-foreground text-sm">
@@ -840,7 +840,7 @@
 		</div>
 
 		<!-- Context Debugging -->
-		<div class="card preset-tonal space-y-4 p-4">
+		<div class="card preset-filled-surface-100-900 space-y-4 p-4">
 			<h3 class="text-lg font-semibold">Context Debugging</h3>
 			<p class="text-muted-foreground text-sm">
 				When enabled, shows the prompt inspector tab in the session UI,
@@ -871,13 +871,13 @@
 		</div>
 
 		<!-- Legacy Configs -->
-		<div class="card preset-tonal space-y-4 p-4">
+		<div class="card preset-filled-surface-100-900 space-y-4 p-4">
 			<h3 class="text-lg font-semibold">Legacy Configs</h3>
 			<p class="text-muted-foreground text-sm">
-				Show the Legacy panel holding the 0.5 archives — the old
-				Context Configs and Prompt Configs, kept readable. Nothing in
-				0.6 builds a prompt from them; hide the panel when you are done
-				referring back. The rows themselves stay either way.
+				Show the Legacy panel holding the 0.5 archives — the old Context
+				Configs and Prompt Configs, kept readable. Nothing in 0.6 builds
+				a prompt from them; hide the panel when you are done referring
+				back. The rows themselves stay either way.
 			</p>
 			<div class="flex items-center gap-2">
 				<Switch
@@ -893,8 +893,8 @@
 					</Switch.Control>
 					<Switch.HiddenInput />
 					<Switch.Label class="font-semibold">
-						{systemSettingsCtx.settings?.legacyPromptConfigsVisible !==
-						false
+						{systemSettingsCtx.settings
+							?.legacyPromptConfigsVisible !== false
 							? "Legacy Configs Shown"
 							: "Show Legacy Configs"}
 					</Switch.Label>
@@ -903,7 +903,7 @@
 		</div>
 
 		<!-- CharaVault Integration -->
-		<div class="card preset-tonal space-y-4 p-4">
+		<div class="card preset-filled-surface-100-900 space-y-4 p-4">
 			<h3 class="text-lg font-semibold">Community Library: CharaVault</h3>
 			<p class="text-muted-foreground text-sm">
 				Connect one CharaVault account to enable browsing charavault.net
@@ -972,40 +972,44 @@
 			{/if}
 		</div>
 
-		<!-- Account Settings -->
-		<div class="card preset-tonal space-y-4 p-4">
-			<h3 class="text-lg font-semibold">Account Management</h3>
+		<!-- Account Settings. Hidden on Android, which is single-user by
+		     design — the server refuses the change regardless. -->
+		{#if !systemSettingsCtx.settings?.isAndroidWrapper}
+			<div class="card preset-filled-surface-100-900 space-y-4 p-4">
+				<h3 class="text-lg font-semibold">Account Management</h3>
 
-			<div class="flex items-center gap-2">
-				<Switch
-					name="enable-accounts"
-					checked={systemSettingsCtx.settings?.isAccountsEnabled}
-					onCheckedChange={handleEnableAccountsClick}
-					disabled={systemSettingsCtx.settings?.isAccountsEnabled}
-				>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+				<div class="flex items-center gap-2">
+					<Switch
+						name="enable-accounts"
+						checked={systemSettingsCtx.settings?.isAccountsEnabled}
+						onCheckedChange={handleEnableAccountsClick}
+						disabled={systemSettingsCtx.settings?.isAccountsEnabled}
 					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-					<Switch.Label class="font-semibold">
-						Enable User Accounts
-					</Switch.Label>
-				</Switch>
-			</div>
+						<Switch.Control
+							class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+						>
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+						<Switch.Label class="font-semibold">
+							Enable User Accounts
+						</Switch.Label>
+					</Switch>
+				</div>
 
-			{#if systemSettingsCtx.settings?.isAccountsEnabled}
-				<p class="text-muted-foreground ml-6 text-sm">
-					User accounts are enabled. This setting cannot be reversed.
-				</p>
-			{:else}
-				<p class="text-muted-foreground ml-6 text-sm">
-					Enable user authentication and multi-user support. This is a
-					permanent change.
-				</p>
-			{/if}
-		</div>
+				{#if systemSettingsCtx.settings?.isAccountsEnabled}
+					<p class="text-muted-foreground ml-6 text-sm">
+						User accounts are enabled. This setting cannot be
+						reversed.
+					</p>
+				{:else}
+					<p class="text-muted-foreground ml-6 text-sm">
+						Enable user authentication and multi-user support. This
+						is a permanent change.
+					</p>
+				{/if}
+			</div>
+		{/if}
 	</div>
 {:else if !userCtx.user?.isAdmin}
 	<div class="text-muted-foreground">

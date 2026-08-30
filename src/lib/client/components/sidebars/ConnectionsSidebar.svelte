@@ -452,7 +452,7 @@
 
 		<!-- LLM / Text Generation card -->
 		<button
-			class="card preset-tonal hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
+			class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
 			onclick={() => (view = "connections")}
 		>
 			<div class="flex items-start gap-3">
@@ -497,7 +497,7 @@
 		     rather than through this card. -->
 		{#if systemSettingsCtx.settings?.vectorizationEnabled}
 			<button
-				class="card preset-tonal hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
+				class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
 				onclick={() => (view = "embedding")}
 			>
 				<div class="flex items-start gap-3">

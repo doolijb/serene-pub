@@ -4,7 +4,7 @@
  * combined with accounts-disabled-by-default and HOST=0.0.0.0-by-default,
  * meant any internet-reachable non-browser client got a tokenless admin
  * session. Fixed by scoping it to the local network by default, with
- * SOCKETS_ALLOWED_ORIGINS=* as an explicit opt-out.
+ * ALLOWED_ORIGINS=* as an explicit opt-out.
  *
  * The `::ffff:`-mapped test cases are the one most likely to be silently
  * broken by a naive implementation: a dual-stack listener (the default for
@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest"
 const ORIGINAL_ENV = { ...process.env }
 
 beforeEach(() => {
-	delete process.env.SOCKETS_ALLOWED_ORIGINS
+	delete process.env.ALLOWED_ORIGINS
 	delete process.env.ADDRESS_HEADER
 })
 
@@ -82,8 +82,8 @@ describe("isMissingOriginAllowed", () => {
 		expect(isMissingOriginAllowed("203.0.113.7")).toBe(false)
 	})
 
-	test("allows any address when SOCKETS_ALLOWED_ORIGINS=* is set", async () => {
-		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+	test("allows any address when ALLOWED_ORIGINS=* is set", async () => {
+		process.env.ALLOWED_ORIGINS = "*"
 		const { isMissingOriginAllowed } = await import("./originAllowlist")
 		expect(isMissingOriginAllowed("203.0.113.7")).toBe(true)
 		expect(isMissingOriginAllowed(undefined)).toBe(true)
@@ -147,7 +147,7 @@ describe("isLocalThroughProxy", () => {
 		// The case a hand-decomposed (isWildcardAllowed() || isLocalNetworkAddress())
 		// predicate could silently break: rejecting a connection an admin
 		// deliberately opted in to allowing.
-		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+		process.env.ALLOWED_ORIGINS = "*"
 		const { isLocalThroughProxy } = await import("./originAllowlist")
 		expect(isLocalThroughProxy(socketWith("203.0.113.7"))).toBe(true)
 	})
@@ -192,7 +192,7 @@ describe("getSocketClientAddress", () => {
 		// If this delegated to isMissingOriginAllowed the way isLocalThroughProxy
 		// does, a wildcard deployment would trust any remote peer's claimed
 		// forwarded-for value, letting spoofed headers evade the rate limiter.
-		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+		process.env.ALLOWED_ORIGINS = "*"
 		process.env.ADDRESS_HEADER = "x-forwarded-for"
 		const { getSocketClientAddress } = await import("./originAllowlist")
 		expect(
@@ -206,8 +206,8 @@ describe("getSocketClientAddress", () => {
 })
 
 describe("isOriginAllowed — wildcard", () => {
-	test("allows a genuinely cross-origin request when SOCKETS_ALLOWED_ORIGINS=* is set", async () => {
-		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+	test("allows a genuinely cross-origin request when ALLOWED_ORIGINS=* is set", async () => {
+		process.env.ALLOWED_ORIGINS = "*"
 		const { isOriginAllowed } = await import("./originAllowlist")
 		expect(
 			isOriginAllowed("https://evil.example.com", "my-server.local")
@@ -215,7 +215,7 @@ describe("isOriginAllowed — wildcard", () => {
 	})
 
 	test("* can be combined with other comma-separated values", async () => {
-		process.env.SOCKETS_ALLOWED_ORIGINS = "serene.example.com,*"
+		process.env.ALLOWED_ORIGINS = "serene.example.com,*"
 		const { isOriginAllowed } = await import("./originAllowlist")
 		expect(isOriginAllowed("https://evil.example.com", "host")).toBe(true)
 	})
@@ -230,7 +230,7 @@ describe("isOriginAllowed — wildcard", () => {
 
 describe("describeOriginAllowlistConfig", () => {
 	test("reports the wildcard state distinctly", async () => {
-		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+		process.env.ALLOWED_ORIGINS = "*"
 		const { describeOriginAllowlistConfig } = await import(
 			"./originAllowlist"
 		)
@@ -238,10 +238,83 @@ describe("describeOriginAllowlistConfig", () => {
 	})
 
 	test("lists explicit extra hosts when configured", async () => {
-		process.env.SOCKETS_ALLOWED_ORIGINS = "serene.example.com"
+		process.env.ALLOWED_ORIGINS = "serene.example.com"
 		const { describeOriginAllowlistConfig } = await import(
 			"./originAllowlist"
 		)
 		expect(describeOriginAllowlistConfig()).toContain("serene.example.com")
+	})
+})
+
+describe("listAllowedHosts — provenance", () => {
+	test("reports the built-in loopback hosts with no configuration at all", async () => {
+		const { listAllowedHosts } = await import("./originAllowlist")
+		expect(listAllowedHosts()).toEqual([
+			{ hostname: "localhost", source: "builtin" },
+			{ hostname: "127.0.0.1", source: "builtin" },
+			{ hostname: "::1", source: "builtin" }
+		])
+	})
+
+	test("attributes configured hosts to the environment, normalised", async () => {
+		process.env.ALLOWED_ORIGINS = " Serene.Example.COM , 192.168.1.50 "
+		const { listAllowedHosts } = await import("./originAllowlist")
+		const env = listAllowedHosts().filter((e) => e.source === "env")
+		expect(env).toEqual([
+			{ hostname: "serene.example.com", source: "env" },
+			{ hostname: "192.168.1.50", source: "env" }
+		])
+	})
+
+	test("the wildcard is not a hostname and never appears as an entry", async () => {
+		process.env.ALLOWED_ORIGINS = "*,serene.example.com"
+		const { listAllowedHosts, isWildcardAllowed } = await import(
+			"./originAllowlist"
+		)
+		// It disables the allowlist rather than joining it — rendering "*" as
+		// a host would read as an allowed hostname literally named "*".
+		expect(isWildcardAllowed()).toBe(true)
+		expect(listAllowedHosts().map((e) => e.hostname)).not.toContain("*")
+		expect(listAllowedHosts()).toContainEqual({
+			hostname: "serene.example.com",
+			source: "env"
+		})
+	})
+
+	test("a host that is already built in is not listed twice under env", async () => {
+		process.env.ALLOWED_ORIGINS = "localhost"
+		const { listAllowedHosts } = await import("./originAllowlist")
+		const localhosts = listAllowedHosts().filter(
+			(e) => e.hostname === "localhost"
+		)
+		expect(localhosts).toEqual([
+			{ hostname: "localhost", source: "builtin" }
+		])
+	})
+
+	test("the startup log line is derived from the same list it describes", async () => {
+		process.env.ALLOWED_ORIGINS = "serene.example.com"
+		const { describeOriginAllowlistConfig } = await import(
+			"./originAllowlist"
+		)
+		// Two readers of process.env is how a page and a log line end up
+		// disagreeing about what is actually enforced.
+		expect(describeOriginAllowlistConfig()).toContain("serene.example.com")
+	})
+
+	test("enforcement uses exactly the hosts that are listed", async () => {
+		process.env.ALLOWED_ORIGINS = "serene.example.com"
+		const { listAllowedHosts, isOriginAllowed } = await import(
+			"./originAllowlist"
+		)
+		for (const { hostname } of listAllowedHosts()) {
+			// IPv6 has to be bracketed to be a legal URL host; the allowlist
+			// stores the bare form, so the lookup normalises brackets away.
+			const origin = hostname.includes(":")
+				? `https://[${hostname}]`
+				: `https://${hostname}`
+			expect(isOriginAllowed(origin)).toBe(true)
+		}
+		expect(isOriginAllowed("https://not-listed.example.com")).toBe(false)
 	})
 })

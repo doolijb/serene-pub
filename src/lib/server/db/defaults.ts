@@ -2,6 +2,7 @@ import { eq, sql } from "drizzle-orm"
 import { DEFAULT_CONTEXT_TEMPLATE } from "./legacyContextTemplate"
 import { db } from "."
 import * as schema from "./schema"
+import { LOCAL_SERVER_SLUG } from "$lib/shared/constants/Tunnels"
 
 // Re-exported so existing importers keep working; the definition moved out.
 export { DEFAULT_CONTEXT_TEMPLATE }
@@ -906,6 +907,41 @@ export async function sync() {
 		}
 	} catch (error) {
 		console.error("Error syncing koboldcpp settings:", error)
+	}
+
+	try {
+		// Servers (plan 26 §2)
+		//
+		// The instance's own network identity — a stable anchor for
+		// instance-scoped, non-model-provider settings (tunnels). Exactly one
+		// row, seeded here.
+		//
+		// Matched on `slug`, never on `id`, per the seedKey rule documented at
+		// the top of this file: a hardcoded id collides with whatever the
+		// sequence hands the first user-created row. `servers` has no
+		// user-created rows today, but the rule holds regardless — it costs
+		// nothing here and removes the trap if that ever changes.
+		const existingLocalServer = await db.query.servers.findFirst({
+			where: eq(schema.servers.slug, LOCAL_SERVER_SLUG)
+		})
+		if (!existingLocalServer) {
+			await db.insert(schema.servers).values({
+				slug: LOCAL_SERVER_SLUG,
+				name: "This instance",
+				isSeeded: true
+			})
+		} else if (!existingLocalServer.isSeeded) {
+			// Repair, not overwrite: isSeeded is what stops the row being
+			// deleted, so a row that lost the flag would become deletable and
+			// take its tunnels with it (FK cascade). Name stays whatever the
+			// admin set.
+			await db
+				.update(schema.servers)
+				.set({ isSeeded: true })
+				.where(eq(schema.servers.id, existingLocalServer.id))
+		}
+	} catch (error) {
+		console.error("Error syncing servers:", error)
 	}
 
 	const tables = [

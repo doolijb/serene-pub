@@ -1,6 +1,6 @@
 import { schema, db } from "$lib/server/db"
 import crypto from "crypto"
-import { encrypt } from "../encrypt"
+import { hashPassphrase } from "../kdf"
 import type { QueryResult } from "pg"
 import { eq } from "drizzle-orm"
 
@@ -23,19 +23,17 @@ export async function set({
 	passphrase: string
 	createOnly?: boolean
 }): Promise<void> {
-	// Use PBKDF2, salt is randomly generated string + env var
-	// Hash is 256 bits
-	// Iterations is a random number within 1000 + or - of 100,000
-	// Store hash, salt, and iterations in database
-	const saltLength = 32
-	const salt = crypto.randomBytes(256 - saltLength).toString("hex")
-	const iterations: number = Math.floor(Math.random() * 2000) + 100000
+	// Argon2id where the runtime supports it, scrypt otherwise (see ../kdf).
+	// The digest is a self-describing PHC-style string, so the algorithm and
+	// its cost parameters travel with the row rather than living in columns
+	// that only ever described PBKDF2.
+	const hashedPassphrase = hashPassphrase(passphrase)
 
-	const hashedPassphrase = await encrypt({
-		passphrase,
-		salt,
-		iterations
-	})
+	// `salt` and `iterations` are NOT NULL and only ever meant PBKDF2. The salt
+	// is inside the digest now, so these are written as inert placeholders to
+	// satisfy the constraint — nothing reads them for a modern row.
+	const salt = ""
+	const iterations = 0
 
 	// Delete any existing passphrases for this user if createOnly is false
 	!createOnly &&

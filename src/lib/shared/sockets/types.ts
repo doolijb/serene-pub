@@ -6067,6 +6067,199 @@ declare global {
 			}
 		}
 
+		// Totp namespace (plan 26 §10)
+		namespace Totp {
+			namespace Status {
+				interface Params {}
+				interface Response {
+					/** A secret exists — enrolment may be half-finished. */
+					enrolled: boolean
+					/** The factor is in force. */
+					enabled: boolean
+					/** Unused recovery codes. Zero while enabled is a lockout waiting. */
+					remainingCodes: number
+					/** This session still owes a code before it can do anything. */
+					verificationRequired: boolean
+				}
+			}
+			namespace EnrollBegin {
+				interface Params {}
+				interface Response {
+					/** Returned in the clear so it can be typed into an app that cannot scan. */
+					secret: string
+					otpauthUri: string
+				}
+			}
+			namespace EnrollConfirm {
+				interface Params {
+					code: string
+				}
+				interface Response {
+					/** Shown exactly once; only hashes are stored. */
+					recoveryCodes: string[]
+				}
+			}
+			namespace Verify {
+				interface Params {
+					/** A TOTP code or an unused recovery code. */
+					code: string
+				}
+				interface Response {
+					/** True means the authenticator is probably gone — prompt to re-enrol. */
+					usedRecoveryCode: boolean
+					remainingCodes: number
+				}
+			}
+			namespace RegenerateCodes {
+				interface Params {}
+				interface Response {
+					recoveryCodes: string[]
+				}
+			}
+			namespace Disable {
+				interface Params {
+					code: string
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace AdminClear {
+				interface Params {
+					userId: number
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+		}
+
+		// AllowedHosts namespace (plan 26 §9) — read-only. See
+		// sockets/allowedHosts.ts for why there is no write side.
+		namespace AllowedHosts {
+			/**
+			 * Where a host came from. `builtin` is this machine reaching itself,
+			 * `env` is ALLOWED_ORIGINS, `tunnel` is the hostname a running tunnel
+			 * currently answers on — allowed by the same-hostname rule rather than
+			 * by being on the list, which the UI says out loud.
+			 */
+			type AllowedHostSourceName = "builtin" | "env" | "tunnel"
+
+			interface HostEntry {
+				hostname: string
+				source: AllowedHostSourceName
+			}
+
+			namespace Get {
+				interface Params {}
+				interface Response {
+					/**
+					 * ALLOWED_ORIGINS=* disables the allowlist entirely. When true,
+					 * every entry below is inert and the UI must lead with that.
+					 */
+					wildcard: boolean
+					hosts: HostEntry[]
+				}
+			}
+		}
+
+		// Tunnels namespace (plan 26 §8)
+		//
+		// Its own namespace and its own server file, deliberately never folded
+		// into Connections: a tunnel gates whether this instance is reachable
+		// from the public internet, which is not the kind of thing that should
+		// share a surface with LLM endpoints. Never exposed to the plugin/hook
+		// broker's callable surface at all.
+		namespace Tunnels {
+			/**
+			 * The client-safe projection of a tunnel row.
+			 *
+			 * Spelled out field by field rather than derived as
+			 * `Omit<SelectTunnel, "credential">`, on purpose: this is a wire
+			 * contract, and deriving it from the table would let a future
+			 * column join the client payload silently just by existing. The
+			 * one field that must never be here is the credential — it is
+			 * dropped entirely rather than masked, and `credentialSet` is all
+			 * the UI needs to render "configured".
+			 */
+			interface TunnelView {
+				id: number
+				serverId: number
+				provider: string
+				mode: string
+				hostname: string | null
+				enabled: boolean
+				autoStart: boolean
+				status: string
+				lastError: string | null
+				ttlSeconds: number | null
+				expiresAt: Date | null
+				startedAt: Date | null
+				stoppedAt: Date | null
+				createdAt: Date
+				updatedAt: Date
+				credentialSet: boolean
+			}
+
+			namespace Get {
+				interface Params {}
+				interface Response {
+					/** The seeded `local` server this tunnel belongs to. */
+					serverId: number | null
+					/** Null until an admin has configured one. */
+					tunnel: TunnelView | null
+					/**
+					 * False when tunnels can't be used on this instance at all —
+					 * the Android build today (26 §7). The UI hides the section;
+					 * the server refuses regardless, so this is presentation only.
+					 */
+					available: boolean
+					/** Human-readable reason when `available` is false. */
+					unavailableReason?: string
+					/**
+					 * Whether accounts are on. Enabling a tunnel requires them
+					 * (26 §5); surfaced so the UI can explain the disabled switch
+					 * rather than just refusing on click.
+					 */
+					accountsEnabled: boolean
+				}
+			}
+
+			namespace UpdateConfig {
+				interface Params {
+					provider: string
+					mode: string
+					/** Required for persistent providers; ignored for ephemeral. */
+					hostname?: string | null
+					/** Null = no expiry. */
+					ttlSeconds?: number | null
+					autoStart?: boolean
+					/**
+					 * Write-only. Omit to leave the stored credential untouched;
+					 * pass null to clear it. Never echoed back.
+					 */
+					credential?: string | null
+				}
+				interface Response {
+					tunnel: TunnelView
+				}
+			}
+
+			namespace Enable {
+				interface Params {}
+				interface Response {
+					tunnel: TunnelView
+				}
+			}
+
+			namespace Disable {
+				interface Params {}
+				interface Response {
+					tunnel: TunnelView
+				}
+			}
+		}
+
 		export interface SyncDetails {
 			syncSource: Partial<SelectUser> | null
 			scenario: null | "character" | "session"

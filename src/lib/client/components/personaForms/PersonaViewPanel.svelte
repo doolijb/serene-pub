@@ -115,7 +115,7 @@
 			>
 				<div class="flex flex-col gap-3">
 					<!-- Avatar + name -->
-					<div class="card preset-tonal flex items-center gap-3 p-3">
+					<div class="card preset-filled-surface-100-900 flex items-center gap-3 p-3">
 						<Avatar class="h-16 min-h-16 w-16 min-w-16">
 							<Avatar.Image
 								src={persona.avatar || ""}
@@ -162,7 +162,7 @@
 
 					<!-- Description -->
 					{#if persona.description}
-						<section class="card preset-tonal space-y-1 p-3">
+						<section class="card preset-filled-surface-100-900 space-y-1 p-3">
 							<p
 								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 							>

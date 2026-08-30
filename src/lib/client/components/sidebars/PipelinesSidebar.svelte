@@ -99,7 +99,7 @@
 			{#each list as ns (ns.slug)}
 				<button
 					type="button"
-					class="card preset-tonal hover:preset-tonal-primary flex w-full items-center gap-3 p-4 text-left transition-colors"
+					class="card preset-filled-surface-100-900 hover:preset-tonal-primary flex w-full items-center gap-3 p-4 text-left transition-colors"
 					onclick={() => open(ns.slug)}
 				>
 					<Icons.Workflow size={18} class="shrink-0 opacity-70" />

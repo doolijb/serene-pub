@@ -76,7 +76,7 @@
      definition was an empty one scoped to SessionMessage, so it never applied
      here), plus `gap-4` and `align-middle`, both inert on a block box. -->
 <div
-	class="preset-tonal-surface px-3 pb-2 lg:rounded-t-lg lg:pb-4"
+	class="sp-composer preset-tonal-surface px-3 pb-2 lg:rounded-t-lg lg:pb-4"
 	class:hidden={!!editSessionMessage}
 >
 	{#if showAddPersonaCTA}
@@ -102,10 +102,12 @@
 		</div>
 	{:else}
 		{#if session?.id && systemSettingsCtx.settings?.vectorizationEnabled}
-			<RagNotice
-				sessionId={session.id}
-				totalMessages={session.sessionMessages?.length ?? 0}
-			/>
+			<div class="rag-notice">
+				<RagNotice
+					sessionId={session.id}
+					totalMessages={session.sessionMessages?.length ?? 0}
+				/>
+			</div>
 		{/if}
 
 		{#snippet personaSwitcherControl()}
@@ -185,7 +187,7 @@
 								<Portal>
 									<Popover.Positioner class="z-[1000]!">
 										<Popover.Content
-											class="card preset-tonal-surface min-w-[180px] space-y-1 p-2"
+											class="card preset-filled-surface-100-900-surface min-w-[180px] space-y-1 p-2"
 										>
 											<p
 												class="text-surface-700-300 px-2 pb-1 text-xs font-semibold tracking-wider uppercase"

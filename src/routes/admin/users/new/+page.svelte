@@ -23,7 +23,7 @@
 </div>
 
 <div
-	class="form-max card preset-tonal p-4 shadow-sm"
+	class="form-max card preset-filled-surface-100-900 p-4 shadow-sm"
 >
 	<UserForm onSave={done} onCancel={done} />
 </div>

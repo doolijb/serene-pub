@@ -163,7 +163,13 @@
 				}
 			]
 		>
-		ComposerComponent: Snippet<[]>
+		/**
+		 * The composer, rendered below the scroll area. Optional: under the
+		 * widget-grid layout (PLAN 25) the composer is a SEPARATE sibling widget,
+		 * so this container renders the message list alone and the composer is
+		 * omitted here.
+		 */
+		ComposerComponent?: Snippet<[]>
 		NextCharacterComponent?: Snippet<[]>
 	}
 
@@ -679,6 +685,8 @@
 		</div>
 	</div>
 
-	<!-- Composer area -->
-	{@render ComposerComponent()}
+	<!-- Composer area (omitted when the composer is a separate widget, PLAN 25) -->
+	{#if ComposerComponent}
+		{@render ComposerComponent()}
+	{/if}
 </div>

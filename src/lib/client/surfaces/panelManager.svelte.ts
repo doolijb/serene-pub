@@ -118,6 +118,8 @@ export class SurfaceManager {
 		this.colFr = layout?.tierSizeOverrides
 			? { ...layout.tierSizeOverrides }
 			: {}
+		this.zoneLayout = layout?.zoneLayout
+		this.widgetGrid = layout?.widgetGrid
 	}
 
 	/** Restore the mode's default layout — activation, order, sizes, all of it. */
@@ -258,6 +260,30 @@ export class SurfaceManager {
 				this.activate(p.id)
 	}
 
+	/**
+	 * The modular zone layout (mockup 2026-08-28) — the free-form template
+	 * SessionLayout edits. Stored verbatim inside the same blob; the manager
+	 * is only its courier, never its interpreter.
+	 */
+	zoneLayout = $state<unknown>(undefined)
+
+	setZoneLayout(layout: unknown) {
+		this.zoneLayout = layout
+		this.#schedulePersist()
+	}
+
+	/**
+	 * The chat widget grid (PLAN 25) — the messages/composer widget config
+	 * SessionLayout edits. Same courier contract as zoneLayout: stored verbatim,
+	 * never interpreted here.
+	 */
+	widgetGrid = $state<unknown>(undefined)
+
+	setWidgetGrid(grid: unknown) {
+		this.widgetGrid = grid
+		this.#schedulePersist()
+	}
+
 	/** Serialize just the sticky per-panel state (21 §10). */
 	toBlob(): LayoutBlob {
 		return {
@@ -270,7 +296,13 @@ export class SurfaceManager {
 					drawered: p.drawered,
 					on: p.active
 				})),
-			tierSizeOverrides: { ...this.colFr }
+			tierSizeOverrides: { ...this.colFr },
+			...(this.zoneLayout !== undefined
+				? { zoneLayout: this.zoneLayout }
+				: {}),
+			...(this.widgetGrid !== undefined
+				? { widgetGrid: this.widgetGrid }
+				: {})
 		}
 	}
 

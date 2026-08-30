@@ -124,7 +124,7 @@
 			>
 				<div class="flex flex-col gap-3">
 					<!-- Avatar + name -->
-					<div class="card preset-tonal flex items-center gap-3 p-3">
+					<div class="card preset-filled-surface-100-900 flex items-center gap-3 p-3">
 						<Avatar class="h-16 min-h-16 w-16 min-w-16">
 							<Avatar.Image
 								src={character.avatar || ""}
@@ -174,7 +174,7 @@
 
 					<!-- Description -->
 					{#if character.description}
-						<section class="card preset-tonal space-y-1 p-3">
+						<section class="card preset-filled-surface-100-900 space-y-1 p-3">
 							<p
 								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 							>
@@ -191,7 +191,7 @@
 
 					<!-- Personality -->
 					{#if character.personality}
-						<section class="card preset-tonal space-y-1 p-3">
+						<section class="card preset-filled-surface-100-900 space-y-1 p-3">
 							<p
 								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 							>
@@ -208,7 +208,7 @@
 
 					<!-- Scenario -->
 					{#if character.scenario}
-						<section class="card preset-tonal space-y-1 p-3">
+						<section class="card preset-filled-surface-100-900 space-y-1 p-3">
 							<p
 								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 							>
@@ -225,7 +225,7 @@
 
 					<!-- First message -->
 					{#if character.firstMessage}
-						<section class="card preset-tonal space-y-1 p-3">
+						<section class="card preset-filled-surface-100-900 space-y-1 p-3">
 							<p
 								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 							>
@@ -242,7 +242,7 @@
 
 					<!-- Alternate greetings -->
 					{#if character.alternateGreetings?.length}
-						<section class="card preset-tonal space-y-1.5 p-3">
+						<section class="card preset-filled-surface-100-900 space-y-1.5 p-3">
 							<p
 								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 							>
@@ -271,7 +271,7 @@
 
 					<!-- Creator notes -->
 					{#if character.creatorNotes}
-						<section class="card preset-tonal space-y-1 p-3">
+						<section class="card preset-filled-surface-100-900 space-y-1 p-3">
 							<p
 								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 							>

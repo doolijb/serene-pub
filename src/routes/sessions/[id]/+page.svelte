@@ -27,7 +27,7 @@
 	import { sceneImages } from "$lib/client/stores/sceneImages"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
-	import SurfaceGrid from "$lib/client/components/surfaces/SurfaceGrid.svelte"
+	import SessionLayout from "$lib/client/sessionLayout/SessionLayout.svelte"
 	import { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 	import type { LayoutBlob } from "$lib/client/surfaces/types"
 
@@ -1863,16 +1863,17 @@
 				/>
 			</div>
 		{:else}
-		<!-- The surface grid (plan 21): the conversation is the primary panel;
-		     scene portraits and sample widgets flow into container-responsive
-		     tracks beside it, resize, drawer, and persist per user. -->
-		<SurfaceGrid
+		<!-- The modular session layout (mockup 2026-08-28): the conversation
+		     is the fixed chat core; widgets live in the free-form zones the
+		     user's layout template declares — pinned rails, icon strips with
+		     pop-overs, and top/bottom strips, all by measured width. -->
+		<SessionLayout
 			manager={surfaceManager}
 			{sessionId}
 			{session}
 			onFrameAction={handleFrameAction}
 		>
-			{#snippet primaryChildren()}
+			{#snippet messagesChildren()}
 		<SessionContainer
 			{session}
 			{pagination}
@@ -2075,7 +2076,20 @@
 					{/snippet}
 				</SessionMessage>
 			{/snippet}
-			{#snippet ComposerComponent()}
+			{#snippet NextCharacterComponent()}
+				{#if shouldShowNextCharacterBlock}
+					<NextCharacterBlock
+						{nextCharacter}
+						shouldShow={shouldShowNextCharacterBlock}
+						{canChooseDifferentCharacter}
+						onContinueWithNextCharacter={handleContinueWithNextCharacter}
+						onChooseDifferentCharacter={handleChooseDifferentCharacter}
+					/>
+				{/if}
+			{/snippet}
+		</SessionContainer>
+			{/snippet}
+			{#snippet composerChildren()}
 				{#if isSummarizationMode && summarizationEnabled}
 					<div
 						class="preset-tonal-secondary flex flex-wrap items-center gap-2 p-3 lg:rounded-t-lg"
@@ -2246,20 +2260,7 @@
 					/>
 				{/if}
 			{/snippet}
-			{#snippet NextCharacterComponent()}
-				{#if shouldShowNextCharacterBlock}
-					<NextCharacterBlock
-						{nextCharacter}
-						shouldShow={shouldShowNextCharacterBlock}
-						{canChooseDifferentCharacter}
-						onContinueWithNextCharacter={handleContinueWithNextCharacter}
-						onChooseDifferentCharacter={handleChooseDifferentCharacter}
-					/>
-				{/if}
-			{/snippet}
-		</SessionContainer>
-			{/snippet}
-		</SurfaceGrid>
+		</SessionLayout>
 		{/if}
 	</div>
 

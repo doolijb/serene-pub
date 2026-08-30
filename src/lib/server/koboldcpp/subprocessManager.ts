@@ -69,7 +69,8 @@ let lastBinaryDir: string | null = null
 // handlers must be synchronous, so this only handles the "we hold a live
 // process handle from this session" case with a direct signal — the fuller,
 // async-capable cleanup (which also covers an adopted-from-a-previous-
-// session process) lives in the SIGINT/SIGTERM handlers below.
+// session process) lives in stop(), which the services registry calls on
+// SIGINT/SIGTERM.
 process.on("exit", () => {
 	if (state.process?.pid) {
 		try {
@@ -84,30 +85,13 @@ process.on("exit", () => {
 // subprocess doesn't outlive a shutdown that had every opportunity to clean
 // up after itself. Still can't do anything about SIGKILL/power loss; that
 // residue is what checkForOrphanOnBoot() exists to sweep up on next start.
-let shuttingDown = false
-async function gracefulShutdown(signal: NodeJS.Signals) {
-	if (shuttingDown) return
-	shuttingDown = true
-	console.log(
-		`[KoboldCPP] Received ${signal} — stopping managed subprocess before exit…`
-	)
-	try {
-		await stop()
-	} catch (err) {
-		console.error(
-			"[KoboldCPP] Error stopping managed subprocess during shutdown:",
-			err
-		)
-	} finally {
-		process.exit(0)
-	}
-}
-process.on("SIGINT", () => {
-	gracefulShutdown("SIGINT")
-})
-process.on("SIGTERM", () => {
-	gracefulShutdown("SIGTERM")
-})
+// Signal handling moved to $lib/server/services: this module used to install
+// its own SIGINT/SIGTERM handler that called process.exit(0) when it was done
+// stopping. Node runs every listener for a signal, so that exit cut short any
+// other cleanup still in flight — the db module's lock release, and now the
+// tunnel teardown. The registry waits for all of them, then exits once.
+//
+// `stop()` is what it calls; nothing else about this module's shutdown changed.
 
 function pidFilePath(binaryDir: string): string {
 	return path.join(binaryDir, ".managed-subprocess.pid")

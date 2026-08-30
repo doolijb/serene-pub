@@ -1600,7 +1600,7 @@
 												(cc) => cc.characterId === c.id
 											)}
 										<div
-											class="card preset-tonal flex flex-col gap-3 p-3 shadow-sm transition-colors"
+											class="card preset-filled-surface-100-900 flex flex-col gap-3 p-3 shadow-sm transition-colors"
 											data-dnd-handle
 										>
 											<div class="flex items-start gap-3">
@@ -1806,7 +1806,7 @@
 							>
 								{#each selectedPersonas as p, i (p.id)}
 									<div
-										class="card preset-tonal flex flex-col gap-3 p-3 shadow-sm transition-colors"
+										class="card preset-filled-surface-100-900 flex flex-col gap-3 p-3 shadow-sm transition-colors"
 										data-dnd-handle
 									>
 										<div class="flex items-start gap-3">
@@ -1912,7 +1912,7 @@
 							<div class="flex flex-col gap-2">
 								{#each removedCharacters as rc (rc.id)}
 									<div
-										class="card preset-tonal flex items-center justify-between gap-3 p-3"
+										class="card preset-filled-surface-100-900 flex items-center justify-between gap-3 p-3"
 									>
 										<span class="truncate text-sm">
 											{rc.name}
@@ -1932,7 +1932,7 @@
 								{/each}
 								{#each removedPersonas as rp (rp.id)}
 									<div
-										class="card preset-tonal flex items-center justify-between gap-3 p-3"
+										class="card preset-filled-surface-100-900 flex items-center justify-between gap-3 p-3"
 									>
 										<span class="truncate text-sm">
 											{rp.name}
@@ -1977,7 +1977,7 @@
 									</div>
 								{/if}
 								{#each selectedGuests as guest}
-									<div class="card preset-tonal p-3">
+									<div class="card preset-filled-surface-100-900 p-3">
 										<div class="flex flex-col gap-2">
 											<div
 												class="flex items-center justify-between"
@@ -2310,7 +2310,7 @@
 								     panel renders a flat selector list, so this
 								     is the only card — no nesting. -->
 								<div
-									class="card preset-tonal-surface flex flex-col gap-2 p-3"
+									class="card preset-filled-surface-100-900-surface flex flex-col gap-2 p-3"
 								>
 									<p class="text-sm font-semibold">
 										{p.label}
@@ -2445,7 +2445,7 @@
 
 						{@const ex = accountVisibility.exposed}
 						{#if ex.characters.length + ex.personas.length + ex.lorebooks.length === 0}
-							<div class="card preset-tonal p-4 text-sm">
+							<div class="card preset-filled-surface-100-900 p-4 text-sm">
 								You have not added any of your own characters,
 								personas, or lorebooks to this session — so it
 								exposes nothing of yours.
@@ -2454,7 +2454,7 @@
 							<div class="flex flex-col gap-3">
 								{#if ex.characters.length}
 									<div
-										class="card preset-tonal flex flex-col gap-2 p-3"
+										class="card preset-filled-surface-100-900 flex flex-col gap-2 p-3"
 									>
 										<div
 											class="flex items-center gap-2 text-sm font-semibold"
@@ -2473,7 +2473,7 @@
 								{/if}
 								{#if ex.personas.length}
 									<div
-										class="card preset-tonal flex flex-col gap-2 p-3"
+										class="card preset-filled-surface-100-900 flex flex-col gap-2 p-3"
 									>
 										<div
 											class="flex items-center gap-2 text-sm font-semibold"
@@ -2492,7 +2492,7 @@
 								{/if}
 								{#if ex.lorebooks.length}
 									<div
-										class="card preset-tonal flex flex-col gap-2 p-3"
+										class="card preset-filled-surface-100-900 flex flex-col gap-2 p-3"
 									>
 										<div
 											class="flex items-center gap-2 text-sm font-semibold"
@@ -2525,7 +2525,7 @@
 								<div class="flex flex-col gap-2">
 									{#each accountVisibility.viewers as v}
 										<div
-											class="card preset-tonal flex items-center justify-between gap-3 p-3 text-sm"
+											class="card preset-filled-surface-100-900 flex items-center justify-between gap-3 p-3 text-sm"
 										>
 											<span
 												class="flex items-center gap-2"

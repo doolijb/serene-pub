@@ -1,0 +1,586 @@
+/* ============================================================================
+   Session message + composer style packs (mockup 2026-08-28).
+
+   These are LAYOUTS over the one feature-complete SessionMessage /
+   SessionComposer — the same components, the same shape data, the same
+   behaviours (swipes, edit, thinking, parts, controls, errors, generating
+   states). Full feature parity is structural: there is only ever one message
+   component; a "layout" never forks it.
+
+   The message is ZERO-styled at the base — no background, no card, no baked
+   avatar size — so a layout adds its look instead of fighting a default.
+   SessionMessage is authored as a FLAT grid of four named cells (its direct
+   children):
+
+       .sp-msg-avatar     .sp-msg-identity     .sp-msg-controls
+       .sp-msg-content  (narrator + thinking collapsibles + the message body)
+
+   A layout is a `grid-template-areas` + per-cell CSS, so it can genuinely
+   RESTRUCTURE (avatar beside the body, a single IRC line, no avatar at all).
+   The avatar is a plain <img>/glyph (not the reusable Avatar component, which
+   hard-sizes its own root), so every layout owns its size and shape via the
+   `--sp-av` custom property.
+
+   `data-msg-state` (normal | selected | dim | editing) carries the message's
+   state; backgrounds and the edit outline hang off it, so the state treatment
+   is one place and consistent across layouts. Only the NORMAL background is
+   layout-specific (clean + moonlit add one; the bare packs don't).
+
+   Selected by [data-msg-layout] / [data-composer-layout] on `.chat-core`.
+   SessionMessage only ever renders inside `.chat-core`, so scoping the card
+   there is safe. Imported once (SessionLayout.svelte) as a plain global sheet
+   — outside Tailwind's cascade layers, so it wins over utility classes
+   without !important. Dark mode is [data-mode="dark"] on <html>.
+   ============================================================================ */
+
+/* ── BASE (zero-styled): grid skeleton + neutral spacing only ───────────── */
+.sp-msg {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	grid-template-areas:
+		"avatar identity controls"
+		"content content content";
+	column-gap: 0.5rem;
+	row-gap: 0.15rem;
+	align-items: start;
+	padding: 0.5rem;
+	border-radius: 0.6rem;
+}
+.sp-msg-avatar {
+	grid-area: avatar;
+	align-self: start;
+	display: block;
+	/* Matches the original clean design (~4em). Layouts override per pack. */
+	--sp-av: 3.9rem;
+}
+.sp-msg-identity {
+	grid-area: identity;
+	/* Anchor the name to the TOP of the row (beside the avatar's top), not
+	   centred against the avatar — layouts that want it centred override. */
+	align-self: start;
+	min-width: 0;
+}
+.sp-msg-controls {
+	grid-area: controls;
+	align-self: start;
+	justify-self: end;
+}
+.sp-msg-content {
+	grid-area: content;
+	min-width: 0;
+}
+
+/* Avatar: rendered directly, sized entirely by --sp-av (+ optional radius). */
+.sp-msg-avatar-btn {
+	display: block;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: none;
+	cursor: pointer;
+	width: var(--sp-av);
+	height: var(--sp-av);
+}
+.sp-msg-avatar-img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	border-radius: var(--sp-av-radius, 9999px);
+}
+.sp-msg-avatar-glyph {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--sp-av);
+	height: var(--sp-av);
+	border-radius: var(--sp-av-radius, 9999px);
+	background: color-mix(in oklab, var(--color-primary-500) 12%, transparent);
+	color: var(--color-primary-500);
+}
+
+/* ── Message state (all layouts) ────────────────────────────────────────── */
+.chat-core .sp-msg[data-msg-state="selected"] {
+	background: var(--color-secondary-100);
+}
+[data-mode="dark"] .chat-core .sp-msg[data-msg-state="selected"] {
+	background: var(--color-secondary-900);
+}
+.chat-core .sp-msg[data-msg-state="dim"] {
+	opacity: 0.6;
+	background: color-mix(in oklab, var(--color-surface-500) 14%, transparent);
+}
+.chat-core .sp-msg[data-msg-state="editing"] {
+	outline: 2px solid
+		color-mix(in oklab, var(--color-warning-500) 70%, transparent);
+	outline-offset: -1px;
+	box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.18);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CLEAN — the classic Serene Pub card (its background lives here now).
+   ══════════════════════════════════════════════════════════════════════════ */
+.chat-core[data-msg-layout="clean"] .sp-msg[data-msg-state="normal"] {
+	background: var(--color-primary-50);
+}
+[data-mode="dark"]
+	.chat-core[data-msg-layout="clean"]
+	.sp-msg[data-msg-state="normal"] {
+	background: var(--color-primary-950);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BUBBLES — avatar beside a speaker-coloured bubble; the user on the right.
+   ══════════════════════════════════════════════════════════════════════════ */
+.chat-core[data-msg-layout="bubbles"] {
+	/* Character bubbles get their own tint so they read AS bubbles instead of
+	   melting into the page background; the user's bubble is the primary tint. */
+	--sp-bub-bg: color-mix(
+		in oklab,
+		var(--color-secondary-500) 10%,
+		var(--color-surface-100)
+	);
+	--sp-bub-bd: color-mix(in oklab, var(--color-secondary-500) 28%, transparent);
+	--sp-bub-user-bg: var(--color-primary-100);
+	--sp-bub-user-bd: var(--color-primary-300);
+}
+[data-mode="dark"] .chat-core[data-msg-layout="bubbles"] {
+	--sp-bub-bg: color-mix(
+		in oklab,
+		var(--color-secondary-500) 16%,
+		var(--color-surface-800)
+	);
+	--sp-bub-bd: color-mix(in oklab, var(--color-secondary-500) 34%, transparent);
+	--sp-bub-user-bg: var(--color-primary-900);
+	--sp-bub-user-bd: var(--color-primary-700);
+}
+.chat-core[data-msg-layout="bubbles"] .sp-msg {
+	/* The trailing 1fr column absorbs the body's width so the name and controls
+	   in row 1 stay adjacent (a small gap) instead of the controls being shoved
+	   to the far edge. */
+	grid-template-columns: auto auto auto minmax(0, 1fr);
+	grid-template-areas:
+		"avatar identity controls ."
+		"avatar content  content  content";
+	column-gap: 0.4rem;
+	max-width: 82%;
+	padding: 0.15rem;
+}
+/* Menu + swipes on ONE line. In moonlit this also keeps the header row a
+   single control-height tall, so the fixed --sp-header (where the card starts)
+   stays correct — a stacked 2-row control column would push the card down and
+   overlap the title. */
+.chat-core[data-msg-layout="bubbles"] .sp-msg-controls,
+.chat-core[data-msg-layout="novel"] .sp-msg-controls,
+.chat-core[data-msg-layout="compact"] .sp-msg-controls,
+.chat-core[data-msg-layout="cameo"] .sp-msg-controls {
+	flex-direction: row;
+	align-items: center;
+	gap: 0.25rem;
+	min-inline-size: 0;
+}
+.chat-core[data-msg-layout="bubbles"] .sp-msg-avatar {
+	--sp-av: 2.2rem;
+}
+.chat-core[data-msg-layout="bubbles"] .sp-msg-content {
+	width: 100%;
+}
+.chat-core[data-msg-layout="bubbles"] .sp-msg-body {
+	width: fit-content;
+	max-width: 100%;
+	padding: 0.5rem 0.8rem;
+	border-radius: 1.05rem;
+	border-top-left-radius: 0.3rem;
+	background: var(--sp-bub-bg);
+	border: 1px solid var(--sp-bub-bd);
+}
+/* User / persona: mirror to the right; the controls sit to the RIGHT of the
+   avatar (avatar is the right-side anchor, as the name is on the left side). */
+.chat-core[data-msg-layout="bubbles"] .sp-msg[data-msg-role="user"],
+.chat-core[data-msg-layout="bubbles"] .sp-msg[data-msg-author="persona"] {
+	margin-left: auto;
+	grid-template-columns: minmax(0, 1fr) auto auto;
+	grid-template-areas:
+		"identity avatar controls"
+		"content  avatar controls";
+}
+.chat-core[data-msg-layout="bubbles"]
+	.sp-msg[data-msg-role="user"]
+	.sp-msg-identity,
+.chat-core[data-msg-layout="bubbles"]
+	.sp-msg[data-msg-author="persona"]
+	.sp-msg-identity {
+	flex-direction: row-reverse;
+	text-align: right;
+}
+.chat-core[data-msg-layout="bubbles"]
+	.sp-msg[data-msg-role="user"]
+	.sp-msg-body,
+.chat-core[data-msg-layout="bubbles"]
+	.sp-msg[data-msg-author="persona"]
+	.sp-msg-body {
+	margin-left: auto;
+	background: var(--sp-bub-user-bg);
+	border-color: var(--sp-bub-user-bd);
+	border-radius: 1.05rem;
+	border-top-right-radius: 0.3rem;
+}
+/* Narration: a centred, dashed strip; no avatar. */
+.chat-core[data-msg-layout="bubbles"] .sp-msg[data-msg-role="narration"] {
+	margin-inline: auto;
+	max-width: 70%;
+	grid-template-areas:
+		"identity identity controls"
+		"content  content  content";
+}
+.chat-core[data-msg-layout="bubbles"]
+	.sp-msg[data-msg-role="narration"]
+	.sp-msg-avatar {
+	display: none;
+}
+.chat-core[data-msg-layout="bubbles"]
+	.sp-msg[data-msg-role="narration"]
+	.sp-msg-body {
+	margin-inline: auto;
+	background: transparent;
+	border-style: dashed;
+	font-style: italic;
+	text-align: center;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   NOVEL — flowing serif prose at a reading measure. No bubbles, no avatars.
+   ══════════════════════════════════════════════════════════════════════════ */
+.chat-core[data-msg-layout="novel"] .sp-msg {
+	grid-template-areas:
+		"identity identity controls"
+		"content  content  content";
+	padding: 0.15rem 0.25rem;
+	max-width: 100%;
+}
+.chat-core[data-msg-layout="novel"] .sp-msg-avatar {
+	display: none;
+}
+.chat-core[data-msg-layout="novel"] .sp-msg-name {
+	font-size: 0.66rem !important;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.14em;
+	opacity: 0.7;
+}
+.chat-core[data-msg-layout="novel"] .sp-msg-body {
+	font-family: Georgia, "Times New Roman", serif;
+	font-size: 1.02rem;
+	line-height: 1.75;
+}
+.chat-core[data-msg-layout="novel"] .sp-msg[data-msg-role="user"] .sp-msg-body {
+	border-left: 3px solid var(--color-primary-500);
+	padding-left: 0.95rem;
+}
+.chat-core[data-msg-layout="novel"]
+	.sp-msg[data-msg-role="narration"]
+	.sp-msg-body {
+	text-align: center;
+	font-style: italic;
+	opacity: 0.85;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   COMPACT — dense single IRC line: avatar · name · text · controls.
+   ══════════════════════════════════════════════════════════════════════════ */
+.chat-core[data-msg-layout="compact"] .sp-msg {
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	grid-template-areas:
+		"avatar identity controls"
+		"avatar content  content";
+	align-items: start;
+	column-gap: 0.5rem;
+	row-gap: 0;
+	padding: 0.15rem;
+}
+.chat-core[data-msg-layout="compact"] .sp-msg-avatar {
+	--sp-av: 1.75rem;
+	--sp-av-radius: 0.4rem;
+	align-self: start;
+	margin-top: 0.15rem;
+}
+.chat-core[data-msg-layout="compact"] .sp-msg-identity {
+	white-space: nowrap;
+}
+.chat-core[data-msg-layout="compact"] .sp-msg-name {
+	font-size: 0.8rem !important;
+	color: var(--color-secondary-600);
+}
+[data-mode="dark"] .chat-core[data-msg-layout="compact"] .sp-msg-name {
+	color: var(--color-secondary-400);
+}
+.chat-core[data-msg-layout="compact"]
+	.sp-msg[data-msg-role="user"]
+	.sp-msg-name {
+	color: var(--color-primary-600);
+}
+[data-mode="dark"]
+	.chat-core[data-msg-layout="compact"]
+	.sp-msg[data-msg-role="user"]
+	.sp-msg-name {
+	color: var(--color-primary-400);
+}
+.chat-core[data-msg-layout="compact"] .sp-msg-body {
+	font-size: 0.86rem;
+	margin-top: -0.1rem;
+}
+.chat-core[data-msg-layout="compact"] .sp-msg-body :where(p) {
+	margin-top: 0.2em;
+	margin-bottom: 0.2em;
+}
+.chat-core[data-msg-layout="compact"] .sp-msg[data-msg-role="narration"] {
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-areas: "content controls";
+}
+.chat-core[data-msg-layout="compact"]
+	.sp-msg[data-msg-role="narration"]
+	.sp-msg-avatar,
+.chat-core[data-msg-layout="compact"]
+	.sp-msg[data-msg-role="narration"]
+	.sp-msg-identity {
+	display: none;
+}
+.chat-core[data-msg-layout="compact"]
+	.sp-msg[data-msg-role="narration"]
+	.sp-msg-body {
+	font-style: italic;
+	text-align: center;
+	opacity: 0.85;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CAMEO — a profile card: a large character portrait bleeding into a soft,
+   borderless surface, with the name row set above the card.
+   ══════════════════════════════════════════════════════════════════════════ */
+.chat-core[data-msg-layout="cameo"] {
+	/* A query container so `cqi` (below) resolves the portrait size against the
+	   chat WIDTH on any axis — which lets the card's min-HEIGHT equal the
+	   portrait's WIDTH (a bare `25%` in min-block-size would resolve against
+	   height, which is indefinite, and collapse). */
+	container-type: inline-size;
+	/* A mild, borderless surface card. */
+	--sp-cameo-card: color-mix(in oklab, var(--color-surface-500) 12%, transparent);
+	--sp-cameo-bd: color-mix(in oklab, var(--color-surface-500) 30%, transparent);
+	--sp-cameo-glow: color-mix(in oklab, var(--color-surface-950) 20%, transparent);
+	--sp-cameo-accent: var(--color-primary-600);
+}
+[data-mode="dark"] .chat-core[data-msg-layout="cameo"] {
+	--sp-cameo-card: color-mix(in oklab, var(--color-surface-400) 14%, transparent);
+	--sp-cameo-bd: color-mix(in oklab, var(--color-surface-400) 30%, transparent);
+	--sp-cameo-glow: color-mix(in oklab, var(--color-surface-950) 40%, transparent);
+	--sp-cameo-accent: var(--color-primary-400);
+}
+.chat-core[data-msg-layout="cameo"] .sp-msg {
+	--sp-portrait: clamp(5.5rem, 25cqi, 11rem);
+	/* Height of the name row above the card (row 1 + gap). */
+	--sp-header: calc(var(--msg-ctrl-size) + 0.25rem);
+	position: relative;
+	/* Row 1 = the name/controls ABOVE the card; row 2 = the card (portrait +
+	   body). The card itself is drawn by ::before so its shadow isn't clipped. */
+	grid-template-columns: var(--sp-portrait) minmax(0, 1fr) auto;
+	grid-template-areas:
+		"identity identity controls"
+		"avatar   content  content";
+	column-gap: 0;
+	row-gap: 0.25rem;
+	padding: 0;
+}
+.chat-core[data-msg-layout="cameo"] .sp-msg[data-msg-state="normal"] {
+	background: transparent;
+}
+/* The CARD: a pseudo covering row 2 (full width), behind the portrait + body. */
+.chat-core[data-msg-layout="cameo"] .sp-msg::before {
+	content: "";
+	position: absolute;
+	inset-block-start: var(--sp-header);
+	inset-block-end: 0;
+	inset-inline: 0;
+	border-radius: 1.1rem;
+	box-shadow: 0 8px 26px -16px var(--sp-cameo-glow);
+	backdrop-filter: blur(6px);
+	z-index: 0;
+	pointer-events: none;
+}
+.chat-core[data-msg-layout="cameo"] .sp-msg[data-msg-state="normal"]::before {
+	background: var(--sp-cameo-card);
+}
+/* Name row, above the card. */
+.chat-core[data-msg-layout="cameo"] .sp-msg-identity {
+	align-self: center;
+	padding-inline-start: 1.15rem;
+	z-index: 1;
+}
+.chat-core[data-msg-layout="cameo"] .sp-msg-name {
+	font-size: 1.18rem !important;
+	letter-spacing: 0.01em;
+	color: var(--sp-cameo-accent);
+}
+.chat-core[data-msg-layout="cameo"] .sp-msg-controls {
+	/* row-reverse puts the swipe controls BEFORE the menu (⟨ 1/2 ⟩ · ⋮). */
+	flex-direction: row-reverse;
+	padding-inline-end: 0.35rem;
+	z-index: 1;
+}
+/* Body sits on the card, clearing the portrait column via padding. */
+.chat-core[data-msg-layout="cameo"] .sp-msg-content {
+	position: relative;
+	z-index: 1;
+	align-self: stretch;
+	/* A square-ish floor: at least as tall as the portrait is wide. */
+	min-block-size: var(--sp-portrait);
+	padding: 0.85rem 1.15rem 0.9rem 0.95rem;
+	line-height: 1.7;
+}
+/* Portrait: a real grid cell (row 2, leading column) that STRETCHES to the
+   card height. The image is absolute inside, so it never expands the row and
+   is clipped to the card by the cell's overflow. Width-bound; fades on the
+   text side + bottom so it blends into the card. */
+.chat-core[data-msg-layout="cameo"] .sp-msg-avatar {
+	grid-area: avatar;
+	position: relative;
+	align-self: stretch;
+	overflow: hidden;
+	border-radius: 1.1rem 0 0 1.1rem;
+	z-index: 1;
+}
+.chat-core[data-msg-layout="cameo"] .sp-msg-avatar-btn {
+	position: relative;
+	display: block;
+	width: 100%;
+	height: 100%;
+	min-height: 0;
+	border-radius: 0;
+	overflow: hidden;
+}
+.chat-core[data-msg-layout="cameo"] .sp-msg-avatar-img {
+	position: absolute;
+	inset-block-start: 0;
+	inset-inline: 0;
+	width: 100%;
+	height: auto;
+	border-radius: 0;
+	box-shadow: none;
+	-webkit-mask-image:
+		linear-gradient(to right, #000 42%, transparent 100%),
+		linear-gradient(to bottom, #000 76%, transparent 100%);
+	-webkit-mask-composite: source-in;
+	mask-image:
+		linear-gradient(to right, #000 42%, transparent 100%),
+		linear-gradient(to bottom, #000 76%, transparent 100%);
+	mask-composite: intersect;
+}
+.chat-core[data-msg-layout="cameo"] .sp-msg-avatar-glyph {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	border-radius: 0;
+	box-shadow: none;
+}
+
+/* User / persona: the portrait mirrors to the RIGHT and sits UNDER the name +
+   controls, which are anchored to the card's right edge (name then controls). */
+.chat-core[data-msg-layout="cameo"] .sp-msg[data-msg-role="user"],
+.chat-core[data-msg-layout="cameo"] .sp-msg[data-msg-author="persona"] {
+	grid-template-columns: minmax(0, 1fr) minmax(4.5rem, auto) auto;
+	grid-template-areas:
+		".        identity controls"
+		"content  avatar   avatar";
+}
+.chat-core[data-msg-layout="cameo"]
+	.sp-msg[data-msg-role="user"]
+	.sp-msg-identity,
+.chat-core[data-msg-layout="cameo"]
+	.sp-msg[data-msg-author="persona"]
+	.sp-msg-identity {
+	text-align: right;
+}
+.chat-core[data-msg-layout="cameo"]
+	.sp-msg[data-msg-role="user"]
+	.sp-msg-content,
+.chat-core[data-msg-layout="cameo"]
+	.sp-msg[data-msg-author="persona"]
+	.sp-msg-content {
+	padding: 0.85rem 0.95rem 0.9rem 1.15rem;
+}
+.chat-core[data-msg-layout="cameo"]
+	.sp-msg[data-msg-role="user"]
+	.sp-msg-avatar,
+.chat-core[data-msg-layout="cameo"]
+	.sp-msg[data-msg-author="persona"]
+	.sp-msg-avatar {
+	border-radius: 0 1.1rem 1.1rem 0;
+}
+.chat-core[data-msg-layout="cameo"]
+	.sp-msg[data-msg-role="user"]
+	.sp-msg-avatar-img,
+.chat-core[data-msg-layout="cameo"]
+	.sp-msg[data-msg-author="persona"]
+	.sp-msg-avatar-img {
+	-webkit-mask-image:
+		linear-gradient(to left, #000 42%, transparent 100%),
+		linear-gradient(to bottom, #000 76%, transparent 100%);
+	-webkit-mask-composite: source-in;
+	mask-image:
+		linear-gradient(to left, #000 42%, transparent 100%),
+		linear-gradient(to bottom, #000 76%, transparent 100%);
+	mask-composite: intersect;
+}
+
+/* Narration: no portrait; the card is full width, the name row centred. */
+.chat-core[data-msg-layout="cameo"] .sp-msg[data-msg-role="narration"] {
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-areas:
+		"identity controls"
+		"content  content";
+}
+.chat-core[data-msg-layout="cameo"]
+	.sp-msg[data-msg-role="narration"]
+	.sp-msg-avatar {
+	display: none;
+}
+.chat-core[data-msg-layout="cameo"]
+	.sp-msg[data-msg-role="narration"]
+	.sp-msg-content {
+	padding: 0.7rem 1.15rem;
+	text-align: center;
+	font-style: italic;
+	opacity: 0.95;
+}
+.chat-core[data-msg-layout="cameo"]
+	.sp-msg[data-msg-role="narration"]::before {
+	border: 1px dashed var(--sp-cameo-bd);
+	box-shadow: none;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   COMPOSER STYLE PACKS
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* CLASSIC — the default; no rules. */
+
+/* MINIMAL — a single-line pill; token meter and chatter tucked away. */
+.chat-core[data-composer-layout="minimal"] .sp-composer {
+	border-radius: 999px;
+	padding-block: 0.25rem;
+}
+.chat-core[data-composer-layout="minimal"] .sp-composer textarea {
+	min-height: 2.2rem !important;
+	border: none !important;
+	background: transparent !important;
+}
+.chat-core[data-composer-layout="minimal"] .sp-composer .rag-notice {
+	display: none;
+}
+
+/* WRITER — a tall editor with room to draft long prose. */
+.chat-core[data-composer-layout="writer"] .sp-composer textarea {
+	min-height: 8rem !important;
+	font-size: 0.98rem;
+	line-height: 1.65;
+}

@@ -9,6 +9,7 @@
 	import { Toast } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import LoginForm from "$lib/client/components/LoginForm.svelte"
+	import MfaPrompt from "$lib/client/components/auth/MfaPrompt.svelte"
 	import AccessibleShell from "$lib/client/accessibility/AccessibleShell.svelte"
 	import AccessibleLoginForm from "$lib/client/accessibility/AccessibleLoginForm.svelte"
 	import {
@@ -53,6 +54,7 @@
 	let socketsInitialized = $state(false)
 	let showUpdateBar = $state(true)
 	let showLogin = $state(false)
+	let showMfaPrompt = $state(false)
 	// Startup failure of the realtime connection. Without this the template's
 	// `{#if socketsInitialized}{:else if showLogin}` chain had no third branch,
 	// so any failure here rendered a completely blank page — see the catch in
@@ -154,11 +156,48 @@
 		}
 		const domain = page.url.hostname
 		await loadSocketsClient({ domain })
+
+		// Password accepted, second factor still outstanding (26 §10). The
+		// socket is connected — it has to be, since the code is submitted over
+		// it — but the server refuses everything outside a small allowlist
+		// until then, so the app shell must not render yet.
+		if (await mfaVerificationRequired()) {
+			showMfaPrompt = true
+			return
+		}
 		socketsInitialized = true
 	}
 
 	/**
-	 * loadSocketsClient() rethrows on any failure — /api/sockets-endpoint being
+	 * Ask the server whether this session still owes a code.
+	 *
+	 * Resolves false on anything unexpected. An instance with no 2FA enabled is
+	 * the overwhelming majority, and blocking startup behind a prompt nobody
+	 * can satisfy would be a far worse failure than the server simply refusing
+	 * requests it was going to refuse anyway.
+	 */
+	async function mfaVerificationRequired(): Promise<boolean> {
+		const { useTypedSocket } = await import(
+			"$lib/client/sockets/loadSockets.client"
+		)
+		const socket = useTypedSocket()
+		return await new Promise<boolean>((resolve) => {
+			const timer = setTimeout(() => {
+				socket.off("totp:status", onStatus)
+				resolve(false)
+			}, 5000)
+			function onStatus(res: Sockets.Totp.Status.Response) {
+				clearTimeout(timer)
+				socket.off("totp:status", onStatus)
+				resolve(res.verificationRequired)
+			}
+			socket.on("totp:status", onStatus)
+			socket.emit("totp:status", {})
+		})
+	}
+
+	/**
+	 * loadSocketsClient() rethrows on any failure — the socket connection
 	 * unreachable, a connect_error (blocked port, CORS, TLS), or its own 10s
 	 * connection timeout. This call had no catch and the template had no third
 	 * branch, so every one of those produced a silently blank page plus an
@@ -167,9 +206,9 @@
 	 * true.
 	 *
 	 * The most likely cause in a real deployment is a reverse proxy or tunnel
-	 * that forwards the web port but not the separate realtime port, so the
-	 * message below names that explicitly rather than saying "something went
-	 * wrong".
+	 * that forwards the app's port but not WebSocket upgrade headers — the
+	 * realtime connection shares that one port now — so the message below
+	 * names that explicitly rather than saying "something went wrong".
 	 */
 	async function startup() {
 		startupError = null
@@ -231,6 +270,15 @@
 			{/key}
 		</Layout>
 	{/if}
+{:else if showMfaPrompt}
+	<MfaPrompt
+		onVerified={() => {
+			// Reload rather than flipping a flag: any other tab still holds a
+			// socket whose pending state was decided at handshake, and a fresh
+			// page load is what re-resolves it everywhere.
+			window.location.reload()
+		}}
+	/>
 {:else if showLogin}
 	{#if showAccessibleLogin}
 		<AccessibleLoginForm />

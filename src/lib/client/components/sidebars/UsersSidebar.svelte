@@ -213,7 +213,7 @@
 				<div class="space-y-2">
 					{#each filteredUsers as user}
 						<div
-							class="card preset-tonal hover:preset-tonal-primary flex w-full items-center justify-between p-3 transition-colors"
+							class="card preset-filled-surface-100-900 hover:preset-tonal-primary flex w-full items-center justify-between p-3 transition-colors"
 							role="listitem"
 						>
 							<button

@@ -30,7 +30,6 @@ WORKDIR /app
 # Defaults — all overridable at runtime via environment variables
 ENV NODE_ENV=production \
     PORT=3000 \
-    SOCKETS_PORT=3001 \
     SERENE_PUB_DATA_DIR=/data \
     # Disable auto-open in container environments
     SERENE_AUTO_OPEN=1
@@ -53,6 +52,6 @@ USER serene
 # Persistent data volume (database, uploads, model cache, etc.)
 VOLUME ["/data"]
 
-EXPOSE 3000 3001
+EXPOSE 3000
 
 CMD ["node", "build/index.js"]

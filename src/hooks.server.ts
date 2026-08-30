@@ -132,6 +132,16 @@ export const handle: Handle = async ({ event, resolve }) => {
 		return new Response(null, { status: 204 }) // Return empty response with 204 No Content
 	}
 
+	// Startup no longer blocks this module's import (see db/index.ts for why it
+	// can't), so every request states the dependency explicitly instead of
+	// inheriting it. Imported dynamically, not statically, to keep the server
+	// modules out of the SSR entry's graph — a static import here would also
+	// load them before installPrettyConsole() above has run, losing the
+	// formatting on their own startup logs. Resolved after the first request,
+	// so this costs a microtask thereafter.
+	const { appReady } = await import("$lib/server/startup")
+	await appReady
+
 	if (!dev && !hasCheckedForUpdates) {
 		hasCheckedForUpdates = true
 		// Fire-and-forget: don't let a slow/unreachable network delay this

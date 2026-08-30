@@ -52,7 +52,7 @@
 	)
 </script>
 
-<section class="card preset-tonal flex flex-col gap-3 p-4" aria-label="Used by presets">
+<section class="card preset-filled-surface-100-900 flex flex-col gap-3 p-4" aria-label="Used by presets">
 	<div>
 		<h3 class="text-sm font-semibold">Used by presets</h3>
 		<p class="text-surface-600-400 text-xs">

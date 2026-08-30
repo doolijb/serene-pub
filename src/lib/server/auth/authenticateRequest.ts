@@ -59,6 +59,15 @@ export async function authenticateRequest(
 		})
 		if (!authResult?.user) return null
 
+		// A session that has not cleared its second factor is not authenticated
+		// for anything (26 §10). HTTP routes have no way to prompt for a code,
+		// so the correct answer here is simply "no user" — the socket layer is
+		// where verification happens.
+		const { isMfaPending } = await import("$lib/server/auth/totp/service")
+		if (await isMfaPending(authResult.user.id, payload.id as string)) {
+			return null
+		}
+
 		return {
 			id: authResult.user.id,
 			username: authResult.user.username,

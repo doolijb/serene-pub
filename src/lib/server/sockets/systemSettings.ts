@@ -212,6 +212,18 @@ export const systemSettingsUpdateAccountsEnabled: Handler<
 	event: "systemSettings:updateAccountsEnabled",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		// The Android build is single-user by design: it is one person's app on
+		// one device, with no way to reach it from elsewhere (tunnels are
+		// unavailable there too). Enabling accounts would only add a login
+		// wall — and because the transition is one-way, an accidental tap
+		// would be unrecoverable without the recovery environment variables.
+		// Enforced here and not just hidden in the UI, same as the tunnel
+		// gates.
+		if (params.enabled && isAndroidWrapper()) {
+			throw new Error(
+				"User accounts are not available in the Android app"
+			)
+		}
 		try {
 			const currentSettings = await db.query.systemSettings.findFirst({
 				where: eq(schema.systemSettings.id, 1),

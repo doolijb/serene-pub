@@ -35,3 +35,31 @@ export function encrypt({
 		)
 	})
 }
+
+/**
+ * Synchronous form of the same PBKDF2 derivation.
+ *
+ * Needed because verification now dispatches on the stored digest's scheme
+ * (see ../kdf), and that dispatch is synchronous. Retired for *writing* — this
+ * exists solely to verify rows created before the move to Argon2id/scrypt, so
+ * that those users can sign in once and be upgraded in place.
+ */
+export function encryptSync({
+	passphrase,
+	salt,
+	iterations
+}: {
+	passphrase: string
+	salt: string
+	iterations: number
+}): string {
+	return crypto
+		.pbkdf2Sync(
+			passphrase,
+			salt + getCryptoSecretKey(),
+			iterations,
+			256,
+			"sha256"
+		)
+		.toString("hex")
+}

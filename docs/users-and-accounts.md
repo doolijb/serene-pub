@@ -140,3 +140,49 @@ Because of this, it's worth treating admin lockout as a real risk to plan around
 
 - Passphrase requirements are asymmetric and worth knowing precisely: **self-service** passphrases (the initial admin setup dialog and **Change Passphrase**) are strictly enforced server-side at a minimum of 10 characters (128 maximum), with at least one uppercase letter, one lowercase letter, and one special character. Passphrases an **admin sets for someone else** (the Create/Edit User form) are only required to be non-empty server-side — the form's "6 characters, uppercase, lowercase, numbers" helper text is a client-side suggestion, not an enforced rule. If you need a guaranteed-strong passphrase for another user's account, don't rely on the form alone.
 - Admin status is powerful and, once granted, has no separate approval step beyond the initial confirmation dialog — grant it only to people you'd trust with full server access, since admins can read and modify every other user's characters, personas, and sessions in addition to managing accounts.
+
+## Two-factor authentication
+
+Enable it from **Settings → User → Two-factor authentication**. You will add
+Serene Pub to an authenticator app, then enter a code to confirm — the factor
+does not take effect until you have proved a code works, so a failed setup can
+never lock you out.
+
+### Recovery codes
+
+You get ten when you enable it. **Each one works once**, and they are shown
+exactly once — only their hashes are stored, so there is no way to display them
+again. Copy or download them and keep them somewhere you can reach without this
+app.
+
+The settings page shows how many are left and warns at two remaining. Running
+out is the most common way people lock themselves out; generate a new set before
+that happens. Generating a new set invalidates every previous code.
+
+If you sign in with a recovery code, treat it as a signal that your
+authenticator is gone — set it up again rather than working through the
+remaining codes.
+
+### If you are locked out
+
+Three ways back in, in the order you should try them:
+
+1. **A recovery code**, at the sign-in prompt.
+2. **Another administrator** can clear your second factor from
+   **Admin → Users → (your account)**. This signs out all of your sessions; your
+   password still works. This is the normal route when there is more than one
+   admin.
+3. **The environment**, when you are the only administrator and have lost both
+   your authenticator and your codes. Set `SERENE_PUB_RECOVERY_KEY` (any string
+   you choose) and `SERENE_PUB_RECOVERY_PASSWORD`, then restart. On the next
+   boot your password is reset, two-factor is cleared, and every session is
+   revoked.
+
+   The key is recorded as spent, so booting again with the same key does
+   nothing — the variables can stay in place without resetting your password on
+   every restart. To reset again, choose a **new** key. See
+   [environment variables](./environment-variables.md#account-recovery).
+
+There is no email-based password reset. Setting those variables requires access
+to the machine or container the app runs in, and that access is what authorises
+the reset — anyone who has it could already edit the database directly.

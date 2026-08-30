@@ -4,10 +4,34 @@ import { defineConfig } from "vite"
 import pkg from "./package.json"
 import banner from "vite-plugin-banner"
 
+/**
+ * Hand Vite's own HTTP server to the app so Socket.IO can attach to it.
+ *
+ * Socket.IO used to run its own listener on `SOCKETS_PORT`; it now shares the
+ * one server that serves the pages, which is what makes a socket handshake
+ * same-origin. Neither Vite nor adapter-node passes its `http.Server` into app
+ * code, so both hand it over on `globalThis` and `src/hooks.server.ts` picks it
+ * up on the first request. See `scripts/customize-build.js` for the production
+ * half of this.
+ */
+function serenePubSocketServer() {
+	const stash = (server: { httpServer: unknown | null }) => {
+		if (server.httpServer) {
+			;(globalThis as any).__SERENE_PUB_HTTP_SERVER__ = server.httpServer
+		}
+	}
+	return {
+		name: "serene-pub-socket-server",
+		configureServer: stash,
+		configurePreviewServer: stash
+	}
+}
+
 export default defineConfig({
 	plugins: [
 		tailwindcss(),
 		sveltekit(),
+		serenePubSocketServer(),
 		banner(
 			`/**\n * name: ${pkg.name}\n * version: v${pkg.version}\n * description: ${pkg.description}\n * author: ${JSON.stringify(pkg.author)}\n * homepage: ${pkg.homepage}\n */`
 		)

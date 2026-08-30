@@ -344,8 +344,6 @@ jobs:
                   # SERVER CONFIGURATION
                   # ===========================================
                   # WebSocket server port
-                  # Default: 3001
-                  # SOCKETS_PORT=3001
 
                   # HTTP server port (main application)  
                   # Default: 3000

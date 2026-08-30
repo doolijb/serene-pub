@@ -23,8 +23,20 @@ interface MetaFile {
 // Move meta.json handling to the beginning
 const metaPath = dbConfig.dataDir + "/meta.json"
 
+/**
+ * True when this process created meta.json, i.e. there was no prior Serene Pub
+ * install here.
+ *
+ * Load-bearing for data upgrades: a fresh database is created at the current
+ * schema with no legacy content, so every upgrade would be a no-op at best and
+ * a misfire at worst. Cannot be inferred from the version afterwards — a fresh
+ * file is written as "0.0.0", which is indistinguishable from a genuine old
+ * install once written.
+ */
+const isFreshInstall = !fs.existsSync(metaPath)
+
 // Ensure meta.json exists
-if (!fs.existsSync(metaPath)) {
+if (isFreshInstall) {
 	fs.writeFileSync(
 		metaPath,
 		JSON.stringify(
@@ -221,16 +233,18 @@ export async function closeDatabase(): Promise<void> {
 	}
 }
 
-// Clean up lock on process exit
+// Last-resort, synchronous: 'exit' handlers cannot await, so this only stops
+// the lock-refresh timer. The real teardown is `closeDatabase()`, registered as
+// the "database" managed service (see $lib/server/services/register).
 process.on("exit", stopLockUpdates)
-process.on("SIGINT", () => {
-	stopLockUpdates()
-	process.exit(0)
-})
-process.on("SIGTERM", () => {
-	stopLockUpdates()
-	process.exit(0)
-})
+
+// This module used to own SIGINT/SIGTERM handlers that called
+// `process.exit(0)` immediately. Node runs every listener for a signal, and
+// this module is imported before almost anything else — so that exit fired
+// first and cut short every other listener's cleanup. The managed KoboldCPP
+// subprocess had a graceful-shutdown path that, in production, almost certainly
+// never got to run. The services registry now owns signal handling and waits
+// for each service in turn.
 
 // Everything below is skipped while BUILDING.
 //
@@ -344,163 +358,214 @@ export function getCryptoSecretKey(): string {
 	}
 }
 
+/**
+ * The Serene Pub version this data directory was last opened by, captured
+ * before anything writes to meta.json.
+ */
+const previousVersion: string | null = isFreshInstall
+	? null
+	: (meta.version ?? null)
+
 async function runMigrations() {
-	// TODO: Update this in 0.4.1 to perform pg backups. Not needed for 0.3.0
+	// A backup first, and a failed one aborts the upgrade rather than warning.
+	// This data directory is the only copy the user has — no managed Postgres
+	// behind it, no PITR — so migrating unprotected is the exact situation the
+	// backup exists to prevent. Skipped entirely on a fresh install and when
+	// nothing is actually pending, so it costs an unchanged instance nothing.
+	const { backupBeforeMigrations } = await import("./backup")
+	await backupBeforeMigrations(db, {
+		dataDir: dbConfig.dataDir,
+		migrationsFolder: dbConfig.migrationsDir,
+		label: previousVersion ?? "unknown",
+		isFreshInstall
+	})
 
-	await migrate(db, {
-		migrationsFolder: dbConfig.migrationsDir
-	} as MigrationConfig)
-	console.log("Migrations applied.")
-}
-
-// In dev, always run migrations unconditionally — never gated by the
-// meta.json/app version comparison below. Dev iteration adds new migration
-// files constantly without bumping the app version for each one (that
-// mismatch is exactly what silently skipped a real migration for an entire
-// debugging session once already), so version-gating in dev just means
-// "sometimes skip a migration that actually needs to run." drizzle's own
-// migrate() is idempotent — safe to call every startup regardless of the
-// stored meta.json version, it only applies what isn't already applied.
-if (building) {
-	// no-op: see the `building` guard above
-} else if (dev) {
-	await runMigrations()
-} else {
-	// @ts-ignore
-	const appVersion = __APP_VERSION__
-	if (!appVersion) {
-		throw new Error(
-			"App version is not defined. Please set __APP_VERSION__."
-		)
-	}
-	const versionCompare = compareVersions(meta.version, appVersion)
-
-	switch (versionCompare) {
-		case 0:
-			console.log("No migration needed, versions match.")
-			break
-		case -1:
-			console.log("Running migrations to update database schema...")
-			await runMigrations()
-			meta.version = appVersion
-			fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
-			console.log(`Updated meta.json to version ${appVersion}.`)
-			break
-		case 1:
-			console.warn(
-				`Warning: Database version (${meta.version}) is newer than app version (${appVersion}).`
-			)
-			// This could happen if the app version is rolled back or if the database was manually updated
-			// Handle this case as needed, e.g., notify the user or log an error
-			throw new Error(
-				`Database version (${meta.version}) is newer than app version (${appVersion}). Please check your database integrity.`
-			)
-		default:
-			console.error(
-				"Unexpected version comparison result:",
-				versionCompare
-			)
-			throw new Error("Unexpected version comparison result")
-	}
-}
-
-// Keep immutable seed rows (default prompt configs, etc.) in sync with the
-// current code on every startup — deliberately NOT gated by the version
-// comparison above, since that only tracks schema migrations. Editing seed
-// *text* in defaults.ts without a version bump would otherwise never take
-// effect on restart. sync() is fully idempotent (upsert-by-id, isImmutable
-// rows only), so running it unconditionally here is safe.
-if (!building) {
-	// Imported here rather than at module scope, and the difference is a real
-	// cycle rather than style: `defaults.ts` imports `db` from this module, so
-	// a static import makes the two initialise in a loop. It happened to work
-	// only because some *other* module in the graph pulled `db` in first;
-	// deleting the legacy prompt builder removed that module and the parity
-	// suite started failing with `Cannot access '__vite_ssr_import_1__' before
-	// initialization` — `db` still in its temporal dead zone while `sync()`
-	// ran. Deferring the import to here means this module's body has finished
-	// and `db` is a real value by the time `defaults.ts` reads it.
-	const { sync } = await import("./defaults")
-	await sync()
+	const { runMigrationsWithUpgrades } = await import("./dataUpgrades")
+	const { upgradesRun } = await runMigrationsWithUpgrades(db, {
+		migrationsFolder: dbConfig.migrationsDir,
+		// Data upgrades transform content an older version left behind. There
+		// is none on a fresh install, so they are skipped outright rather than
+		// each being asked to detect emptiness.
+		skipUpgrades: isFreshInstall
+	})
+	console.log(
+		`Migrations applied.` +
+			(upgradesRun.length
+				? ` Data upgrades run: ${upgradesRun.join(", ")}.`
+				: "")
+	)
 }
 
 /**
- * Pipeline tables: the type registry, and core's own published specs.
+ * Everything this module used to do at top level, moved into a function.
  *
- * Separate from `sync()` above because the two are different kinds of thing. The
- * seeded rows there are user-editable content, upserted so a user's edits
- * survive; a published spec version is immutable by construction — it is what a
- * run resolved against — so it is published once per version and never rewritten.
+ * **Why this is not a style change.** Awaiting these at module scope made this
+ * an async ESM module whose own evaluation dynamically imported modules that
+ * import `db` right back — `./defaults`, `messages/store`,
+ * `pipelines/boot/bootstrap`, `plugins`. That is a cycle through a top-level
+ * await, and in the production Rollup bundle it deadlocks: whether it happens
+ * depends on which chunk each of those modules lands in, so it was invisible
+ * until a chunk boundary moved. When it does happen nothing throws and nothing
+ * rejects — every `await import()` of anything reaching `db` simply never
+ * settles, so the request that triggered it hangs forever and any
+ * fire-and-forget caller silently does nothing. Neither vitest nor `vite dev`
+ * reproduces it; both skip Rollup's chunking entirely.
  *
- * **A failure here does not stop the app.** A type-registry conflict means
- * pipelines cannot run safely on this build; it does not mean the session cannot
- * start, and taking an instance down over a subsystem nobody has opted into yet
- * would be the wrong trade. It is logged, and the report carries the reason for
- * a diagnostics screen to show.
+ * Starting the promise here without awaiting it keeps this module's evaluation
+ * synchronous, which breaks the cycle. The work still begins the instant the
+ * module loads — what changes is that "the database is ready" is now something
+ * callers state explicitly by awaiting `dbReady`, instead of a side effect they
+ * inherited by importing `db`.
  */
-// The message-model migration (20 §5): one-shot, idempotent, before anything
-// reads messages. After the first pass the store's runtime mirror keeps the
-// legacy table and the new model in step, so this finds nothing.
-if (!building) {
-	try {
-		const { migrateMessages } = await import("$lib/server/messages/store")
-		const { migrated } = await migrateMessages(db)
-		if (migrated)
-			console.log(`[messages] migrated ${migrated} legacy message(s)`)
-	} catch (err) {
-		console.warn("[messages] legacy migration failed:", err)
-	}
-	// Embeddings become a connection (20 §14) — one-shot, pointer-guarded.
-	try {
-		const { migrateEmbeddingConnection } = await import(
-			"$lib/server/embedding/migrateEmbeddingConnection"
-		)
-		const r = await migrateEmbeddingConnection(db)
-		if (r.migrated)
-			console.log(
-				`[embedding] endpoint config migrated to connection ${r.connectionId}`
+async function initialiseDatabase(): Promise<void> {
+	// In dev, always run migrations unconditionally — never gated by the
+	// meta.json/app version comparison below. Dev iteration adds new migration
+	// files constantly without bumping the app version for each one (that
+	// mismatch is exactly what silently skipped a real migration for an entire
+	// debugging session once already), so version-gating in dev just means
+	// "sometimes skip a migration that actually needs to run." drizzle's own
+	// migrate() is idempotent — safe to call every startup regardless of the
+	// stored meta.json version, it only applies what isn't already applied.
+	// Did this boot move the stored version? Decides the seed pass below.
+	let versionChanged = false
+
+	if (building) {
+		// no-op: see the `building` guard above
+	} else if (dev) {
+		await runMigrations()
+	} else {
+		// @ts-ignore
+		const appVersion = __APP_VERSION__
+		if (!appVersion) {
+			throw new Error(
+				"App version is not defined. Please set __APP_VERSION__."
 			)
-	} catch (err) {
-		console.warn("[embedding] connection migration failed:", err)
+		}
+		const versionCompare = compareVersions(meta.version, appVersion)
+
+		switch (versionCompare) {
+			case 0: {
+				// Matching versions are not proof that the schema is current.
+				// A rebuild that adds a migration without bumping the version,
+				// a version stamped by an earlier boot that then found more
+				// work, or a restored data directory all produce "versions
+				// match" with migrations still outstanding — and skipping on
+				// the version alone silently never applies them. This is the
+				// same failure the dev branch above refuses to risk; the only
+				// difference here is that the check is cheap enough to make
+				// rather than assume.
+				const { hasPendingMigrations } = await import("./backup")
+				if (await hasPendingMigrations(db, dbConfig.migrationsDir)) {
+					console.log(
+						"Versions match but migrations are pending — running them."
+					)
+					await runMigrations()
+				} else {
+					console.log("No migration needed, versions match.")
+				}
+				break
+			}
+			case -1:
+				console.log("Running migrations to update database schema...")
+				await runMigrations()
+				break
+			case 1:
+				console.warn(
+					`Warning: Database version (${meta.version}) is newer than app version (${appVersion}).`
+				)
+				// This could happen if the app version is rolled back or if the database was manually updated
+				// Handle this case as needed, e.g., notify the user or log an error
+				throw new Error(
+					`Database version (${meta.version}) is newer than app version (${appVersion}). Please check your database integrity.`
+				)
+			default:
+				console.error(
+					"Unexpected version comparison result:",
+					versionCompare
+				)
+				throw new Error("Unexpected version comparison result")
+		}
+	}
+
+	// Stamp the version only after migrations and their data upgrades have
+	// succeeded. Writing it earlier would mark the upgrade done on a boot that
+	// threw halfway through it.
+	if (!building) {
+		// `__APP_VERSION__` is a Vite build-time define. It genuinely does not
+		// exist under vitest, so this has to be a `typeof` guard rather than a
+		// truthiness check — referencing an undeclared identifier throws.
+		// @ts-ignore
+		const appVersion: string | null =
+			// @ts-ignore
+			typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : null
+		if (appVersion && meta.version !== appVersion) {
+			meta.version = appVersion
+			fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
+			versionChanged = true
+			console.log(`Updated meta.json to version ${appVersion}.`)
+		}
+	}
+
+	// Keep immutable seed rows (default prompt configs, etc.) in sync with the
+	// current code.
+	//
+	// **In dev, every boot.** Editing seed *text* in defaults.ts without
+	// bumping the app version would otherwise never take effect on restart,
+	// which is the whole reason this is not version-gated there.
+	//
+	// **In production, only when the version actually moved.** A released build
+	// cannot have its seed text edited underneath it, so re-running the sync on
+	// every boot of an unchanged version is pure startup cost — and this runs
+	// before the app serves its first request. sync() stays fully idempotent
+	// either way; this is about not paying for it needlessly.
+	if (!building && (dev || versionChanged || isFreshInstall)) {
+		// Imported here rather than at module scope, and the difference is a real
+		// cycle rather than style: `defaults.ts` imports `db` from this module, so
+		// a static import makes the two initialise in a loop. It happened to work
+		// only because some *other* module in the graph pulled `db` in first;
+		// deleting the legacy prompt builder removed that module and the parity
+		// suite started failing with `Cannot access '__vite_ssr_import_1__' before
+		// initialization` — `db` still in its temporal dead zone while `sync()`
+		// ran. Deferring the import to here means this module's body has finished
+		// and `db` is a real value by the time `defaults.ts` reads it.
+		const { sync } = await import("./defaults")
+		await sync()
+
+		// Seed core widgets' shipped style presets and prune any that were
+		// dropped (PLAN 25). Deferred-imported for the same db-cycle reason as
+		// `sync` above. Plugin widgets seed their own on install/update.
+		const { syncWidgetStyles } = await import("./widgetStyles")
+		const { CORE_WIDGETS } = await import("$lib/shared/widgets/coreWidgets")
+		await syncWidgetStyles(CORE_WIDGETS, meta.version || "0.0.0")
 	}
 }
 
-if (!building) {
-	try {
-		const { bootstrapPipelines } = await import(
-			"$lib/server/pipelines/boot/bootstrap"
-		)
-		const report = await bootstrapPipelines(db)
-		if (report.conflict)
-			console.warn(
-				"[pipelines] type registry conflict — pipelines are disabled on " +
-					"this build until it is resolved:\n" +
-					report.conflict
-			)
-	} catch (err) {
-		console.warn(
-			"[pipelines] bootstrap failed, pipelines unavailable:",
-			err
-		)
-	}
-}
+/**
+ * Resolves once the database itself is ready: schema migrations applied and
+ * seed rows synced. Nothing beyond the database is in scope here — subsystem
+ * bootstraps live in `$lib/server/startup`, which awaits this first.
+ *
+ * Await this before the first query on any path that can run at startup.
+ */
+export const dbReady: Promise<void> = initialiseDatabase()
 
-// Plugins load after every core startup task. Inert unless SP_PLUGINS_ENABLED
-// is set; a failure here never stops the app (same trade as pipelines above).
-if (!building) {
-	try {
-		const { bootstrapPlugins } = await import("$lib/server/plugins")
-		await bootstrapPlugins(db)
-	} catch (err) {
-		console.warn(
-			"[plugins] bootstrap failed, plugin subsystem unavailable:",
-			err
-		)
-	}
-}
-
-// Mark any downloads that were in-flight when the server last stopped as errored
-db.update(schema.koboldCppModels)
-	.set({ status: "error", errorMessage: "Server restarted during download" })
-	.where(eq(schema.koboldCppModels.status, "downloading"))
-	.catch(() => {})
+// In dev and under test, keep the original contract: importing this module
+// means the database is ready. Only the *production* bundle has the Rollup
+// chunking that turns this top-level await into a deadlock — `vite dev` and
+// vitest both run modules unbundled, where it is exactly as safe as it always
+// was.
+//
+// The asymmetry is deliberate but worth naming, because "behaves differently in
+// the production bundle" is the same property that hid the original bug: what
+// changes between the two is only *when* this is awaited, never whether it
+// runs. Production awaits `appReady` per request (`hooks.server.ts`) and before
+// the socket handlers register (`attachSocketServer`), which covers every entry
+// point.
+//
+// Dev and test additionally await here so migrations and seed sync can never
+// run concurrently with a test. Without this line, a test file that merely
+// touches this module leaves PGlite churning in the background for the rest of
+// the run, and 5s int-test budgets that used to pass start failing several
+// files away from the cause — confirmed by A/B, not guessed at. Do not delete
+// it as redundant.
+if (dev) await dbReady

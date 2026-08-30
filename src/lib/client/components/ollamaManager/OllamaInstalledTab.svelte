@@ -314,7 +314,7 @@
 			{@const isRunning = isModelRunning(model)}
 			{@const isConnected = currentConnectionModelName === model.name}
 			{@const existingConn = findConnectionForModel(model.name)}
-			<div class="card preset-tonal flex flex-col gap-2 p-4">
+			<div class="card preset-filled-surface-100-900 flex flex-col gap-2 p-4">
 				<div class="flex items-center justify-between gap-2">
 					<h4 class="min-w-0 font-semibold break-all">
 						{#if isConnected}

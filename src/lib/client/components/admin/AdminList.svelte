@@ -276,7 +276,7 @@
 
 	{#if loading}
 		<div
-			class="card preset-tonal text-surface-600-400 px-3 py-8 text-center text-sm shadow-sm"
+			class="card preset-filled-surface-100-900 text-surface-600-400 px-3 py-8 text-center text-sm shadow-sm"
 		>
 			<span class="inline-flex items-center gap-2">
 				<Icons.Loader2 size={14} class="animate-spin" /> Loading…
@@ -284,14 +284,14 @@
 		</div>
 	{:else if !pageRows.length}
 		<div
-			class="card preset-tonal text-surface-600-400 px-3 py-8 text-center text-sm shadow-sm"
+			class="card preset-filled-surface-100-900 text-surface-600-400 px-3 py-8 text-center text-sm shadow-sm"
 		>
 			{search ? "No matches." : emptyMessage}
 		</div>
 	{:else if effectiveView === "list"}
 		<!-- ── table view ─────────────────────────────────────────── -->
 		<div
-			class="card preset-tonal overflow-x-auto shadow-sm"
+			class="card preset-filled-surface-100-900 overflow-x-auto shadow-sm"
 		>
 			<table class="w-full min-w-[560px] border-collapse text-sm">
 				<thead>
@@ -358,7 +358,7 @@
 				     because action-column buttons render inside it. -->
 				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 				<div
-					class="card preset-tonal hover:border-primary-500/50 flex flex-col gap-2 border border-transparent p-3 shadow-sm transition-colors"
+					class="card preset-filled-surface-100-900 hover:border-primary-500/50 flex flex-col gap-2 border border-transparent p-3 shadow-sm transition-colors"
 					class:cursor-pointer={!!onRowClick}
 					onclick={() => onRowClick?.(row)}
 					role={onRowClick ? "button" : undefined}

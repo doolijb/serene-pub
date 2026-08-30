@@ -51,6 +51,9 @@ import { registerCustomThemeHandlers } from "./customThemes"
 import { registerCardSourceHandlers } from "./cardSources"
 import { registerPipelineHandlers } from "./pipelines"
 import { registerSessionAdminHandlers } from "./sessionAdmin"
+import { registerTunnelHandlers } from "./tunnels"
+import { registerAllowedHostHandlers } from "./allowedHosts"
+import { registerTotpHandlers } from "./totp"
 import { archivedWrite } from "./legacyArchive"
 
 export function connectSockets(io: {
@@ -115,6 +118,9 @@ export function connectSockets(io: {
 		registerCustomThemeHandlers(socket, emitToUser, register)
 		registerPipelineHandlers(socket, emitToUser, register)
 		registerSessionAdminHandlers(socket, emitToUser, register)
+		registerTunnelHandlers(socket, emitToUser, register)
+		registerAllowedHostHandlers(socket, emitToUser, register)
+		registerTotpHandlers(socket, emitToUser, register)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }
@@ -150,12 +156,52 @@ export function connectSockets(io: {
  * - Type safety for parameters and responses via Socket namespace types
  */
 
+/**
+ * The only events a not-yet-verified session may use. Everything else is
+ * refused until the second factor is cleared.
+ */
+const MFA_PENDING_ALLOWED_EVENTS = new Set([
+	"totp:status",
+	"totp:verify",
+	"auth:logout",
+	"users:current"
+])
+
+/**
+ * Exported for its test. The allowlist is the entire boundary between "asked
+ * for a code" and "let through without one", and it is four strings — worth
+ * asserting directly rather than only through a full socket handshake.
+ */
+export function isBlockedWhilePendingMfa(event: string): boolean {
+	return !MFA_PENDING_ALLOWED_EVENTS.has(event)
+}
+
 function register(
 	socket: any,
 	handler: Handler<any, any>,
 	emitToUser: (event: string, data: any) => void
 ) {
 	socket.on(handler.event, async (message: any) => {
+		// A session that owes a second factor (26 §10) can do exactly four
+		// things: report its own state, submit a code, and log out. Enforced
+		// here rather than per-handler for the same reason as the archived
+		// check below — a handler added later cannot forget a gate it never
+		// had to know about.
+		//
+		// The flag is computed once at handshake. A tab that verifies elsewhere
+		// keeps a stale `true` until it reconnects, which fails closed (it sees
+		// refusals, never unauthorized access) and is what the post-verification
+		// reload resolves.
+		if (
+			socket.mfaPending &&
+			!MFA_PENDING_ALLOWED_EVENTS.has(handler.event)
+		) {
+			emitToUser(`${handler.event}:error`, {
+				error: "Two-factor verification is required to continue."
+			})
+			return
+		}
+
 		// The 0.5 config tables are readable and nothing else. Checked here
 		// rather than in each of their handlers so a handler added to one of
 		// those namespaces later cannot forget — see `legacyArchive.ts`.

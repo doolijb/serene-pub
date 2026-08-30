@@ -1,6 +1,6 @@
 /**
  * Round-12 audit fix (MEDIUM): the compose files already document the
- * SOCKETS_ALLOWED_ORIGINS=* + disabled-accounts-mode exposure tradeoff in a
+ * ALLOWED_ORIGINS=* + disabled-accounts-mode exposure tradeoff in a
  * comment, but there was no runtime signal of it. warnIfOpenAdminExposure()
  * (called once at server startup) logs a loud warning when both conditions
  * are true — every connection reaching this port auto-attaches as an
@@ -47,19 +47,19 @@ afterAll(async () => {
 	await releaseDataDir(dataDir)
 })
 
-const ORIGINAL_ALLOWED_ORIGINS = process.env.SOCKETS_ALLOWED_ORIGINS
+const ORIGINAL_ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
 
 afterEach(() => {
 	if (ORIGINAL_ALLOWED_ORIGINS === undefined) {
-		delete process.env.SOCKETS_ALLOWED_ORIGINS
+		delete process.env.ALLOWED_ORIGINS
 	} else {
-		process.env.SOCKETS_ALLOWED_ORIGINS = ORIGINAL_ALLOWED_ORIGINS
+		process.env.ALLOWED_ORIGINS = ORIGINAL_ALLOWED_ORIGINS
 	}
 })
 
 describe("warnIfOpenAdminExposure (Round-12 audit fix, PGlite integration)", () => {
-	test("warns when accounts are disabled and SOCKETS_ALLOWED_ORIGINS=*", async () => {
-		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+	test("warns when accounts are disabled and ALLOWED_ORIGINS=*", async () => {
+		process.env.ALLOWED_ORIGINS = "*"
 		await testDb
 			.insert(schema.systemSettings)
 			.values({ id: 1, isAccountsEnabled: false })
@@ -75,8 +75,8 @@ describe("warnIfOpenAdminExposure (Round-12 audit fix, PGlite integration)", () 
 		warnSpy.mockRestore()
 	}, 30_000)
 
-	test("does not warn when accounts are enabled, even with SOCKETS_ALLOWED_ORIGINS=*", async () => {
-		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+	test("does not warn when accounts are enabled, even with ALLOWED_ORIGINS=*", async () => {
+		process.env.ALLOWED_ORIGINS = "*"
 		await testDb
 			.update(schema.systemSettings)
 			.set({ isAccountsEnabled: true })
@@ -96,8 +96,8 @@ describe("warnIfOpenAdminExposure (Round-12 audit fix, PGlite integration)", () 
 			.where(eq(schema.systemSettings.id, 1))
 	})
 
-	test("does not warn when SOCKETS_ALLOWED_ORIGINS is not the wildcard, even with accounts disabled", async () => {
-		delete process.env.SOCKETS_ALLOWED_ORIGINS
+	test("does not warn when ALLOWED_ORIGINS is not the wildcard, even with accounts disabled", async () => {
+		delete process.env.ALLOWED_ORIGINS
 
 		const { warnIfOpenAdminExposure } = await import("./loadSockets.server")
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})

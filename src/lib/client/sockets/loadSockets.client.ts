@@ -1,15 +1,6 @@
 import { dev } from "$app/environment"
-import axios, { type AxiosResponse } from "axios"
-import * as skio from "sveltekit-io"
-
-interface SocketsEndpointResponse {
-	endpoint: string
-}
-
-interface SocketOptions {
-	cors: { origin: string; credentials: boolean }
-	maxHttpBufferSize: number
-}
+import { io as connect } from "socket.io-client"
+import { setSocket } from "./socketInstance"
 
 /**
  * Get authentication token from cookies via API endpoint
@@ -34,51 +25,27 @@ async function getAuthToken(): Promise<string | null> {
 }
 
 export async function loadSocketsClient({
-	domain
+	domain: _domain
 }: {
 	domain: string
 }): Promise<void> {
 	try {
-		const res: AxiosResponse<SocketsEndpointResponse> = await axios.get(
-			"/api/sockets-endpoint"
-		)
-		const endpoint = res.data.endpoint?.trim()
-		let host: string
-		if (endpoint) {
-			const serverUrl = new URL(endpoint, window.location.origin)
-			host = serverUrl.origin
-		} else {
-			host = window.location.origin
-		}
-
 		if (dev) {
-			console.log("Connecting to socket server at:", host)
+			console.log(
+				"Connecting to socket server at:",
+				window.location.origin
+			)
 		}
 
 		// Get auth token for socket authentication (async)
 		const authToken = await getAuthToken()
 
-		const socketOptions: SocketOptions = {
-			cors: { origin: "*", credentials: false },
-			maxHttpBufferSize: 1e8
-		}
-
-		// Add auth token to connection if available
-		const connectionOptions = authToken
-			? {
-					...socketOptions,
-					auth: { token: authToken }
-				}
-			: socketOptions
-
-		const io = await skio.setup(host, connectionOptions)
-
-		// Type guard to ensure io.to function exists
-		// @ts-ignore
-		if (typeof io.to !== "function") {
-			// @ts-ignore
-			io.to = () => ({ emit: () => {} })
-		}
+		// No URL: same origin as the page. Socket.IO is attached to the server
+		// that served it, so there is nothing to discover.
+		const io = connect({
+			...(authToken ? { auth: { token: authToken } } : {})
+		})
+		setSocket(io)
 
 		// Wait for connection to be established
 		return new Promise((resolve, reject) => {
@@ -88,7 +55,6 @@ export async function loadSocketsClient({
 			}, 10000) // 10 second timeout
 
 			// Listen for successful connection
-			// @ts-ignore
 			io.on("connect", () => {
 				clearTimeout(connectionTimeout)
 				if (dev) {
@@ -101,14 +67,12 @@ export async function loadSocketsClient({
 			})
 
 			// Listen for connection errors
-			// @ts-ignore
 			io.on("connect_error", (error: any) => {
 				clearTimeout(connectionTimeout)
 				console.error("Socket connection error:", error)
 				reject(error)
 			})
 
-			// @ts-ignore
 			io.on("disconnect", (reason: string) => {
 				if (dev) {
 					console.log("Socket disconnected:", reason)

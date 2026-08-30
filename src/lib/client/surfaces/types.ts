@@ -110,6 +110,18 @@ export interface LayoutBlob {
 	}>
 	/** Sparse per-tier column fr weights, keyed by tier then panel/track. */
 	tierSizeOverrides?: Partial<Record<Tier, number[]>>
+	/**
+	 * The modular zone layout (sessionLayout/schema.ts) — the free-form
+	 * template the layout editor writes. Stored verbatim; typed as unknown
+	 * here so the blob contract does not couple to the schema's evolution.
+	 */
+	zoneLayout?: unknown
+	/**
+	 * The chat widget grid (sessionLayout/widgetGrid.ts, PLAN 25) — the
+	 * messages/composer widget config the layout editor writes. Stored verbatim
+	 * for the same reason as zoneLayout; the manager is only its courier.
+	 */
+	widgetGrid?: unknown
 }
 
 /** Normalize a raw `PanelDecl.layout` to the fully-defaulted instance shape. */

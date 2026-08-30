@@ -3,8 +3,7 @@ services:
         image: ghcr.io/doolijb/serene-pub:latest
         restart: unless-stopped
         ports:
-            - "3000:3000" # Web UI
-            - "3001:3001" # WebSocket server
+            - "3000:3000" # Web UI (also serves the realtime socket)
         volumes:
             - serene-pub-data:/data
         environment:
@@ -14,19 +13,10 @@ services:
             # HTTP port the web UI listens on (must match the left side of the ports mapping)
             PORT: 3000
 
-            # WebSocket server port (must match the left side of the ports mapping)
-            SOCKETS_PORT: 3001
 
             # Disable automatic browser launch (always disabled in containers)
             SERENE_AUTO_OPEN: 1
 
-            # A Docker deployment has already made its own network-exposure
-            # decision via the port mapping above (and/or a reverse proxy in
-            # front of it), so the app's own origin allowlist is redundant
-            # friction here — this opts out of it entirely. Remove this line
-            # (or set specific hostnames) if you want the app-level allowlist
-            # enforced on top of your container's own network boundary.
-            SOCKETS_ALLOWED_ORIGINS: "*"
 
             # --- Optional overrides ---
 
@@ -42,9 +32,9 @@ services:
             # See DOCKER.md for details.
             # KOBOLDCPP_BINARY_DIR: /koboldcpp
 
-            # Running behind a reverse proxy or tunnel? See HOSTING.md — you'll likely need
-            # SOCKETS_HTTPS_HOSTS and HOST_HEADER, and to route /socket.io/ to SOCKETS_PORT.
-            # SOCKETS_HTTPS_HOSTS: serene.example.com
+            # Running behind a reverse proxy or tunnel? See HOSTING.md. One port
+            # serves both the app and its sockets, so proxying PORT is enough —
+            # just forward WebSocket upgrade headers.
             # HOST_HEADER: x-forwarded-host
 
 volumes:

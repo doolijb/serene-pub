@@ -568,7 +568,7 @@
 	{:else}
 		<!-- ── configuration bar ─────────────────────────────────────── -->
 		<section
-			class="card preset-tonal flex flex-wrap items-end gap-2 p-3"
+			class="card preset-filled-surface-100-900 flex flex-wrap items-end gap-2 p-3"
 			aria-label="Configuration"
 		>
 			<label class="min-w-[14rem] flex-1">
@@ -637,7 +637,7 @@
 		</section>
 
 		{#if creating}
-			<div class="card preset-tonal-primary flex flex-wrap gap-2 p-3">
+			<div class="card preset-filled-surface-100-900-primary flex flex-wrap gap-2 p-3">
 				<label class="min-w-[14rem] flex-1">
 					<span class="mb-1 block text-xs font-semibold">
 						{creating.fromConfigId != null
@@ -670,7 +670,7 @@
 		{/if}
 
 		{#if renaming}
-			<div class="card preset-tonal-primary flex flex-wrap gap-2 p-3">
+			<div class="card preset-filled-surface-100-900-primary flex flex-wrap gap-2 p-3">
 				<label class="min-w-[14rem] flex-1">
 					<span class="mb-1 block text-xs font-semibold">
 						Rename configuration
@@ -827,7 +827,7 @@
 						? 'grid grid-cols-[minmax(0,1fr)_25rem]'
 						: 'flex flex-col'}"
 			>
-				<section aria-label="Steps" class="card preset-tonal min-w-0">
+				<section aria-label="Steps" class="card preset-filled-surface-100-900 min-w-0">
 					{#if navView === "map"}
 						<PipelineMap
 							{graph}
@@ -876,7 +876,7 @@
 						</div>
 					{:else}
 						<div
-							class="card preset-tonal text-surface-600-400 flex flex-col items-center gap-1 p-8 text-center text-sm"
+							class="card preset-filled-surface-100-900 text-surface-600-400 flex flex-col items-center gap-1 p-8 text-center text-sm"
 						>
 							<Icons.MousePointerClick
 								size={20}
@@ -974,7 +974,7 @@
      viewport whichever tab is open, and nothing writes until Save all. -->
 {#if pendingCount}
 	<div
-		class="draft-bar card preset-tonal-warning flex items-center gap-2 px-3 py-2 shadow-lg"
+		class="draft-bar card preset-filled-surface-100-900-warning flex items-center gap-2 px-3 py-2 shadow-lg"
 		role="status"
 	>
 		<Icons.CircleDot size={15} class="shrink-0" />

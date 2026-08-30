@@ -80,50 +80,44 @@ volumes:
 
 All variables are optional unless noted. This is the Docker-relevant subset —
 for the full reference, including reverse-proxy trust settings
-(`PROTOCOL_HEADER`/`HOST_HEADER`) and socket endpoint overrides
-(`SOCKETS_HTTPS_HOSTS`/`PUBLIC_SOCKETS_ENDPOINT`), see
-[HOSTING.md](./HOSTING.md).
+(`PROTOCOL_HEADER`/`HOST_HEADER`), see [HOSTING.md](./HOSTING.md).
 
 | Variable                                         | Default                                   | Description                                                                                                        |
 | ------------------------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `SERENE_PUB_DATA_DIR`                            | `/data`                                   | Directory for all persistent data                                                                                  |
-| `PORT`                                           | `3000`                                    | HTTP port the web server listens on                                                                                |
-| `SOCKETS_PORT`                                   | `3001`                                    | WebSocket server port                                                                                              |
+| `PORT`                                           | `3000`                                    | HTTP port the web server listens on (serves the realtime socket too)                                                                                |
 | `SERENE_AUTO_OPEN`                               | `1` (disabled)                            | Baked into the image (there's no browser to open in a container) and set again in both compose files — no need to touch this yourself |
 | `NODE_ENV`                                       | `production`                              | Node.js environment                                                                                                |
 | `USER_TOKEN_EXPIRATION_HOURS`                    | `168`                                     | Session lifetime in hours (168 = 7 days)                                                                           |
 | `TRANSFORMERS_CACHE`                             | `$SERENE_PUB_DATA_DIR/transformers-cache` | Override embedding model cache directory                                                                           |
-| `SOCKETS_ALLOWED_ORIGINS`                        | `*` (in both compose files)               | Disables the app-level socket origin allowlist. Both `docker-compose.dist.yml` and `docker-compose.dev.yml` ship with this set, since a Docker deployment's network exposure is already controlled by its port mapping and/or a reverse proxy — see the comment above `SOCKETS_ALLOWED_ORIGINS` in either compose file if you'd rather remove it and rely on the app-level allowlist too |
 | `KOBOLDCPP_BINARY_DIR` / `KOBOLDCPP_BINARY_NAME` | unset                                     | Point managed KoboldCPP mode at a binary you mounted yourself — see [Managed mode](#koboldcpp--managed-mode) below |
 
 ---
 
 ## Changing ports
 
-Update both the `ports` mapping **and** the corresponding environment variable:
+Update both the `ports` mapping **and** the corresponding environment variable.
+One port serves the web UI and the realtime connection together:
 
 ```yaml
 ports:
     - "8080:8080" # host:container
-    - "8081:8081"
 environment:
     PORT: 8080
-    SOCKETS_PORT: 8081
 ```
 
 ---
 
 ## Running behind a reverse proxy
 
-Serene Pub runs two servers — the web app (`PORT`, default `3000`) and a
-separate WebSocket server (`SOCKETS_PORT`, default `3001`). Your proxy needs
-to route **both**, and forward WebSocket upgrade requests. The simplest way
-is a path split on the same host — see
+Serene Pub serves the web app and its realtime connection from a single
+port (`PORT`, default `3000`), so proxying that one port is all that's
+required — but your proxy **must forward WebSocket upgrade requests**
+(`Upgrade` / `Connection` headers) for `/socket.io/` to work. See
 [HOSTING.md](./HOSTING.md#reverse-proxy--tunnel-same-host) for a full nginx
-example (including Nginx Proxy Manager) and the matching environment
-variables (`SOCKETS_HTTPS_HOSTS`, `HOST_HEADER`), plus a troubleshooting
-table for the "mixed content" / CORS / timeout errors this typically shows
-up as when misconfigured.
+example (including Nginx Proxy Manager) and `HOST_HEADER`, plus a
+troubleshooting table for the "mixed content" / CORS / timeout errors this
+typically shows up as when misconfigured.
 
 ---
 

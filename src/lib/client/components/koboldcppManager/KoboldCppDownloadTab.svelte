@@ -264,7 +264,7 @@
 				</div>
 			{:else}
 				{#each recommendedModels as model}
-					<div class="card preset-tonal p-4">
+					<div class="card preset-filled-surface-100-900 p-4">
 						<div class="flex flex-col gap-3">
 							<div class="flex items-start justify-between gap-2">
 								<div class="min-w-0 flex-1 break-all">
@@ -395,7 +395,7 @@
 				</div>
 			{:else}
 				{#each searchResults as model}
-					<div class="card preset-tonal p-4">
+					<div class="card preset-filled-surface-100-900 p-4">
 						<div class="flex flex-col gap-2">
 							<h4 class="text-lg font-semibold">{model.name}</h4>
 
