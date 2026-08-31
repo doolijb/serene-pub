@@ -13,35 +13,65 @@ console.log("🔧 Customizing server build output...")
 
 let content = fs.readFileSync(buildFile, "utf8")
 
-// Replace console.log messages
-let replacements = 0
+/**
+ * Patch the build, or fail the build trying.
+ *
+ * Every rewrite here targets code this repo doesn't own — @sveltejs/adapter-node's
+ * generated index.js — so an upstream release that rewords a line turns the
+ * matching regex into a silent no-op. That is exactly how browser auto-launch
+ * (and the startup banner) stopped shipping: adapter-node changed
+ *   console.log(`Listening on ${path || `http://${host}:${port}`}`)
+ * to
+ *   console.log(`Listening on ${format_listening_address(path, host, port, ...)}`)
+ * in a semver-minor release, package.json floats on ^5.2.12 with no lockfile,
+ * and nothing here checked whether the replace had actually matched. A
+ * zero-match replace is indistinguishable from a successful one unless you
+ * look, so look — and fail the build, loudly, rather than quietly shipping a
+ * server that's missing the feature.
+ */
+function replaceOrFail(pattern, replacement, label) {
+	// Counted against a global clone: a non-global pattern's .match() returns
+	// capture groups, not occurrences, which would report a bogus count.
+	const matches = [
+		...content.matchAll(
+			new RegExp(pattern.source, pattern.flags.replace("g", "") + "g")
+		)
+	]
+	if (matches.length === 0) {
+		console.error(`❌ ${label}: no match for ${pattern}`)
+		console.error(
+			"   The generated server no longer contains the code this patch targets —"
+		)
+		console.error(
+			"   most likely @sveltejs/adapter-node changed its output. Update the"
+		)
+		console.error("   pattern in scripts/customize-build.js to match.")
+		process.exit(1)
+	}
+	content = content.replace(pattern, replacement)
+	console.log(
+		`✅ ${label} (${matches.length} match${matches.length > 1 ? "es" : ""})`
+	)
+}
 
-const originalListeningFd = content
-content = content.replace(
+replaceOrFail(
 	/console\.log\(`Listening on file descriptor/g,
-	"console.log(`🚀 Serene Pub listening on file descriptor"
+	"console.log(`🚀 Serene Pub listening on file descriptor",
+	"Branded the file-descriptor listening message"
 )
-if (content !== originalListeningFd) {
-	replacements++
-	console.log("✅ Replaced file descriptor listening message")
-}
 
-const originalListeningPath = content
-content = content.replace(
-	/console\.log\(`Listening on \$\{path/g,
-	"console.log(`🚀 Serene Pub listening on ${path"
-)
-if (content !== originalListeningPath) {
-	replacements++
-	console.log("✅ Replaced path listening message")
-}
-
-console.log(`Applied ${replacements} basic replacements`)
-
-// Add launch message after the listening message
-content = content.replace(
-	/console\.log\(`🚀 Serene Pub listening on \$\{path \|\| `http:\/\/\$\{host\}:\$\{port\}`\}`\);/g,
-	`console.log(\`🚀 Serene Pub listening on \${path || \`http://\${host}:\${port}\`}\`);
+// Brand the network listening message AND hang the banner + auto-open off it,
+// in one pass. These used to be two chained replaces, the second matching the
+// first's output — which meant one upstream reword silently disabled both.
+//
+// Matching the whole statement by its stable prefix (`Listening on ${`) and
+// its line ending, rather than by the interpolation's exact contents, is what
+// makes this survive adapter-node rewording the address expression. The
+// socket-activation branch's message reads `Listening on file descriptor ${…}`
+// — literal text before the interpolation — so it can't collide with this.
+replaceOrFail(
+	/^([ \t]*)console\.log\(`Listening on (\$\{.*\})`\);$/m,
+	`$1console.log(\`🚀 Serene Pub listening on $2\`);
 		if (!path) {
 			console.log(\`\`);
 			console.log(\`                                                  \`);
@@ -108,13 +138,14 @@ content = content.replace(
 			} else {
 				console.log(\`ℹ️  Auto-open browser disabled (SERENE_AUTO_OPEN=\${process.env.SERENE_AUTO_OPEN})\`);
 			}
-		}`
+		}`,
+	"Branded the listening message and injected the startup banner + browser auto-open"
 )
 
-// Add shutdown message - fix the function call pattern
-content = content.replace(
+replaceOrFail(
 	/function graceful_shutdown\(reason\) \{/g,
-	"function graceful_shutdown(reason) {\n\tconsole.log(`👋 Serene Pub shutting down (${reason})`);"
+	"function graceful_shutdown(reason) {\n\tconsole.log(`👋 Serene Pub shutting down (${reason})`);",
+	"Added the shutdown message"
 )
 
 // Load .env before @sveltejs/adapter-node reads its own configuration.

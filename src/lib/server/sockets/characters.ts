@@ -435,6 +435,11 @@ async function claimIncomingCharacterUuid(
 	return existing ? undefined : incomingUuid
 }
 
+/** First candidate that's actually an array, else undefined. */
+function firstArray<T>(...candidates: unknown[]): T[] | undefined {
+	return candidates.find(Array.isArray) as T[] | undefined
+}
+
 export function characterFieldsFromParsedData(
 	data: any
 ): Omit<typeof schema.characters.$inferInsert, "userId" | "isFavorite"> {
@@ -455,12 +460,23 @@ export function characterFieldsFromParsedData(
 		postHistoryInstructions: data.post_history_instructions || null,
 		characterVersion: data.character_version || null,
 		creator: data.creator || null,
-		source: Array.isArray(data.extensions?.source)
-			? data.extensions.source
-			: [],
-		groupOnlyGreetings: Array.isArray(data.extensions?.group_only_greetings)
-			? data.extensions.group_only_greetings
-			: null,
+		// V3 defines these on `data` itself; Serene Pub's own exporter (and
+		// SillyTavern before it) writes them under `extensions` instead. Read
+		// both, spec location first, or every spec-compliant card from another
+		// tool imports with these silently emptied.
+		source: firstArray(data.source, data.extensions?.source) ?? [],
+		groupOnlyGreetings:
+			firstArray(
+				data.group_only_greetings,
+				data.extensions?.group_only_greetings
+			) ?? null,
+		// Straight V3 fields with a column each — dropped entirely until now.
+		creatorNotesMultilingual:
+			data.creator_notes_multilingual &&
+			typeof data.creator_notes_multilingual === "object"
+				? data.creator_notes_multilingual
+				: null,
+		assets: firstArray(data.assets) ?? [],
 		aliases: Array.isArray(
 			data.extensions?.serenepub?.aliases ?? data.extensions?.aliases
 		)

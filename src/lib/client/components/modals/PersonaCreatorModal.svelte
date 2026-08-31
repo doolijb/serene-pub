@@ -5,7 +5,7 @@
 	import { onDestroy, onMount } from "svelte"
 	import { z } from "zod"
 	import Avatar from "../Avatar.svelte"
-	import Dropzone from "../Dropzone.svelte"
+	import FileDropzone from "../FileDropzone.svelte"
 
 	interface Props {
 		open: boolean
@@ -101,10 +101,8 @@
 	}
 
 	// Avatar handling
-	function handleAvatarChange(e: Event) {
-		const input = e.target as HTMLInputElement | null
-		if (!input || !input.files || input.files.length === 0) return
-		const file = input.files[0]
+	function handleAvatarChange(details: FileAcceptDetails) {
+		const file = details.files?.[0]
 		if (!file) return
 
 		// Set preview
@@ -462,9 +460,11 @@
 
 									<!-- Upload Area -->
 									<div class="flex-1 space-y-3">
-										<Dropzone
-											id="avatar-upload"
-											onchange={handleAvatarChange}
+										<FileDropzone
+											name="persona-avatar"
+											accept="image/*"
+											hint="PNG, JPG or GIF"
+											onFileAccept={handleAvatarChange}
 										/>
 
 										{#if personaData._avatarFile}

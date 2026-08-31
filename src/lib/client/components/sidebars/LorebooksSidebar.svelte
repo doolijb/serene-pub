@@ -9,12 +9,8 @@
 	import NewNameModal from "../modals/NewNameModal.svelte"
 	import { attachLorebookToChat } from "$lib/client/utils/attachLorebookToChat"
 	import EditLorebookForm from "../lorebookForms/EditLorebookForm.svelte"
-	import {
-		FileUpload,
-		Dialog,
-		Portal,
-		Tabs
-	} from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal, Tabs } from "@skeletonlabs/skeleton-svelte"
+	import FileDropzone from "$lib/client/components/FileDropzone.svelte"
 	import LorebookBindingsManager from "../lorebookForms/LorebookBindingsManager.svelte"
 	import WorldLoreManager from "../lorebookForms/WorldLoreManager.svelte"
 	import type { ValueChangeDetails } from "@zag-js/tabs"
@@ -923,30 +919,11 @@
 							<label class="mb-2" for="file-upload">
 								Select a file.
 							</label>
-							<FileUpload
+							<FileDropzone
 								name="file-upload"
 								accept=".json"
-								maxFiles={1}
 								onFileAccept={handleFileImport}
-								onFileReject={console.error}
-							>
-								<FileUpload.Dropzone
-									class="border-surface-300-700 bg-surface-50-950 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
-								>
-									<Icons.Upload
-										class="text-surface-700-300 h-8 w-8"
-									/>
-									<FileUpload.Trigger
-										class="btn btn-sm preset-filled-primary-500"
-									>
-										Browse
-									</FileUpload.Trigger>
-									<span class="text-surface-700-300 text-xs">
-										or drag and drop
-									</span>
-									<FileUpload.HiddenInput />
-								</FileUpload.Dropzone>
-							</FileUpload>
+							/>
 						{:else}
 							<label class="mb-2" for="name">Name</label>
 							<input

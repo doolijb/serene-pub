@@ -1,13 +1,18 @@
 package pub.serene.app
 
+import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
+import android.webkit.MimeTypeMap
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -22,6 +27,7 @@ import android.widget.TextView
 import android.widget.Toast
 import android.content.res.ColorStateList
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
@@ -38,6 +44,29 @@ class MainActivity : AppCompatActivity() {
     private var serverCheckJob: Job? = null
     private var nodeDiedReceiver: BroadcastReceiver? = null
 
+    /**
+     * Outstanding `<input type="file">` callback, if a picker is open. WebView
+     * hands us exactly one of these per chooser and expects exactly one
+     * onReceiveValue() back — miss it and it believes a chooser is still open,
+     * so every later tap on any file input is silently ignored for the life of
+     * the page.
+     */
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
+
+    // Registered as a field so it lands before the Activity reaches STARTED,
+    // which registerForActivityResult() requires.
+    private val fileChooserLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val callback = filePathCallback
+        filePathCallback = null
+        // parseResult() yields null on cancel, which is the "no files" answer
+        // WebView wants — it must still be delivered.
+        callback?.onReceiveValue(
+            WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+        )
+    }
+
     companion object {
         const val SERVER_URL = "http://localhost:3000"
         // Generous enough to cover first-run asset extraction (node_modules
@@ -47,6 +76,18 @@ class MainActivity : AppCompatActivity() {
         // as soon as the server responds, well under this ceiling.
         const val MAX_WAIT_TIME = 120000L // 2 minutes
         const val CHECK_INTERVAL = 500L // 500ms
+
+        /**
+         * Extensions the app's `accept` lists use that MimeTypeMap doesn't
+         * reliably resolve across the API levels we support (26+). Anything
+         * missing here still falls back to MimeTypeMap, then to no filtering.
+         */
+        private val EXTRA_MIME_TYPES = mapOf(
+            "json" to "application/json",
+            "apng" to "image/apng",
+            "webp" to "image/webp",
+            "avif" to "image/avif"
+        )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -94,6 +135,49 @@ class MainActivity : AppCompatActivity() {
                 // shouldn't tear down the whole WebView.
                 if (request.isForMainFrame) {
                     showRecoveryView("The connection to Serene Pub was lost.")
+                }
+            }
+        }
+
+        // Without a WebChromeClient overriding onShowFileChooser(), WebView's
+        // default answer is "not handled" and tapping any <input type="file">
+        // does nothing at all — no picker, no error. Every upload in the app
+        // (character/persona/lorebook import, avatars, backgrounds, themes)
+        // goes through one, so this is what makes them work on Android.
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(
+                view: WebView,
+                callback: ValueCallback<Array<Uri>>,
+                params: FileChooserParams
+            ): Boolean {
+                // Answer any previous chooser before dropping its callback.
+                filePathCallback?.onReceiveValue(null)
+                filePathCallback = callback
+
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "*/*"
+                    val mimeTypes = toMimeTypes(params.acceptTypes)
+                    if (mimeTypes.isNotEmpty()) {
+                        putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+                    }
+                    if (params.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                    }
+                }
+
+                return try {
+                    fileChooserLauncher.launch(intent)
+                    true
+                } catch (e: ActivityNotFoundException) {
+                    filePathCallback = null
+                    callback.onReceiveValue(null)
+                    Toast.makeText(
+                        this@MainActivity,
+                        "No file picker available on this device.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    false
                 }
             }
         }
@@ -157,6 +241,39 @@ class MainActivity : AppCompatActivity() {
         // the Activity's own launch either way.
         startNodeService()
         waitForServerAndLoad()
+    }
+
+    /**
+     * Translates an HTML `accept` list into MIME types for EXTRA_MIME_TYPES.
+     *
+     * WebView passes `accept` through verbatim, and the app's import zones list
+     * *extensions* (".png,.apng,.jpeg,.jpg,.webp,.json"). Android's picker only
+     * understands MIME types, so handing it those raw would filter the list down
+     * to nothing selectable. Anything we can't resolve makes us give up on
+     * filtering entirely — an empty result leaves the intent on its wildcard
+     * type — rather than show a picker where the wanted file isn't tappable.
+     */
+    private fun toMimeTypes(acceptTypes: Array<String>?): Array<String> {
+        if (acceptTypes.isNullOrEmpty()) return emptyArray()
+        val out = LinkedHashSet<String>()
+        for (raw in acceptTypes) {
+            // A single acceptTypes entry can itself be comma-joined.
+            for (part in raw.split(",")) {
+                val entry = part.trim()
+                if (entry.isEmpty()) continue
+                if (!entry.startsWith(".")) {
+                    // Already a MIME type or wildcard ("image/*").
+                    out.add(entry)
+                    continue
+                }
+                val ext = entry.removePrefix(".").lowercase()
+                val mime = EXTRA_MIME_TYPES[ext]
+                    ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+                    ?: return emptyArray()
+                out.add(mime)
+            }
+        }
+        return out.toTypedArray()
     }
 
     private fun startNodeService() {
@@ -303,6 +420,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Release a chooser still waiting on us, so WebView isn't left holding
+        // an unanswered callback.
+        filePathCallback?.onReceiveValue(null)
+        filePathCallback = null
         serverCheckJob?.cancel()
         nodeDiedReceiver?.let { unregisterReceiver(it) }
         stopService(Intent(this, NodeService::class.java))

@@ -522,10 +522,18 @@ export function buildPersonaExportCard(persona: {
 export function personaFieldsFromParsedData(
 	data: any
 ): Omit<InsertPersona, "userId" | "isDefault"> {
+	// aliases/summary are read back from the same place buildPersonaExportCard
+	// writes them — without this a Serene Pub persona loses both on its own
+	// export/re-import round trip. Mirrors characterFieldsFromParsedData, which
+	// also tolerates the un-namespaced `extensions.aliases` other tools use.
+	const aliases =
+		data.extensions?.serenepub?.aliases ?? data.extensions?.aliases
 	return {
 		name: data.name || "Unnamed Persona",
 		description: data.description || "",
 		creator: data.creator || null,
+		aliases: Array.isArray(aliases) ? aliases : [],
+		summary: data.extensions?.serenepub?.summary ?? null,
 		category: data.extensions?.serenepub?.category ?? null
 	}
 }
