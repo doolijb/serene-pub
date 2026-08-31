@@ -21,6 +21,8 @@ export interface ConnectionServiceItem {
 	presetValue?: number
 	difficulty: string
 	description: string
+	/** Model modality — drives the picker's Text/Image button-group filter. */
+	modality: "text-gen" | "image-gen"
 }
 
 export const CATEGORY_ORDER: ConnectionServiceCategory[] = [
@@ -64,7 +66,8 @@ export function buildConnectionServiceItems(): ConnectionServiceItem[] {
 			category: t.category,
 			type: t.value,
 			difficulty: t.difficulty,
-			description: t.description
+			description: t.description,
+			modality: t.modality ?? "text-gen"
 		})
 	}
 
@@ -83,11 +86,21 @@ export function buildConnectionServiceItems(): ConnectionServiceItem[] {
 			type: CONNECTION_TYPE.OPENAI_CHAT,
 			presetValue: preset.value,
 			difficulty: openaiType.difficulty,
-			description: openaiType.description
+			description: openaiType.description,
+			// OpenAI-compatible presets are all text generation.
+			modality: "text-gen"
 		})
 	}
 
 	return items
+}
+
+/** Keep only the items for one modality — the picker's Text/Image toggle. */
+export function filterConnectionServiceItemsByModality(
+	items: ConnectionServiceItem[],
+	modality: "text-gen" | "image-gen"
+): ConnectionServiceItem[] {
+	return items.filter((i) => i.modality === modality)
 }
 
 export interface ConnectionServiceGroup {

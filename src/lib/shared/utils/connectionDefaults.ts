@@ -114,6 +114,16 @@ export const CONNECTION_DEFAULTS = {
 			thinking: false,
 			thinkingBudget: 8000
 		}
+	},
+	[CONNECTION_TYPE.IMAGE_FOOOCUS]: {
+		type: CONNECTION_TYPE.IMAGE_FOOOCUS,
+		// Fooocus-API's default port. Image connection, so no prompt-format /
+		// token-counter — those are text-only concerns.
+		baseUrl: "http://localhost:8888",
+		modality: "image-gen",
+		extraJson: {
+			apiKey: ""
+		}
 	}
 }
 

@@ -86,7 +86,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Gained `currentCharacterId` in 0.6-preview (migration 0134): the §27l
 	// stop-string exclusion follows the next-speaker node's output through
 	// the host's payload-wins seam (19 §5).
-	"core:provider/generate-text@1": "190742a9f644c5",
+	// Re-projected by 0170 (policy answer 3): the type gained a multimodal
+	// contract — an `attachments` in-port, a `parts` out-port, and a declared
+	// `media` capability — before any release shipped it.
+	"core:provider/generate-text@1": "161f2572294a5c",
 	"core:provider/graph-node-description@1": "6f9762a123b0c",
 	"core:provider/graph-node-resolution@1": "e769698f56c34",
 	"core:provider/graph-perspective@1": "10d6e4b8419763",

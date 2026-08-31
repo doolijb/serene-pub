@@ -72,12 +72,20 @@ export class CONNECTION_TYPE {
 	static KOBOLDCPP = "koboldcpp"
 	static KOBOLDCPP_MANAGED = "koboldcpp_managed"
 	static ANTHROPIC = "anthropic"
+	/** Image generation (modality "image-gen"), Fooocus via Fooocus-API. */
+	static IMAGE_FOOOCUS = "image_fooocus"
 
 	static options: {
 		value: string
 		label: string
 		description: string
 		difficulty: string
+		/**
+		 * Which model modality this connection type is for. Absent = "text-gen"
+		 * (every existing type). Image types carry "image-gen" so the New
+		 * Connection picker's Text/Image button-group can filter them.
+		 */
+		modality?: "text-gen" | "image-gen"
 		/** Used to group this type alongside OPENAI_CHAT_PRESETS entries in the
 		 * unified "New Connection" service picker — "local" for anything that
 		 * talks to a process running on the user's own machine/network,
@@ -132,8 +140,33 @@ export class CONNECTION_TYPE {
 			description: anthropicDesc,
 			difficulty: anthropicDiff,
 			category: "cloud"
+		},
+		{
+			value: CONNECTION_TYPE.IMAGE_FOOOCUS,
+			label: "Fooocus",
+			description:
+				"Local image generation via Fooocus-API (the FastAPI wrapper — " +
+				"Fooocus itself has no HTTP server). Start Fooocus-API (default " +
+				"port 8888) and point this at it; its native performance modes and " +
+				"styles are supported.",
+			difficulty: "Intermediate - Run Fooocus-API",
+			category: "local",
+			modality: "image-gen"
 		}
 	]
+
+	/** The modality a connection type is for; absent option ⇒ "text-gen". */
+	static modalityOf(type: string): "text-gen" | "image-gen" {
+		return (
+			CONNECTION_TYPE.options.find((o) => o.value === type)?.modality ??
+			"text-gen"
+		)
+	}
+
+	/** True for image-generation connection types (route to getImageAdapter). */
+	static isImage(type: string): boolean {
+		return CONNECTION_TYPE.modalityOf(type) === "image-gen"
+	}
 }
 
 export const CONNECTION_TYPES = CONNECTION_TYPE.options

@@ -6,6 +6,7 @@
 		buildConnectionServiceItems,
 		groupConnectionServiceItems,
 		filterConnectionServiceItems,
+		filterConnectionServiceItemsByModality,
 		type ConnectionServiceItem
 	} from "$lib/shared/utils/connectionServiceItems"
 
@@ -20,9 +21,29 @@
 	// once rather than on every keystroke.
 	const ALL_ITEMS = buildConnectionServiceItems()
 
+	// Text vs Image generation — the two modalities share this picker but never
+	// mix, so a widget slot asking for one never offers the other. Seeded from
+	// the current selection so re-opening on an image connection stays on Image.
+	let modality = $state<"text-gen" | "image-gen">(
+		selectedItem?.modality ?? "text-gen"
+	)
+	function setModality(m: "text-gen" | "image-gen") {
+		if (m === modality) return
+		modality = m
+		// A selection from the other modality no longer belongs — clear it and
+		// the search so the list reflects the new modality cleanly.
+		if (selectedItem && selectedItem.modality !== m) {
+			selectedItem = undefined
+			inputValue = ""
+		}
+	}
+
 	let inputValue = $state(selectedItem?.label ?? "")
 	let visibleItems = $derived(
-		filterConnectionServiceItems(ALL_ITEMS, inputValue)
+		filterConnectionServiceItems(
+			filterConnectionServiceItemsByModality(ALL_ITEMS, modality),
+			inputValue
+		)
 	)
 	let groups = $derived(groupConnectionServiceItems(visibleItems))
 
@@ -35,6 +56,38 @@
 		})
 	)
 </script>
+
+<!-- Modality toggle: Text vs Image generation. The two never mix in one picker. -->
+<div
+	class="mb-2 inline-flex overflow-hidden rounded-lg border border-surface-300-700"
+	role="group"
+	aria-label="Generation type"
+>
+	<button
+		type="button"
+		class="flex items-center gap-1.5 px-3 py-1.5 text-sm {modality ===
+		'text-gen'
+			? 'preset-filled-primary-500'
+			: 'preset-tonal-surface'}"
+		aria-pressed={modality === "text-gen"}
+		onclick={() => setModality("text-gen")}
+	>
+		<Icons.Type size={14} />
+		Text
+	</button>
+	<button
+		type="button"
+		class="flex items-center gap-1.5 px-3 py-1.5 text-sm {modality ===
+		'image-gen'
+			? 'preset-filled-primary-500'
+			: 'preset-tonal-surface'}"
+		aria-pressed={modality === "image-gen"}
+		onclick={() => setModality("image-gen")}
+	>
+		<Icons.Image size={14} />
+		Image
+	</button>
+</div>
 
 <Combobox
 	collection={comboboxCollection}

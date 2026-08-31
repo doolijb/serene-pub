@@ -5,10 +5,24 @@ import { user as loadUser, user, usersCurrent } from "./users"
 import { userSettingsGet } from "./userSettings"
 import { systemSettingsGet } from "./systemSettings"
 import { getConnectionAdapter } from "../utils/getConnectionAdapter"
+import { getImageAdapter } from "../utils/getImageAdapter"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import {
 	withConnectionDefaults,
 	stableStringify
 } from "$lib/shared/utils/connectionDefaults"
+
+/**
+ * Resolve a connection's test/list functions, picking the adapter FAMILY by
+ * modality: image-gen types route to the image adapters, everything else to the
+ * text adapters. Both families export `testConnection`/`listModels` with the
+ * same call shape, so callers destructure the two the same way.
+ */
+async function adapterIO(type: string) {
+	return CONNECTION_TYPE.isImage(type)
+		? await getImageAdapter(type)
+		: await getConnectionAdapter(type)
+}
 import type { Handler } from "$lib/shared/events"
 import { loginRateLimit } from "$lib/server/services/loginRateLimit"
 import {
@@ -355,7 +369,7 @@ export const connectionsTest: Handler<
 			// (was previously outside it) so that throw produces this
 			// handler's own clean {ok:false, error, connectionId} response
 			// instead of an uncaught error.
-			const { testConnection, listModels } = await getConnectionAdapter(
+			const { testConnection, listModels } = await adapterIO(
 				params.connection.type
 			)
 			const result = await testConnection(params.connection)
@@ -428,9 +442,7 @@ export const connectionsRefreshModels: Handler<
 			// getConnectionAdapter can throw for an unsupported type — moved
 			// inside this try so that surfaces as this handler's own clean
 			// error response instead of an uncaught error.
-			const { listModels } = await getConnectionAdapter(
-				params.connection.type
-			)
+			const { listModels } = await adapterIO(params.connection.type)
 			const result = await listModels(params.connection)
 			if (result.error) {
 				const res = {

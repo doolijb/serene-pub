@@ -12,6 +12,7 @@
 	import KoboldCppForm from "$lib/client/connectionForms/KoboldCppForm.svelte"
 	import KoboldCppManagedForm from "$lib/client/connectionForms/KoboldCppManagedForm.svelte"
 	import AnthropicForm from "$lib/client/connectionForms/AnthropicForm.svelte"
+	import FooocusForm from "$lib/client/connectionForms/FooocusForm.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
@@ -737,6 +738,8 @@
 							<KoboldCppManagedForm bind:connection />
 						{:else if connection.type === CONNECTION_TYPE.ANTHROPIC}
 							<AnthropicForm bind:connection />
+						{:else if connection.type === CONNECTION_TYPE.IMAGE_FOOOCUS}
+							<FooocusForm bind:connection />
 						{/if}
 
 						{#if connection.id}
