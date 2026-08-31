@@ -1,4 +1,5 @@
 import { db } from "$lib/server/db"
+import { getMediaByUuid, mediaIdUrl, mediaUrl } from "$lib/server/media"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
@@ -13,6 +14,17 @@ import { join } from "path"
 import { dev } from "$app/environment"
 
 const DEFAULT_BACKGROUNDS_MANIFEST = "/backgrounds/defaults/manifest.json"
+
+/** `/media/{uuid}` -> the uuid. Null for anything else, including a shipped
+ *  default background (a static path, which is the other thing this column can
+ *  hold). */
+function mediaUuidFromUrl(value: string | null | undefined): string | null {
+	const match =
+		/^\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(
+			value ?? ""
+		)
+	return match ? match[1] : null
+}
 
 // The 9 default backgrounds that shipped as .jpg before being re-encoded to
 // .webp (see dist size-reduction pass). A user's stored backgroundImagePath
@@ -171,9 +183,16 @@ export const userSettingsGet: Handler<
 					enableEasyCharacterCreation:
 						settings.enableEasyCharacterCreation,
 					showAllCharacterFields: settings.showAllCharacterFields,
-					backgroundImagePath: resolveBackgroundImagePath(
-						settings.backgroundImagePath
-					),
+					// One field on the wire, two columns behind it (28): an
+					// uploaded background is a `/media/{id}` proxy, a shipped
+					// default is its static path. The client only ever
+					// interpolates this into a CSS url(), so it does not care
+					// which it got.
+					backgroundImagePath: settings.backgroundMediaId
+						? mediaIdUrl(settings.backgroundMediaId)
+						: resolveBackgroundImagePath(
+								settings.backgroundImagePath
+							),
 					backgroundOpacity: settings.backgroundOpacity ?? 75,
 					charaVaultIncludeNsfw:
 						settings.charaVaultIncludeNsfw ?? false
@@ -453,7 +472,11 @@ export const userSettingsListBackgrounds: Handler<
 	handler: async (socket: AuthenticatedSocket, _params, emitToUser) => {
 		const userId = socket.user!.id
 		const defaults = getDefaultBackgrounds()
-		const uploads = await listUserBackgrounds({ userId })
+		// Kept as URL strings rather than Media objects: a background is
+		// interpolated straight into a CSS `url(...)` and is never displayed as
+		// a gallery entry, so the id adds nothing a caller can use. They are
+		// `/media/{id}` proxies now — never a filesystem path.
+		const uploads = (await listUserBackgrounds({ userId })).map((m) => m.url)
 		const res: Sockets.UserSettings.ListBackgrounds.Response = {
 			defaults,
 			uploads
@@ -470,14 +493,14 @@ export const userSettingsUploadBackground: Handler<
 	event: "userSettings:uploadBackground",
 	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
 		const userId = socket.user!.id
-		const bgPath = await handleUserBackgroundUpload({
+		const uploaded = await handleUserBackgroundUpload({
 			userId,
 			backgroundFile: params.backgroundFile,
 			mimeType: params.mimeType
 		})
 		const res: Sockets.UserSettings.UploadBackground.Response = {
 			success: true,
-			path: bgPath
+			path: mediaUrl(uploaded.uuid)
 		}
 		emitToUser("userSettings:uploadBackground", res)
 		// Refresh list so client gets updated uploads
@@ -493,7 +516,9 @@ export const userSettingsDeleteBackground: Handler<
 	event: "userSettings:deleteBackground",
 	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
 		const userId = socket.user!.id
-		await deleteUserBackground({ userId, path: params.path })
+		const uuid = mediaUuidFromUrl(params.path)
+		const row = uuid ? await getMediaByUuid(db, uuid) : null
+		if (row) await deleteUserBackground({ userId, mediaId: row.id })
 		const res: Sockets.UserSettings.DeleteBackground.Response = {
 			success: true
 		}
@@ -517,23 +542,39 @@ export const userSettingsUpdateBackground: Handler<
 		// shipped default or one of this user's own uploads, the same two
 		// lists userSettings:listBackgrounds itself offers, rather than
 		// accepting an arbitrary string verbatim.
+		// A background is one of exactly two things, and they live in two
+		// different columns: a shipped default (a static asset owned by no
+		// user, so there is nothing in `media` for it) or one of this user's
+		// own uploads. Setting either clears the other, so "which background"
+		// never has two answers.
+		let backgroundImagePath: string | null = null
+		let backgroundMediaId: number | null = null
+
 		if (params.path !== null) {
-			const [defaults, uploads] = await Promise.all([
-				Promise.resolve(getDefaultBackgrounds()),
-				listUserBackgrounds({ userId })
-			])
-			if (
-				!defaults.includes(params.path) &&
-				!uploads.includes(params.path)
-			) {
-				throw new Error("Invalid background image.")
+			const uuid = mediaUuidFromUrl(params.path)
+			if (uuid !== null) {
+				const owned = await getMediaByUuid(db, uuid)
+				if (!owned || owned.userId !== userId) {
+					throw new Error("Invalid background image.")
+				}
+				backgroundMediaId = owned.id
+			} else {
+				// Still restricted to a shipped default: params.path is
+				// interpolated unescaped into a CSS url(...) on the user's own
+				// page (Layout.svelte), so an arbitrary string must never
+				// reach it.
+				if (!getDefaultBackgrounds().includes(params.path)) {
+					throw new Error("Invalid background image.")
+				}
+				backgroundImagePath = params.path
 			}
 		}
 
 		await db
 			.update(schema.userSettings)
 			.set({
-				backgroundImagePath: params.path,
+				backgroundImagePath,
+				backgroundMediaId,
 				backgroundOpacity: params.opacity
 			})
 			.where(eq(schema.userSettings.userId, userId))

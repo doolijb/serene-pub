@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { avatarSrc } from "$lib/client/utils/media"
 	import { Avatar } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
@@ -115,7 +116,7 @@
 							<div class="flex items-center gap-2">
 								<Avatar class="h-8 min-h-8 w-8 min-w-8">
 									<Avatar.Image
-										src={c.avatar || ""}
+										src={avatarSrc(c) || ""}
 										alt={c.nickname || c.name}
 										class="object-cover"
 									/>
@@ -145,7 +146,7 @@
 							<div class="flex items-center gap-2">
 								<Avatar class="h-8 min-h-8 w-8 min-w-8">
 									<Avatar.Image
-										src={p.avatar || ""}
+										src={avatarSrc(p) || ""}
 										alt={p.name}
 										class="object-cover"
 									/>

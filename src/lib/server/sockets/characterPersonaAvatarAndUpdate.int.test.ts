@@ -71,8 +71,30 @@ async function makePersona(userId: number, name = "Persona") {
 	return persona
 }
 
-describe("characters:setAvatar / personas:setAvatar — gallery scoping (PGlite integration)", () => {
-	test("rejects a path not present in the character's own gallery", async () => {
+/** Insert a media row directly — enough to be "one of this entity's own
+ *  images" without going through an upload. */
+async function makeMedia(
+	userId: number,
+	parent: { characterId?: number; personaId?: number }
+) {
+	const [row] = await testDb
+		.insert(schema.media)
+		.values({
+			userId,
+			characterId: parent.characterId ?? null,
+			personaId: parent.personaId ?? null,
+			hash: `hash-${userId}-${parent.characterId ?? parent.personaId}`,
+			mime: "image/png",
+			bytes: 10,
+			kind: "image",
+			path: "data/users/1/x/deadbeef.png"
+		})
+		.returning()
+	return row
+}
+
+describe("characters:setAvatar / personas:setAvatar — ownership scoping (PGlite integration)", () => {
+	test("rejects a media id that is not one of the character's own images", async () => {
 		const { charactersSetAvatar } = await import("./characters")
 		const user = await makeUser("setavatar-char-user")
 		const character = await makeCharacter(user.id)
@@ -80,39 +102,31 @@ describe("characters:setAvatar / personas:setAvatar — gallery scoping (PGlite 
 		await expect(
 			charactersSetAvatar.handler(
 				fakeSocket(user.id),
-				{
-					characterId: character.id,
-					path: "https://attacker.example/beacon.png"
-				} as any,
+				// Not this character's media — and, since 28, there is no
+				// longer anywhere to put an external URL at all: an avatar is
+				// an id into `media`.
+				{ characterId: character.id, mediaId: 999999 } as any,
 				noopEmit
 			)
 		).rejects.toThrow()
 	})
 
-	test("accepts a path that is in the character's own gallery", async () => {
+	test("accepts a media id grouped under the character", async () => {
 		const { charactersSetAvatar } = await import("./characters")
 		const user = await makeUser("setavatar-char-user-2")
 		const character = await makeCharacter(user.id)
-		await testDb.insert(schema.characterGalleryImages).values({
-			characterId: character.id,
-			path: "/images/data/users/1/characters/1/real.png"
-		})
+		const media = await makeMedia(user.id, { characterId: character.id })
 
 		const res = await charactersSetAvatar.handler(
 			fakeSocket(user.id),
-			{
-				characterId: character.id,
-				path: "/images/data/users/1/characters/1/real.png"
-			} as any,
+			{ characterId: character.id, mediaId: media.id } as any,
 			noopEmit
 		)
 
-		expect(res.character?.avatar).toBe(
-			"/images/data/users/1/characters/1/real.png"
-		)
+		expect(res.character?.avatarMediaId).toBe(media.id)
 	})
 
-	test("rejects a path not present in the persona's own gallery", async () => {
+	test("rejects a media id that is not one of the persona's own images", async () => {
 		const { personasSetAvatar } = await import("./personas")
 		const user = await makeUser("setavatar-persona-user")
 		const persona = await makePersona(user.id)
@@ -120,37 +134,27 @@ describe("characters:setAvatar / personas:setAvatar — gallery scoping (PGlite 
 		await expect(
 			personasSetAvatar.handler(
 				fakeSocket(user.id),
-				{
-					personaId: persona.id,
-					path: "https://attacker.example/beacon.png"
-				} as any,
+				{ personaId: persona.id, mediaId: 999999 } as any,
 				noopEmit
 			)
 		).rejects.toThrow()
 	})
 
-	test("accepts a path that is in the persona's own gallery", async () => {
+	test("accepts a media id grouped under the persona", async () => {
 		const { personasSetAvatar } = await import("./personas")
 		const user = await makeUser("setavatar-persona-user-2")
 		const persona = await makePersona(user.id)
-		await testDb.insert(schema.personaGalleryImages).values({
-			personaId: persona.id,
-			path: "/images/data/users/1/personas/1/real.png"
-		})
+		const media = await makeMedia(user.id, { personaId: persona.id })
 
 		const res = await personasSetAvatar.handler(
 			fakeSocket(user.id),
-			{
-				personaId: persona.id,
-				path: "/images/data/users/1/personas/1/real.png"
-			} as any,
+			{ personaId: persona.id, mediaId: media.id } as any,
 			noopEmit
 		)
 
-		expect(res.persona?.avatar).toBe(
-			"/images/data/users/1/personas/1/real.png"
-		)
+		expect(res.persona?.avatarMediaId).toBe(media.id)
 	})
+
 })
 
 describe("characters:update / personas:update — lorebookId/uuid stripped (PGlite integration)", () => {

@@ -12,6 +12,7 @@
 	import AdminList, {
 		type AdminColumn
 	} from "$lib/client/components/admin/AdminList.svelte"
+	import InvitePanel from "$lib/client/components/userForms/InvitePanel.svelte"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
@@ -19,6 +20,14 @@
 	type Row = SelectUser
 	let rows: Row[] = $state([])
 	let loading = $state(true)
+
+	/**
+	 * Invites live here rather than on a page of their own — issuing one is
+	 * something you do *while* looking at the roster, and a separate section
+	 * for two buttons and a list was one more place to go for no reason.
+	 */
+	type Tab = "accounts" | "invites"
+	let tab = $state<Tab>("accounts")
 
 	function handleList(res: Sockets.Users.List.Response) {
 		rows = res.users
@@ -60,47 +69,81 @@
 	</a>
 </div>
 
-<AdminList
-	{rows}
-	{columns}
-	{loading}
-	searchText={(r) => `${r.username} ${r.displayName ?? ""}`}
-	searchPlaceholder="Search users…"
-	defaultSort="username"
-	storageKey="serene-pub:adminView:users"
-	emptyMessage="No users."
-	onRowClick={(r) => goto(`/admin/users/${r.id}`)}
+<nav
+	class="border-surface-300-700 mb-4 flex flex-wrap gap-1 border-b pb-1"
+	aria-label="Users sections"
 >
-	{#snippet cell(row, col)}
-		{#if col.key === "username"}
-			<span class="font-semibold">{row.username}</span>
-			{#if row.id === userCtx.user?.id}
-				<span class="text-surface-600-400 ml-1.5 text-xs">(you)</span>
-			{/if}
-		{:else if col.key === "displayName"}
-			<span class="text-surface-700-300">{row.displayName ?? "—"}</span>
-		{:else if col.key === "role"}
-			{#if row.isAdmin}
-				<span
-					class="preset-tonal-primary rounded-full px-2 py-0.5 text-xs font-medium"
-					>Admin</span
+	{#each [{ id: "accounts", label: "Accounts", icon: "Users" }, { id: "invites", label: "Invites", icon: "UserPlus" }] as t (t.id)}
+		{@const TabIcon = Icons[t.icon as keyof typeof Icons] as any}
+		<button
+			type="button"
+			class="btn btn-sm {tab === t.id
+				? 'preset-filled-primary-500'
+				: 'preset-tonal-surface'}"
+			aria-pressed={tab === t.id}
+			onclick={() => (tab = t.id as Tab)}
+		>
+			<TabIcon size={15} />
+			{t.label}
+		</button>
+	{/each}
+</nav>
+
+{#if tab === "invites"}
+	<div class="card preset-filled-surface-100-900 max-w-2xl p-4">
+		<InvitePanel />
+	</div>
+{:else}
+	<AdminList
+		{rows}
+		{columns}
+		{loading}
+		searchText={(r) => `${r.username} ${r.displayName ?? ""}`}
+		searchPlaceholder="Search users…"
+		defaultSort="username"
+		storageKey="serene-pub:adminView:users"
+		emptyMessage="No users."
+		onRowClick={(r) => goto(`/admin/users/${r.id}`)}
+	>
+		{#snippet cell(row, col)}
+			{#if col.key === "username"}
+				<span class="font-semibold">{row.username}</span>
+				{#if row.id === userCtx.user?.id}
+					<span class="text-surface-600-400 ml-1.5 text-xs">
+						(you)
+					</span>
+				{/if}
+			{:else if col.key === "displayName"}
+				<span class="text-surface-700-300">
+					{row.displayName ?? "—"}
+				</span>
+			{:else if col.key === "role"}
+				{#if row.isAdmin}
+					<span
+						class="preset-tonal-primary rounded-full px-2 py-0.5 text-xs font-medium"
+					>
+						Admin
+					</span>
+				{:else}
+					<span
+						class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs"
+					>
+						Member
+					</span>
+				{/if}
+			{:else if col.key === "createdAt"}
+				<span class="text-surface-700-300 text-xs">
+					{row.createdAt ?? "—"}
+				</span>
+			{:else if col.key === "actions"}
+				<a
+					class="btn btn-sm preset-tonal-surface"
+					href="/admin/users/{row.id}"
+					onclick={(e) => e.stopPropagation()}
 				>
-			{:else}
-				<span
-					class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs"
-					>Member</span
-				>
+					<Icons.Pencil size={13} /> Edit
+				</a>
 			{/if}
-		{:else if col.key === "createdAt"}
-			<span class="text-surface-700-300 text-xs">{row.createdAt ?? "—"}</span>
-		{:else if col.key === "actions"}
-			<a
-				class="btn btn-sm preset-tonal-surface"
-				href="/admin/users/{row.id}"
-				onclick={(e) => e.stopPropagation()}
-			>
-				<Icons.Pencil size={13} /> Edit
-			</a>
-		{/if}
-	{/snippet}
-</AdminList>
+		{/snippet}
+	</AdminList>
+{/if}

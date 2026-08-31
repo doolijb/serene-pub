@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { avatarSrc } from "$lib/client/utils/media"
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
 	import { Dialog, Portal, Popover } from "@skeletonlabs/skeleton-svelte"
@@ -1740,7 +1741,7 @@
 		type: "character" | "persona"
 		id: number
 		name: string
-		avatar: string | null | undefined
+		avatarMediaId: number | null
 	} | null>(null)
 
 	let showImageModal = $state(false)
@@ -1813,7 +1814,9 @@
 			// isn't nullish, so `??` wouldn't fall through to the character's
 			// real name, leaving the modal title empty.
 			name: resolveCharacterName(char, ""),
-			avatar: char.avatar ?? null
+			// The id, not a resolved URL: the modal shows this large, and a
+			// pre-resolved thumbnail URL is not something it can undo.
+			avatarMediaId: char.avatarMediaId ?? null
 		}
 		showAvatarModal = true
 	}

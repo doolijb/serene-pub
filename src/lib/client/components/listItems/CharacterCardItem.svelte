@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { avatarSrc } from "$lib/client/utils/media"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import EmbeddingStatusIcon from "../EmbeddingStatusIcon.svelte"
@@ -46,9 +47,9 @@
 		title={contentTitle}
 		aria-label="{contentTitle}: {character.nickname || character.name}"
 	>
-		{#if character.avatar}
+		{#if avatarSrc(character)}
 			<img
-				src={character.avatar}
+				src={avatarSrc(character)}
 				alt=""
 				loading="lazy"
 				class="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"

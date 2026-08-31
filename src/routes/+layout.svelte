@@ -9,7 +9,7 @@
 	import { Toast } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import LoginForm from "$lib/client/components/LoginForm.svelte"
-	import MfaPrompt from "$lib/client/components/auth/MfaPrompt.svelte"
+	import SetupGate from "$lib/client/components/auth/SetupGate.svelte"
 	import AccessibleShell from "$lib/client/accessibility/AccessibleShell.svelte"
 	import AccessibleLoginForm from "$lib/client/accessibility/AccessibleLoginForm.svelte"
 	import {
@@ -54,7 +54,18 @@
 	let socketsInitialized = $state(false)
 	let showUpdateBar = $state(true)
 	let showLogin = $state(false)
-	let showMfaPrompt = $state(false)
+	let showSetupGate = $state(false)
+
+	/**
+	 * Routes that must render for someone with no session at all.
+	 *
+	 * Invite redemption is the whole point of an invite — the recipient has no
+	 * account yet, so gating it behind the login form makes the link useless.
+	 * It talks to the server over plain HTTP and never touches the socket, so
+	 * it needs none of the startup below.
+	 */
+	const PUBLIC_ROUTES = ["/invite"]
+	const isPublicRoute = $derived(PUBLIC_ROUTES.includes(page.url.pathname))
 	// Startup failure of the realtime connection. Without this the template's
 	// `{#if socketsInitialized}{:else if showLogin}` chain had no third branch,
 	// so any failure here rendered a completely blank page — see the catch in
@@ -143,6 +154,9 @@
 
 	async function initializeSocketsIfAllowed() {
 		if (!browser) return
+		// A public route renders on its own; starting sockets or demanding a
+		// session here would replace it with a login form.
+		if (isPublicRoute) return
 		const { checkSystemSettings, checkAuthentication } = await import(
 			"$lib/client/utils/authFlow"
 		)
@@ -157,12 +171,12 @@
 		const domain = page.url.hostname
 		await loadSocketsClient({ domain })
 
-		// Password accepted, second factor still outstanding (26 §10). The
-		// socket is connected — it has to be, since the code is submitted over
-		// it — but the server refuses everything outside a small allowlist
-		// until then, so the app shell must not render yet.
-		if (await mfaVerificationRequired()) {
-			showMfaPrompt = true
+		// Authenticated, but the account may still owe setup — a password to
+		// choose, a second factor to enrol (27 §1). The socket is connected (it
+		// has to be, since those steps run over it) but the server refuses
+		// everything else, so the app shell must not render yet.
+		if (await setupRequired()) {
+			showSetupGate = true
 			return
 		}
 		socketsInitialized = true
@@ -176,23 +190,35 @@
 	 * can satisfy would be a far worse failure than the server simply refusing
 	 * requests it was going to refuse anyway.
 	 */
-	async function mfaVerificationRequired(): Promise<boolean> {
+	async function setupRequired(): Promise<boolean> {
 		const { useTypedSocket } = await import(
 			"$lib/client/sockets/loadSockets.client"
 		)
 		const socket = useTypedSocket()
 		return await new Promise<boolean>((resolve) => {
 			const timer = setTimeout(() => {
+				socket.off("account:setupState", onState)
 				socket.off("totp:status", onStatus)
 				resolve(false)
 			}, 5000)
-			function onStatus(res: Sockets.Totp.Status.Response) {
+			function done(v: boolean) {
 				clearTimeout(timer)
+				socket.off("account:setupState", onState)
 				socket.off("totp:status", onStatus)
-				resolve(res.verificationRequired)
+				resolve(v)
 			}
+			function onState(res: Sockets.Account.SetupState.Response) {
+				if (res.pending.length) return done(true)
+				// No outstanding setup, but an *enrolled* factor may still be
+				// unverified for this session — a challenge rather than setup.
+				socket.emit("totp:status", {})
+			}
+			function onStatus(res: Sockets.Totp.Status.Response) {
+				done(res.verificationRequired)
+			}
+			socket.on("account:setupState", onState)
 			socket.on("totp:status", onStatus)
-			socket.emit("totp:status", {})
+			socket.emit("account:setupState", {})
 		})
 	}
 
@@ -256,7 +282,9 @@
 	<meta name="description" content="Serene Pub" />
 </svelte:head>
 
-{#if socketsInitialized}
+{#if isPublicRoute}
+	{@render children?.()}
+{:else if socketsInitialized}
 	{#if showAccessibleShell}
 		<AccessibleShell>
 			{#key page.route}
@@ -270,9 +298,9 @@
 			{/key}
 		</Layout>
 	{/if}
-{:else if showMfaPrompt}
-	<MfaPrompt
-		onVerified={() => {
+{:else if showSetupGate}
+	<SetupGate
+		onDone={() => {
 			// Reload rather than flipping a flag: any other tab still holds a
 			// socket whose pending state was decided at handshake, and a fresh
 			// page load is what re-resolves it everywhere.

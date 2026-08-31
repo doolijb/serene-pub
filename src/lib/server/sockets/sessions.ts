@@ -296,7 +296,7 @@ async function buildSessionsListFor(
 						columns: {
 							id: true,
 							name: true,
-							avatar: true
+							avatarMediaId: true
 						}
 					}
 				},
@@ -310,7 +310,7 @@ async function buildSessionsListFor(
 						columns: {
 							id: true,
 							name: true,
-							avatar: true
+							avatarMediaId: true
 						}
 					}
 				},

@@ -218,7 +218,7 @@ declare global {
 					characterId: number
 				}
 				interface Response {
-					images: string[]
+					images: Media[]
 					characterId: number
 				}
 			}
@@ -230,14 +230,14 @@ declare global {
 				}
 				interface Response {
 					success: boolean
-					path: string
+					media: Media
 					characterId: number
 				}
 			}
 			namespace DeleteGalleryImage {
 				interface Params {
 					characterId: number
-					path: string
+					mediaId: number
 				}
 				interface Response {
 					success: boolean
@@ -247,7 +247,7 @@ declare global {
 			namespace SetAvatar {
 				interface Params {
 					characterId: number
-					path: string
+					mediaId: number
 				}
 				interface Response {
 					character: any
@@ -256,11 +256,96 @@ declare global {
 			namespace ReorderGallery {
 				interface Params {
 					characterId: number
-					/** Full gallery in the desired new order (paths as returned by ListGallery). */
-					paths: string[]
+					/** Full gallery in the desired new order (ids as returned by ListGallery). */
+					mediaIds: number[]
 				}
 				interface Response {
-					images: string[]
+					images: Media[]
+				}
+			}
+		}
+
+		/**
+		 * A media row as a client is allowed to see it (28 §7).
+		 *
+		 * Note what is NOT here: `path`. The server's `toClientMedia` is the
+		 * only thing that builds one of these, and its return type has no path
+		 * field, so leaking the on-disk location is a type error rather than a
+		 * review catch. `url` is a proxy (`/media/{id}`), never a location.
+		 */
+		interface Media {
+			id: number
+			/** The public address — every URL here is built from it. Rotates
+			 *  when the served content could have changed, which is what lets
+			 *  those URLs be cached immutably. */
+			uuid: string
+			kind: string
+			mime: string
+			bytes: number
+			width: number | null
+			height: number | null
+			filename: string | null
+			visibility: string
+			position: number
+			url: string
+			thumbUrl: string
+			thumbMediaId: number | null
+			characterId: number | null
+			personaId: number | null
+			sessionId: number | null
+			messageId: number | null
+		}
+
+	/** A media row plus the extras the management panel needs. */
+		interface ManagedMedia extends Media {
+			createdAt: string
+			hasThumbnail: boolean
+			/** What the blob is grouped under. `name` is null when the parent
+			 *  no longer exists — which is exactly how an orphan becomes
+			 *  visible, since 28 keeps the id rather than nulling it. */
+			attachedTo: {
+				type: "character" | "persona" | "session"
+				id: number
+				name: string | null
+			} | null
+		}
+
+		namespace Media {
+			namespace List {
+				interface Params {
+					sort?: "newest" | "oldest" | "largest" | "smallest" | "name"
+					kind?: string
+				}
+				interface Response {
+					media: ManagedMedia[]
+					totalBytes: number
+				}
+			}
+			namespace RegenerateThumbnail {
+				interface Params {
+					mediaId: number
+				}
+				interface Response {
+					mediaId: number
+					regenerated: boolean
+				}
+			}
+			namespace SetVisibility {
+				interface Params {
+					mediaId: number
+					visibility: string
+				}
+				interface Response {
+					mediaId: number
+					visibility: string
+				}
+			}
+			namespace Delete {
+				interface Params {
+					mediaId: number
+				}
+				interface Response {
+					mediaId: number
 				}
 			}
 		}
@@ -760,7 +845,7 @@ declare global {
 					personaId: number
 				}
 				interface Response {
-					images: string[]
+					images: Media[]
 					personaId: number
 				}
 			}
@@ -772,14 +857,14 @@ declare global {
 				}
 				interface Response {
 					success: boolean
-					path: string
+					media: Media
 					personaId: number
 				}
 			}
 			namespace DeleteGalleryImage {
 				interface Params {
 					personaId: number
-					path: string
+					mediaId: number
 				}
 				interface Response {
 					success: boolean
@@ -789,7 +874,7 @@ declare global {
 			namespace SetAvatar {
 				interface Params {
 					personaId: number
-					path: string
+					mediaId: number
 				}
 				interface Response {
 					persona: any
@@ -798,11 +883,11 @@ declare global {
 			namespace ReorderGallery {
 				interface Params {
 					personaId: number
-					/** Full gallery in the desired new order (paths as returned by ListGallery). */
-					paths: string[]
+					/** Full gallery in the desired new order (ids as returned by ListGallery). */
+					mediaIds: number[]
 				}
 				interface Response {
-					images: string[]
+					images: Media[]
 				}
 			}
 			namespace SetDefault {
@@ -4626,6 +4711,14 @@ declare global {
 					baseUrl: string
 				}
 			}
+			namespace UpdateRequireTwoFactor {
+				interface Params {
+					enabled: boolean
+				}
+				interface Response {
+					success: boolean
+				}
+			}
 			namespace UpdateAccountsEnabled {
 				interface Params {
 					enabled: boolean
@@ -6063,6 +6156,87 @@ declare global {
 				}
 				interface Response {
 					success: boolean
+				}
+			}
+		}
+
+		// Invites namespace (plan 27 §3)
+		namespace Invites {
+			interface InviteView {
+				id: number
+				kind: string
+				userId: number | null
+				/** Present for `account` invites, for the admin list. */
+				username: string | null
+				expiresAt: Date
+				usedAt: Date | null
+				revokedAt: Date | null
+				createdAt: Date
+			}
+			/**
+			 * A host an invite link could point at. The admin's own origin is added
+			 * client-side, since only the browser knows it.
+			 */
+			interface HostOption {
+				hostname: string
+				label: string
+				source: "tunnel" | "env"
+				/** A tunnel always terminates TLS; other hosts follow the page. */
+				forceHttps: boolean
+				/** Higher wins when preselecting a default. */
+				priority: number
+			}
+
+			namespace List {
+				interface Params {}
+				interface Response {
+					invites: InviteView[]
+					hostOptions: HostOption[]
+				}
+			}
+			namespace Create {
+				interface Params {
+					kind: "register" | "account"
+					/** Required for `account`; ignored for `register`. */
+					userId?: number
+				}
+				interface Response {
+					/** Returned once and never again — only the hash is stored. */
+					token: string
+					id: number
+					expiresAt: Date
+				}
+			}
+			namespace Revoke {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+		}
+
+		// Account setup namespace (plan 27 §1)
+		namespace Account {
+			/** Ordered; the first entry is what the client should show. */
+			type SetupStep = "password" | "twoFactor"
+
+			namespace SetupState {
+				interface Params {}
+				interface Response {
+					pending: SetupStep[]
+					/** False means two-factor is offered but may be declined. */
+					twoFactorRequired: boolean
+				}
+			}
+			namespace SetPassword {
+				interface Params {
+					passphrase: string
+				}
+				interface Response {
+					/** What remains after this step. */
+					pending: SetupStep[]
 				}
 			}
 		}

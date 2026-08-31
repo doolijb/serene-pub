@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { avatarSrc } from "$lib/client/utils/media"
 	import type { Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import MessageComposer from "$lib/client/components/sessionMessages/MessageComposer.svelte"
@@ -305,10 +306,10 @@
 					title="View Avatar"
 					aria-label="View avatar"
 				>
-					{#if character?.avatar}
+					{#if avatarSrc(character)}
 						<img
 							class="sp-msg-avatar-img"
-							src={character.avatar}
+							src={avatarSrc(character)}
 							alt={resolveCharacterName(character, "Unknown")}
 						/>
 					{:else}

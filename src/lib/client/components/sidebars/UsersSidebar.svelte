@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, onMount } from "svelte"
+	import InvitePanel from "$lib/client/components/userForms/InvitePanel.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
@@ -17,6 +18,8 @@
 	const userCtx: { user: SelectUser } = $state(getContext("userCtx"))
 
 	let userList: SelectUser[] = $state([])
+	/** The invite panel is opt-in here — the roster is what this sidebar is for. */
+	let showInvites = $state(false)
 	let search = $state("")
 	let viewingUser: SelectUser | undefined = $state()
 	let selectedUser: SelectUser | undefined = $state()
@@ -166,7 +169,7 @@
 		{/key}
 	{:else}
 		<!-- Header -->
-		<div class="mb-2 flex gap-2">
+		<div class="mb-2 flex flex-wrap gap-2">
 			{#if isCurrentUserAdmin}
 				<button
 					class="btn btn-sm preset-filled-primary-500"
@@ -176,8 +179,27 @@
 					<Icons.Plus size={16} />
 					New
 				</button>
+				<button
+					class="btn btn-sm {showInvites
+						? 'preset-filled-primary-500'
+						: 'preset-filled-surface-400-600'}"
+					onclick={() => (showInvites = !showInvites)}
+					aria-pressed={showInvites}
+					title="Create an invite link"
+				>
+					<Icons.UserPlus size={16} />
+					Invite
+				</button>
 			{/if}
 		</div>
+
+		{#if isCurrentUserAdmin && showInvites}
+			<!-- Same component the Users admin page renders, so the two cannot
+			     drift; `compact` only trims it for this width. -->
+			<div class="card preset-filled-surface-100-900 mb-4 p-3">
+				<InvitePanel compact />
+			</div>
+		{/if}
 
 		<!-- Search -->
 		<div class="relative mb-4">

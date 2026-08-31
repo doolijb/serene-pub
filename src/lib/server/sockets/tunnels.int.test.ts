@@ -51,9 +51,13 @@ const supervisorStop = vi.fn(async (id?: number) => {
 		.where(eq(schema.tunnels.id, id))
 })
 
+/** Whether the stubbed supervisor claims to be running a tunnel right now. */
+let supervising = false
+
 vi.mock("$lib/server/tunnels/supervisor", () => ({
 	start: (id: number) => supervisorStart(id),
-	stop: (id?: number) => supervisorStop(id)
+	stop: (id?: number) => supervisorStop(id),
+	isSupervising: () => supervising
 }))
 
 vi.mock("$lib/server/db", async () => {
@@ -80,6 +84,7 @@ beforeAll(async () => {
 }, 60_000)
 
 afterEach(async () => {
+	supervising = false
 	supervisorStart.mockClear()
 	supervisorStop.mockClear()
 	delete process.env.SERENE_PUB_PLATFORM
@@ -319,6 +324,57 @@ describe("tunnels — config validation", () => {
 			noopEmit
 		)
 		expect(res.tunnel.ttlSeconds).toBeNull()
+	})
+
+	test("reports a row as stopped when nothing is actually supervising it", async () => {
+		const { tunnelsUpdateConfig, tunnelsGet } = await import("./tunnels")
+		const admin = await makeAdmin("tunnel-stale-row-user")
+		const created = await tunnelsUpdateConfig.handler(
+			fakeSocket(admin.id),
+			QUICK_CONFIG,
+			noopEmit
+		)
+		// The state a restart leaves behind: the row survives, the process
+		// does not.
+		await testDb
+			.update(schema.tunnels)
+			.set({
+				enabled: true,
+				status: "running",
+				hostname: "ghost.trycloudflare.com"
+			})
+			.where(eq(schema.tunnels.id, created.tunnel.id))
+
+		supervising = false
+		const res = await tunnelsGet.handler(fakeSocket(admin.id), {}, noopEmit)
+
+		expect(res.tunnel?.status).toBe("stopped")
+		expect(res.tunnel?.enabled).toBe(false)
+		// Corrected on disk too, not just in the response — otherwise every
+		// read would have to re-derive it forever.
+		const row = await testDb.query.tunnels.findFirst({
+			where: eq(schema.tunnels.id, created.tunnel.id)
+		})
+		expect(row?.enabled).toBe(false)
+	})
+
+	test("leaves a genuinely running tunnel alone", async () => {
+		const { tunnelsUpdateConfig, tunnelsGet } = await import("./tunnels")
+		const admin = await makeAdmin("tunnel-live-row-user")
+		const created = await tunnelsUpdateConfig.handler(
+			fakeSocket(admin.id),
+			QUICK_CONFIG,
+			noopEmit
+		)
+		await testDb
+			.update(schema.tunnels)
+			.set({ enabled: true, status: "running" })
+			.where(eq(schema.tunnels.id, created.tunnel.id))
+
+		supervising = true
+		const res = await tunnelsGet.handler(fakeSocket(admin.id), {}, noopEmit)
+		expect(res.tunnel?.status).toBe("running")
+		expect(res.tunnel?.enabled).toBe(true)
 	})
 
 	test("non-admins are refused", async () => {

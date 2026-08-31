@@ -120,6 +120,7 @@ export class SurfaceManager {
 			: {}
 		this.zoneLayout = layout?.zoneLayout
 		this.widgetGrid = layout?.widgetGrid
+		this.arrangedGrid = layout?.arrangedGrid
 	}
 
 	/** Restore the mode's default layout — activation, order, sizes, all of it. */
@@ -284,6 +285,17 @@ export class SurfaceManager {
 		this.#schedulePersist()
 	}
 
+	/**
+	 * The drag editor's captured per-zone geometry (PLAN 25). Same courier
+	 * contract as the two above: stored verbatim, never interpreted here.
+	 */
+	arrangedGrid = $state<unknown>(undefined)
+
+	setArrangedGrid(grid: unknown) {
+		this.arrangedGrid = grid
+		this.#schedulePersist()
+	}
+
 	/** Serialize just the sticky per-panel state (21 §10). */
 	toBlob(): LayoutBlob {
 		return {
@@ -302,6 +314,9 @@ export class SurfaceManager {
 				: {}),
 			...(this.widgetGrid !== undefined
 				? { widgetGrid: this.widgetGrid }
+				: {}),
+			...(this.arrangedGrid !== undefined
+				? { arrangedGrid: this.arrangedGrid }
 				: {})
 		}
 	}

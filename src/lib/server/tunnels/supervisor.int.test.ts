@@ -178,6 +178,27 @@ describe("supervisor.start", () => {
 		expect(row.lastError).toBeNull()
 	})
 
+	test("grants the dev server exactly the hostname it was given, and nothing wider", async () => {
+		const granted: string[] = []
+		;(globalThis as any).__SERENE_PUB_ALLOW_DEV_HOST__ = (h: string) =>
+			granted.push(h)
+		try {
+			const { start } = await import("./supervisor")
+			const tunnel = await makeQuickTunnel()
+			const started = start(tunnel.id)
+			await announceWhenSpawned("app-host.trycloudflare.com")
+			await started
+
+			// Vite refuses unrecognised Host headers, and a quick tunnel's is
+			// generated per run. Granting the exact hostname is what keeps that
+			// from becoming a domain-wide `.trycloudflare.com` entry, which
+			// would trust every quick tunnel on the internet.
+			expect(granted).toEqual(["app-host.trycloudflare.com"])
+		} finally {
+			delete (globalThis as any).__SERENE_PUB_ALLOW_DEV_HOST__
+		}
+	})
+
 	test("a tunnelled socket handshake is same-origin, so it needs no allowlist entry", async () => {
 		const { start } = await import("./supervisor")
 		const { isOriginAllowed } = await import(
@@ -548,6 +569,44 @@ describe("TTL and boot reconciliation (phase D)", () => {
 		})
 		expect(after?.status).toBe("running")
 		expect(after?.expiresAt!.getTime()).toBeGreaterThan(Date.now())
+	})
+
+	test("boot resets a row left claiming it is running", async () => {
+		const { reconcileOnBoot, isRunning } = await import("./supervisor")
+		// Exactly what an ungraceful shutdown leaves: the row survives, the
+		// cloudflared it describes does not.
+		const [row] = await testDb
+			.insert(schema.tunnels)
+			.values({
+				serverId,
+				provider: "cloudflare_quick",
+				mode: "ephemeral",
+				enabled: true,
+				status: "running",
+				hostname: "ghost.trycloudflare.com"
+			})
+			.returning()
+
+		await reconcileOnBoot()
+
+		const after = await testDb.query.tunnels.findFirst({
+			where: eq(schema.tunnels.id, row.id)
+		})
+		expect(after?.enabled).toBe(false)
+		expect(after?.status).toBe("stopped")
+		expect(isRunning()).toBe(false)
+		expect(spawnMock).not.toHaveBeenCalled()
+	})
+
+	test("isSupervising is false for a row this process never started", async () => {
+		const { isSupervising } = await import("./supervisor")
+		const tunnel = await makeQuickTunnel()
+		await testDb
+			.update(schema.tunnels)
+			.set({ enabled: true, status: "running" })
+			.where(eq(schema.tunnels.id, tunnel.id))
+		// The row says running; the authority says otherwise.
+		expect(isSupervising(tunnel.id)).toBe(false)
 	})
 
 	test("auto-start does nothing for a row that did not ask for it", async () => {

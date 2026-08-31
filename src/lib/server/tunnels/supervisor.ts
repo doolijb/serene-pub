@@ -343,6 +343,16 @@ export function isRunning(): boolean {
 }
 
 /**
+ * Whether this specific row is actually being supervised right now.
+ *
+ * The authority on "is it up" is the live process handle, not the row — a
+ * restart leaves the row behind but takes the process with it.
+ */
+export function isSupervising(tunnelId: number): boolean {
+	return state.tunnelId === tunnelId && state.proc !== null
+}
+
+/**
  * The hostname this instance is currently reachable at through the tunnel, if
  * one is up. Read by the allowed-hosts surface so a live tunnel host is
  * attributed rather than appearing from nowhere.
@@ -417,6 +427,13 @@ export async function start(tunnelId: number): Promise<SelectTunnel> {
 		state.proc = proc
 		state.hostname = hostname
 		state.restartAttempt = 0
+
+		// Tell the dev server to answer for this hostname. Vite rejects
+		// unrecognised Host headers, and a quick tunnel's is generated per run
+		// — without this the freshly minted URL returns "Blocked request",
+		// which reads like the tunnel failed rather than the dev server
+		// refusing. No-op in production, where no such check exists.
+		;(globalThis as any).__SERENE_PUB_ALLOW_DEV_HOST__?.(hostname)
 
 		// Recomputed on every off -> on transition, never inherited (26 §4):
 		// a run that reused a stale deadline would either die seconds later or
@@ -574,6 +591,22 @@ async function accountsEnabled(): Promise<boolean> {
  */
 export async function reconcileOnBoot(): Promise<void> {
 	const now = new Date()
+
+	// 0. Nothing this process supervises can have survived it. A row still
+	//    claiming `running` or `starting` is describing a cloudflared that died
+	//    with the previous run, so the record is corrected before anything
+	//    reads it. Without this the admin page offers to "stop" a tunnel that
+	//    does not exist, and the row's own status is a lie that never expires.
+	const stale = await db.query.tunnels.findMany()
+	for (const row of stale) {
+		if (row.status === TunnelStatuses.STOPPED && !row.enabled) continue
+		await writeRow(row.id, {
+			enabled: false,
+			status: TunnelStatuses.STOPPED,
+			expiresAt: null,
+			stoppedAt: row.stoppedAt ?? now
+		}).catch(() => {})
+	}
 
 	// 1. Anything already past its deadline goes down, whatever else is true.
 	await sweepExpiredTunnels(now)

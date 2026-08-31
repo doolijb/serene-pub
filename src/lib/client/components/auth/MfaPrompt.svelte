@@ -11,7 +11,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 
-	let { onVerified }: { onVerified: () => void } = $props()
+	let { onDone }: { onDone: () => void } = $props()
 
 	const socket = useTypedSocket()
 
@@ -29,7 +29,7 @@
 				`Recovery code used — ${res.remainingCodes} remaining.`
 			)
 		}
-		onVerified()
+		onDone()
 	}
 
 	function handleError(res: Sockets.ErrorResponse) {
@@ -58,53 +58,48 @@
 	}
 </script>
 
-<div class="flex min-h-screen items-center justify-center p-6">
-	<form
-		class="card preset-filled-surface-100-900 w-full max-w-sm space-y-4 p-6"
-		onsubmit={submit}
-	>
-		<div class="space-y-1">
-			<h1 class="flex items-center gap-2 text-lg font-semibold">
-				<Icons.ShieldCheck size={20} /> Two-factor authentication
-			</h1>
-			<p class="text-surface-600-400 text-sm">
-				Enter the 6-digit code from your authenticator app, or one of
-				your recovery codes.
-			</p>
-		</div>
-
-		<label class="label">
-			<span class="label-text">Code</span>
-			<input
-				bind:this={input}
-				bind:value={code}
-				class="input"
-				type="text"
-				autocomplete="one-time-code"
-				inputmode="text"
-				placeholder="123456"
-				disabled={busy}
-			/>
-		</label>
-
-		{#if error}
-			<p class="text-error-500 text-sm" role="alert">{error}</p>
-		{/if}
-
-		<button
-			type="submit"
-			class="btn preset-filled-primary-500 w-full"
-			disabled={busy || !code.trim()}
-		>
-			{busy ? "Checking…" : "Verify"}
-		</button>
-
-		<p class="text-surface-600-400 text-xs">
-			Lost your authenticator and your recovery codes? An administrator
-			can clear two-factor for your account. If you are the only
-			administrator, see the account-recovery section of
-			<code>.env.example</code>
-			.
+<form class="space-y-4" onsubmit={submit}>
+	<div class="space-y-1">
+		<h1 class="flex items-center gap-2 text-lg font-semibold">
+			<Icons.ShieldCheck size={20} /> Two-factor authentication
+		</h1>
+		<p class="text-surface-600-400 text-sm">
+			Enter the 6-digit code from your authenticator app, or one of your
+			recovery codes.
 		</p>
-	</form>
-</div>
+	</div>
+
+	<label class="label">
+		<span class="label-text">Code</span>
+		<input
+			bind:this={input}
+			bind:value={code}
+			class="input"
+			type="text"
+			autocomplete="one-time-code"
+			inputmode="text"
+			placeholder="123456"
+			disabled={busy}
+		/>
+	</label>
+
+	{#if error}
+		<p class="text-error-500 text-sm" role="alert">{error}</p>
+	{/if}
+
+	<button
+		type="submit"
+		class="btn preset-filled-primary-500 w-full"
+		disabled={busy || !code.trim()}
+	>
+		{busy ? "Checking…" : "Verify"}
+	</button>
+
+	<p class="text-surface-600-400 text-xs">
+		Lost your authenticator and your recovery codes? An administrator can
+		clear two-factor for your account. If you are the only administrator,
+		see the account-recovery section of
+		<code>.env.example</code>
+		.
+	</p>
+</form>

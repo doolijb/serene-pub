@@ -122,6 +122,15 @@ export interface LayoutBlob {
 	 * for the same reason as zoneLayout; the manager is only its courier.
 	 */
 	widgetGrid?: unknown
+	/**
+	 * The captured gridstack geometry per zone (PLAN 25) — `{left?,middle?,right?}`
+	 * each a `GsLayout` (cols/rows + per-item x/y/w/h). This is the drag editor's
+	 * full arrangement, the ONE store that carries cell POSITIONS (widgetGrid and
+	 * zoneLayout carry only membership/config). Persisting it is what lets the
+	 * editor restore what you arranged and the live render survive a reload;
+	 * stored verbatim, the manager is only its courier.
+	 */
+	arrangedGrid?: unknown
 }
 
 /** Normalize a raw `PanelDecl.layout` to the fully-defaulted instance shape. */

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { avatarSrc } from "$lib/client/utils/media"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 
@@ -58,7 +59,7 @@
 								<Icons.FileText size={20} aria-hidden="true" />
 								<span>Export as JSON</span>
 							</button>
-							{#if persona.avatar}
+							{#if avatarSrc(persona)}
 								<button
 									class="btn preset-filled-primary-500 justify-start"
 									onclick={handleExportAsPng}

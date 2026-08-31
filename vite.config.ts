@@ -15,9 +15,25 @@ import banner from "vite-plugin-banner"
  * half of this.
  */
 function serenePubSocketServer() {
-	const stash = (server: { httpServer: unknown | null }) => {
+	const stash = (server: any) => {
 		if (server.httpServer) {
 			;(globalThis as any).__SERENE_PUB_HTTP_SERVER__ = server.httpServer
+		}
+		// Vite's dev server rejects any Host header it does not recognise
+		// (DNS-rebinding protection). A tunnel hostname is generated at
+		// runtime and cannot be in the static list below, so the tunnel
+		// supervisor pushes it here when it starts — otherwise the freshly
+		// generated URL answers with "Blocked request. This host is not
+		// allowed." and nothing about it points at Vite.
+		//
+		// Dev only. The production adapter-node server has no such check.
+		;(globalThis as any).__SERENE_PUB_ALLOW_DEV_HOST__ = (
+			hostname: string
+		) => {
+			const allowed = server.config?.server?.allowedHosts
+			if (Array.isArray(allowed) && !allowed.includes(hostname)) {
+				allowed.push(hostname)
+			}
 		}
 	}
 	return {
@@ -41,6 +57,28 @@ export default defineConfig({
 		__APP_VERSION_DISPLAY__: JSON.stringify(
 			`v${pkg.version}${pkg.version.includes("-") ? "" : "-alpha"}`
 		)
+	},
+	server: {
+		/**
+		 * Hosts the dev server will answer for, beyond localhost.
+		 *
+		 * Only what the operator named in ALLOWED_ORIGINS. The wildcard is
+		 * skipped because it identifies no host, and a tunnel's own hostname is
+		 * added at runtime by the supervisor once it exists — Vite re-reads this
+		 * array on every request, so the exact hostname can be granted rather
+		 * than a domain guessed at in advance.
+		 *
+		 * Deliberately no `.trycloudflare.com` entry: a leading dot matches
+		 * every subdomain, so that would trust every quick tunnel on the
+		 * internet to reach this dev server, when only one hostname is ever
+		 * needed. And deliberately not `true`, which disables the
+		 * DNS-rebinding check outright on a server with a live database behind
+		 * it.
+		 */
+		allowedHosts: (process.env.ALLOWED_ORIGINS || "")
+			.split(",")
+			.map((h) => h.trim())
+			.filter((h) => h && h !== "*")
 	},
 	resolve: {
 		extensions: [".mjs", ".js", ".ts", ".jsx", ".tsx", ".json", ".svelte"]

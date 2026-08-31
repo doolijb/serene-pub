@@ -4,75 +4,15 @@ import envPaths from "env-paths"
 import { db } from "$lib/server/db"
 import { and, eq, inArray, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { writeFile, mkdir, unlink } from "fs/promises"
-import { v4 as uuid } from "uuid"
-import { fileTypeFromBuffer } from "file-type"
+import {
+	createMedia,
+	clientMediaFor,
+	deleteMedia,
+	getMedia,
+	mediaFor,
+	reorderMedia
+} from "$lib/server/media"
 
-const ALLOWED_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif"])
-
-// Round-12 audit fix (MEDIUM): none of the five upload functions in this
-// file (avatar x2, gallery x2, background) checked the incoming buffer's
-// byte length — the only ceiling anywhere was Socket.IO's global
-// maxHttpBufferSize (100MB, loadSockets.server.ts), applied per-EVENT, not
-// per-field. 10MB is generous for a high-res avatar/gallery image while
-// staying far under that global ceiling. Enforced inside
-// sniffImageExtension since every upload path already calls it — a single
-// choke point instead of five separate checks.
-const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024
-
-/**
- * Sniffs the real file type from the uploaded bytes and returns a safe
- * extension to write to disk — never trusts the client-supplied MIME
- * type/extension, which previously went straight into the on-disk filename
- * with no verification that it matched the actual file content.
- */
-async function sniffImageExtension(
-	buffer: Buffer | Uint8Array
-): Promise<string> {
-	if (buffer.length > MAX_IMAGE_UPLOAD_BYTES) {
-		throw new Error(
-			`Uploaded image is too large (max ${MAX_IMAGE_UPLOAD_BYTES / (1024 * 1024)}MB).`
-		)
-	}
-	const detected = await fileTypeFromBuffer(buffer)
-	const ext = detected?.ext?.toLowerCase()
-	if (!ext || !ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
-		throw new Error(
-			"Uploaded file is not a recognized image type (png/jpg/webp/gif)"
-		)
-	}
-	return ext === "jpeg" ? "jpg" : ext
-}
-
-/**
- * Deletes a previously-stored avatar file, given its stored `avatar` URL
- * (or null/undefined — a no-op) and the entity's own data directory —
- * reuses the same URL-to-filesystem-path pattern already established at
- * the PNG card-export call sites (getCharacterDataDir/getPersonaDataDir +
- * path.basename(avatar) + path.join). Errors (already gone, permission
- * issue) are swallowed, same safety shape as deleteUserBackground — a
- * failed cleanup shouldn't fail the upload that already succeeded.
- */
-async function deleteOldAvatarIfPresent(
-	previousAvatar: string | null | undefined,
-	avatarDir: string
-): Promise<void> {
-	if (!previousAvatar) return
-	const filename = path.basename(previousAvatar)
-	const fullPath = path.join(avatarDir, filename)
-	if (!fullPath.startsWith(avatarDir)) return
-	try {
-		await unlink(fullPath)
-	} catch {
-		// File already gone, or never existed on disk (eg. an imported
-		// card's avatar) — ignore.
-	}
-}
-
-/**
- * Gets the application data directory with optional override from environment
- * Checks SERENE_PUB_DATA_DIR environment variable first, falls back to envPaths
- */
 export function getAppDataDir() {
 	const envDataDir = process.env.SERENE_PUB_DATA_DIR
 	if (envDataDir) {
@@ -156,35 +96,64 @@ export function getPersonaDataDir({
 	)
 }
 
+// ---------------------------------------------------------------------------
+// Media-backed entity helpers (28).
+//
+// These keep the names the socket handlers already call, but every one of them
+// is now a thin adapter over `$lib/server/media`. The five hand-built upload
+// paths, the two near-identical gallery tables and the disk<->DB reconciliation
+// that `listCharacterGallery` used to perform are all gone: the row is the
+// truth, and the file is named after its own hash.
+// ---------------------------------------------------------------------------
+
 export async function handleCharacterAvatarUpload({
 	character,
 	avatarFile
 }: {
-	character: any
+	character: { id: number; userId: number; avatarMediaId?: number | null }
 	avatarFile: Buffer
 }) {
-	const ext = await sniffImageExtension(avatarFile)
-	const filename = `avatar-${uuid().substring(0, 4)}.${ext}`
-	const avatarDir = getCharacterDataDir({
+	const row = await createMedia(db, {
+		userId: character.userId,
 		characterId: character.id,
-		userId: character.userId
+		bytes: avatarFile
 	})
-	// Ensure the directory exists
-	await mkdir(avatarDir, { recursive: true })
-	// Save the new avatar file
-	const filePath = path.join(avatarDir, filename)
-	await writeFile(filePath, avatarFile, { flag: "w" }) // Write the file to disk
-	const avatar = `/images/data/users/${character.userId}/characters/${character.id}/${filename}` // Construct URL for the avatar
 	await db
 		.update(schema.characters)
-		.set({ avatar })
+		.set({ avatarMediaId: row.id })
 		.where(eq(schema.characters.id, character.id))
-	// Round-12 audit fix (MEDIUM): the previous avatar file was never
-	// deleted on re-upload — unbounded orphan growth on disk on every
-	// re-upload. `character.avatar` here is the pre-update value (the
-	// caller fetched this row before calling this function).
-	await deleteOldAvatarIfPresent(character.avatar, avatarDir)
+	return row
 }
+
+export async function handlePersonaAvatarUpload({
+	persona,
+	avatarFile
+}: {
+	persona: { id: number; userId: number; avatarMediaId?: number | null }
+	avatarFile: Buffer
+}) {
+	const row = await createMedia(db, {
+		userId: persona.userId,
+		personaId: persona.id,
+		bytes: avatarFile
+	})
+	await db
+		.update(schema.personas)
+		.set({ avatarMediaId: row.id })
+		.where(eq(schema.personas.id, persona.id))
+	return row
+}
+
+/**
+ * The previous avatar file is deliberately NOT deleted here.
+ *
+ * The old code unlinked it on every re-upload to stop unbounded orphan growth.
+ * That is no longer this function's job, and doing it here would now be wrong:
+ * the same bytes may be deduped into a gallery entry or another character's
+ * avatar, so "nothing points at my old avatar" is not a fact a single caller
+ * can establish. Orphans are the cleanup tool's problem (28 §9) — and unlike
+ * before, they are an exact query rather than a guess.
+ */
 
 export function getUserBackgroundsDir({ userId }: { userId: number }) {
 	const appData = getAppDataDir()
@@ -193,425 +162,190 @@ export function getUserBackgroundsDir({ userId }: { userId: number }) {
 
 export async function handleUserBackgroundUpload({
 	userId,
-	backgroundFile,
-	mimeType
+	backgroundFile
 }: {
 	userId: number
 	backgroundFile: Buffer | Uint8Array
-	mimeType: string
+	mimeType?: string
 }) {
-	const ext = await sniffImageExtension(backgroundFile)
-	const filename = `bg-${uuid().substring(0, 8)}.${ext}`
-	const bgDir = getUserBackgroundsDir({ userId })
-	await mkdir(bgDir, { recursive: true })
-	const filePath = path.join(bgDir, filename)
-	await writeFile(filePath, backgroundFile, { flag: "w" })
-	return `/images/data/users/${userId}/backgrounds/${filename}`
+	// No entity parent — a background is personal, so it lands in the user-level
+	// bucket and stays owner-only (28 §6: no entity parent means no sharing to
+	// inherit).
+	return createMedia(db, {
+		userId,
+		bytes: backgroundFile,
+		bucket: "backgrounds"
+	})
 }
 
+/** A user's uploaded backgrounds, newest last. Shipped defaults are static
+ *  assets and are listed separately by `getDefaultBackgrounds`. */
 export async function listUserBackgrounds({ userId }: { userId: number }) {
-	const bgDir = getUserBackgroundsDir({ userId })
-	try {
-		const { readdir } = await import("fs/promises")
-		const files = await readdir(bgDir)
-		return files
-			.filter((f) => /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(f))
-			.map((f) => `/images/data/users/${userId}/backgrounds/${f}`)
-	} catch {
-		return []
-	}
+	return clientMediaFor(db, { userId })
 }
 
 export async function deleteUserBackground({
 	userId,
-	path: bgPath
+	mediaId
 }: {
 	userId: number
-	path: string
+	mediaId: number
 }) {
-	// Safety: only allow deleting files within this user's backgrounds dir
-	const bgDir = getUserBackgroundsDir({ userId })
-	const filename = path.basename(bgPath)
-	const fullPath = path.join(bgDir, filename)
-	// Ensure the resolved path is inside the expected directory
-	if (!fullPath.startsWith(bgDir)) return
-	try {
-		const { unlink } = await import("fs/promises")
-		await unlink(fullPath)
-	} catch {
-		// File already gone — ignore
-	}
-}
-
-export async function handlePersonaAvatarUpload({
-	persona,
-	avatarFile
-}: {
-	persona: any
-	avatarFile: Buffer
-}) {
-	const ext = await sniffImageExtension(avatarFile)
-	const filename = `avatar-${uuid().substring(0, 4)}.${ext}` // Use UUID to ensure unique filename
-	const avatarDir = getPersonaDataDir({
-		personaId: persona.id,
-		userId: persona.userId
-	})
-	// Ensure the directory exists
-	await mkdir(avatarDir, { recursive: true })
-	// Save the new avatar file
-	const filePath = path.join(avatarDir, filename)
-	await writeFile(filePath, avatarFile, { flag: "w" }) // Write the file to disk
-	const avatar = `/images/data/users/${persona.userId}/personas/${persona.id}/${filename}` // Construct URL for the avatar
+	const row = await getMedia(db, mediaId)
+	// Ownership is the whole check: a background has no entity parent, so
+	// there is no sharing path that could make someone else's deletable.
+	if (!row || row.userId !== userId) return
+	await deleteMedia(db, mediaId)
 	await db
-		.update(schema.personas)
-		.set({ avatar })
-		.where(eq(schema.personas.id, persona.id))
-	// Round-12 audit fix (MEDIUM): see handleCharacterAvatarUpload — same
-	// orphan-cleanup fix, same reasoning.
-	await deleteOldAvatarIfPresent(persona.avatar, avatarDir)
+		.update(schema.userSettings)
+		.set({ backgroundMediaId: null })
+		.where(
+			and(
+				eq(schema.userSettings.userId, userId),
+				eq(schema.userSettings.backgroundMediaId, mediaId)
+			)
+		)
 }
 
 /**
- * Gallery uploads add to the gallery only — they deliberately do NOT touch
- * `characters.avatar` (a prior version of this function did, which meant
- * every gallery upload silently changed the character's avatar). Setting
- * the avatar is a separate, explicit action (see charactersSetAvatar).
+ * Gallery uploads add to the gallery only — they deliberately do NOT set the
+ * avatar (a prior version did, which meant every gallery upload silently
+ * changed it). Setting the avatar stays a separate, explicit action.
  */
 export async function uploadCharacterGalleryImage({
 	characterId,
 	userId,
-	imageFile,
-	mimeType
+	imageFile
 }: {
 	characterId: number
 	userId: number
 	imageFile: Buffer
-	mimeType: string
 }) {
-	const ext = await sniffImageExtension(imageFile)
-	const filename = `img-${uuid().substring(0, 8)}.${ext}`
-	const dir = getCharacterDataDir({ characterId, userId })
-	await mkdir(dir, { recursive: true })
-	const filePath = path.join(dir, filename)
-	await writeFile(filePath, imageFile, { flag: "w" })
-	const imgPath = `/images/data/users/${userId}/characters/${characterId}/${filename}`
-
-	const [{ maxPosition }] = await db
-		.select({
-			maxPosition: sql<number>`coalesce(max(${schema.characterGalleryImages.position}), -1)`
-		})
-		.from(schema.characterGalleryImages)
-		.where(eq(schema.characterGalleryImages.characterId, characterId))
-	await db.insert(schema.characterGalleryImages).values({
+	const existing = await mediaFor(db, { characterId })
+	return createMedia(db, {
+		userId,
 		characterId,
-		path: imgPath,
-		position: maxPosition + 1
+		bytes: imageFile,
+		position: existing.length
 	})
+}
 
-	return imgPath
+/** Mirrors uploadCharacterGalleryImage. */
+export async function uploadPersonaGalleryImage({
+	personaId,
+	userId,
+	imageFile
+}: {
+	personaId: number
+	userId: number
+	imageFile: Buffer
+}) {
+	const existing = await mediaFor(db, { personaId })
+	return createMedia(db, {
+		userId,
+		personaId,
+		bytes: imageFile,
+		position: existing.length
+	})
 }
 
 /**
- * Lists a character's gallery images in persisted order, reconciling the
- * `characterGalleryImages` table against what's actually on disk: rows
- * whose file is gone (eg. removed out-of-band) are dropped, and on-disk
- * files with no row yet (eg. the first call after this table was
- * introduced, or a file that landed on disk some other way) are lazily
- * backfilled at the end, in directory-listing order — a one-time self-heal
- * rather than a startup migration script.
+ * A character's gallery.
+ *
+ * The old version reconciled the database against a directory listing on every
+ * call — adopting stray files, deleting rows whose file had vanished — because
+ * the row and the file were two independent facts that drifted. They are one
+ * fact now, so this is a query.
+ *
+ * Returns originals only, and not by filtering: a thumbnail carries no
+ * `characterId`, so it never matches (28 §5).
  */
 export async function listCharacterGallery({
-	characterId,
-	userId
+	characterId
 }: {
 	characterId: number
-	userId: number
+	userId?: number
 }) {
-	const dir = getCharacterDataDir({ characterId, userId })
-	const urlPrefix = `/images/data/users/${userId}/characters/${characterId}/`
+	return clientMediaFor(db, { characterId })
+}
 
-	let onDiskPaths = new Set<string>()
-	try {
-		const { readdir } = await import("fs/promises")
-		const files = await readdir(dir)
-		onDiskPaths = new Set(
-			files
-				.filter((f) => /\.(jpg|jpeg|png|webp|gif)$/i.test(f))
-				.map((f) => urlPrefix + f)
-		)
-	} catch {
-		onDiskPaths = new Set()
-	}
-
-	const rows = await db.query.characterGalleryImages.findMany({
-		where: eq(schema.characterGalleryImages.characterId, characterId),
-		orderBy: (t, { asc }) => asc(t.position)
-	})
-
-	const staleIds = rows
-		.filter((r) => !onDiskPaths.has(r.path))
-		.map((r) => r.id)
-	if (staleIds.length > 0) {
-		await db
-			.delete(schema.characterGalleryImages)
-			.where(inArray(schema.characterGalleryImages.id, staleIds))
-	}
-
-	const knownPaths = new Set(rows.map((r) => r.path))
-	const missingPaths = [...onDiskPaths].filter((p) => !knownPaths.has(p))
-	if (missingPaths.length > 0) {
-		let nextPosition =
-			rows.length > 0 ? Math.max(...rows.map((r) => r.position)) + 1 : 0
-		await db.insert(schema.characterGalleryImages).values(
-			missingPaths.map((p) => ({
-				characterId,
-				path: p,
-				position: nextPosition++
-			}))
-		)
-	}
-
-	if (staleIds.length === 0 && missingPaths.length === 0) {
-		return rows.map((r) => r.path)
-	}
-
-	const finalRows = await db.query.characterGalleryImages.findMany({
-		where: eq(schema.characterGalleryImages.characterId, characterId),
-		orderBy: (t, { asc }) => asc(t.position)
-	})
-	return finalRows.map((r) => r.path)
+export async function listPersonaGallery({
+	personaId
+}: {
+	personaId: number
+	userId?: number
+}) {
+	return clientMediaFor(db, { personaId })
 }
 
 export async function deleteCharacterGalleryImage({
 	characterId,
-	userId,
-	path: imgPath
+	mediaId
 }: {
 	characterId: number
-	userId: number
-	path: string
+	userId?: number
+	mediaId: number
 }) {
-	const dir = getCharacterDataDir({ characterId, userId })
-	const filename = path.basename(imgPath)
-	const fullPath = path.join(dir, filename)
-	if (!fullPath.startsWith(dir)) return
-	try {
-		const { unlink } = await import("fs/promises")
-		await unlink(fullPath)
-	} catch {
-		// File already gone
-	}
-	await db
-		.delete(schema.characterGalleryImages)
-		.where(
-			and(
-				eq(schema.characterGalleryImages.characterId, characterId),
-				eq(schema.characterGalleryImages.path, imgPath)
-			)
-		)
-	// The deleted file may have been the character's avatar — leaving that
-	// column pointing at a now-nonexistent path renders as a broken image
-	// everywhere the avatar is shown (character cards, session messages, etc.),
-	// so clear it rather than leave a dangling reference.
+	const row = await getMedia(db, mediaId)
+	if (!row || row.characterId !== characterId) return
+	await deleteMedia(db, mediaId)
+	// The deleted image may have been the avatar. Clearing the pointer is
+	// cheap and keeps a broken image off every card and message; a dangling
+	// pointer elsewhere is tolerated by design, but not one we can see.
 	await db
 		.update(schema.characters)
-		.set({ avatar: null })
+		.set({ avatarMediaId: null })
 		.where(
 			and(
 				eq(schema.characters.id, characterId),
-				eq(schema.characters.avatar, imgPath)
+				eq(schema.characters.avatarMediaId, mediaId)
+			)
+		)
+}
+
+export async function deletePersonaGalleryImage({
+	personaId,
+	mediaId
+}: {
+	personaId: number
+	userId?: number
+	mediaId: number
+}) {
+	const row = await getMedia(db, mediaId)
+	if (!row || row.personaId !== personaId) return
+	await deleteMedia(db, mediaId)
+	await db
+		.update(schema.personas)
+		.set({ avatarMediaId: null })
+		.where(
+			and(
+				eq(schema.personas.id, personaId),
+				eq(schema.personas.avatarMediaId, mediaId)
 			)
 		)
 }
 
 /**
- * Persists a new display order for a character's gallery. Only `position`
- * changes — filenames on disk are never renamed — so `characters.avatar`
- * (which stores a full image path) can never be invalidated by a reorder.
- * Paths that don't belong to this character are silently ignored.
+ * Persists a new display order. Only `position` changes — files are named
+ * after their own hash and are never renamed — so no reorder can invalidate an
+ * avatar pointer. Ids that do not belong to this parent are ignored.
  */
 export async function reorderCharacterGalleryImages({
 	characterId,
-	paths
+	mediaIds
 }: {
 	characterId: number
-	paths: string[]
+	mediaIds: number[]
 }) {
-	await Promise.all(
-		paths.map((p, position) =>
-			db
-				.update(schema.characterGalleryImages)
-				.set({ position })
-				.where(
-					and(
-						eq(
-							schema.characterGalleryImages.characterId,
-							characterId
-						),
-						eq(schema.characterGalleryImages.path, p)
-					)
-				)
-		)
-	)
+	await reorderMedia(db, { characterId }, mediaIds)
 }
 
-/** Mirrors uploadCharacterGalleryImage — see its comment. */
-export async function uploadPersonaGalleryImage({
-	personaId,
-	userId,
-	imageFile,
-	mimeType
-}: {
-	personaId: number
-	userId: number
-	imageFile: Buffer
-	mimeType: string
-}) {
-	const ext = await sniffImageExtension(imageFile)
-	const filename = `img-${uuid().substring(0, 8)}.${ext}`
-	const dir = getPersonaDataDir({ personaId, userId })
-	await mkdir(dir, { recursive: true })
-	const filePath = path.join(dir, filename)
-	await writeFile(filePath, imageFile, { flag: "w" })
-	const imgPath = `/images/data/users/${userId}/personas/${personaId}/${filename}`
-
-	const [{ maxPosition }] = await db
-		.select({
-			maxPosition: sql<number>`coalesce(max(${schema.personaGalleryImages.position}), -1)`
-		})
-		.from(schema.personaGalleryImages)
-		.where(eq(schema.personaGalleryImages.personaId, personaId))
-	await db.insert(schema.personaGalleryImages).values({
-		personaId,
-		path: imgPath,
-		position: maxPosition + 1
-	})
-
-	return imgPath
-}
-
-/** Mirrors listCharacterGallery — see its comment. */
-export async function listPersonaGallery({
-	personaId,
-	userId
-}: {
-	personaId: number
-	userId: number
-}) {
-	const dir = getPersonaDataDir({ personaId, userId })
-	const urlPrefix = `/images/data/users/${userId}/personas/${personaId}/`
-
-	let onDiskPaths = new Set<string>()
-	try {
-		const { readdir } = await import("fs/promises")
-		const files = await readdir(dir)
-		onDiskPaths = new Set(
-			files
-				.filter((f) => /\.(jpg|jpeg|png|webp|gif)$/i.test(f))
-				.map((f) => urlPrefix + f)
-		)
-	} catch {
-		onDiskPaths = new Set()
-	}
-
-	const rows = await db.query.personaGalleryImages.findMany({
-		where: eq(schema.personaGalleryImages.personaId, personaId),
-		orderBy: (t, { asc }) => asc(t.position)
-	})
-
-	const staleIds = rows
-		.filter((r) => !onDiskPaths.has(r.path))
-		.map((r) => r.id)
-	if (staleIds.length > 0) {
-		await db
-			.delete(schema.personaGalleryImages)
-			.where(inArray(schema.personaGalleryImages.id, staleIds))
-	}
-
-	const knownPaths = new Set(rows.map((r) => r.path))
-	const missingPaths = [...onDiskPaths].filter((p) => !knownPaths.has(p))
-	if (missingPaths.length > 0) {
-		let nextPosition =
-			rows.length > 0 ? Math.max(...rows.map((r) => r.position)) + 1 : 0
-		await db.insert(schema.personaGalleryImages).values(
-			missingPaths.map((p) => ({
-				personaId,
-				path: p,
-				position: nextPosition++
-			}))
-		)
-	}
-
-	if (staleIds.length === 0 && missingPaths.length === 0) {
-		return rows.map((r) => r.path)
-	}
-
-	const finalRows = await db.query.personaGalleryImages.findMany({
-		where: eq(schema.personaGalleryImages.personaId, personaId),
-		orderBy: (t, { asc }) => asc(t.position)
-	})
-	return finalRows.map((r) => r.path)
-}
-
-export async function deletePersonaGalleryImage({
-	personaId,
-	userId,
-	path: imgPath
-}: {
-	personaId: number
-	userId: number
-	path: string
-}) {
-	const dir = getPersonaDataDir({ personaId, userId })
-	const filename = path.basename(imgPath)
-	const fullPath = path.join(dir, filename)
-	if (!fullPath.startsWith(dir)) return
-	try {
-		const { unlink } = await import("fs/promises")
-		await unlink(fullPath)
-	} catch {
-		// File already gone
-	}
-	await db
-		.delete(schema.personaGalleryImages)
-		.where(
-			and(
-				eq(schema.personaGalleryImages.personaId, personaId),
-				eq(schema.personaGalleryImages.path, imgPath)
-			)
-		)
-	// See deleteCharacterGalleryImage — clear a dangling avatar reference
-	// rather than leave it pointing at a deleted file.
-	await db
-		.update(schema.personas)
-		.set({ avatar: null })
-		.where(
-			and(
-				eq(schema.personas.id, personaId),
-				eq(schema.personas.avatar, imgPath)
-			)
-		)
-}
-
-/** Mirrors reorderCharacterGalleryImages — see its comment. */
 export async function reorderPersonaGalleryImages({
 	personaId,
-	paths
+	mediaIds
 }: {
 	personaId: number
-	paths: string[]
+	mediaIds: number[]
 }) {
-	await Promise.all(
-		paths.map((p, position) =>
-			db
-				.update(schema.personaGalleryImages)
-				.set({ position })
-				.where(
-					and(
-						eq(schema.personaGalleryImages.personaId, personaId),
-						eq(schema.personaGalleryImages.path, p)
-					)
-				)
-		)
-	)
+	await reorderMedia(db, { personaId }, mediaIds)
 }

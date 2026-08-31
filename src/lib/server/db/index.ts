@@ -535,7 +535,7 @@ async function initialiseDatabase(): Promise<void> {
 		// dropped (PLAN 25). Deferred-imported for the same db-cycle reason as
 		// `sync` above. Plugin widgets seed their own on install/update.
 		const { syncWidgetStyles } = await import("./widgetStyles")
-		const { CORE_WIDGETS } = await import("$lib/shared/widgets/coreWidgets")
+		const { CORE_WIDGETS } = await import("@serene-pub/core-catalog")
 		await syncWidgetStyles(CORE_WIDGETS, meta.version || "0.0.0")
 	}
 }

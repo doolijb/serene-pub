@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { avatarSrc } from "$lib/client/utils/media"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { Avatar } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
@@ -50,7 +51,7 @@
 	{#snippet content()}
 		<Avatar class="h-[4em] min-h-[4em] w-[4em] min-w-[4em]">
 			<Avatar.Image
-				src={character.avatar || ""}
+				src={avatarSrc(character) || ""}
 				alt={character.nickname || character.name!}
 				class="object-cover"
 			/>

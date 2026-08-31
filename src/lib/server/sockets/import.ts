@@ -7,7 +7,7 @@ import * as path from "path"
 import * as os from "os"
 import { eq, and } from "drizzle-orm"
 import { v4 as uuid } from "uuid"
-import { getCharacterDataDir, getPersonaDataDir } from "$lib/server/utils"
+import { createMedia } from "$lib/server/media"
 import {
 	extractCharacterFromPNG,
 	readCharacterFile,
@@ -639,22 +639,22 @@ export const importExecuteSillyTavern: Handler<
 					if (charItem.filename.endsWith(".png")) {
 						try {
 							const buffer = await fsPromises.readFile(filePath)
-							const avatarDir = getCharacterDataDir({
+							// An import is an upload like any other (28 §8
+							// rule 6): it lands under the entity it produced,
+							// through the same choke point, rather than
+							// getting its own tree and its own path format.
+							// Thumbnails are left to the backfill pass — a
+							// bulk import should not stop to encode.
+							const row = await createMedia(db, {
+								userId,
 								characterId: newChar.id,
-								userId
+								bytes: buffer,
+								filename: charItem.filename,
+								thumbnail: false
 							})
-							await fsPromises.mkdir(avatarDir, {
-								recursive: true
-							})
-							const filename = `avatar-${uuid().substring(0, 4)}.png`
-							await fsPromises.writeFile(
-								path.join(avatarDir, filename),
-								buffer
-							)
-							const avatarUrl = `/images/data/users/${userId}/characters/${newChar.id}/${filename}`
 							await db
 								.update(schema.characters)
-								.set({ avatar: avatarUrl })
+								.set({ avatarMediaId: row.id })
 								.where(eq(schema.characters.id, newChar.id))
 						} catch (e) {
 							console.warn(
@@ -762,20 +762,16 @@ export const importExecuteSillyTavern: Handler<
 					)
 					try {
 						const buffer = await fsPromises.readFile(avatarSrc)
-						const avatarDir = getPersonaDataDir({
+						const row = await createMedia(db, {
+							userId,
 							personaId: newPersona.id,
-							userId
+							bytes: buffer,
+							filename: avatarFilename,
+							thumbnail: false
 						})
-						await fsPromises.mkdir(avatarDir, { recursive: true })
-						const filename = `avatar-${uuid().substring(0, 4)}.png`
-						await fsPromises.writeFile(
-							path.join(avatarDir, filename),
-							buffer
-						)
-						const avatarUrl = `/images/data/users/${userId}/personas/${newPersona.id}/${filename}`
 						await db
 							.update(schema.personas)
-							.set({ avatar: avatarUrl })
+							.set({ avatarMediaId: row.id })
 							.where(eq(schema.personas.id, newPersona.id))
 					} catch {
 						/* no avatar file — that's fine */

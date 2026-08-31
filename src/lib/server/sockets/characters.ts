@@ -1,4 +1,5 @@
 import { db } from "$lib/server/db"
+import { readMedia, toClientMedia } from "$lib/server/media"
 import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import * as fsPromises from "fs/promises"
@@ -131,7 +132,7 @@ export const charactersList: Handler<
 				id: true,
 				name: true,
 				nickname: true,
-				avatar: true,
+				avatarMediaId: true,
 				isFavorite: true,
 				description: true,
 				creatorNotes: true,
@@ -952,32 +953,23 @@ export const charactersExportCard: Handler<
 				return res
 			} else {
 				// Export as PNG with embedded data
-				if (!character.avatar) {
+				// The card's primary image (28 §10). The media row carries
+				// the sniffed mime, so the "is it actually a PNG?" check no
+				// longer has to infer the type from a filename extension.
+				const avatar = character.avatarMediaId
+					? await readMedia(db, character.avatarMediaId)
+					: null
+				if (!avatar) {
 					throw new Error(
 						"Character has no avatar to embed data into"
 					)
 				}
-
-				// Read the avatar file
-				const avatarDir = getCharacterDataDir({
-					characterId: params.id,
-					userId
-				})
-				// Extract just the filename from the avatar path (it may contain full path)
-				const avatarFilename = path.basename(character.avatar)
-				// Stored avatars aren't guaranteed to be PNGs (jpg/webp/gif are
-				// all valid per ALLOWED_IMAGE_EXTENSIONS) — embedCharacterCardInPng
-				// would otherwise throw the PNG library's opaque "Invalid .png
-				// file header" for those, with no indication of why to the user.
-				if (path.extname(avatarFilename).toLowerCase() !== ".png") {
+				if (avatar.row.mime !== "image/png") {
 					throw new Error(
 						"This character's avatar isn't a PNG, so it can't be used for PNG card export — try JSON export instead, or update the avatar to a PNG image first."
 					)
 				}
-				const avatarPath = path.join(avatarDir, avatarFilename)
-				const avatarBuffer = await fsPromises.readFile(avatarPath)
-
-				const blob = embedCharacterCardInPng(avatarBuffer, charCardData)
+				const blob = embedCharacterCardInPng(avatar.bytes, charCardData)
 				const filename = `${character.name.replace(/[^a-z0-9]/gi, "_").toLowerCase()}.v3.png`
 
 				const res: Sockets.Characters.ExportCard.Response = {
@@ -1040,16 +1032,15 @@ export const charactersUploadGalleryImage: Handler<
 			if (!character)
 				throw new Error("Character not found or access denied")
 
-			const imgPath = await uploadCharacterGalleryImage({
+			const uploaded = await uploadCharacterGalleryImage({
 				characterId: params.characterId,
 				userId,
-				imageFile: Buffer.from(params.imageFile as Uint8Array),
-				mimeType: params.mimeType
+				imageFile: Buffer.from(params.imageFile as Uint8Array)
 			})
 
 			const res: Sockets.Characters.UploadGalleryImage.Response = {
 				success: true,
-				path: imgPath,
+				media: toClientMedia(uploaded),
 				characterId: params.characterId
 			}
 			emitToUser("characters:uploadGalleryImage", res)
@@ -1092,7 +1083,7 @@ export const charactersDeleteGalleryImage: Handler<
 			await deleteCharacterGalleryImage({
 				characterId: params.characterId,
 				userId,
-				path: params.path
+				mediaId: params.mediaId
 			})
 
 			const res: Sockets.Characters.DeleteGalleryImage.Response = {
@@ -1131,7 +1122,7 @@ export const charactersReorderGallery: Handler<
 
 		await reorderCharacterGalleryImages({
 			characterId: params.characterId,
-			paths: params.paths
+			mediaIds: params.mediaIds
 		})
 
 		const listRes = await charactersListGallery.handler(
@@ -1158,24 +1149,26 @@ export const charactersSetAvatar: Handler<
 		})
 		if (!character) throw new Error("Character not found or access denied")
 
-		// params.path must be one of this character's own gallery images —
-		// without this, the client could point avatar at an arbitrary
-		// external URL, which every other viewer's browser would then fetch
-		// directly (avatar isn't routed through the authenticated /images
-		// proxy unless it happens to start with /images/...), bypassing the
-		// per-viewer authorization that route exists to enforce.
-		const galleryImage = await db.query.characterGalleryImages.findFirst({
-			where: (g, { and, eq }) =>
+		// params.mediaId must be one of this character's own media rows.
+		// The old version guarded against the client pointing `avatar` at an
+		// arbitrary external URL — every viewer's browser would fetch it
+		// directly, bypassing the authenticated proxy. That whole class is
+		// gone now (an avatar is an id into `media`, and there is nowhere to
+		// put a URL), but the ownership check still matters: without it a
+		// client could name someone else's media id.
+		const owned = await db.query.media.findFirst({
+			where: (m, { and, eq, isNull }) =>
 				and(
-					eq(g.characterId, params.characterId),
-					eq(g.path, params.path)
+					eq(m.id, params.mediaId),
+					eq(m.characterId, params.characterId),
+					isNull(m.variant)
 				)
 		})
-		if (!galleryImage) throw new Error("Invalid avatar path.")
+		if (!owned) throw new Error("Invalid avatar image.")
 
 		const [updated] = await db
 			.update(schema.characters)
-			.set({ avatar: params.path })
+			.set({ avatarMediaId: params.mediaId })
 			.where(
 				and(
 					eq(schema.characters.id, params.characterId),

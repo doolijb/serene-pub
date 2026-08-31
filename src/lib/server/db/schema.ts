@@ -44,6 +44,17 @@ export const users = pgTable(
 		theme: text("theme").notNull().default("hamlindigo"), // Remove next
 		darkMode: boolean("dark_mode").notNull().default(true), // Remove next
 		isAdmin: boolean("is_admin").notNull().default(false),
+		/**
+		 * When this account last completed a sign-in. NULL means it never has.
+		 *
+		 * Load-bearing rather than informational: an account cannot be made an
+		 * admin until it has been signed into at least once (27 §5). A
+		 * freshly-created or invited account is an unproven claim about who
+		 * holds it — granting it admin before anyone has demonstrated they can
+		 * actually get in means a mistyped username or an intercepted invite
+		 * hands over the instance.
+		 */
+		lastLoginAt: timestamp("last_login_at"),
 		isDeleted: boolean("is_deleted").notNull().default(false),
 		createdAt: date("created_at")
 			.notNull()
@@ -120,7 +131,21 @@ export const userSettings = pgTable(
 		showAllCharacterFields: boolean("show_all_character_fields")
 			.notNull()
 			.default(false),
+		/**
+		 * A *shipped* default background — `/backgrounds/defaults/x.webp`, a
+		 * static asset, not user data. Survives 28: there is nothing to move
+		 * into `media`, because these files ship with the app and belong to no
+		 * user.
+		 */
 		backgroundImagePath: text("background_image_path"),
+		/**
+		 * An *uploaded* background — a role, expressed as a pointer at `media`.
+		 * Plain integer, not an FK: see the note on `media`.
+		 *
+		 * At most one of this and `backgroundImagePath` is set; this one wins
+		 * when both are, and setting either clears the other.
+		 */
+		backgroundMediaId: integer("background_media_id"),
 		backgroundOpacity: integer("background_opacity").notNull().default(75),
 		// Personal viewing preference — independent of who owns the underlying
 		// CharaVault account (a single admin-configured, instance-wide
@@ -1616,7 +1641,9 @@ export const characters = pgTable(
 			.notNull()
 			.default({})
 			.$type<Record<string, any>>(), // JSON/text for extra fields
-		avatar: text("avatar"), // Path or URL to avatar image
+		/** The character's avatar — a role, expressed as a pointer at `media`
+		 *  (28). Plain integer, not an FK: see the note on `media`. */
+		avatarMediaId: integer("avatar_media_id"),
 		creatorNotes: text("creator_notes"), // Notes from the character creator
 		creatorNotesMultilingual: json("creator_notes_multilingual").$type<
 			Record<string, string>
@@ -1624,14 +1651,9 @@ export const characters = pgTable(
 		groupOnlyGreetings: json("group_only_greetings").$type<string[]>(), // JSON array of greetings for group sessions
 		postHistoryInstructions: text("post_history_instructions"), // Instructions for post-history processing
 		source: json("source").notNull().default([]).$type<string[]>(), // JSON array of sources (e.g., URLs, books)
-		assets: json("assets").notNull().default([]).$type<
-			Array<{
-				type: string
-				uri: string
-				name: string
-				ext: string
-			}>
-		>(), // JSON array of asset paths or URLs
+		// `assets` (a JSON array of card asset descriptors) was dropped by 28:
+		// nothing ever wrote it — buildCharacterCardV3 emits no `assets` field
+		// and the card parser never populated it — and nothing ever read it.
 		createdAt: date("created_at")
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
@@ -1674,43 +1696,13 @@ export const charactersRelations = relations(characters, ({ many, one }) => ({
 	}),
 	characterTags: many(characterTags),
 	sessionCharacters: many(sessionCharacters),
-	sessionMessages: many(sessionMessages),
-	galleryImages: many(characterGalleryImages)
+	sessionMessages: many(sessionMessages)
 }))
 
-// Tracks display order for a character's uploaded gallery images. The
-// images themselves are plain files on disk (see getCharacterDataDir) —
-// this table exists purely so drag-to-reorder has somewhere persistent to
-// write to; filenames are never renamed on reorder (only `position`
-// changes), so `characters.avatar` — which stores a full image path — can
-// never be invalidated by a reorder.
-export const characterGalleryImages = pgTable(
-	"character_gallery_images",
-	{
-		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		characterId: integer("character_id")
-			.notNull()
-			.references(() => characters.id, { onDelete: "cascade" }),
-		path: text("path").notNull(),
-		position: integer("position").notNull().default(0),
-		createdAt: date("created_at")
-			.notNull()
-			.default(sql`(CURRENT_TIMESTAMP)`)
-	},
-	(t) => [
-		uniqueIndex("character_gallery_images_unique").on(t.characterId, t.path)
-	]
-)
-
-export const characterGalleryImagesRelations = relations(
-	characterGalleryImages,
-	({ one }) => ({
-		character: one(characters, {
-			fields: [characterGalleryImages.characterId],
-			references: [characters.id]
-		})
-	})
-)
+// `character_gallery_images` / `persona_gallery_images` were folded into
+// `media` by 28: a gallery image is a media row stamped with the parent's id
+// and ordered by `position`. The two tables existed only to hold that
+// ordering, and every helper in utils/index.ts was written twice to match.
 
 export const personas = pgTable(
 	"personas",
@@ -1724,7 +1716,8 @@ export const personas = pgTable(
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }), // FK to users.id
 		isDefault: boolean("is_default").notNull(), // Is this the default persona for the user?
-		avatar: text("avatar"), // e.g. 'user-default.png', '1747379438925-Ryvn.png'
+		/** See characters.avatarMediaId. */
+		avatarMediaId: integer("avatar_media_id"),
 		name: text("name").notNull(), // e.g. 'Warren', 'Master Desir'
 		description: text("description").notNull(), // Persona description (long text)
 		position: integer("position").default(0),
@@ -1762,39 +1755,8 @@ export const personasRelations = relations(personas, ({ one, many }) => ({
 		fields: [personas.lorebookId],
 		references: [lorebooks.id]
 	}),
-	personaTags: many(personaTags),
-	galleryImages: many(personaGalleryImages)
+	personaTags: many(personaTags)
 }))
-
-// Mirrors characterGalleryImages — see its comment for the "why a table,
-// not filename renaming" rationale.
-export const personaGalleryImages = pgTable(
-	"persona_gallery_images",
-	{
-		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		personaId: integer("persona_id")
-			.notNull()
-			.references(() => personas.id, { onDelete: "cascade" }),
-		path: text("path").notNull(),
-		position: integer("position").notNull().default(0),
-		createdAt: date("created_at")
-			.notNull()
-			.default(sql`(CURRENT_TIMESTAMP)`)
-	},
-	(t) => [
-		uniqueIndex("persona_gallery_images_unique").on(t.personaId, t.path)
-	]
-)
-
-export const personaGalleryImagesRelations = relations(
-	personaGalleryImages,
-	({ one }) => ({
-		persona: one(personas, {
-			fields: [personaGalleryImages.personaId],
-			references: [personas.id]
-		})
-	})
-)
 
 // Sessions (group or 1:1)
 export const sessions = pgTable(
@@ -2111,25 +2073,115 @@ export const messageParts = pgTable(
 )
 
 /**
- * Binary attachments referenced by `core:image`/`core:file` parts and the
- * block vocabulary's image block (20 §1) — one reference vocabulary, not two.
- * Bytes live under the data dir, jailed like plugin storage; serving is a
- * session-access-checked route.
+ * Media — every uploaded or imported blob in the instance (28).
+ *
+ * **Provenance, not role.** The `userId`/`characterId`/`personaId`/`sessionId`/
+ * `messageId` columns say what a blob *belongs to*; they never say what it is
+ * *for*. Roles are read off inbound relations instead — a character's avatar is
+ * `characters.avatarMediaId` pointing at a row here, an emotion sprite will be
+ * whatever the emotions row points at. That inverse is deliberate: the number
+ * of roles grows over time, the number of parent kinds does not, so a new role
+ * costs a column on the thing that owns it and never a migration here.
+ *
+ * **No foreign keys, no cascade, no set null** (28 §2, ruled). Deleting a
+ * character leaves its media behind, still stamped with that character's id —
+ * which is the whole point. A stale id keeps an orphan *groupable*, so "these
+ * 34 files belonged to a character you deleted" stays an answerable question
+ * and deleting them stays a safe operation. Under cascade the rows vanish and
+ * the files become an unattributable pile.
+ *
+ * The cost, stated so it is not a surprise: the database enforces nothing about
+ * media references. A dangling `avatarMediaId` is possible and renders as a
+ * missing image. Integrity lives in the application and in the (deferred)
+ * cleanup tool.
+ *
+ * `path` is NEVER serialised to a non-admin client — see
+ * `$lib/server/media`'s `toClientMedia`.
  */
-export const sessionAssets = pgTable("session_assets", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	sessionId: integer("session_id")
-		.notNull()
-		.references(() => sessions.id, { onDelete: "cascade" }),
-	hash: text("hash").notNull(),
-	mime: text("mime").notNull(),
-	bytes: integer("bytes").notNull(),
-	path: text("path").notNull(),
-	createdBy: integer("created_by").references(() => users.id, {
-		onDelete: "set null"
-	}),
-	createdAt: timestamp("created_at").notNull().defaultNow()
-})
+export const media = pgTable(
+	"media",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+
+		/**
+		 * The public address of this blob — every URL a client sees is
+		 * `/media/{uuid}`, never `/media/{id}`.
+		 *
+		 * It is a **cache token**, not just an opaque id: it is rotated
+		 * whenever what this row serves could differ from what a browser
+		 * already has (today: a regenerated thumbnail). Because a uuid only
+		 * ever addresses one fixed set of bytes, the response can be
+		 * `immutable` for a year and still never go stale — a changed image is
+		 * a changed URL, so there is nothing to revalidate.
+		 */
+		uuid: uuid("uuid")
+			.notNull()
+			.unique()
+			.default(sql`(gen_random_uuid ())`),
+
+		// ---- Provenance. Plain integers by ruling; see the note above.
+		//
+		// A THUMBNAIL LEAVES ALL FOUR ENTITY COLUMNS NULL — its only parent is
+		// the image it represents (`parentMediaId`). That is what keeps
+		// `mediaFor(character)` returning originals only, with no
+		// `variant IS NULL` filter at any call site.
+		userId: integer("user_id").notNull(),
+		characterId: integer("character_id"),
+		personaId: integer("persona_id"),
+		sessionId: integer("session_id"),
+		messageId: integer("message_id"),
+
+		/** scoped | private — see MEDIA_VISIBILITY. */
+		visibility: text("visibility").notNull().default("scoped"),
+
+		/** sha256 of the content, hex. Identity — not the filename. */
+		hash: text("hash").notNull(),
+		mime: text("mime").notNull(),
+		bytes: integer("bytes").notNull(),
+		/** image | document | audio | video | other. Derived from `mime` at
+		 *  insert and stored, so "every document" is an index scan rather than
+		 *  a string parse. */
+		kind: text("kind").notNull(),
+		/** Relative to the data dir, so the data dir can move. Admin-only. */
+		path: text("path").notNull(),
+		/** The uploader's filename. Display metadata only — never resolved,
+		 *  never any part of `path`. */
+		filename: text("filename"),
+		width: integer("width"),
+		height: integer("height"),
+
+		/** Set only on a derivative; its one and only parent. */
+		parentMediaId: integer("parent_media_id"),
+		/** NULL for an original, `thumb` for a generated thumbnail. */
+		variant: text("variant"),
+
+		/** Ordering within its group — replaces the gallery tables' only real
+		 *  function (drag-to-reorder). */
+		position: integer("position").notNull().default(0),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		// Dedupe is per-user, not per-instance: instance-wide would make one
+		// user's upload observable to another by hash timing, and would put a
+		// blob's lifetime under an account that no longer references it.
+		// `variant` is in the key so an original and its thumbnail can share a
+		// hash without colliding.
+		uniqueIndex("media_user_hash_variant_unique").on(
+			t.userId,
+			t.hash,
+			t.variant
+		),
+		index("media_character_idx").on(t.characterId),
+		index("media_persona_idx").on(t.personaId),
+		index("media_session_idx").on(t.sessionId),
+		index("media_message_idx").on(t.messageId),
+		index("media_parent_idx").on(t.parentMediaId)
+	]
+)
+
+// `session_assets` was folded into `media` by 28 — a session attachment is a
+// media row stamped with a `sessionId`. `$lib/server/messages/assets.ts` keeps
+// the old function names as thin wrappers so message code did not have to move.
 
 export const messagesRelations = relations(messages, ({ one, many }) => ({
 	session: one(sessions, {
@@ -2376,6 +2428,12 @@ export const systemSettings = pgTable("system_settings", {
 		"default_narrator_prompt_config_id"
 	).references(() => narratorPromptConfigs.id, { onDelete: "set null" }),
 	isAccountsEnabled: boolean("is_accounts_enabled").notNull().default(false),
+	/**
+	 * Every account must carry a second factor (27 §4). Enforced through the
+	 * setup gate, so a user without one is walked through enrolment rather
+	 * than locked out.
+	 */
+	requireTwoFactor: boolean("require_two_factor").notNull().default(false),
 	/**
 	 * SHA-256 of the last `SERENE_PUB_RECOVERY_KEY` that was applied (26 §10,
 	 * tier 3). One column is the entire one-time-use mechanism: on boot, a key
@@ -4508,6 +4566,26 @@ export const sessionPanelLayouts = pgTable(
 			.notNull()
 			.default({})
 			.$type<Record<string, unknown>>(),
+		/**
+		 * The user's ACTIVE layout selection for this session (PLAN 25 redesign,
+		 * 2026-08-30): which saved preset they've applied. NULL = the genre
+		 * default. The preset DEFINITION lives in `session_layout_presets`; this
+		 * row holds only the reference + the per-widget settings below — the
+		 * active selection, never the preset itself.
+		 */
+		layoutPresetId: integer("layout_preset_id").references(
+			() => sessionLayoutPresets.id,
+			{ onDelete: "set null" }
+		),
+		/**
+		 * Per-widget settings that are the USER's, not the preset's — arbitrary
+		 * per-component config a preset shouldn't carry (a background-image
+		 * reference, etc.), keyed by widget id. Stored verbatim.
+		 */
+		layoutSettings: json("layout_settings")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at")
 			.notNull()
@@ -4519,6 +4597,47 @@ export const sessionPanelLayouts = pgTable(
 			t.userId,
 			t.sessionId
 		)
+	]
+)
+
+/**
+ * Saved layout presets (PLAN 25 redesign, ruled 2026-08-30). A preset is a
+ * reusable layout DEFINITION scoped to a session type (genre); `authorUserId`
+ * NULL = a system/default preset seeded per genre, set = a user-authored one.
+ * The user's ACTIVE choice and their per-widget settings ride the per-user
+ * `session_panel_layouts` row (layoutPresetId / layoutSettings) — this table is
+ * only the definitions, never the active selection.
+ */
+export const sessionLayoutPresets = pgTable(
+	"session_layout_presets",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** Seeded system defaults match on this (seed rule); NULL for user presets. */
+		seedKey: text("seed_key").unique(),
+		/** The parent session type — a genre id (e.g. `core:genre/chat`). */
+		genreId: text("genre_id").notNull(),
+		/** NULL = system/default; set = the user who authored this preset. */
+		authorUserId: integer("author_user_id").references(() => users.id, {
+			onDelete: "cascade"
+		}),
+		name: text("name").notNull(),
+		/**
+		 * The arrangement, stored verbatim: `{ zoneLayout?, widgetGrid?,
+		 * arrangedGrid? }` — the same blob the client layout editor produces.
+		 */
+		layout: json("layout")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [
+		index("session_layout_presets_genre_idx").on(t.genreId),
+		index("session_layout_presets_author_idx").on(t.authorUserId)
 	]
 )
 
@@ -4856,3 +4975,51 @@ export const userTotpRecoveryCodesRelations = relations(
 		})
 	})
 )
+
+/**
+ * One-time invitations (plan 27 §3).
+ *
+ * Two kinds, and the difference is whether an account exists yet:
+ *
+ * - `register` — no account behind it. The recipient chooses their own username
+ *   and password, and the account is created on redemption. This is what lets
+ *   an admin add people without hand-delivering credentials, while the invite
+ *   itself remains the authorisation.
+ * - `account` — bound to an existing user. Redeeming replaces their password
+ *   and deletes their two-factor credentials, which makes it the polished form
+ *   of the tier-2 recovery in 26 §10: a link, instead of an admin reading a
+ *   temporary password down the phone.
+ *
+ * The token is stored only as a hash. It is a bearer credential — whoever holds
+ * it becomes the account — so it gets the same treatment as a recovery code,
+ * plus a deliberately tight two-hour expiry.
+ */
+export const accountInvites = pgTable(
+	"account_invites",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** SHA-256 of the token. The token itself is shown once and never stored. */
+		tokenHash: text("token_hash").notNull().unique(),
+		kind: text("kind").notNull().$type<"register" | "account">(),
+		/** Set for `account` invites; NULL for `register`, which has no user yet. */
+		userId: integer("user_id").references(() => users.id, {
+			onDelete: "cascade"
+		}),
+		createdBy: integer("created_by").references(() => users.id, {
+			onDelete: "set null"
+		}),
+		expiresAt: timestamp("expires_at").notNull(),
+		/** Set atomically on claim, which is what makes it single-use. */
+		usedAt: timestamp("used_at"),
+		revokedAt: timestamp("revoked_at"),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [index("account_invites_user_idx").on(t.userId)]
+)
+
+export const accountInvitesRelations = relations(accountInvites, ({ one }) => ({
+	user: one(users, {
+		fields: [accountInvites.userId],
+		references: [users.id]
+	})
+}))

@@ -12,23 +12,39 @@
 		entityId: number
 		entityName: string
 		isOwner: boolean
-		currentAvatar: string | null
+		/** The media id of the entity's current avatar, so "which tile is the
+		 *  avatar" is an id comparison rather than a URL string match — the
+		 *  latter broke the moment the two sides built the URL differently
+		 *  (thumb vs original). */
+		currentAvatarMediaId: number | null
 	}
 
-	let { entityType, entityId, entityName, isOwner, currentAvatar }: Props =
+	let {
+		entityType,
+		entityId,
+		entityName,
+		isOwner,
+		currentAvatarMediaId
+	}: Props =
 		$props()
 
 	const socket = useTypedSocket()
 
-	let images = $state<string[]>([])
+	// Media rows, not paths (28): the id is the identity, so a reorder, a
+	// rename or a re-upload of identical bytes can no longer desync this list
+	// from what the server has.
+	let images = $state<Sockets.Media[]>([])
 	let isLoading = $state(true)
 	let isUploading = $state(false)
 	let fileInputEl: HTMLInputElement
-	let brokenPaths = $state(new Set<string>())
+	let brokenIds = $state(new Set<number>())
 
-	let pendingDeletePath = $state<string | null>(null)
-	let showDeleteModal = $derived(pendingDeletePath !== null)
-	let menuOpenFor = $state<string | null>(null)
+	let pendingDeleteId = $state<number | null>(null)
+	let showDeleteModal = $derived(pendingDeleteId !== null)
+	let pendingDeleteMedia = $derived(
+		images.find((m) => m.id === pendingDeleteId) ?? null
+	)
+	let menuOpenFor = $state<number | null>(null)
 
 	let lightboxOpen = $state(false)
 	let lightboxPath = $state<string | null>(null)
@@ -38,16 +54,16 @@
 	// re-deriving this fresh from `images` on every `consider` tick would
 	// desync its internal drag state, so this local mirror is what the zone
 	// actually drives; `images` is only re-derived from it on `finalize`.
-	type Tile = { id: string; path: string }
+	type Tile = { id: number; media: Sockets.Media }
 	let tiles = $state<Tile[]>([])
 	$effect(() => {
 		tiles = images
-			.filter((p) => !brokenPaths.has(p))
-			.map((p) => ({ id: p, path: p }))
+			.filter((m) => !brokenIds.has(m.id))
+			.map((m) => ({ id: m.id, media: m }))
 	})
 
-	function handleImageError(imgPath: string) {
-		brokenPaths = new Set([...brokenPaths, imgPath])
+	function handleImageError(id: number) {
+		brokenIds = new Set([...brokenIds, id])
 	}
 
 	function triggerUpload() {
@@ -86,42 +102,45 @@
 		lightboxOpen = true
 	}
 
-	function openMenu(path: string) {
-		menuOpenFor = path
+	function openMenu(id: number) {
+		menuOpenFor = id
 	}
 
-	function setAsAvatar(path: string) {
+	function setAsAvatar(mediaId: number) {
 		menuOpenFor = null
 		if (entityType === "character") {
-			socket.emit("characters:setAvatar", { characterId: entityId, path })
+			socket.emit("characters:setAvatar", {
+				characterId: entityId,
+				mediaId
+			})
 		} else {
-			socket.emit("personas:setAvatar", { personaId: entityId, path })
+			socket.emit("personas:setAvatar", { personaId: entityId, mediaId })
 		}
 	}
 
-	function requestDelete(path: string) {
+	function requestDelete(id: number) {
 		menuOpenFor = null
-		pendingDeletePath = path
+		pendingDeleteId = id
 	}
 
 	function confirmDelete() {
-		if (!pendingDeletePath) return
+		if (pendingDeleteId === null) return
 		if (entityType === "character") {
 			socket.emit("characters:deleteGalleryImage", {
 				characterId: entityId,
-				path: pendingDeletePath
+				mediaId: pendingDeleteId
 			})
 		} else {
 			socket.emit("personas:deleteGalleryImage", {
 				personaId: entityId,
-				path: pendingDeletePath
+				mediaId: pendingDeleteId
 			})
 		}
-		pendingDeletePath = null
+		pendingDeleteId = null
 	}
 
 	function cancelDelete() {
-		pendingDeletePath = null
+		pendingDeleteId = null
 	}
 
 	function handleConsider(e: CustomEvent<{ items: Tile[] }>) {
@@ -130,16 +149,16 @@
 
 	function handleFinalize(e: CustomEvent<{ items: Tile[] }>) {
 		tiles = e.detail.items
-		const paths = tiles.map((t) => t.path)
+		const mediaIds = tiles.map((t) => t.id)
 		if (entityType === "character") {
 			socket.emit("characters:reorderGallery", {
 				characterId: entityId,
-				paths
+				mediaIds
 			})
 		} else {
 			socket.emit("personas:reorderGallery", {
 				personaId: entityId,
-				paths
+				mediaIds
 			})
 		}
 	}
@@ -151,7 +170,7 @@
 	}
 
 	function handleList(msg: {
-		images: string[]
+		images: Sockets.Media[]
 		characterId?: number
 		personaId?: number
 	}) {
@@ -295,21 +314,24 @@
 			{#each tiles as tile (tile.id)}
 				<div
 					class="group relative aspect-square overflow-hidden rounded-lg border-2 transition-all
-						{currentAvatar === tile.path
+						{currentAvatarMediaId === tile.id
 						? 'border-primary-500 ring-primary-500 ring-2 ring-offset-1'
 						: 'border-surface-300-600 hover:border-surface-400-500'}"
 				>
 					<button
 						type="button"
 						class="h-full w-full"
-						onclick={() => openLightbox(tile.path)}
+						onclick={() => openLightbox(tile.media.url)}
 						title="View image"
 					>
 						<img
-							src={tile.path}
+							src={tile.media.thumbUrl}
 							alt="Gallery thumbnail"
 							class="h-full w-full object-cover"
-							onerror={() => handleImageError(tile.path)}
+							loading="lazy"
+							width={tile.media.width ?? undefined}
+							height={tile.media.height ?? undefined}
+							onerror={() => handleImageError(tile.id)}
 						/>
 					</button>
 
@@ -330,9 +352,9 @@
 							onclick={(e) => e.stopPropagation()}
 						>
 							<Popover
-								open={menuOpenFor === tile.path}
+								open={menuOpenFor === tile.id}
 								onOpenChange={(e) =>
-									(menuOpenFor = e.open ? tile.path : null)}
+									(menuOpenFor = e.open ? tile.id : null)}
 								positioning={{ placement: "bottom-end" }}
 							>
 								<Popover.Trigger
@@ -356,13 +378,13 @@
 											<article
 												class="flex flex-col gap-2"
 											>
-												{#if currentAvatar !== tile.path}
+												{#if currentAvatarMediaId !== tile.id}
 													<button
 														type="button"
 														class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
 														onclick={() =>
 															setAsAvatar(
-																tile.path
+																tile.id
 															)}
 													>
 														<Icons.Star
@@ -379,7 +401,7 @@
 													class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
 													onclick={() =>
 														requestDelete(
-															tile.path
+															tile.id
 														)}
 												>
 													<Icons.Trash2
@@ -396,7 +418,7 @@
 						</div>
 					{/if}
 
-					{#if currentAvatar === tile.path}
+					{#if currentAvatarMediaId === tile.id}
 						<div
 							class="bg-primary-500 pointer-events-none absolute right-1 bottom-1 rounded-full p-0.5"
 							title="Current avatar"
@@ -430,10 +452,10 @@
 					<Icons.Trash2 class="text-error-500 h-5 w-5 shrink-0" />
 					<h2 class="text-lg font-bold">Delete Image</h2>
 				</header>
-				{#if pendingDeletePath}
+				{#if pendingDeleteMedia}
 					<div class="overflow-hidden rounded-lg">
 						<img
-							src={pendingDeletePath}
+							src={pendingDeleteMedia.thumbUrl}
 							alt="Preview of item to delete"
 							class="h-24 w-full object-cover"
 						/>

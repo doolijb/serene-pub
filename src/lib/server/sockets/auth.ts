@@ -46,10 +46,12 @@ export interface AuthenticatedSocket extends Socket {
 	 */
 	tokenId: string | null
 	/**
-	 * This session owes a second factor. While true, sockets/index.ts refuses
-	 * every handler outside MFA_PENDING_ALLOWED_EVENTS.
+	 * What this session still owes before it can use the app (27 §1) — a
+	 * password to set, a second factor to enrol, or both, in that order. While
+	 * non-empty, sockets/index.ts refuses every handler outside
+	 * SETUP_ALLOWED_EVENTS.
 	 */
-	mfaPending: boolean
+	pendingSetup: import("$lib/server/auth/setupGate").SetupStep[]
 	io?: any // Add io property for socket server reference
 }
 
@@ -160,7 +162,7 @@ export async function authMiddleware(
 				// to. Set explicitly rather than left undefined so the gate in
 				// sockets/index.ts reads a real value on every path.
 				socket.tokenId = null
-				socket.mfaPending = false
+				socket.pendingSetup = []
 				if (!joinUserRoomWithCap(socket, fallbackUser.id)) {
 					return next(new Error("Too many concurrent connections"))
 				}
@@ -247,11 +249,20 @@ export async function authMiddleware(
 		// For a user without 2FA enabled this is false, which is what keeps the
 		// whole mechanism invisible on the overwhelming majority of instances.
 		socket.tokenId = payload.id as string
+		const { pendingSetupSteps } = await import("$lib/server/auth/setupGate")
 		const { isMfaPending } = await import("$lib/server/auth/totp/service")
-		socket.mfaPending = await isMfaPending(
-			authResult.user.id,
-			socket.tokenId
-		)
+		const steps = await pendingSetupSteps(authResult.user.id)
+		// An enrolled second factor that this session has not yet satisfied is
+		// a different thing from *not having* one: the first is a challenge,
+		// the second is setup. Both close the gate, and both are cleared
+		// through totp:verify / totp:enroll.
+		if (
+			!steps.includes("twoFactor") &&
+			(await isMfaPending(authResult.user.id, socket.tokenId))
+		) {
+			steps.push("twoFactor")
+		}
+		socket.pendingSetup = steps
 
 		// Join user-specific room
 		if (!joinUserRoomWithCap(socket, authResult.user.id)) {

@@ -10,6 +10,7 @@
 	import type { Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import PluginFrame from "$lib/client/components/frames/PluginFrame.svelte"
+	import WidgetHost from "$lib/client/sessionLayout/WidgetHost.svelte"
 	import { nativeSurface } from "$lib/client/surfaces/registry"
 	import type { PanelInstance } from "$lib/client/surfaces/types"
 	import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
@@ -28,6 +29,12 @@
 		 * close and the drawered flag never suspends a frame.
 		 */
 		chrome?: "grid" | "zone"
+		/**
+		 * Suppress the panel's own title bar. Used when the panel sits inside a
+		 * live tab group, where the tab already supplies the title (avoids the
+		 * tab-label + panel-header double chrome).
+		 */
+		hideHeader?: boolean
 		/** The primary conversation body, supplied by the session page. */
 		primaryChildren?: Snippet
 		onFrameAction?: (
@@ -44,6 +51,7 @@
 		session,
 		inDrawer = false,
 		chrome = "grid",
+		hideHeader = false,
 		primaryChildren,
 		onFrameAction
 	}: Props = $props()
@@ -98,8 +106,8 @@
 	tabindex="-1"
 	aria-label={instance.title}
 >
-	{#if !isPrimary}
-	<!-- Title bar (secondary panels only) -->
+	{#if !isPrimary && !hideHeader}
+	<!-- Title bar (secondary panels only; suppressed inside a tab group) -->
 	<header
 		class="preset-tonal-surface border-surface-200-800 flex shrink-0 items-center gap-1.5 border-b px-2 py-1"
 	>
@@ -186,11 +194,35 @@
 				onAction={onFrameAction}
 			/>
 		{:else if NativeCmp}
-			<NativeCmp
-				{sessionId}
-				{session}
-				channels={instance.channels}
-			/>
+			<!-- Provide the unified widget ctx around the native surface (PLAN
+			     25). Additive: NativeCmp still gets its legacy props, and a
+			     migrated one reads ctx via useWidgetContext(). Native passes the
+			     LIVE message array (not the frame's snapshot) so ctx stays
+			     reactive. Placement is the WidgetHost default until a zone host
+			     threads real grid geometry. A session-less panel (sessionId
+			     null) has nothing to project, so it renders bare. -->
+			{#if session}
+				<WidgetHost
+					widget={{
+						id: instance.id,
+						instanceId: instance.id,
+						title: instance.title
+					}}
+					session={session as any}
+					messages={((session as any)?.sessionMessages ?? []) as any}
+					channels={instance.channels}
+					props={{ panelId: instance.id, title: instance.title }}
+					onAction={onFrameAction}
+				>
+					<NativeCmp
+						{sessionId}
+						{session}
+						channels={instance.channels}
+					/>
+				</WidgetHost>
+			{:else}
+				<NativeCmp {sessionId} {session} channels={instance.channels} />
+			{/if}
 		{:else}
 			<!-- Unknown surface: a labeled floor, never a crash (21 §6). -->
 			<div

@@ -221,7 +221,32 @@ export const tunnelsGet: Handler<
 		// configured and later moved to Android should still be able to see
 		// what is on file, not have it silently vanish.
 		const server = await getLocalServer()
-		const tunnel = await getLocalTunnel(server.id)
+		let tunnel = await getLocalTunnel(server.id)
+
+		// Liveness is derived from the supervisor, never read from the row.
+		// A row outlives the process it describes — after a restart it still
+		// says `running` while nothing is — so a stale one is corrected here
+		// rather than reported. Self-healing on read keeps the record honest
+		// even for a row that boot reconciliation never saw.
+		if (tunnel && (tunnel.enabled || tunnel.status !== "stopped")) {
+			const { isSupervising } = await import(
+				"$lib/server/tunnels/supervisor"
+			)
+			if (!isSupervising(tunnel.id)) {
+				const [corrected] = await db
+					.update(schema.tunnels)
+					.set({
+						enabled: false,
+						status: TunnelStatuses.STOPPED,
+						expiresAt: null,
+						stoppedAt: tunnel.stoppedAt ?? new Date()
+					})
+					.where(eq(schema.tunnels.id, tunnel.id))
+					.returning()
+				tunnel = corrected
+			}
+		}
+
 		const res: Sockets.Tunnels.Get.Response = {
 			serverId: server.id,
 			tunnel: tunnel ? toTunnelView(tunnel) : null,

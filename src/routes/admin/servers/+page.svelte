@@ -29,6 +29,16 @@
 	let accountsEnabled = $state(false)
 	let loading = $state(true)
 	let busy = $state(false)
+	/**
+	 * Set while a start is in flight.
+	 *
+	 * Starting a tunnel means downloading cloudflared on first run, spawning
+	 * it, and waiting for Cloudflare to hand back a URL — up to a minute, with
+	 * the socket handler awaiting the whole thing. Without an indicator the
+	 * page simply sits there and reads as broken.
+	 */
+	let starting = $state(false)
+	let pollTimer: ReturnType<typeof setInterval> | null = null
 
 	let allowedHosts = $state<Sockets.AllowedHosts.HostEntry[]>([])
 	let wildcard = $state(false)
@@ -54,6 +64,13 @@
 	/** Edited in hours — the unit people actually think in for this. */
 	let ttlHours = $state(DEFAULT_TUNNEL_TTL_SECONDS / 3600)
 
+	function stopPolling() {
+		if (pollTimer) {
+			clearInterval(pollTimer)
+			pollTimer = null
+		}
+	}
+
 	function handleGet(res: Sockets.Tunnels.Get.Response) {
 		tunnel = res.tunnel
 		available = res.available
@@ -78,10 +95,19 @@
 		}
 		// Never repopulated from the server: the token is write-only.
 		tokenField = ""
+
+		// The supervisor owns `status`, so it is the authority on whether a
+		// start is still in progress — not the click that began it.
+		if (res.tunnel?.status !== "starting") {
+			starting = false
+			stopPolling()
+		}
 	}
 
 	function handleError(res: Sockets.ErrorResponse) {
 		busy = false
+		starting = false
+		stopPolling()
 		toaster.error({ title: res.error })
 	}
 
@@ -104,6 +130,7 @@
 		socket.emit("allowedHosts:get", {})
 	})
 	onDestroy(() => {
+		stopPolling()
 		socket.off("tunnels:get", handleGet)
 		socket.off("allowedHosts:get", handleAllowedHosts)
 		for (const e of ERROR_EVENTS) socket.off(e, handleError)
@@ -166,6 +193,14 @@
 
 	function toggleTunnel(next: boolean) {
 		busy = true
+		if (next) {
+			starting = true
+			// The enable ack does not arrive until the tunnel is up or has
+			// failed, so poll for the row's own status in the meantime — that
+			// is what surfaces a restart or an error while waiting.
+			stopPolling()
+			pollTimer = setInterval(() => socket.emit("tunnels:get", {}), 2000)
+		}
 		socket.emit(next ? "tunnels:enable" : "tunnels:disable", {})
 		busy = false
 		// A tunnel coming up or going down changes which hostname this
@@ -440,12 +475,27 @@
 					class="btn {isRunning
 						? 'preset-tonal-error'
 						: 'preset-filled-success-500'}"
-					disabled={busy || (!isRunning && !!enableBlockedReason)}
+					disabled={busy ||
+						starting ||
+						(!isRunning && !!enableBlockedReason)}
 					onclick={() => toggleTunnel(!isRunning)}
 				>
-					{isRunning ? "Stop tunnel" : "Start tunnel"}
+					{#if starting}
+						<Icons.LoaderCircle size={16} class="animate-spin" />
+						Starting…
+					{:else}
+						{isRunning ? "Stop tunnel" : "Start tunnel"}
+					{/if}
 				</button>
 			</div>
+
+			{#if starting}
+				<p class="text-surface-600-400 text-sm">
+					Waiting for Cloudflare to assign an address. The first start
+					also downloads <code>cloudflared</code>
+					, so this can take up to a minute.
+				</p>
+			{/if}
 
 			{#if !isRunning && enableBlockedReason}
 				<p class="text-warning-600-400 text-sm">

@@ -68,9 +68,12 @@
 	// The editor's grid is gridstack (free 2D drag / resize / snap). See
 	// GridStackZone — gridstack owns its DOM, Svelte owns only the host.
 	import GridStackZone, {
+		type GsAnchor,
 		type GsItem,
-		type GsLayout
+		type GsLayout,
+		type GsPos
 	} from "./GridStackZone.svelte"
+	import { unitsOf, type RenderUnit } from "./tabGroups"
 
 	interface Props {
 		manager: SurfaceManager
@@ -438,41 +441,156 @@
 	// owns drag/resize/snap. The list is keyed by its ids, so adding/removing a
 	// widget (palette drop, remove) re-seeds the grid, while a drag/resize —
 	// which changes only positions, not the id set — leaves it untouched.
+	// ── connector: editor arrangement → live render + persistence ───────────
+	// The gridstack editor reports each zone's arrangement (cell dims + item
+	// cells) as you edit (arranged.*). It is SEEDED FROM PERSISTENCE so a saved
+	// arrangement survives a reload and drives the live render immediately (the
+	// render treats a present arranged zone as authoritative), and re-opening the
+	// editor restores it. Written while editing, persisted on Done. A malformed or
+	// absent blob yields {} — the pre-edit default render. (Declared here, above
+	// the GsItems that read it, so the derived seeding is in scope.)
+	type Arranged = { left?: GsLayout; middle?: GsLayout; right?: GsLayout }
+	let arranged = $state<Arranged>(loadArranged(manager.arrangedGrid))
+
+	// Each list carries its default placement (place/h); `withGeometry` overlays
+	// any saved x/y/w/h from `arranged` so re-opening the editor restores what was
+	// arranged rather than re-laying-out from defaults (the reset-to-defaults bug).
 	let middleGsItems = $derived<GsItem[]>(
-		widgetsInZone(chatGrid, "middle").map((w) => ({
-			id: w.id,
-			title: middleWidgetLabel(w.id),
-			locked: true,
-			// The chat's bound default: messages fills, composer docks to the
-			// bottom as a fixed 3-cell strip — both full-width.
-			...(w.id === "composer"
-				? { place: "bottom" as const, h: 3 }
-				: { place: "fill" as const })
-		}))
+		withGeometry(
+			widgetsInZone(chatGrid, "middle").map((w) => ({
+				id: w.id,
+				title: middleWidgetLabel(w.id),
+				locked: true,
+				// The chat's bound default: messages fills, composer docks to the
+				// bottom as a fixed 3-cell strip — both full-width.
+				...(w.id === "composer"
+					? { place: "bottom" as const, h: 3 }
+					: { place: "fill" as const })
+			})),
+			arranged.middle
+		)
 	)
 	let leftGsItems = $derived<GsItem[]>(
-		editorLeftPanels.map((p) => ({ id: p.id, title: p.title, h: 3 }))
+		withGeometry(
+			editorLeftPanels.map((p) => ({ id: p.id, title: p.title, h: 3 })),
+			arranged.left
+		)
 	)
 	let rightGsItems = $derived<GsItem[]>(
-		editorRightPanels.map((p) => ({ id: p.id, title: p.title, h: 3 }))
+		withGeometry(
+			editorRightPanels.map((p) => ({ id: p.id, title: p.title, h: 3 })),
+			arranged.right
+		)
 	)
 	function gsKey(items: GsItem[]): string {
 		return items.map((i) => i.id).join(",")
 	}
 
-	// ── connector: editor arrangement → live render + persistence ───────────
-	// The gridstack editor reports each zone's arrangement (cell dims + item
-	// cells) as you edit; we keep the latest per zone. The MIDDLE drives the live
-	// chat render in memory (arranged.middle); on Done, side-zone membership is
-	// committed back to the zoneLayout (which persists to storage), so a widget
-	// dragged into a zone it wasn't defaulted to stays there.
-	let arranged = $state<{
-		left?: GsLayout
-		middle?: GsLayout
-		right?: GsLayout
-	}>({})
+	function isGsPos(i: unknown): i is GsPos {
+		return (
+			!!i &&
+			typeof i === "object" &&
+			typeof (i as any).id === "string" &&
+			["x", "y", "w", "h"].every(
+				(k) => typeof (i as any)[k] === "number"
+			)
+		)
+	}
+	function isGsLayout(z: unknown): z is GsLayout {
+		return (
+			!!z &&
+			typeof z === "object" &&
+			typeof (z as any).cols === "number" &&
+			typeof (z as any).rows === "number" &&
+			Array.isArray((z as any).items)
+		)
+	}
+	/** Defensively rehydrate the persisted per-zone geometry (verbatim blob). */
+	function loadArranged(saved: unknown): Arranged {
+		if (!saved || typeof saved !== "object") return {}
+		const out: Arranged = {}
+		for (const key of ["left", "middle", "right"] as const) {
+			const z = (saved as any)[key]
+			if (isGsLayout(z))
+				out[key] = {
+					cols: z.cols,
+					rows: z.rows,
+					items: z.items.filter(isGsPos)
+				}
+		}
+		return out
+	}
+	/**
+	 * Merge captured x/y/w/h from a persisted zone layout onto the editor's
+	 * id-keyed GsItems, so re-opening the editor restores the arrangement instead
+	 * of re-laying-out from defaults. An item with no saved geometry keeps its
+	 * default `place`/`h`. gsKey is ids-only, so this never re-instantiates the
+	 * grid (geometry is read once at mount).
+	 */
+	function withGeometry(items: GsItem[], zone: GsLayout | undefined): GsItem[] {
+		if (!zone) return items
+		const pos = new Map(zone.items.map((i) => [i.id, i]))
+		return items.map((it) => {
+			const p = pos.get(it.id)
+			return p
+				? {
+						...it,
+						x: p.x,
+						y: p.y,
+						w: p.w,
+						h: p.h,
+						...(p.anchor ? { anchor: p.anchor } : {}),
+						...(p.group ? { group: p.group } : {})
+					}
+				: it
+		})
+	}
 
-	/** Commit editor arrangement on Done: side-zone membership → zoneLayout. */
+	/**
+	 * justify/align-self for an arranged cell from a widget's anchor edges — the
+	 * connector's analog of widgetItemStyle's anchoring. Default (no anchor) is
+	 * stretch, so an unanchored widget renders exactly as before; only a widget
+	 * the user explicitly anchored changes.
+	 */
+	function cellSelfAlign(near?: boolean, far?: boolean): string {
+		if (near && far) return "stretch"
+		if (near) return "start"
+		if (far) return "end"
+		return "stretch"
+	}
+	function anchorCellStyle(a?: GsAnchor): string {
+		if (!a) return ""
+		return `justify-self:${cellSelfAlign(a.left, a.right)};align-self:${cellSelfAlign(a.top, a.bottom)};`
+	}
+
+	// ── live tab groups ────────────────────────────────────────────────────
+	// Widgets sharing a `group` collapse in the LIVE view to ONE footprint and
+	// render as a tab set — click a tab to switch. Members stay mounted
+	// (shown/hidden), never unmounted, so a panel/frame keeps its state across
+	// tab switches (the no-reload law). The EDITOR keeps grouped cards separate
+	// (individually draggable / un-groupable) — only these live renderers collapse
+	// them. `unitsOf` (with the scattered-overlap guard) lives in ./tabGroups.
+	// Which member is showing in each tab group (keyed by group id). Defaults to
+	// the first member; falls back if the remembered one is no longer present.
+	let activeTabs = $state<Record<string, string>>({})
+	function activeTab(u: RenderUnit): string {
+		const a = activeTabs[u.key]
+		return a && u.members.some((m) => m.id === a) ? a : u.members[0].id
+	}
+	function setActiveTab(key: string, id: string) {
+		activeTabs = { ...activeTabs, [key]: id }
+	}
+	function widgetLabel(id: string): string {
+		if (id === "messages" || id === "composer") return middleWidgetLabel(id)
+		return inst(id)?.title ?? id
+	}
+
+	/**
+	 * Commit editor arrangement on Done: side-zone membership → zoneLayout (for
+	 * the palette/active logic), and the full per-zone geometry → arrangedGrid
+	 * (positions + anchors + groups — what makes the arrangement survive a reload
+	 * and restore into the editor).
+	 */
 	function commitArrangement() {
 		let next = layout
 		for (const [key, zid] of [
@@ -494,6 +612,7 @@
 			}
 		}
 		if (next !== layout) commit(next)
+		manager.setArrangedGrid($state.snapshot(arranged))
 	}
 
 	/* ── pop-over (unpinned rails + narrow drawers) ────────────────── */
@@ -568,11 +687,11 @@
 	// Advanced (JSON/reset). Widget-placement affordances (zone outlines,
 	// drag, remove) only light up in the Widgets tab, so Style stays a clean
 	// live preview.
-	let editTab = $state<"style" | "widgets" | "advanced">("style")
-	let placing = $derived(editing && editTab === "widgets")
-	let jsonOpen = $state(false)
-	let jsonText = $state("")
-	let jsonError = $state<string | null>(null)
+	// Editor tabs (PLAN 25 redesign): Presets (pick a default/saved layout) ·
+	// Settings (per-widget style) · Move (drag + anchor/pin/group + the
+	// screen-size simulator). Only Move lights up the structural drag affordances.
+	let editTab = $state<"presets" | "settings" | "move">("move")
+	let placing = $derived(editing && editTab === "move")
 	/** Tap-to-place: the palette chip currently armed. */
 	let armedId = $state<string | null>(null)
 	/** The zone currently under a drag (highlight). */
@@ -620,24 +739,11 @@
 		if (placing && armedId) place(zoneId, armedId)
 	}
 
-	function openJson() {
-		jsonText = JSON.stringify(layout, null, 2)
-		jsonError = null
-		jsonOpen = true
-	}
-	function applyJson() {
-		try {
-			const parsed = JSON.parse(jsonText)
-			commit(normalizeZoneLayout(parsed, activeSecondaryIds))
-			jsonError = null
-			jsonOpen = false
-		} catch (e) {
-			jsonError = e instanceof Error ? e.message : String(e)
-		}
-	}
 	function resetLayout() {
 		manager.setZoneLayout(undefined)
 		manager.setWidgetGrid(undefined)
+		manager.setArrangedGrid(undefined)
+		arranged = {}
 		popId = null
 	}
 </script>
@@ -646,7 +752,7 @@
      ANY widget renders correctly in ANY zone (a panel dragged into the middle,
      or chat dragged into a side, no longer vanishes). Used by the middle grid
      AND the side connector. -->
-{#snippet middleWidget({ id }: { id: string })}
+{#snippet middleWidget({ id, bare = false }: { id: string; bare?: boolean })}
 	{#if id === "messages"}
 		{@render messagesChildren?.()}
 	{:else if id === "composer"}
@@ -660,6 +766,7 @@
 				{sessionId}
 				{session}
 				chrome="zone"
+				hideHeader={bare}
 				{onFrameAction}
 			/>
 		{/if}
@@ -996,6 +1103,35 @@
      real panels placed at the cells you arranged, via a proportional grid so it
      maps to the margin's actual size. Replaces the interim rail/icons whenever
      an arrangement for that side exists. -->
+<!-- A tab group in the live view: grouped widgets share one footprint, one tab
+     per member, all members mounted (shown/hidden) so their state survives a
+     switch. Used by both the middle connector and the side connector. -->
+{#snippet tabGroup(u: RenderUnit)}
+	{@const active = activeTab(u)}
+	<div class="wtabs">
+		<div class="wtabs-bar" role="tablist">
+			{#each u.members as m (m.id)}
+				<button
+					class="wtab"
+					class:active={m.id === active}
+					role="tab"
+					aria-selected={m.id === active}
+					onclick={() => setActiveTab(u.key, m.id)}
+				>
+					{widgetLabel(m.id)}
+				</button>
+			{/each}
+		</div>
+		<div class="wtabs-body">
+			{#each u.members as m (m.id)}
+				<div class="wtab-pane" class:wtab-hidden={m.id !== active}>
+					{@render middleWidget({ id: m.id, bare: true })}
+				</div>
+			{/each}
+		</div>
+	</div>
+{/snippet}
+
 {#snippet arrangedSide(side: "left" | "right")}
 	{@const arr = side === "left" ? arranged.left : arranged.right}
 	{#if arr}
@@ -1003,12 +1139,20 @@
 			class="live-side"
 			style="grid-template-columns:repeat({arr.cols},1fr); grid-template-rows:repeat({arr.rows},1fr);"
 		>
-			{#each arr.items as it (it.id)}
+			{#each unitsOf(arr.items) as u (u.key)}
 				<div
 					class="live-side-cell"
-					style="grid-column:{it.x + 1} / span {it.w}; grid-row:{it.y + 1} / span {it.h};"
+					style="grid-column:{u.box.x + 1} / span {u.box
+						.w}; grid-row:{u.box.y + 1} / span {u.box.h};{u.members
+						.length === 1
+						? anchorCellStyle(u.members[0].anchor)
+						: ''}"
 				>
-					{@render middleWidget({ id: it.id })}
+					{#if u.members.length === 1}
+						{@render middleWidget({ id: u.members[0].id })}
+					{:else}
+						{@render tabGroup(u)}
+					{/if}
 				</div>
 			{/each}
 		</div>
@@ -1027,9 +1171,11 @@
 			class:revealed={tabRevealed}
 			data-pop-keep
 			onclick={() => {
-				// Fresh capture each session — so a Reset (or an un-opened
-				// Widgets tab) can't re-commit a stale arrangement on Done.
-				arranged = {}
+				// Reseed from the persisted arrangement (not wiped) so the editor
+				// opens on what was last saved — the source of truth, so there's no
+				// stale in-memory state to re-commit, and a saved layout restores
+				// into the grid instead of resetting to defaults.
+				arranged = loadArranged(manager.arrangedGrid)
 				editing = true
 			}}
 			onmouseenter={() => (tabActive = true)}
@@ -1056,33 +1202,33 @@
 				<div class="editor-tablist">
 					<button
 						class="editor-tab"
-						class:active={editTab === "style"}
+						class:active={editTab === "presets"}
 						role="tab"
-						aria-selected={editTab === "style"}
-						onclick={() => (editTab = "style")}
+						aria-selected={editTab === "presets"}
+						onclick={() => (editTab = "presets")}
+					>
+						<Icons.LayoutTemplate size={13} />
+						Presets
+					</button>
+					<button
+						class="editor-tab"
+						class:active={editTab === "settings"}
+						role="tab"
+						aria-selected={editTab === "settings"}
+						onclick={() => (editTab = "settings")}
 					>
 						<Icons.Palette size={13} />
-						Style
+						Settings
 					</button>
 					<button
 						class="editor-tab"
-						class:active={editTab === "widgets"}
+						class:active={editTab === "move"}
 						role="tab"
-						aria-selected={editTab === "widgets"}
-						onclick={() => (editTab = "widgets")}
+						aria-selected={editTab === "move"}
+						onclick={() => (editTab = "move")}
 					>
-						<Icons.Blocks size={13} />
-						Widgets
-					</button>
-					<button
-						class="editor-tab"
-						class:active={editTab === "advanced"}
-						role="tab"
-						aria-selected={editTab === "advanced"}
-						onclick={() => (editTab = "advanced")}
-					>
-						<Icons.SlidersHorizontal size={13} />
-						Advanced
+						<Icons.Move size={13} />
+						Move
 					</button>
 				</div>
 				<span class="flex-1"></span>
@@ -1092,7 +1238,6 @@
 						commitArrangement()
 						editing = false
 						armedId = null
-						jsonOpen = false
 					}}
 				>
 					<Icons.Check size={14} />
@@ -1101,7 +1246,21 @@
 			</div>
 
 			<div class="editor-panel">
-				{#if editTab === "style"}
+				{#if editTab === "presets"}
+					<div class="presets-row">
+						<button
+							class="tool-btn"
+							onclick={resetLayout}
+							title="Reset to the default layout"
+						>
+							<Icons.RotateCcw size={14} />
+							<span>Reset to default</span>
+						</button>
+						<span class="advanced-note">
+							Default &amp; saved layouts (per genre) — coming soon.
+						</span>
+					</div>
+				{:else if editTab === "settings"}
 					<div class="pack-row">
 						<span class="pack-label">
 							<Icons.MessagesSquare size={13} />
@@ -1147,7 +1306,7 @@
 							{/each}
 						</div>
 					</div>
-				{:else if editTab === "widgets"}
+				{:else if editTab === "move"}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div
 						class="palette"
@@ -1203,28 +1362,6 @@
 						<span class="flex-1"></span>
 						<span class="palette-tip">
 							Drag onto a zone · drop here to remove
-						</span>
-					</div>
-				{:else}
-					<div class="advanced-row">
-						<button
-							class="tool-btn"
-							onclick={openJson}
-							title="Edit the raw layout JSON"
-						>
-							<Icons.Braces size={14} />
-							<span>Layout JSON</span>
-						</button>
-						<button
-							class="tool-btn"
-							onclick={resetLayout}
-							title="Reset to the default layout"
-						>
-							<Icons.RotateCcw size={14} />
-							<span>Reset layout</span>
-						</button>
-						<span class="advanced-note">
-							Edit zones and width rules directly.
 						</span>
 					</div>
 				{/if}
@@ -1319,12 +1456,20 @@
 						class="chat-arranged"
 						style="grid-template-columns:repeat({arranged.middle.cols},1fr); grid-template-rows:repeat({arranged.middle.rows},1fr);"
 					>
-						{#each arranged.middle.items as it (it.id)}
+						{#each unitsOf(arranged.middle.items) as u (u.key)}
 							<div
 								class="chat-arranged-cell"
-								style="grid-column:{it.x + 1} / span {it.w}; grid-row:{it.y + 1} / span {it.h};"
+								style="grid-column:{u.box.x + 1} / span {u.box
+									.w}; grid-row:{u.box.y + 1} / span {u.box
+									.h};{u.members.length === 1
+									? anchorCellStyle(u.members[0].anchor)
+									: ''}"
 							>
-								{@render middleWidget({ id: it.id })}
+								{#if u.members.length === 1}
+									{@render middleWidget({ id: u.members[0].id })}
+								{:else}
+									{@render tabGroup(u)}
+								{/if}
 							</div>
 						{/each}
 					</div>
@@ -1421,42 +1566,6 @@
 			</div>
 		{/if}
 	</div>
-	{/if}
-
-	{#if jsonOpen}
-		<div class="json-modal" data-pop-keep>
-			<div class="json-card">
-				<div class="zone-head">
-					<span class="zone-label always">Layout JSON</span>
-					<span class="flex-1"></span>
-					<button
-						class="zone-head-btn"
-						title="Close"
-						aria-label="Close JSON editor"
-						onclick={() => (jsonOpen = false)}
-					>
-						<Icons.X size={13} />
-					</button>
-				</div>
-				<textarea
-					class="json-text"
-					bind:value={jsonText}
-					spellcheck="false"
-					aria-label="Layout JSON"
-				></textarea>
-				{#if jsonError}
-					<p class="json-error">{jsonError}</p>
-				{/if}
-				<div class="flex justify-end gap-2 p-2">
-					<button class="tool-btn" onclick={() => (jsonOpen = false)}>
-						Cancel
-					</button>
-					<button class="tool-btn primary" onclick={applyJson}>
-						Apply
-					</button>
-				</div>
-			</div>
-		</div>
 	{/if}
 </div>
 
@@ -1565,6 +1674,61 @@
 		overflow: hidden;
 	}
 	.live-side-cell > :global(*) {
+		flex: 1;
+		min-block-size: 0;
+	}
+
+	/* Live tab group: grouped widgets share one cell — a tab bar plus one active
+	   pane. The inactive panes are display:none but stay mounted, so a panel or
+	   frame keeps its state across a tab switch (the no-reload law). */
+	.wtabs {
+		block-size: 100%;
+		min-block-size: 0;
+		min-inline-size: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	.wtabs-bar {
+		flex: none;
+		display: flex;
+		gap: 0.15rem;
+		overflow-x: auto;
+		scrollbar-width: none;
+		padding: 0.15rem 0.15rem 0;
+	}
+	.wtab {
+		flex: none;
+		font-size: 0.72rem;
+		font-weight: 600;
+		padding: 0.2rem 0.55rem;
+		border-radius: 0.4rem 0.4rem 0 0;
+		color: var(--color-surface-600-400);
+		white-space: nowrap;
+	}
+	.wtab.active {
+		background: var(--color-surface-100-900);
+		color: inherit;
+	}
+	.wtabs-body {
+		flex: 1;
+		min-block-size: 0;
+		min-inline-size: 0;
+		display: flex;
+		background: var(--color-surface-100-900);
+		border-radius: 0 0.45rem 0.45rem 0.45rem;
+		overflow: hidden;
+	}
+	.wtab-pane {
+		flex: 1;
+		min-block-size: 0;
+		min-inline-size: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	.wtab-pane.wtab-hidden {
+		display: none;
+	}
+	.wtab-pane > :global(*) {
 		flex: 1;
 		min-block-size: 0;
 	}
@@ -2218,7 +2382,7 @@
 		font-size: 0.68rem;
 		color: var(--color-surface-500);
 	}
-	.advanced-row {
+	.presets-row {
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
@@ -2426,73 +2590,6 @@
 	}
 	.edit-x:hover {
 		background: color-mix(in oklab, var(--color-error-500) 25%, transparent);
-	}
-
-	/* JSON modal */
-	.json-modal {
-		position: absolute;
-		inset: 0;
-		z-index: 50;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: rgba(0, 0, 0, 0.35);
-		padding: 1rem;
-	}
-	.json-card {
-		display: flex;
-		flex-direction: column;
-		inline-size: min(44rem, 100%);
-		block-size: min(30rem, 100%);
-		border-radius: 0.75rem;
-		background: var(--color-surface-50);
-		border: 1px solid
-			color-mix(in oklab, var(--color-surface-300) 60%, transparent);
-		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3);
-		padding: 0.5rem;
-	}
-	:global([data-mode="dark"]) .json-card {
-		background: var(--color-surface-950);
-		border-color: color-mix(
-			in oklab,
-			var(--color-surface-700) 60%,
-			transparent
-		);
-	}
-	.json-text {
-		flex: 1;
-		min-block-size: 0;
-		resize: none;
-		font-family: var(--font-mono, monospace);
-		font-size: 0.72rem;
-		line-height: 1.45;
-		padding: 0.5rem;
-		border-radius: 0.5rem;
-		background: color-mix(
-			in oklab,
-			var(--color-surface-200) 40%,
-			transparent
-		);
-		border: 1px solid
-			color-mix(in oklab, var(--color-surface-300) 60%, transparent);
-	}
-	:global([data-mode="dark"]) .json-text {
-		background: color-mix(
-			in oklab,
-			var(--color-surface-900) 60%,
-			transparent
-		);
-		border-color: color-mix(
-			in oklab,
-			var(--color-surface-700) 60%,
-			transparent
-		);
-	}
-	.json-error {
-		flex: none;
-		padding: 0.25rem 0.5rem;
-		font-size: 0.72rem;
-		color: var(--color-error-500);
 	}
 
 	@media (prefers-reduced-motion: reduce) {

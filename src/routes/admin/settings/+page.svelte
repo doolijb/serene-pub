@@ -1,15 +1,35 @@
 <script lang="ts">
 	/**
-	 * System settings — the instance-wide configuration page. The form itself
-	 * is `SystemSettingsTab`, the same component the Settings sidebar's System
-	 * tab renders (one source of truth for the fields and their save flows).
+	 * System settings — the instance-wide configuration page, and since 28 the
+	 * ONLY one. The Settings sidebar used to render this same component in a
+	 * System tab; that tab is gone (the sidebar is per-user now), so nothing
+	 * moved — the duplicate entry point simply went away.
 	 * The tab already groups each setting into its own card, so the page adds
 	 * no wrapper — it only reflows those cards into multiple columns as the
 	 * content pane widens (CSS multi-column on the tab's own stack; container
 	 * query on the pane, never the viewport).
 	 */
 	import * as Icons from "@lucide/svelte"
+	import { beforeNavigate } from "$app/navigation"
 	import SystemSettingsTab from "$lib/client/components/settingsTabs/SystemSettingsTab.svelte"
+
+	let hasUnsavedChanges = $state(false)
+
+	/**
+	 * The sidebar tab guarded its buffered fields on tab switch and on close.
+	 * With the tab gone this page is the only way to reach them, so the guard
+	 * had to come with them — otherwise removing the tab would have quietly
+	 * dropped the protection rather than relocating it.
+	 *
+	 * `confirm` rather than a modal, matching the pipelines editor's guard:
+	 * beforeNavigate is synchronous, so an async dialog cannot cancel in time.
+	 */
+	beforeNavigate((nav) => {
+		if (!hasUnsavedChanges) return
+		if (!confirm("You have unsaved changes. Leave without saving?")) {
+			nav.cancel()
+		}
+	})
 </script>
 
 <div class="mb-4">
@@ -22,7 +42,7 @@
 </div>
 
 <div class="settings-columns">
-	<SystemSettingsTab />
+	<SystemSettingsTab bind:hasUnsavedChanges />
 </div>
 
 <style>

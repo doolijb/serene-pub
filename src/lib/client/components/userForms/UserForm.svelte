@@ -31,6 +31,16 @@
 	// Track if we're creating or editing
 	let isCreating = $derived(!user)
 
+	/**
+	 * An account can only be promoted once someone has actually signed into it
+	 * (27 §5). Until then it is an unproven claim about who holds it — a
+	 * mistyped username or an intercepted invite would hand over the instance.
+	 *
+	 * The server refuses regardless; this only explains why the control is off
+	 * rather than letting an admin discover it by being rejected.
+	 */
+	let canPromote = $derived(!isCreating && !!user?.lastLoginAt)
+
 	// Passphrase validation schema
 	const passphraseSchema = z
 		.string()
@@ -275,15 +285,29 @@
 				/>
 			</div>
 
-			<label class="flex cursor-pointer items-center gap-2">
-				<input
-					type="checkbox"
-					checked={formIsAdmin}
-					onchange={handleAdminChange}
-					class="checkbox"
-				/>
-				<span class="text-sm">Administrator</span>
-			</label>
+			<div class="space-y-1">
+				<label
+					class="flex items-center gap-2 {canPromote || formIsAdmin
+						? 'cursor-pointer'
+						: 'cursor-not-allowed opacity-60'}"
+				>
+					<input
+						type="checkbox"
+						checked={formIsAdmin}
+						onchange={handleAdminChange}
+						class="checkbox"
+						disabled={!canPromote && !formIsAdmin}
+					/>
+					<span class="text-sm">Administrator</span>
+				</label>
+				{#if !canPromote && !formIsAdmin}
+					<p class="text-surface-600-400 text-xs">
+						{isCreating
+							? "New accounts can't be administrators. Once this person has signed in for the first time, you can promote them here."
+							: "This account has never been signed into. It can be promoted once someone has signed in at least once."}
+					</p>
+				{/if}
+			</div>
 
 			<div class="space-y-2">
 				<label for="passphrase" class="mb-1 block font-semibold">

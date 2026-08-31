@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Tabs } from "@skeletonlabs/skeleton-svelte"
 	import type { ValueChangeDetails } from "@zag-js/tabs"
-	import { getContext, onMount } from "svelte"
+	import { onMount } from "svelte"
 	import {
 		appVersion,
 		appVersionDisplay
@@ -12,7 +12,7 @@
 	import PanelSectionTitle from "$lib/client/components/panels/PanelSectionTitle.svelte"
 	import { page } from "$app/state"
 	import UserSettingsTab from "../settingsTabs/UserSettingsTab.svelte"
-	import SystemSettingsTab from "../settingsTabs/SystemSettingsTab.svelte"
+	import MediaManagerTab from "../media/MediaManagerTab.svelte"
 	import CustomThemeManager from "../CustomThemeManager.svelte"
 	import SettingsUnsavedChangesModal from "../modals/SettingsUnsavedChangesModal.svelte"
 
@@ -22,29 +22,35 @@
 	let { onclose = $bindable() }: Props = $props()
 
 	// State
-	let activeTab = $state<"user" | "system" | "themes" | "about">("user")
+	//
+	// There is deliberately no System tab. Instance-wide settings live on
+	// /admin/settings, which renders the very same `SystemSettingsTab`
+	// component this used to — so nothing moved, the duplicate entry point
+	// just went away. This panel is now entirely per-user: your settings, your
+	// media, your theme.
+	let activeTab = $state<"user" | "media" | "themes" | "about">("user")
 
 	// Section names. The tab triggers are icon-only (see PanelTab), so
 	// PanelSectionTitle is where the active section's full name is shown.
 	const SECTION_LABELS: Record<string, string> = {
 		user: "User",
-		system: "System",
+		media: "Media",
 		themes: "Themes",
 		about: "About"
 	}
 	let sectionLabel = $derived(SECTION_LABELS[activeTab] ?? "")
-	let userCtx: UserCtx = $state(getContext("userCtx"))
-	// Shared across the User and System tabs (the only two with buffered,
-	// explicitly-saved fields) — same pattern as LorebooksSidebar's
-	// tabHasUnsavedChanges.
+	// Only the User tab has buffered, explicitly-saved fields now; Media acts
+	// immediately, so there is nothing to lose by leaving it. Kept as the
+	// shared flag rather than folded into UserSettingsTab because the guard is
+	// on tab *switching* — same pattern as LorebooksSidebar.
 	let tabHasUnsavedChanges = $state(false)
-	let nextTab: "user" | "system" | "themes" | "about" | undefined = $state()
+	let nextTab: "user" | "media" | "themes" | "about" | undefined = $state()
 	let showUnsavedChangesModal = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 
 	// Handle tab switching
 	function handleTabChange(e: ValueChangeDetails): void {
-		const target = e.value as "user" | "system" | "themes" | "about"
+		const target = e.value as "user" | "media" | "themes" | "about"
 		if (!tabHasUnsavedChanges) {
 			activeTab = target
 		} else {
@@ -124,13 +130,7 @@
 		<Tabs value={activeTab} onValueChange={handleTabChange}>
 			<PanelTabList>
 				<PanelTab value="user" label="User" icon={Icons.UserCog} />
-				{#if userCtx.user?.isAdmin}
-					<PanelTab
-						value="system"
-						label="System"
-						icon={Icons.Server}
-					/>
-				{/if}
+				<PanelTab value="media" label="Media" icon={Icons.Images} />
 				<PanelTab value="themes" label="Themes" icon={Icons.Palette} />
 				<PanelTab value="about" label="About" icon={Icons.Info} />
 			</PanelTabList>
@@ -142,15 +142,11 @@
 					/>
 				{/if}
 			</Tabs.Content>
-			{#if userCtx.user?.isAdmin}
-				<Tabs.Content value="system">
-					{#if activeTab === "system"}
-						<SystemSettingsTab
-							bind:hasUnsavedChanges={tabHasUnsavedChanges}
-						/>
-					{/if}
-				</Tabs.Content>
-			{/if}
+			<Tabs.Content value="media">
+				{#if activeTab === "media"}
+					<MediaManagerTab />
+				{/if}
+			</Tabs.Content>
 			<Tabs.Content value="themes">
 				{#if activeTab === "themes"}
 					<CustomThemeManager />

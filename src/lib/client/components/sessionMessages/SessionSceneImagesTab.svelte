@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { avatarSrc } from "$lib/client/utils/media"
 	import * as Icons from "@lucide/svelte"
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -36,21 +37,24 @@
 			type: "character" as const,
 			id: cc.character.id,
 			name: (cc.character as any).nickname || cc.character.name,
-			avatar: cc.character.avatar,
+			avatar: avatarSrc(cc.character, { full: true }),
 			entity: cc.character
 		})),
 		...sessionPersonas.map((cp) => ({
 			type: "persona" as const,
 			id: cp.persona.id,
 			name: cp.persona.name,
-			avatar: cp.persona.avatar,
+			avatar: avatarSrc(cp.persona, { full: true }),
 			entity: cp.persona
 		}))
 	])
 
 	// Expanded entity key and gallery cache
 	let expandedKey = $state<string | null>(null)
-	let galleryCache = $state<Record<string, string[]>>({})
+	// Media rows rather than URL strings: the grid shows thumbnails while a
+	// pin stores the original, and both have to come from the same row for
+	// `leftImage === ...` to keep meaning "the same image".
+	let galleryCache = $state<Record<string, Sockets.Media[]>>({})
 	let pendingGalleryKey = $state<string | null>(null)
 	let brokenPaths = $state(new Set<string>())
 
@@ -200,8 +204,8 @@
 				{@const isExpanded = expandedKey === key}
 				{@const galleryImages = galleryCache[key] ?? []}
 				{@const isLoadingGallery = pendingGalleryKey === key}
-				{@const isLeft = !!e.avatar && leftImage === e.avatar}
-				{@const isRight = !!e.avatar && rightImage === e.avatar}
+				{@const isLeft = !!avatarSrc(e) && leftImage === avatarSrc(e)}
+				{@const isRight = !!avatarSrc(e) && rightImage === avatarSrc(e)}
 
 				<div
 					class="border-surface-300-700 overflow-hidden rounded-lg border"
@@ -220,7 +224,7 @@
 						</span>
 						<!-- Controls -->
 						<div class="flex shrink-0 gap-1">
-							{#if e.avatar}
+							{#if avatarSrc(e)}
 								<button
 									class="btn btn-sm px-2 py-1 text-xs {isLeft
 										? 'preset-filled-primary-500'
@@ -228,7 +232,7 @@
 									onclick={() =>
 										isLeft
 											? clearLeft()
-											: setLeft(e.avatar!)}
+											: setLeft(avatarSrc(e)!)}
 									title={isLeft ? "Unpin left" : "Pin left"}
 								>
 									<Icons.PanelLeft size={12} />
@@ -241,7 +245,7 @@
 									onclick={() =>
 										isRight
 											? clearRight()
-											: setRight(e.avatar!)}
+											: setRight(avatarSrc(e)!)}
 									title={isRight
 										? "Unpin right"
 										: "Pin right"}
@@ -298,12 +302,14 @@
 								</p>
 							{:else}
 								<div class="flex flex-wrap gap-1.5">
-									{#each galleryImages as imgPath}
+									{#each galleryImages as img (img.id)}
+										{@const imgPath = img.url}
 										{#if !brokenPaths.has(imgPath)}
 											<div class="group relative">
 												<img
-													src={imgPath}
+													src={img.thumbUrl}
 													alt=""
+													loading="lazy"
 													class="h-14 w-14 cursor-pointer rounded border-2 object-cover {leftImage ===
 													imgPath
 														? 'border-primary-500'

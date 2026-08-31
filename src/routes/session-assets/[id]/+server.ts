@@ -1,34 +1,23 @@
 /**
- * Serve a session asset (20 §1) — the bytes behind image/file parts and image
- * blocks. Access is the session's: authenticated, and only participants see a
- * session's attachments (404 on denial, never 403 — the established
- * enumeration-avoidance convention).
+ * Serve a session asset by id.
+ *
+ * Kept as a redirect rather than a second implementation: since 28 a session
+ * asset *is* a media row, so `/media/{id}` already serves it under the shared
+ * access check. Two copies of that check is exactly the duplication folding the
+ * tables together was meant to remove.
+ *
+ * Existing message parts store bare asset ids and build this URL client-side,
+ * so the path has to keep answering — 308 preserves the id and lets the browser
+ * cache the hop.
  */
-import type { RequestHandler } from "@sveltejs/kit"
-import { db } from "$lib/server/db"
-import { authenticateRequest } from "$lib/server/auth/authenticateRequest"
-import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
-import { readSessionAsset } from "$lib/server/messages/assets"
+import { redirect, type RequestHandler } from "@sveltejs/kit"
 
-export const GET: RequestHandler = async (event) => {
-	const id = Number(event.params.id)
-	if (!Number.isInteger(id)) return new Response("Not found", { status: 404 })
-
-	const user = await authenticateRequest(event)
-	if (!user) return new Response("Unauthorized", { status: 401 })
-
-	const asset = await readSessionAsset(db, id)
-	if (!asset) return new Response("Not found", { status: 404 })
-
-	const access = await checkSessionAccess(asset.row.sessionId, user.id)
-	if (!access.hasAccess) return new Response("Not found", { status: 404 })
-
-	return new Response(new Uint8Array(asset.bytes), {
-		headers: {
-			"Content-Type": asset.row.mime,
-			// Hash-addressed on disk and referenced by immutable row id — the
-			// bytes for an id can never change, so the cache may keep them.
-			"Cache-Control": "private, max-age=31536000, immutable"
-		}
-	})
+export const GET: RequestHandler = async ({ params, url }) => {
+	const id = Number(params.id)
+	if (!Number.isInteger(id) || id <= 0) {
+		return new Response("Not found", { status: 404 })
+	}
+	const variant = url.searchParams.get("v")
+	// To the by-id form, which resolves the uuid and redirects again.
+	redirect(308, `/media/${id}${variant ? `?v=${encodeURIComponent(variant)}` : ""}`)
 }

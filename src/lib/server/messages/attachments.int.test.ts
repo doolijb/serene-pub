@@ -3,7 +3,7 @@ import path from "node:path"
 import fs from "node:fs/promises"
 import { createTestDb, createTestUser, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
-import * as dbConfig from "$lib/server/db/drizzle.config"
+import { getAppDataDir } from "$lib/server/db/drizzle.config"
 import { insertLegacy, getMessage, updateLegacy, messageText } from "./store"
 import { createSessionAsset, readSessionAsset } from "./assets"
 import { createHost } from "$lib/server/pipelines/runtime/host"
@@ -49,14 +49,19 @@ describe("the asset store", () => {
 		})
 		expect(b.id).toBe(a.id) // same bytes, same session → one row
 		expect(a.bytes).toBe(PNG.byteLength)
-		expect(a.path.startsWith("session_assets/")).toBe(true)
+		// Since 28 a session asset is a media row and lives in the shared
+		// layout — under the session it belongs to (28 §8 rule 1), not in a
+		// separate session_assets/ tree.
+		expect(a.path).toMatch(
+			new RegExp(`^data/users/\\d+/sessions/${sessionId}/`)
+		)
 
 		const read = await readSessionAsset(db, a.id)
 		expect(read).toBeTruthy()
 		expect(Buffer.compare(read!.bytes, PNG)).toBe(0)
 
 		// The file really is jailed under the data dir.
-		const abs = path.resolve(dbConfig.dataDir, a.path)
+		const abs = path.resolve(getAppDataDir(), a.path)
 		await fs.access(abs)
 	})
 })

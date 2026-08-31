@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { avatarSrc } from "$lib/client/utils/media"
 	import { Switch, Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
@@ -500,7 +501,7 @@
 				? characterData.aliases
 				: [],
 			summary: characterData.summary ?? "",
-			avatar: characterData.avatar ?? "",
+			avatar: avatarSrc(characterData) ?? "",
 			description: characterData.description ?? "",
 			personality: characterData.personality ?? "",
 			scenario: characterData.scenario ?? "",
@@ -697,7 +698,7 @@
 				<div aria-label="Current avatar preview">
 					<Avatar
 						src={editCharacterData._avatar ||
-							editCharacterData.avatar}
+							avatarSrc(editCharacterData)}
 						char={editCharacterData}
 					/>
 				</div>

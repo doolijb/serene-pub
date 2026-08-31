@@ -118,7 +118,7 @@ describe("characters gallery handlers thread characterId (PGlite integration)", 
 		await expect(
 			charactersDeleteGalleryImage.handler(
 				fakeSocket(attacker.id),
-				{ characterId: victimCharacter.id, path: "/does/not/matter" },
+				{ characterId: victimCharacter.id, mediaId: 999999 },
 				emit
 			)
 		).rejects.toThrow()
@@ -210,7 +210,7 @@ describe("personas gallery handlers thread personaId (PGlite integration)", () =
 		await expect(
 			personasDeleteGalleryImage.handler(
 				fakeSocket(attacker.id),
-				{ personaId: victimPersona.id, path: "/does/not/matter" },
+				{ personaId: victimPersona.id, mediaId: 999999 },
 				emit
 			)
 		).rejects.toThrow()

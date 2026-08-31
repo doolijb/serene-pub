@@ -327,4 +327,49 @@ export function registerSystemSettingsHandlers(
 	register(socket, systemSettingsUpdateContextDebuggingEnabled, emitToUser)
 	register(socket, systemSettingsUpdateLegacyConfigsVisible, emitToUser)
 	register(socket, systemSettingsUpdateAccountsEnabled, emitToUser)
+	register(socket, systemSettingsUpdateRequireTwoFactor, emitToUser)
+}
+
+/**
+ * Site-wide two-factor requirement (plan 27 §4).
+ *
+ * Reversible, unlike the accounts switch: turning it on is a policy an admin
+ * may reasonably reconsider, and nobody is locked out by turning it off. It
+ * takes effect through the setup gate, so users without a factor are walked
+ * through enrolment on their next request rather than being refused.
+ */
+export const systemSettingsUpdateRequireTwoFactor: Handler<
+	Sockets.SystemSettings.UpdateRequireTwoFactor.Params,
+	Sockets.SystemSettings.UpdateRequireTwoFactor.Response
+> = {
+	event: "systemSettings:updateRequireTwoFactor",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		const settings = await db.query.systemSettings.findFirst({
+			where: eq(schema.systemSettings.id, 1),
+			columns: { isAccountsEnabled: true }
+		})
+		// Without accounts there is one implicit user and no login, so a second
+		// factor has nothing to protect and no moment to be asked for.
+		if (params.enabled && !settings?.isAccountsEnabled) {
+			const message =
+				"Enable user accounts before requiring two-factor authentication."
+			emitToUser("systemSettings:updateRequireTwoFactor:error", {
+				error: message
+			})
+			throw new Error(message)
+		}
+
+		await db
+			.update(schema.systemSettings)
+			.set({ requireTwoFactor: params.enabled })
+			.where(eq(schema.systemSettings.id, 1))
+
+		const res: Sockets.SystemSettings.UpdateRequireTwoFactor.Response = {
+			success: true
+		}
+		emitToUser("systemSettings:updateRequireTwoFactor", res)
+		await systemSettingsGet.handler(socket, {}, emitToUser)
+		return res
+	}
 }

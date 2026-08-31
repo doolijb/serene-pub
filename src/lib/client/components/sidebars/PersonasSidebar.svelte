@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { avatarSrc } from "$lib/client/utils/media"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getContext, onMount, onDestroy } from "svelte"
 	import { flip } from "svelte/animate"
@@ -105,7 +106,7 @@
 		exportingPersona = {
 			id: persona.id,
 			name: persona.name,
-			avatar: persona.avatar
+			avatar: avatarSrc(persona)
 		}
 		showExportModal = true
 	}

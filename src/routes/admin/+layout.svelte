@@ -42,7 +42,11 @@
 		{
 			group: "System",
 			items: [
-				{ href: "/admin/settings", label: "Settings", icon: "Settings" },
+				{
+					href: "/admin/settings",
+					label: "Settings",
+					icon: "Settings"
+				},
 				{ href: "/admin/servers", label: "Servers", icon: "Server" },
 				{
 					href: "/admin/sampling",
@@ -108,7 +112,11 @@
 					label: "Variable templates",
 					icon: "Braces"
 				},
-				{ href: "/admin/scripts", label: "Scripts", icon: "SquareCode" },
+				{
+					href: "/admin/scripts",
+					label: "Scripts",
+					icon: "SquareCode"
+				},
 				{ href: "/admin/plugins", label: "Plugins", icon: "Puzzle" }
 			]
 		}
@@ -136,7 +144,8 @@
 		<div>
 			<p class="text-surface-600-400 text-xs">
 				<a href="/" class="hover:underline">Home</a>
-				/ <strong>Administration</strong>
+				/
+				<strong>Administration</strong>
 			</p>
 			<h1 class="flex items-center gap-2 text-2xl font-semibold">
 				<Icons.ShieldCheck size={24} class="text-primary-500" />

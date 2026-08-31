@@ -577,7 +577,11 @@ export const usersCreate: Handler<
 				.values({
 					username: params.username,
 					displayName: params.displayName || null,
-					isAdmin: params.isAdmin || false
+					// Never on creation (27 §5). An account nobody has signed
+					// into yet is an unproven claim about who holds it — a
+					// mistyped username or an intercepted invite would hand
+					// over the instance. Promote after their first sign-in.
+					isAdmin: false
 				})
 				.returning()
 		} catch (err: any) {
@@ -649,7 +653,24 @@ export const usersUpdate: Handler<
 		if (params.username !== undefined) updateData.username = params.username
 		if (params.displayName !== undefined)
 			updateData.displayName = params.displayName
-		if (params.isAdmin !== undefined) updateData.isAdmin = params.isAdmin
+		if (params.isAdmin !== undefined) {
+			// Promotion is gated on the account having been signed into at
+			// least once (27 §5). Demotion is always allowed — removing
+			// privilege is the safe direction and must never be blocked.
+			if (params.isAdmin) {
+				const target = await db.query.users.findFirst({
+					where: eq(schema.users.id, params.id),
+					columns: { lastLoginAt: true, username: true }
+				})
+				if (!target?.lastLoginAt) {
+					throw new Error(
+						`"${target?.username ?? "That user"}" has never signed in. ` +
+							"They must sign in once before they can be made an administrator."
+					)
+				}
+			}
+			updateData.isAdmin = params.isAdmin
+		}
 
 		const [updatedUser] = await db
 			.update(schema.users)

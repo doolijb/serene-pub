@@ -33,6 +33,7 @@ import { registerLorebookHandlers } from "./lorebooks"
 import { registerWorldLoreEntryHandlers } from "./worldLoreEntries"
 import { registerCharacterLoreEntryHandlers } from "./characterLoreEntries"
 import { registerHistoryEntryHandlers } from "./historyEntries"
+import { registerMediaHandlers } from "./media"
 import { registerTagHandlers } from "./tags"
 import { registerSystemSettingsHandlers } from "./systemSettings"
 import { registerOllamaHandlers } from "./ollama"
@@ -54,6 +55,9 @@ import { registerSessionAdminHandlers } from "./sessionAdmin"
 import { registerTunnelHandlers } from "./tunnels"
 import { registerAllowedHostHandlers } from "./allowedHosts"
 import { registerTotpHandlers } from "./totp"
+import { registerAccountHandlers } from "./account"
+import { registerInviteHandlers } from "./invites"
+import { isBlockedDuringSetup } from "$lib/server/auth/setupGate"
 import { archivedWrite } from "./legacyArchive"
 
 export function connectSockets(io: {
@@ -106,6 +110,7 @@ export function connectSockets(io: {
 		registerCharacterLoreEntryHandlers(socket, emitToUser, register)
 		registerHistoryEntryHandlers(socket, emitToUser, register)
 		registerTagHandlers(socket, emitToUser, register)
+		registerMediaHandlers(socket, emitToUser, register)
 		registerSummarizeHandlers(socket, emitToUser, register)
 		registerVectorizationHandlers(socket, emitToUser, register)
 		registerVectorizationConfigHandlers(socket, emitToUser, register)
@@ -121,6 +126,8 @@ export function connectSockets(io: {
 		registerTunnelHandlers(socket, emitToUser, register)
 		registerAllowedHostHandlers(socket, emitToUser, register)
 		registerTotpHandlers(socket, emitToUser, register)
+		registerAccountHandlers(socket, emitToUser, register)
+		registerInviteHandlers(socket, emitToUser, register)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }
@@ -156,34 +163,15 @@ export function connectSockets(io: {
  * - Type safety for parameters and responses via Socket namespace types
  */
 
-/**
- * The only events a not-yet-verified session may use. Everything else is
- * refused until the second factor is cleared.
- */
-const MFA_PENDING_ALLOWED_EVENTS = new Set([
-	"totp:status",
-	"totp:verify",
-	"auth:logout",
-	"users:current"
-])
-
-/**
- * Exported for its test. The allowlist is the entire boundary between "asked
- * for a code" and "let through without one", and it is four strings — worth
- * asserting directly rather than only through a full socket handshake.
- */
-export function isBlockedWhilePendingMfa(event: string): boolean {
-	return !MFA_PENDING_ALLOWED_EVENTS.has(event)
-}
-
 function register(
 	socket: any,
 	handler: Handler<any, any>,
 	emitToUser: (event: string, data: any) => void
 ) {
 	socket.on(handler.event, async (message: any) => {
-		// A session that owes a second factor (26 §10) can do exactly four
-		// things: report its own state, submit a code, and log out. Enforced
+		// A session that still owes setup — a password to choose, a second
+		// factor to enrol (27 §1) — may only use what it needs to finish.
+		// Enforced
 		// here rather than per-handler for the same reason as the archived
 		// check below — a handler added later cannot forget a gate it never
 		// had to know about.
@@ -193,11 +181,14 @@ function register(
 		// refusals, never unauthorized access) and is what the post-verification
 		// reload resolves.
 		if (
-			socket.mfaPending &&
-			!MFA_PENDING_ALLOWED_EVENTS.has(handler.event)
+			socket.pendingSetup?.length &&
+			isBlockedDuringSetup(handler.event)
 		) {
 			emitToUser(`${handler.event}:error`, {
-				error: "Two-factor verification is required to continue."
+				error:
+					socket.pendingSetup[0] === "password"
+						? "Set a new password to continue."
+						: "Two-factor authentication is required to continue."
 			})
 			return
 		}

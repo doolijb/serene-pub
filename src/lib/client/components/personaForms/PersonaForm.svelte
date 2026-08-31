@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { avatarSrc } from "$lib/client/utils/media"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { onDestroy, onMount } from "svelte"
@@ -364,7 +365,7 @@
 				name: p.name,
 				aliases: Array.isArray(p.aliases) ? p.aliases : [],
 				summary: p.summary ?? "",
-				avatar: p.avatar ?? "",
+				avatar: avatarSrc(p) ?? "",
 				description: p.description ?? "",
 				isDefault: p.isDefault,
 				position: p.position ?? 0,
@@ -476,7 +477,7 @@
 			<legend id="avatar-section" class="sr-only">Avatar Settings</legend>
 			<div aria-label="Current avatar preview">
 				<Avatar
-					src={editPersonaData._avatar || editPersonaData.avatar}
+					src={editPersonaData._avatar || avatarSrc(editPersonaData)}
 					char={editPersonaData}
 				/>
 			</div>

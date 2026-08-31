@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { avatarSrc } from "$lib/client/utils/media"
 	import { Avatar, Tabs } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -127,7 +128,7 @@
 					<div class="card preset-filled-surface-100-900 flex items-center gap-3 p-3">
 						<Avatar class="h-16 min-h-16 w-16 min-w-16">
 							<Avatar.Image
-								src={character.avatar || ""}
+								src={avatarSrc(character, { full: true }) || ""}
 								alt={character.nickname || character.name}
 								class="object-cover"
 							/>
@@ -297,7 +298,7 @@
 					entityId={character.id}
 					entityName={character.nickname || character.name}
 					isOwner={!!character.isOwner}
-					currentAvatar={character.avatar}
+					currentAvatarMediaId={character.avatarMediaId ?? null}
 				/>
 			</Tabs.Content>
 		</Tabs>

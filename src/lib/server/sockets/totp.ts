@@ -42,7 +42,7 @@ export const totpStatus: Handler<
 			...state,
 			// The client needs this to know whether to show the code prompt
 			// instead of the app.
-			verificationRequired: !!socket.mfaPending
+			verificationRequired: !!socket.pendingSetup?.includes("twoFactor")
 		}
 		emitToUser("totp:status", res)
 		return res
@@ -95,7 +95,7 @@ export const totpEnrollConfirm: Handler<
 					.set({ mfaVerifiedAt: new Date() })
 					.where(eq(schema.userTokens.id, socket.tokenId))
 			}
-			socket.mfaPending = false
+			socket.pendingSetup = []
 
 			// Shown exactly once. Only hashes are stored.
 			const res: Sockets.Totp.EnrollConfirm.Response = { recoveryCodes }
@@ -123,7 +123,7 @@ export const totpVerify: Handler<
 			failWith("totp:verify", emitToUser, new Error(outcome.error))
 		}
 
-		socket.mfaPending = false
+		socket.pendingSetup = []
 		const res: Sockets.Totp.Verify.Response = {
 			usedRecoveryCode: outcome.usedRecoveryCode,
 			remainingCodes: outcome.remainingCodes
@@ -170,7 +170,7 @@ export const totpDisable: Handler<
 		// Sessions are kept: the user is holding one and disabling their own
 		// factor should not log them out of it.
 		await clearTotp(socket.user!.id, { revokeSessions: false })
-		socket.mfaPending = false
+		socket.pendingSetup = []
 
 		const res: Sockets.Totp.Disable.Response = { success: true }
 		emitToUser("totp:disable", res)

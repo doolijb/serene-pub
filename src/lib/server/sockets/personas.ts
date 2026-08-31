@@ -1,4 +1,5 @@
 import { db } from "$lib/server/db"
+import { readMedia, toClientMedia } from "$lib/server/media"
 import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import * as fsPromises from "fs/promises"
@@ -128,7 +129,7 @@ export const personasList: Handler<
 			columns: {
 				id: true,
 				name: true,
-				avatar: true,
+				avatarMediaId: true,
 				isDefault: true,
 				description: true,
 				position: true,
@@ -761,19 +762,22 @@ export const personasExportCard: Handler<
 				emitToUser("personas:exportCard", res)
 				return res
 			} else {
-				if (!persona.avatar) {
+				// The card's primary image (28 §10): read straight from the
+				// media row the avatar points at, rather than reconstructing a
+				// filename from a path column that no longer exists.
+				const avatar = persona.avatarMediaId
+					? await readMedia(db, persona.avatarMediaId)
+					: null
+				if (!avatar) {
 					throw new Error("Persona has no avatar to embed data into")
 				}
+				if (avatar.row.mime !== "image/png") {
+					throw new Error(
+						"This persona's avatar isn't a PNG, so it can't be used for PNG card export — try JSON export instead, or update the avatar to a PNG image first."
+					)
+				}
 
-				const avatarDir = getPersonaDataDir({
-					personaId: params.id,
-					userId
-				})
-				const avatarFilename = path.basename(persona.avatar)
-				const avatarPath = path.join(avatarDir, avatarFilename)
-				const avatarBuffer = await fsPromises.readFile(avatarPath)
-
-				const blob = embedCharacterCardInPng(avatarBuffer, cardData)
+				const blob = embedCharacterCardInPng(avatar.bytes, cardData)
 				const filename = `${persona.name.replace(/[^a-z0-9]/gi, "_").toLowerCase()}.v3.png`
 
 				const res: Sockets.Personas.ExportCard.Response = {
@@ -889,16 +893,15 @@ export const personasUploadGalleryImage: Handler<
 			})
 			if (!persona) throw new Error("Persona not found or access denied")
 
-			const imgPath = await uploadPersonaGalleryImage({
+			const uploaded = await uploadPersonaGalleryImage({
 				personaId: params.personaId,
 				userId,
-				imageFile: Buffer.from(params.imageFile as Uint8Array),
-				mimeType: params.mimeType
+				imageFile: Buffer.from(params.imageFile as Uint8Array)
 			})
 
 			const res: Sockets.Personas.UploadGalleryImage.Response = {
 				success: true,
-				path: imgPath,
+				media: toClientMedia(uploaded),
 				personaId: params.personaId
 			}
 			emitToUser("personas:uploadGalleryImage", res)
@@ -940,7 +943,7 @@ export const personasDeleteGalleryImage: Handler<
 			await deletePersonaGalleryImage({
 				personaId: params.personaId,
 				userId,
-				path: params.path
+				mediaId: params.mediaId
 			})
 
 			const res: Sockets.Personas.DeleteGalleryImage.Response = {
@@ -979,7 +982,7 @@ export const personasReorderGallery: Handler<
 
 		await reorderPersonaGalleryImages({
 			personaId: params.personaId,
-			paths: params.paths
+			mediaIds: params.mediaIds
 		})
 
 		const listRes = await personasListGallery.handler(
@@ -1006,21 +1009,27 @@ export const personasSetAvatar: Handler<
 		})
 		if (!persona) throw new Error("Persona not found or access denied")
 
-		// params.path must be one of this persona's own gallery images —
+		// params.mediaId must be one of this persona's own media rows —
 		// without this, the client could point avatar at an arbitrary
 		// external URL, which every other viewer's browser would then fetch
 		// directly (avatar isn't routed through the authenticated /images
 		// proxy unless it happens to start with /images/...), bypassing the
 		// per-viewer authorization that route exists to enforce.
-		const galleryImage = await db.query.personaGalleryImages.findFirst({
-			where: (g, { and, eq }) =>
-				and(eq(g.personaId, params.personaId), eq(g.path, params.path))
+		// Ownership check — see the equivalent in characters.ts for why the
+		// old external-URL guard is no longer a concern.
+		const owned = await db.query.media.findFirst({
+			where: (m, { and, eq, isNull }) =>
+				and(
+					eq(m.id, params.mediaId),
+					eq(m.personaId, params.personaId),
+					isNull(m.variant)
+				)
 		})
-		if (!galleryImage) throw new Error("Invalid avatar path.")
+		if (!owned) throw new Error("Invalid avatar image.")
 
 		const [updated] = await db
 			.update(schema.personas)
-			.set({ avatar: params.path })
+			.set({ avatarMediaId: params.mediaId })
 			.where(
 				and(
 					eq(schema.personas.id, params.personaId),

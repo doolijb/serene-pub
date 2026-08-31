@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { avatarSrc } from "$lib/client/utils/media"
 	import { Avatar } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 
@@ -56,7 +57,7 @@
 
 <Avatar class="{size} {sizeGuards} shrink-0">
 	<Avatar.Image
-		src={src ? src : char ? char.avatar || undefined : undefined}
+		src={src ? src : char ? avatarSrc(char) || undefined : undefined}
 		alt={char
 			? "nickname" in char && char.nickname
 				? char.nickname

@@ -1,4 +1,11 @@
 <script module lang="ts">
+	/** Which zone edges a widget sticks to (mirrors widgetGrid's Anchor). */
+	export interface GsAnchor {
+		top?: boolean
+		right?: boolean
+		bottom?: boolean
+		left?: boolean
+	}
 	export interface GsItem {
 		id: string
 		title: string
@@ -14,6 +21,10 @@
 		place?: "top" | "bottom" | "fill"
 		/** A required widget (chat) — movable/resizable but not removable. */
 		locked?: boolean
+		/** Edges the widget anchors to within its cell (toggled in the editor). */
+		anchor?: GsAnchor
+		/** Tab-group membership: cards sharing a group id render as one tab set. */
+		group?: string
 	}
 	export interface GsPos {
 		id: string
@@ -21,6 +32,8 @@
 		y: number
 		w: number
 		h: number
+		anchor?: GsAnchor
+		group?: string
 	}
 	/** A zone's captured arrangement: its cell grid dims + the items' cells. */
 	export interface GsLayout {
@@ -44,6 +57,7 @@
 	 * re-derives on zone resize.
 	 */
 	import { onMount, untrack } from "svelte"
+	import { SvelteSet } from "svelte/reactivity"
 	import type { GridStack, GridStackNode } from "gridstack"
 	import "gridstack/dist/gridstack.min.css"
 
@@ -60,6 +74,68 @@
 	let hostEl: HTMLDivElement
 	let grid: GridStack | undefined
 	let cols = $state(6)
+
+	// ── grouping (editor concept gridstack doesn't model) ──────────────────
+	// Selection is reactive so the group toolbar tracks it. `gridMeta`/`gridEmit`
+	// are set inside `init` so the template's group actions can reach the live
+	// per-widget metadata + report changes. A group id is derived from its sorted
+	// members (deterministic — no Date.now/random), and colored by a hue hash so
+	// grouped cards are identifiable at a glance.
+	let selected = new SvelteSet<string>()
+	let gridMeta: Map<string, { anchor: GsAnchor; group?: string }> | null = null
+	let gridEmit: (() => void) | null = null
+	let selectionHasGroup = $derived(
+		[...selected].some((id) => !!gridMeta?.get(id)?.group)
+	)
+
+	function hueFromId(id: string): number {
+		let h = 0
+		for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 360
+		return h
+	}
+	function gscOf(id: string): HTMLElement | null | undefined {
+		return grid?.engine.nodes
+			.find((n) => String(n.id) === id)
+			?.el?.querySelector<HTMLElement>(".gsc")
+	}
+	function applyGroupDom(id: string, group?: string) {
+		const gsc = gscOf(id)
+		if (!gsc) return
+		gsc.classList.toggle("grouped", !!group)
+		if (group) gsc.style.setProperty("--ghue", String(hueFromId(group)))
+		else gsc.style.removeProperty("--ghue")
+	}
+	function setSelected(id: string, on: boolean) {
+		if (on) selected.add(id)
+		else selected.delete(id)
+		gscOf(id)?.classList.toggle("sel", on)
+	}
+	function clearSelection() {
+		for (const id of selected) gscOf(id)?.classList.remove("sel")
+		selected.clear()
+	}
+	function groupSelected() {
+		if (!gridMeta || selected.size < 2) return
+		const members = [...selected].sort()
+		const gid = "g:" + members.join("+")
+		for (const id of members) {
+			const m = gridMeta.get(id) ?? { anchor: {} }
+			gridMeta.set(id, { ...m, group: gid })
+			applyGroupDom(id, gid)
+		}
+		clearSelection()
+		gridEmit?.()
+	}
+	function ungroupSelected() {
+		if (!gridMeta || !selected.size) return
+		for (const id of selected) {
+			const m = gridMeta.get(id)
+			if (m) gridMeta.set(id, { ...m, group: undefined })
+			applyGroupDom(id, undefined)
+		}
+		clearSelection()
+		gridEmit?.()
+	}
 	let rows = $state(6)
 	// The host is exactly cols×cell by rows×cell (whole cells only), centred in
 	// the zone — the sub-cell remainder is culled to margin, never a partial,
@@ -79,17 +155,48 @@
 				})[c] as string
 		)
 	}
-	function cardHtml(it: GsItem): string {
+	/** The class list that draws a thick accent border on each anchored edge. */
+	function anchorClasses(a: GsAnchor): string {
+		return (["top", "right", "bottom", "left"] as const)
+			.filter((e) => a[e])
+			.map((e) => `anch-${e}`)
+			.join(" ")
+	}
+	/** Four edge-toggle buttons; the pressed ones mark which edges are anchored. */
+	function anchorControls(a: GsAnchor): string {
+		const btn = (edge: keyof GsAnchor, glyph: string) =>
+			`<button class="gsc-btn gsc-anch${a[edge] ? " active" : ""}" data-act="anchor-${edge}" title="Anchor ${edge}" aria-label="Anchor to ${edge}" aria-pressed="${!!a[edge]}">${glyph}</button>`
+		return (
+			`<span class="gsc-anchset" title="Anchor edges">` +
+			btn("top", "&#8593;") +
+			btn("left", "&#8592;") +
+			btn("right", "&#8594;") +
+			btn("bottom", "&#8595;") +
+			`</span>`
+		)
+	}
+	function cardHtml(
+		it: GsItem,
+		a: GsAnchor = it.anchor ?? {},
+		group = it.group
+	): string {
 		const rm = it.locked
 			? ""
 			: `<button class="gsc-btn gsc-x" data-remove="${esc(it.id)}" title="Remove ${esc(it.title)}" aria-label="Remove ${esc(it.title)}">&times;</button>`
-		// Position controls — snap the widget to fill/dock without dragging.
+		// Position controls — snap the widget to fill/dock without dragging — then
+		// the anchor-edge cluster (toggle which edges the widget sticks to).
 		const ctrls =
 			`<button class="gsc-btn" data-act="fit-w" title="Fit width">&#8596;</button>` +
 			`<button class="gsc-btn" data-act="fit-h" title="Fit height">&#8597;</button>` +
 			`<button class="gsc-btn" data-act="dock-top" title="Dock to top">&#8607;</button>` +
-			`<button class="gsc-btn" data-act="dock-bottom" title="Dock to bottom">&#8615;</button>`
-		return `<div class="gsc"><span class="gsc-title">${esc(it.title)}</span><span class="gsc-ctrls">${ctrls}${rm}</span></div>`
+			`<button class="gsc-btn" data-act="dock-bottom" title="Dock to bottom">&#8615;</button>` +
+			anchorControls(a)
+		const gcls = group ? " grouped" : ""
+		const gstyle = group ? ` style="--ghue:${hueFromId(group)}"` : ""
+		// The group id is stamped as a data-attr (not just the hue) so a card
+		// dragged into another zone can recover its group there (see `dropped`).
+		const gdata = group ? ` data-group="${esc(group)}"` : ""
+		return `<div class="gsc ${anchorClasses(a)}${gcls}"${gstyle}${gdata}><span class="gsc-title">${esc(it.title)}</span><span class="gsc-ctrls">${ctrls}${rm}</span></div>`
 	}
 
 	// Whole cells that fit a measured length (partials culled, not drawn).
@@ -188,10 +295,17 @@
 				draggable: { handle: ".grid-stack-item-content", appendTo: "body" }
 			},
 			hostEl
-		)
+		)!
 
 		const init = untrack(() => items)
-		grid.batchUpdate()
+		// Editor-only per-widget metadata gridstack doesn't model (anchored edges,
+		// tab-group membership). Tracked here keyed by id, mutated by the anchor
+		// toggles / grouping, and reported back through `emit` so the captured
+		// arrangement carries it.
+		const meta = new Map<string, { anchor: GsAnchor; group?: string }>()
+		const anyAnchor = (a: GsAnchor) =>
+			!!(a.top || a.right || a.bottom || a.left)
+		grid!.batchUpdate()
 		// Resolve default placement against the measured grid. Bottom-docked
 		// items reserve rows from the bottom; a fill item takes what's left; the
 		// rest stack from the top. Everything full-width unless it states a w.
@@ -226,28 +340,86 @@
 					topY += h
 				}
 			}
+			// Clamp to what THIS zone can hold: a restored arrangement may carry
+			// geometry captured in a wider/taller zone (different viewport), and an
+			// out-of-bounds w/x would overflow or clip. A no-op for the default
+			// place branches, which already fit.
+			w = Math.min(w, cols)
+			h = Math.min(h, rows)
+			x = Math.min(Math.max(0, x), Math.max(0, cols - w))
+			y = Math.min(Math.max(0, y), Math.max(0, rows - h))
+			meta.set(it.id, { anchor: { ...(it.anchor ?? {}) }, group: it.group })
 			// NB: not gridstack-`locked` — a required widget (chat) is still fully
 			// draggable/resizable; `locked` in GsItem only hides its remove button.
-			grid!.addWidget({ id: it.id, x, y, w, h, content: cardHtml(it) })
+			grid!.addWidget({
+				id: it.id,
+				x,
+				y,
+				w,
+				h,
+				content: cardHtml(it, meta.get(it.id)!.anchor, it.group)
+			})
 		})
-		grid.batchUpdate(false)
+		grid!.batchUpdate(false)
+		// Expose the live metadata + reporter so the template's group actions reach
+		// them (they run outside init).
+		gridMeta = meta
 
 		const emit = () => {
 			const nodes = grid!.save(false) as GridStackNode[]
 			onChange?.({
 				cols,
 				rows,
-				items: nodes.map((n) => ({
-					id: String(n.id),
-					x: n.x ?? 0,
-					y: n.y ?? 0,
-					w: n.w ?? 1,
-					h: n.h ?? 1
-				}))
+				items: nodes.map((n) => {
+					const m = meta.get(String(n.id))
+					return {
+						id: String(n.id),
+						x: n.x ?? 0,
+						y: n.y ?? 0,
+						w: n.w ?? 1,
+						h: n.h ?? 1,
+						...(m && anyAnchor(m.anchor) ? { anchor: m.anchor } : {}),
+						...(m?.group ? { group: m.group } : {})
+					}
+				})
 			})
 		}
-		grid.on("change added removed", emit)
+		gridEmit = emit
+		grid!.on("change added removed", emit)
 		emit() // seed the initial arrangement immediately
+
+		// Cross-zone drop: refit the incoming card to THIS zone's grid. Each zone
+		// is an independent gridstack with its own column count, so a card dragged
+		// from a wide zone into a narrow one arrives wider than the destination has
+		// columns and would overflow/clip. Clamp its w/h to what fits and pull its
+		// x/y back inside the bounds. `dropped` fires only on an actual drag-in
+		// from another grid (not the initial addWidget batch), so this never
+		// touches cards the user didn't just move here.
+		grid!.on("dropped", ((
+			_e: Event,
+			_prev: GridStackNode,
+			node: GridStackNode
+		) => {
+			if (!node?.el) return
+			const w = Math.min(node.w ?? 1, cols)
+			const h = Math.min(node.h ?? 1, rows)
+			const x = Math.min(node.x ?? 0, Math.max(0, cols - w))
+			const y = Math.min(node.y ?? 0, Math.max(0, rows - h))
+			grid!.update(node.el, { w, h, x, y })
+			// Recover the card's editor metadata from the DOM it brought with it
+			// (gridstack moves the element, so its anchor classes + data-group
+			// survive) — otherwise THIS zone's meta wouldn't know the dragged-in id
+			// and its emit would drop the anchor/group.
+			const gsc = node.el.querySelector<HTMLElement>(".gsc")
+			const anchor: GsAnchor = {}
+			for (const e of ["top", "right", "bottom", "left"] as const)
+				if (gsc?.classList.contains(`anch-${e}`)) anchor[e] = true
+			meta.set(String(node.id), {
+				anchor,
+				group: gsc?.dataset.group || undefined
+			})
+			emit()
+		}) as any)
 
 		const onClick = (e: MouseEvent) => {
 			const target = e.target as HTMLElement
@@ -267,16 +439,44 @@
 					grid!.update(node.el, { y: dockY(node, "top") })
 				else if (a === "dock-bottom")
 					grid!.update(node.el, { y: dockY(node, "bottom") })
+				else if (a?.startsWith("anchor-")) {
+					// Toggle one anchored edge. Geometry doesn't change, so gridstack
+					// fires nothing — update the meta + DOM (button pressed-state and
+					// the card's edge-highlight class) and emit by hand.
+					const edge = a.slice("anchor-".length) as keyof GsAnchor
+					const id = String(node.id)
+					const m = meta.get(id) ?? { anchor: {} }
+					const next = !m.anchor[edge]
+					meta.set(id, { ...m, anchor: { ...m.anchor, [edge]: next } })
+					act.classList.toggle("active", next)
+					act.setAttribute("aria-pressed", String(next))
+					node.el
+						.querySelector(".gsc")
+						?.classList.toggle(`anch-${edge}`, next)
+					emit()
+				}
 				return
 			}
 			// Remove button.
 			const btn = target?.closest("[data-remove]")
-			if (!btn) return
+			if (!btn) {
+				// A plain click on the card body (no control): toggle its selection
+				// for grouping. Dragging still moves it — gridstack fires a drag,
+				// not a click.
+				const card = target?.closest<HTMLElement>(".grid-stack-item")
+				if (card) {
+					const node = grid!.engine.nodes.find((n) => n.el === card)
+					const id = node ? String(node.id) : null
+					if (id) setSelected(id, !selected.has(id))
+				}
+				return
+			}
 			e.preventDefault()
 			e.stopPropagation()
 			const id = btn.getAttribute("data-remove")!
 			const node = grid!.engine.nodes.find((n) => String(n.id) === id)
 			if (node?.el) grid!.removeWidget(node.el)
+			selected.delete(id)
 			onRemove?.(id)
 		}
 		hostEl.addEventListener("click", onClick)
@@ -309,6 +509,31 @@
 </script>
 
 <div class="gs-host">
+	{#if selected.size}
+		<!-- Selection toolbar (grouping). Appears while cards are selected; Group
+		     needs 2+, Ungroup shows when any selected card is already grouped. -->
+		<div class="gs-groupbar">
+			<button
+				class="gs-gbtn"
+				onclick={groupSelected}
+				disabled={selected.size < 2}
+				title="Group selected cards as tabs"
+			>
+				Group ({selected.size})
+			</button>
+			{#if selectionHasGroup}
+				<button class="gs-gbtn" onclick={ungroupSelected} title="Ungroup">
+					Ungroup
+				</button>
+			{/if}
+			<button
+				class="gs-gbtn ghost"
+				onclick={clearSelection}
+				title="Clear selection"
+				aria-label="Clear selection">&times;</button
+			>
+		</div>
+	{/if}
 	<!-- gridstack's item CSS reads --gs-column-width / --gs-cell-height but its
 	     stylesheet doesn't define them for arbitrary column counts; set them
 	     here (reactive to cols/cell, so resize keeps working). --gs-cell drives
@@ -325,6 +550,7 @@
 	   fit the view, centred, with the sub-cell remainder culled to margin. Only a
 	   widget's own content scrolls (gridstack item-content is overflow:auto). */
 	.gs-host {
+		position: relative; /* anchor for the floating group toolbar */
 		block-size: 100%;
 		min-block-size: 0;
 		/* The grid is bounded to fit (maxRow + fixed block-size), so nothing
@@ -334,6 +560,38 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
+	}
+	/* Floating selection/group toolbar, pinned to the top of the zone. */
+	.gs-groupbar {
+		position: absolute;
+		inset-block-start: 2px;
+		inset-inline-start: 50%;
+		transform: translateX(-50%);
+		z-index: 5;
+		display: flex;
+		gap: 0.25rem;
+		padding: 0.15rem 0.3rem;
+		border-radius: 0.45rem;
+		background: color-mix(in oklab, var(--color-surface-950) 82%, transparent);
+		border: 1px solid
+			color-mix(in oklab, var(--color-surface-50) 18%, transparent);
+		box-shadow: 0 4px 14px -6px rgba(0, 0, 0, 0.6);
+	}
+	.gs-gbtn {
+		font-size: 0.7rem;
+		font-weight: 600;
+		line-height: 1.2;
+		padding: 0.1rem 0.4rem;
+		border-radius: 0.3rem;
+		color: var(--color-surface-50);
+		background: color-mix(in oklab, var(--color-primary-500) 80%, black 4%);
+	}
+	.gs-gbtn.ghost {
+		background: transparent;
+		padding-inline: 0.3rem;
+	}
+	.gs-gbtn:disabled {
+		opacity: 0.4;
 	}
 	/* gridstack's real grid, drawn as outlined rounded cells: one border box per
 	   FIXED square cell, a margin/gap between them, no fill. The host is an exact
@@ -411,5 +669,46 @@
 	:global(.grid-stack .gsc-btn:hover) {
 		background: color-mix(in oklab, black 28%, transparent);
 		opacity: 1 !important;
+	}
+	/* Anchor cluster — set off from the fit/dock controls by a divider. */
+	:global(.grid-stack .gsc-anchset) {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.05rem;
+		margin-inline-start: 0.15rem;
+		padding-inline-start: 0.2rem;
+		border-inline-start: 1px solid
+			color-mix(in oklab, var(--color-surface-50) 30%, transparent);
+	}
+	/* A set anchor stays lit even without hover, so the anchored edges read at a
+	   glance; unset ones reveal on hover like the other controls. */
+	:global(.grid-stack .gsc-anch.active) {
+		opacity: 1 !important;
+		background: var(--color-primary-300);
+		color: var(--color-surface-950);
+	}
+	/* Identify the anchored boundaries: a thick accent border on each anchored
+	   edge of the card. Independent per side, so multiple anchors stack. */
+	:global(.grid-stack .gsc.anch-top) {
+		border-top: 3px solid var(--color-primary-300);
+	}
+	:global(.grid-stack .gsc.anch-right) {
+		border-right: 3px solid var(--color-primary-300);
+	}
+	:global(.grid-stack .gsc.anch-bottom) {
+		border-bottom: 3px solid var(--color-primary-300);
+	}
+	:global(.grid-stack .gsc.anch-left) {
+		border-left: 3px solid var(--color-primary-300);
+	}
+	/* Selected for grouping — a bright ring, distinct from the anchor accent. */
+	:global(.grid-stack .gsc.sel) {
+		outline: 2px dashed var(--color-tertiary-300, #7dd3fc);
+		outline-offset: -3px;
+	}
+	/* Grouped — a colored inset bar keyed by the group's hue, so members of the
+	   same group read as one set at a glance. */
+	:global(.grid-stack .gsc.grouped) {
+		box-shadow: inset 5px 0 0 0 hsl(var(--ghue, 210) 70% 62%);
 	}
 </style>

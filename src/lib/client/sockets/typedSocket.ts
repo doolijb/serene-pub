@@ -825,6 +825,59 @@ export type SocketEventMap = {
 	}
 
 	// Sampling Config events
+	// Invites (plan 27 §3).
+	"invites:list": {
+		params: Sockets.Invites.List.Params
+		response: Sockets.Invites.List.Response
+	}
+	"invites:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"invites:create": {
+		params: Sockets.Invites.Create.Params
+		response: Sockets.Invites.Create.Response
+	}
+	"invites:create:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"invites:revoke": {
+		params: Sockets.Invites.Revoke.Params
+		response: Sockets.Invites.Revoke.Response
+	}
+	"invites:revoke:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
+	"systemSettings:updateRequireTwoFactor": {
+		params: Sockets.SystemSettings.UpdateRequireTwoFactor.Params
+		response: Sockets.SystemSettings.UpdateRequireTwoFactor.Response
+	}
+	"systemSettings:updateRequireTwoFactor:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
+	// Account setup (plan 27 §1).
+	"account:setupState": {
+		params: Sockets.Account.SetupState.Params
+		response: Sockets.Account.SetupState.Response
+	}
+	"account:setupState:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"account:setPassword": {
+		params: Sockets.Account.SetPassword.Params
+		response: Sockets.Account.SetPassword.Response
+	}
+	"account:setPassword:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
 	// Two-factor authentication (plan 26 §10).
 	"totp:status": {
 		params: Sockets.Totp.Status.Params
@@ -2153,6 +2206,40 @@ export type SocketEventMap = {
 	"scenes:compile:error": {
 		params: never
 		response: Sockets.Scenes.Compile.ErrorResponse
+	}
+
+	// Media events (28)
+	"media:list": {
+		params: Sockets.Media.List.Params
+		response: Sockets.Media.List.Response
+	}
+	"media:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"media:regenerateThumbnail": {
+		params: Sockets.Media.RegenerateThumbnail.Params
+		response: Sockets.Media.RegenerateThumbnail.Response
+	}
+	"media:regenerateThumbnail:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"media:setVisibility": {
+		params: Sockets.Media.SetVisibility.Params
+		response: Sockets.Media.SetVisibility.Response
+	}
+	"media:setVisibility:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"media:delete": {
+		params: Sockets.Media.Delete.Params
+		response: Sockets.Media.Delete.Response
+	}
+	"media:delete:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 
 	// Tag events

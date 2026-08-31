@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { avatarSrc } from "$lib/client/utils/media"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -511,7 +512,7 @@
 									<div class="flex-shrink-0">
 										<Avatar
 											src={characterData._avatar ||
-												characterData.avatar}
+												avatarSrc(characterData)}
 											char={characterData}
 										/>
 									</div>

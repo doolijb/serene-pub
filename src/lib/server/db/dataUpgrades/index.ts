@@ -47,7 +47,12 @@ export interface DataUpgrade {
  * anchor migration, not today's — so it must not import app modules whose
  * queries drift with the schema. Raw SQL through `tx` ages far better.
  */
-export const DATA_UPGRADES: DataUpgrade[] = []
+export const DATA_UPGRADES: DataUpgrade[] = [
+	{
+		afterMigration: "0166_media",
+		load: () => import("./0166_media")
+	}
+]
 
 function tagsInJournalOrder(migrationsFolder: string): string[] {
 	const journalPath = path.join(migrationsFolder, "meta/_journal.json")

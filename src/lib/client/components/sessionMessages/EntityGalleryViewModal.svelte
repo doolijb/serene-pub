@@ -11,6 +11,7 @@
 	silently changing their avatar.
 -->
 <script lang="ts">
+	import { avatarSrc } from "$lib/client/utils/media"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -20,7 +21,8 @@
 		type: "character" | "persona"
 		id: number
 		name: string
-		avatar: string | null | undefined
+		avatarMediaId?: number | null
+		avatar?: string | null
 	}
 
 	interface Props {
@@ -40,10 +42,10 @@
 	}: Props = $props()
 
 	const socket = useTypedSocket()
-	let images = $state<string[]>([])
+	let images = $state<Sockets.Media[]>([])
 	let selectedSrc = $state<string | null>(null)
 	let loading = $state(false)
-	let brokenPaths = $state(new Set<string>())
+	let brokenIds = $state(new Set<number>())
 	// Track which entity ID we requested so we can discard stale responses
 	let pendingId = $state<number | null>(null)
 
@@ -55,7 +57,7 @@
 			selectedSrc = null
 			images = []
 			loading = false
-			brokenPaths = new Set()
+			brokenIds = new Set()
 			pendingId = null
 			return
 		}
@@ -64,8 +66,9 @@
 		// explicit rather than accidental.
 		if (entity) {
 			images = []
-			brokenPaths = new Set()
-			selectedSrc = entity.avatar ?? null
+			brokenIds = new Set()
+			// The large view wants the original, not the 320px thumbnail.
+			selectedSrc = avatarSrc(entity, { full: true }) ?? null
 			loading = true
 			pendingId = entity.id
 			if (entity.type === "character") {
@@ -91,12 +94,11 @@
 				data.characterId !== entity.id
 			)
 				return
-			let imgs = data.images
-			// Ensure current avatar is in the list
-			if (entity.avatar && !imgs.includes(entity.avatar)) {
-				imgs = [entity.avatar, ...imgs]
-			}
-			images = imgs
+			// No "ensure the avatar is in the list" step any more: an avatar
+			// IS a media row stamped with this character's id, so the gallery
+			// query already returns it (28 §2 — role is a pointer, not a
+			// separate place to store an image).
+			images = data.images
 			loading = false
 		}
 
@@ -110,11 +112,7 @@
 				data.personaId !== entity.id
 			)
 				return
-			let imgs = data.images
-			if (entity.avatar && !imgs.includes(entity.avatar)) {
-				imgs = [entity.avatar, ...imgs]
-			}
-			images = imgs
+			images = data.images
 			loading = false
 		}
 
@@ -177,24 +175,28 @@
 						</div>
 					{:else if entity && images.length > 0}
 						<div class="flex w-full shrink-0 flex-wrap gap-2">
-							{#each images as imgPath}
-								{#if !brokenPaths.has(imgPath)}
+							{#each images as img (img.id)}
+								{#if !brokenIds.has(img.id)}
 									<button
 										class="overflow-hidden rounded border-2 transition-colors {selectedSrc ===
-										imgPath
+										img.url
 											? 'border-primary-500'
 											: 'border-surface-300-700 hover:border-surface-500'}"
-										onclick={() => (selectedSrc = imgPath)}
+										onclick={() => (selectedSrc = img.url)}
 										title="View"
 									>
+										<!-- Strip uses the thumbnail; clicking
+										     swaps the large view to the
+										     original. -->
 										<img
-											src={imgPath}
+											src={img.thumbUrl}
 											alt=""
 											class="h-16 w-16 object-cover"
+											loading="lazy"
 											onerror={() => {
-												brokenPaths = new Set([
-													...brokenPaths,
-													imgPath
+												brokenIds = new Set([
+													...brokenIds,
+													img.id
 												])
 											}}
 										/>

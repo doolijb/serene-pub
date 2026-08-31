@@ -1,97 +1,63 @@
 /**
  * Session assets (20 §1): the bytes behind `core:image`/`core:file` parts and
- * the block vocabulary's image block — one reference vocabulary, not two.
+ * the block vocabulary's image block.
  *
- * Bytes live under `<dataDir>/session_assets/<sessionId>/<hash>`, jailed the
- * same way plugin storage is; the row is the reference. Hash-addressed, so a
- * re-attached identical file dedupes to the same row and the serving route can
- * cache immutably.
+ * Since 28 these are ordinary `media` rows stamped with a `sessionId` — one
+ * table for every blob in the instance. This module survives as the vocabulary
+ * message code already speaks, so nothing above it had to move; the storage,
+ * dedupe, access check and serving route are the shared ones.
+ *
+ * The old `session_assets` table and its `<dataDir>/session_assets/` tree are
+ * gone (migration 0167); the 0166 data upgrade copied both into place.
  */
-
-import crypto from "node:crypto"
-import path from "node:path"
-import fs from "node:fs/promises"
-import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import * as dbConfig from "$lib/server/db/drizzle.config"
+import { createMedia, readMedia, type MediaRow } from "$lib/server/media"
 
-type Db = { select: any; insert: any }
-
-export const ASSETS_DIR = "session_assets"
-
-const assetsRoot = () => path.resolve(dbConfig.dataDir, ASSETS_DIR)
+type Db = any
 
 export interface CreateAssetInput {
 	sessionId: number
 	bytes: Buffer | Uint8Array
 	mime: string
 	createdBy?: number | null
+	/** Stamped when the asset belongs to one message rather than the session at
+	 *  large — finer provenance, same file location (28 §8 rule 1). */
+	messageId?: number | null
+	filename?: string | null
 }
 
+/**
+ * `mime` is accepted for the caller's convenience but not trusted: `createMedia`
+ * sniffs the bytes, exactly as every other upload path does.
+ */
 export async function createSessionAsset(
 	db: Db,
 	input: CreateAssetInput
-): Promise<typeof schema.sessionAssets.$inferSelect> {
-	const buf = Buffer.isBuffer(input.bytes)
-		? input.bytes
-		: Buffer.from(input.bytes)
-	const hash = crypto.createHash("sha256").update(buf).digest("hex")
+): Promise<MediaRow> {
+	return createMedia(db, {
+		// A session asset with no known uploader is owned by the session's
+		// owner for storage purposes; access is still the session's (28 §6).
+		userId: input.createdBy ?? (await sessionOwner(db, input.sessionId)),
+		sessionId: input.sessionId,
+		messageId: input.messageId ?? null,
+		bytes: input.bytes,
+		filename: input.filename ?? null,
+		allowDocuments: true
+	})
+}
 
-	// Dedupe within the session: the same bytes attach once.
-	const [existing] = await db
-		.select()
-		.from(schema.sessionAssets)
-		.where(
-			and(
-				eq(schema.sessionAssets.sessionId, input.sessionId),
-				eq(schema.sessionAssets.hash, hash)
-			)
-		)
-		.limit(1)
-	if (existing) return existing
-
-	const dir = path.join(assetsRoot(), String(input.sessionId))
-	const filePath = path.join(dir, hash)
-	// Containment invariant, asserted rather than trusted — the id is ours and
-	// the hash is hex, but the jail check is one line and forever.
-	if (!filePath.startsWith(assetsRoot() + path.sep))
-		throw new Error("session asset resolved to an unsafe path")
-	await fs.mkdir(dir, { recursive: true })
-	await fs.writeFile(filePath, buf)
-
-	const [row] = await db
-		.insert(schema.sessionAssets)
-		.values({
-			sessionId: input.sessionId,
-			hash,
-			mime: input.mime,
-			bytes: buf.byteLength,
-			// Stored relative to the data dir, so the data dir can move.
-			path: path.join(ASSETS_DIR, String(input.sessionId), hash),
-			createdBy: input.createdBy ?? null
-		})
-		.returning()
-	return row
+async function sessionOwner(db: Db, sessionId: number): Promise<number> {
+	const row = await db.query.sessions.findFirst({
+		where: (s: any, { eq }: any) => eq(s.id, sessionId),
+		columns: { userId: true }
+	})
+	if (!row) throw new Error(`Session ${sessionId} not found`)
+	return row.userId
 }
 
 export async function readSessionAsset(
 	db: Db,
 	id: number
-): Promise<{
-	row: typeof schema.sessionAssets.$inferSelect
-	bytes: Buffer
-} | null> {
-	const [row] = await db
-		.select()
-		.from(schema.sessionAssets)
-		.where(eq(schema.sessionAssets.id, id))
-		.limit(1)
-	if (!row) return null
-	const filePath = path.resolve(dbConfig.dataDir, row.path)
-	if (!filePath.startsWith(assetsRoot() + path.sep)) return null
-	try {
-		return { row, bytes: await fs.readFile(filePath) }
-	} catch {
-		return null
-	}
+): Promise<{ row: MediaRow; bytes: Buffer } | null> {
+	return readMedia(db, id)
 }

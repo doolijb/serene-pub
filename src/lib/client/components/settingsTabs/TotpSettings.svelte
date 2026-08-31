@@ -171,7 +171,10 @@
 				/>
 			</label>
 			<p class="text-surface-600-400 text-xs break-all">
-				Or use this setup URI: <code>{enrolling.otpauthUri}</code>
+				Or use this setup URI:
+				<code class="break-all whitespace-normal">
+					{enrolling.otpauthUri}
+				</code>
 			</p>
 			<label class="label">
 				<span class="label-text">Code from your app</span>

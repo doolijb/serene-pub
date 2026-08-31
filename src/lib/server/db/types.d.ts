@@ -43,6 +43,14 @@ export global {
 	export type InsertWidgetStyle = typeof schema.widgetStyles.$inferInsert
 	export type UpdateWidgetStyle = Partial<SelectWidgetStyle> & { id: number }
 
+	// Session layout preset types (PLAN 25 redesign)
+	export type SelectSessionLayoutPreset =
+		typeof schema.sessionLayoutPresets.$inferSelect
+	export type InsertSessionLayoutPreset =
+		typeof schema.sessionLayoutPresets.$inferInsert
+	export type UpdateSessionLayoutPreset =
+		Partial<SelectSessionLayoutPreset> & { id: number }
+
 	// Context Config types
 	export type SelectContextConfig = typeof schema.contextConfigs.$inferSelect
 	export type InsertContextConfig = typeof schema.contextConfigs.$inferInsert
@@ -168,7 +176,9 @@ export global {
 	// The message model (20 §1)
 	export type SelectMessagePart = typeof schema.messageParts.$inferSelect
 	export type SelectMessageRow = typeof schema.messages.$inferSelect
-	export type SelectSessionAsset = typeof schema.sessionAssets.$inferSelect
+	export type SelectMedia = typeof schema.media.$inferSelect
+	/** @deprecated 28 folded session_assets into media. */
+	export type SelectSessionAsset = SelectMedia
 
 	// Session Persona types
 	export type SelectSessionPersona =
@@ -256,6 +266,10 @@ export global {
 	export type UpdateGraphBuildConfig = Partial<SelectGraphBuildConfig> & {
 		id: number
 	}
+
+	// Account invite types (plan 27)
+	export type SelectAccountInvite = typeof schema.accountInvites.$inferSelect
+	export type InsertAccountInvite = typeof schema.accountInvites.$inferInsert
 
 	// Server types (plan 26)
 	export type SelectServer = typeof schema.servers.$inferSelect

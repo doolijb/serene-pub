@@ -66,6 +66,14 @@ export async function POST(event: RequestEvent) {
 
 		loginRateLimit.clearRateLimit(ip)
 
+		// Stamp the first (and every) successful sign-in. This is what allows
+		// the account to be promoted to admin later (27 §5) — an account nobody
+		// has ever signed into is an unproven claim about who holds it.
+		await db
+			.update(schema.users)
+			.set({ lastLoginAt: new Date() })
+			.where(eq(schema.users.id, user.id))
+
 		// Create authentication token using the proper token creation flow
 		const tokenResult = await users.tokens.create({
 			userId: user.id.toString(),

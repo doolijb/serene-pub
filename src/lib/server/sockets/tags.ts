@@ -204,7 +204,7 @@ export const tagsGetRelatedData: Handler<
 					columns: {
 						id: true,
 						name: true,
-						avatar: true,
+						avatarMediaId: true,
 						userId: true
 					}
 				}
@@ -227,7 +227,7 @@ export const tagsGetRelatedData: Handler<
 					columns: {
 						id: true,
 						name: true,
-						avatar: true,
+						avatarMediaId: true,
 						userId: true
 					}
 				}

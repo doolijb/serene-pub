@@ -8,6 +8,7 @@
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { SvelteMap } from "svelte/reactivity"
+	import { useWidgetContext } from "$lib/shared/widgets/context"
 
 	interface Props {
 		sessionId: number | null
@@ -15,6 +16,12 @@
 		channels: string[]
 	}
 	let { sessionId }: Props = $props()
+
+	// PLAN 25 proof-of-consumption: read the unified widget ctx a WidgetHost
+	// provides. Guarded — the panel renders fine standalone (ctx undefined).
+	// A real migrated panel would source its DATA from here instead of props.
+	const widget = useWidgetContext()
+	let ctx = $derived(widget?.current)
 
 	interface Task {
 		id: string
@@ -65,6 +72,18 @@
 </script>
 
 <div class="flex h-full flex-col gap-2 p-2">
+	{#if ctx}
+		<!-- PLAN 25 ctx probe: proves the unified data pipe reaches a native
+		     widget. session name + width tier + scoped, channel-filtered count. -->
+		<div
+			class="preset-tonal-primary text-[10px] rounded px-2 py-1"
+			data-testid="widget-ctx-probe"
+			title="Unified widget context (PLAN 25)"
+		>
+			ctx · {ctx.session.v1.name ?? `#${ctx.session.v1.id}`} · {ctx.layout.v1
+				.tier} · {ctx.messages.v1.length} msg
+		</div>
+	{/if}
 	<form
 		class="flex gap-1"
 		onsubmit={(e) => {
