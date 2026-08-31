@@ -6,7 +6,7 @@
 	import PersonaCreator from "$lib/client/components/modals/PersonaCreatorModal.svelte"
 	import BindingLinkerModal from "$lib/client/components/modals/BindingLinkerModal.svelte"
 	import OllamaIcon from "$lib/client/components/icons/OllamaIcon.svelte"
-	import { FileUpload } from "@skeletonlabs/skeleton-svelte"
+	import FileDropzone from "$lib/client/components/FileDropzone.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { getContext, onMount, onDestroy } from "svelte"
 	import { goto } from "$app/navigation"
@@ -1535,32 +1535,12 @@
 											Importing…
 										</div>
 									{:else}
-										<FileUpload
+										<FileDropzone
 											name="wizard-char-card"
 											accept=".png,.apng,.jpeg,.jpg,.webp,.json"
-											maxFiles={1}
+											class="border-surface-300-700 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
 											onFileAccept={handleCharacterCardImport}
-											onFileReject={console.error}
-										>
-											<FileUpload.Dropzone
-												class="border-surface-300-700 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
-											>
-												<Icons.Upload
-													class="text-surface-700-300 h-8 w-8"
-												/>
-												<FileUpload.Trigger
-													class="btn btn-sm preset-filled-primary-500"
-												>
-													Browse
-												</FileUpload.Trigger>
-												<span
-													class="text-surface-700-300 text-xs"
-												>
-													or drag and drop
-												</span>
-												<FileUpload.HiddenInput />
-											</FileUpload.Dropzone>
-										</FileUpload>
+										/>
 									{/if}
 								</div>
 								<button
@@ -1673,32 +1653,12 @@
 											Importing…
 										</div>
 									{:else}
-										<FileUpload
+										<FileDropzone
 											name="wizard-persona-card"
 											accept=".png,.apng,.jpeg,.jpg,.webp,.json"
-											maxFiles={1}
+											class="border-surface-300-700 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
 											onFileAccept={handlePersonaCardImport}
-											onFileReject={console.error}
-										>
-											<FileUpload.Dropzone
-												class="border-surface-300-700 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
-											>
-												<Icons.Upload
-													class="text-surface-700-300 h-8 w-8"
-												/>
-												<FileUpload.Trigger
-													class="btn btn-sm preset-filled-primary-500"
-												>
-													Browse
-												</FileUpload.Trigger>
-												<span
-													class="text-surface-700-300 text-xs"
-												>
-													or drag and drop
-												</span>
-												<FileUpload.HiddenInput />
-											</FileUpload.Dropzone>
-										</FileUpload>
+										/>
 									{/if}
 								</div>
 								<button

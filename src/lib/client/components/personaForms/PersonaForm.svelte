@@ -5,6 +5,7 @@
 	import { z } from "zod"
 	import PersonaUnsavedChangesModal from "../modals/PersonaUnsavedChangesModal.svelte"
 	import Avatar from "../Avatar.svelte"
+	import FileDropzone from "../FileDropzone.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { stableStringify } from "$lib/shared/utils/connectionDefaults"
 
@@ -182,10 +183,8 @@
 		}
 	}
 
-	function handleAvatarChange(e: Event) {
-		const input = e.target as HTMLInputElement | null
-		if (!input || !input.files || input.files.length === 0) return
-		const file = (e.target as HTMLInputElement).files?.[0]
+	function handleAvatarChange(details: FileAcceptDetails) {
+		const file = details.files?.[0]
 		if (!file) return
 		// Only set preview, do not upload yet
 		const previewReader = new FileReader()
@@ -482,43 +481,12 @@
 			</div>
 			<div class="flex w-full flex-col gap-2">
 				<div class="flex w-full items-center justify-center">
-					<label
-						for="dropzone-file"
-						class="border-surface-300-700 bg-surface-50-950 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed"
-						aria-describedby="avatar-help"
-					>
-						<div
-							class="flex w-full flex-col items-center justify-center"
-						>
-							<svg
-								class="text-surface-700-300 dark:text-surface-400 my-4 h-8 w-8"
-								aria-hidden="true"
-								xmlns="http://www.w3.org/2000/svg"
-								fill="none"
-								viewBox="0 0 20 16"
-							>
-								<path
-									stroke="currentColor"
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M13 13h3a3 3 0 0 0 0-6h-.025A5.56 5.56 0 0 0 16 6.5 5.5 5.5 0 0 0 5.207 5.021C5.137 5.017 5.071 5 5 5a4 4 0 0 0 0 8h2.167M10 15V6m0 0L8 8m2-2 2 2"
-								/>
-							</svg>
-						</div>
-						<input
-							id="dropzone-file"
-							type="file"
-							class="hidden"
-							accept="image/*"
-							onchange={handleAvatarChange}
-							aria-describedby="avatar-help"
-						/>
-						<div id="avatar-help" class="sr-only">
-							Upload an image file for the persona avatar.
-							Supported formats: JPG, PNG, GIF
-						</div>
-					</label>
+					<FileDropzone
+						name="persona-avatar"
+						accept="image/*"
+						hint="PNG, JPG or GIF"
+						onFileAccept={handleAvatarChange}
+					/>
 				</div>
 				<button
 					type="button"
