@@ -47,8 +47,6 @@ echo
 if [ ! -f "$NODE_BIN" ]; then
     echo "ERROR: Node.js runtime not found at $NODE_BIN"
     echo "Please ensure all application files are present in this directory."
-    echo "Press Enter to exit..."
-    read
     exit 1
 fi
 
@@ -56,8 +54,6 @@ fi
 if [ ! -f "$APP_MAIN" ]; then
     echo "ERROR: Application file not found at $APP_MAIN"
     echo "Please ensure all application files are present in this directory."
-    echo "Press Enter to exit..."
-    read
     exit 1
 fi
 
@@ -94,7 +90,4 @@ else
 fi
 echo
 
-echo "Press Enter to exit..."
-read
 exit $EXIT_CODE
-read

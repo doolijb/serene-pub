@@ -96,6 +96,10 @@ echo.
 goto :End
 
 :Error
+REM Reached only by the goto :Error above, which run before EXIT_CODE is ever
+REM assigned - without this, :End would exit /b on an empty variable and report
+REM success for a missing runtime, which a service manager would believe.
+set EXIT_CODE=1
 echo.
 echo ========================================
 echo Setup failed. Please ensure:
@@ -106,6 +110,4 @@ echo ========================================
 echo.
 
 :End
-echo Press any key to exit...
-pause >nul
 exit /b %EXIT_CODE%
