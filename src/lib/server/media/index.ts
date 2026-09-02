@@ -140,6 +140,15 @@ export interface CreateMediaInput extends MediaProvenance {
 	/** Generate a thumbnail inline. Off during migrations and bulk imports,
 	 *  where the backfill pass handles it instead. */
 	thumbnail?: boolean
+	/**
+	 * How this was made — prompt, seed, model, backend (0173). Stored verbatim,
+	 * never interpreted, and never consulted for access.
+	 *
+	 * Note the dedupe below: identical bytes return the EXISTING row, meta and
+	 * all. That is right — identical bytes are the same image, and the first
+	 * generation's provenance is the one that produced it.
+	 */
+	meta?: Record<string, unknown> | null
 }
 
 /**
@@ -199,7 +208,8 @@ export async function createMedia(
 			filename: input.filename ?? null,
 			width: dims?.width ?? null,
 			height: dims?.height ?? null,
-			position: input.position ?? 0
+			position: input.position ?? 0,
+			meta: input.meta ?? null
 		})
 		.returning()
 

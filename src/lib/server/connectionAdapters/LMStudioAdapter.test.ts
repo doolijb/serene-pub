@@ -68,11 +68,7 @@ function makeSession(): any {
 function makeAdapter(connectionOverrides: Record<string, any> = {}) {
 	return new exportsDefault.Adapter({
 		connection: makeConnection(connectionOverrides),
-		sampling: {
-			contextTokensEnabled: false,
-			responseTokensEnabled: false,
-			responseTokens: 250
-		} as any,
+		sampling: {} as any,
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "Test system prompt." } as any,
 		session: makeSession(),
@@ -124,14 +120,12 @@ describe("LMStudioAdapter — base URL trailing-slash normalization", () => {
 })
 
 describe("LMStudioAdapter.mapSamplingConfig()", () => {
-	test("maps known sampling keys, skipping disabled/undefined/object values", () => {
+	// `sampling` arrives already resolved, so a switched-off sampler reaches the
+	// adapter as an absent key — omission is the only "off" there is. The
+	// undefined/object guards are a separate rule about unusable values.
+	test("maps known sampling keys, skipping omitted/undefined/object values", () => {
 		const adapter = makeAdapter()
-		adapter.sampling = {
-			temperature: 0.7,
-			temperatureEnabled: true,
-			topP: 0.9,
-			topPEnabled: false
-		} as any
+		adapter.sampling = { temperature: 0.7 } as any
 		const result = adapter.mapSamplingConfig()
 		expect(result.temperature).toBe(0.7)
 		expect(result.top_p).toBeUndefined()

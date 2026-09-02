@@ -22,6 +22,7 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { HostServices, NodeRef } from "@serene-pub/sdk"
+import type { RunProgress } from "$lib/shared/sockets/progress"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 
 type Db = { select: any; insert: any; update: any }
@@ -67,6 +68,16 @@ export interface HostScope {
 	sink?: {
 		onChunk?: (chunk: string) => void
 		onThinking?: (chunk: string) => void
+		/**
+		 * Where a Provider that cannot stream reports its progress instead.
+		 *
+		 * Text arrives a token at a time, so streaming IS the progress report. An
+		 * image arrives all at once after a minute of silence, so without this
+		 * there is nothing to show but a spinner and no way to tell a slow render
+		 * from a hung one. Same reasoning for it living on the scope rather than
+		 * the payload: a callback is not a value to write into a receipt.
+		 */
+		onProgress?: (event: RunProgress) => void
 	}
 	/** Aborts an in-flight provider call when the run is cancelled. */
 	signal?: AbortSignal
@@ -165,6 +176,77 @@ function assertScoped(
 			`${node.key} (${node.typeId}) asked for session ${wanted}, but this run is scoped to ` +
 				`${allowed ?? "no session"}. A pipeline may only read the session it was triggered in.`
 		)
+}
+
+/**
+ * Media references → the message parts that show them.
+ *
+ * A reference is a uuid, so the row has to be looked up — and looking it up is
+ * also what makes the reference *checkable*. Every row is required to belong
+ * either to this run's session or to the user the run is acting as; a uuid is
+ * unguessable, but "unguessable" is not an access rule, and a spec that could
+ * name any uuid could post any user's private image into a session.
+ *
+ * A reference that does not resolve is skipped rather than fatal. The image was
+ * rendered and stored; failing the write over one missing row would throw away
+ * the message and the other images with it.
+ */
+async function mediaParts(
+	db: any,
+	refs: unknown[],
+	sessionId: number,
+	scope: HostScope,
+	node: NodeRef
+): Promise<Array<{ type: string; data: Record<string, unknown> }>> {
+	const { eq } = await import("drizzle-orm")
+	const schema = await import("$lib/server/db/schema")
+	const parts: Array<{ type: string; data: Record<string, unknown> }> = []
+
+	for (const ref of refs) {
+		const uuid =
+			typeof ref === "string"
+				? ref
+				: ((ref as Record<string, any>)?.uuid as string | undefined)
+		if (!uuid) continue
+
+		const [row] = await db
+			.select()
+			.from(schema.media)
+			.where(eq(schema.media.uuid, uuid))
+			.limit(1)
+		if (!row) continue
+
+		const ownedHere =
+			(row.sessionId != null && row.sessionId === sessionId) ||
+			(scope.userId != null && row.userId === scope.userId)
+		if (!ownedHere)
+			throw new HostScopeError(
+				`${node.key} (${node.typeId}) tried to post media ${uuid}, which belongs ` +
+					`to neither this session nor the user this run is acting as.`
+			)
+
+		const alt = (ref as Record<string, any>)?.text
+		parts.push(
+			row.kind === "image"
+				? {
+						type: "core:image",
+						data: {
+							assetId: row.id,
+							...(alt ? { alt: String(alt) } : {})
+						}
+					}
+				: {
+						type: "core:file",
+						data: {
+							assetId: row.id,
+							mime: row.mime,
+							...(row.filename ? { name: row.filename } : {})
+						}
+					}
+		)
+	}
+
+	return parts
 }
 
 /**
@@ -881,6 +963,44 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					return result
 				}
 
+				case "core:provider/generate-image": {
+					/**
+					 * The render, through the image adapters.
+					 *
+					 * Same line as generate-text: the binding hands over the ids
+					 * its slots resolved to and gets media REFERENCES back — never
+					 * the connection, never its key, and never the bytes.
+					 * `dispatchImage` explains why the bytes stop there.
+					 */
+					const { dispatchImage } = await import(
+						"$lib/server/pipelines/runtime/dispatchImage"
+					)
+					return await dispatchImage(db as any, {
+						prompt: String(p.prompt ?? ""),
+						negative:
+							p.negative === undefined || p.negative === null
+								? undefined
+								: String(p.negative),
+						prompts: p.prompts ?? null,
+						connectionId: refId(p.connection),
+						samplingId: refId(p.sampling),
+						sessionId: scope.sessionId ?? null,
+						userId: scope.userId ?? null,
+						signal: scope.signal,
+						// Forwarded only when somebody is listening, so an adapter
+						// that can report progress does not pay to compute it for
+						// a run nobody is watching (a background trigger, a test).
+						onProgress: scope.sink?.onProgress
+							? (e) =>
+									scope.sink!.onProgress!({
+										runId: "",
+										nodeKey: node.key,
+										...e
+									})
+							: undefined
+					})
+				}
+
 				default: {
 					/**
 					 * Every summarize and graph step, through one dispatcher.
@@ -939,6 +1059,31 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						metadata: p.metadata ?? {},
 						isGenerating: false
 					})
+
+					// Media posted WITH the message (the `media` in-port).
+					//
+					// It has to happen here rather than in a following
+					// `attach-image`, because a message created inside a run
+					// cannot be the target of a later node — `write-result@1` is
+					// not assignable to `row-ids@1`, deliberately, since under
+					// async review the row may never exist. So the write that
+					// creates the message is the write that attaches its images.
+					if (Array.isArray(p.media) && p.media.length) {
+						const parts = await mediaParts(
+							db as any,
+							p.media,
+							sessionId,
+							scope,
+							node
+						)
+						if (parts.length) {
+							const { appendParts } = await import(
+								"$lib/server/messages/store"
+							)
+							await appendParts(db as any, row.id, parts)
+						}
+					}
+
 					return { id: row.id, sessionId: row.sessionId }
 				}
 
@@ -1014,11 +1159,20 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							`${node.key} was given no message id to attach to — the id comes ` +
 								`from outside the run (13 §10b), on the payload's messageId.`
 						)
+					// A REFERENCE first, bytes only as the legacy path.
+					//
+					// `media.ts` is explicit that media travels as a reference and
+					// never as bytes, and everything that produces media in a run
+					// now stores it and passes a uuid. A base64 payload is still
+					// accepted because a caller outside the graph may genuinely
+					// have only bytes — but it is the fallback, not the contract.
+					const uuid =
+						typeof media.uuid === "string" ? media.uuid : null
 					const b64 =
 						typeof media.data === "string" ? media.data : null
-					if (!b64)
+					if (!uuid && !b64)
 						throw new HostScopeError(
-							`${node.key} was given no bytes — the payload carries base64 'data'.`
+							`${node.key} was given neither a media reference ('uuid') nor bytes ('data').`
 						)
 					const { getMessage, appendParts } = await import(
 						"$lib/server/messages/store"
@@ -1029,13 +1183,31 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							`${node.key}: no message ${messageId} to attach to`
 						)
 					assertScoped(node, target.sessionId, scope.sessionId)
+					const isImage = node.typeId.includes("attach-image")
+
+					let asset: { id: number; mime: string }
+					if (uuid) {
+						const [found] = await mediaParts(
+							db as any,
+							[media],
+							target.sessionId,
+							scope,
+							node
+						)
+						if (!found)
+							throw new HostScopeError(
+								`${node.key}: no media ${uuid} to attach`
+							)
+						await appendParts(db as any, messageId, [found as any])
+						return { id: messageId }
+					}
+
 					const { createSessionAsset } = await import(
 						"$lib/server/messages/assets"
 					)
-					const isImage = node.typeId.includes("attach-image")
-					const asset = await createSessionAsset(db as any, {
+					asset = await createSessionAsset(db as any, {
 						sessionId: target.sessionId,
-						bytes: Buffer.from(b64, "base64"),
+						bytes: Buffer.from(b64!, "base64"),
 						mime:
 							typeof media.mime === "string"
 								? media.mime

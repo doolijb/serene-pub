@@ -59,7 +59,7 @@ export type ResponseFormat = "text" | "json"
 // Generic interface for constructor parameters
 export interface BaseConnectionAdapterParams {
 	connection: SelectConnection
-	sampling: SelectSamplingConfig
+	sampling: ResolvedSampling
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
 	session: BasePromptSession
@@ -80,7 +80,7 @@ export type TestConnectionFn = (
 
 export abstract class BaseConnectionAdapter {
 	connection: SelectConnection
-	sampling: SelectSamplingConfig
+	sampling: ResolvedSampling
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
 	session: BasePromptSession
@@ -275,9 +275,12 @@ export abstract class BaseConnectionAdapter {
 	async preflight(_signal?: AbortSignal): Promise<void> {}
 
 	async getContextTokenLimit(): Promise<number> {
-		return this.sampling.contextTokensEnabled
-			? this.sampling.contextTokens || 4096
-			: 4096
+		// No `contextTokensEnabled` test: `sampling` arrives already resolved
+		// (resolveSampling.ts), so a key being present IS the switch being on.
+		// A config with it off simply has no `contextTokens` here, and 4096 is
+		// what "the user did not say" has always meant.
+		const limit = this.sampling.contextTokens
+		return typeof limit === "number" && limit > 0 ? limit : 4096
 	}
 
 	/**

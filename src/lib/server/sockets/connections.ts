@@ -392,7 +392,12 @@ export const connectionsTest: Handler<
 				ok: result.ok,
 				error: error || null,
 				models,
-				connectionId: params.connection?.id
+				connectionId: params.connection?.id,
+				// Passed through untouched — core does not know what any given
+				// adapter chose to include, which is the point.
+				...((result as any).extra
+					? { extra: (result as any).extra }
+					: {})
 			}
 			emitToUser("connections:test", res)
 			return res

@@ -13,8 +13,10 @@
 	interface Props {
 		selectedItem: ConnectionServiceItem | undefined
 		label: string
+		/** Seed the Text/Image toggle (e.g. the Image Generation category). */
+		initialModality?: "text-gen" | "image-gen"
 	}
-	let { selectedItem = $bindable(), label }: Props = $props()
+	let { selectedItem = $bindable(), label, initialModality }: Props = $props()
 
 	// Static for the app's lifetime (built from CONNECTION_TYPES +
 	// OPENAI_CHAT_PRESETS, neither of which change at runtime) — computed
@@ -25,7 +27,7 @@
 	// mix, so a widget slot asking for one never offers the other. Seeded from
 	// the current selection so re-opening on an image connection stays on Image.
 	let modality = $state<"text-gen" | "image-gen">(
-		selectedItem?.modality ?? "text-gen"
+		initialModality ?? selectedItem?.modality ?? "text-gen"
 	)
 	function setModality(m: "text-gen" | "image-gen") {
 		if (m === modality) return

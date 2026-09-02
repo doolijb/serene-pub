@@ -699,6 +699,13 @@ declare global {
 					// showing (this response is emitToUser, i.e. every open
 					// tab, not just the requester).
 					connectionId?: number
+					// Anything else the test learned that a form can use —
+					// Fooocus returns its style list here. A test is the moment
+					// the connection is known to be reachable, so it is the
+					// cheapest place to fetch what a form cannot guess; a
+					// dedicated round trip per backend-specific list would be
+					// one more endpoint per backend.
+					extra?: Record<string, unknown>
 				}
 			}
 			namespace RefreshModels {
@@ -1311,6 +1318,16 @@ declare global {
 					 * `payload`, shaped by the winning spec's input contract.
 					 */
 					payload?: Record<string, unknown>
+					/**
+					 * Names the run, so it can be cancelled and its progress
+					 * keyed.
+					 *
+					 * Supplied by the CLIENT so that Cancel works during the
+					 * window between pressing the button and the first progress
+					 * event — which is exactly when somebody realises the prompt
+					 * was wrong. Server-generated when absent.
+					 */
+					runId?: string
 				}
 				interface Response {
 					sessionId: number
@@ -2384,7 +2401,23 @@ declare global {
 			namespace List {
 				interface Params {}
 				interface Response {
-					samplingConfigsList: Partial<SelectSamplingConfig>[]
+					/**
+					 * Identity plus the whole stored config (0171). Named
+					 * exactly rather than left as a `Partial`, because there
+					 * are no typed sampler columns to project any more: a
+					 * consumer resolves the numbers it displays out of
+					 * `values`/`enabled`, and filters the list by `shape`, so
+					 * the type has to promise those three are present.
+					 */
+					samplingConfigsList: Pick<
+						SelectSamplingConfig,
+						| "id"
+						| "name"
+						| "isImmutable"
+						| "shape"
+						| "values"
+						| "enabled"
+					>[]
 				}
 			}
 			namespace Get {

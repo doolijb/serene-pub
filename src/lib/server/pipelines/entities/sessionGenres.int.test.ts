@@ -285,21 +285,43 @@ describe("the swap list (19 §5, U-C4)", () => {
 describe("the trigger set (19 §4, U-C5)", () => {
 	it("the narrate button is a row: contributed by the narrate spec, for the standard mode", async () => {
 		const triggers = await listGenreTriggers(db as any, STANDARD_GENRE_ID)
-		expect(triggers).toEqual([
-			{
-				function: "narrate",
-				kind: "button",
-				icon: "book-open-text",
-				name: "Narrate",
-				specSlug: NARRATE_SPEC_ID,
-				// Classified where it is read, not where it is used (19 §3):
-				// `core:spec/narrate` contributing to `core:input/user-message@1`
-				// is the mode owner's own namespace, so a companion — present by
-				// default. A foreign spec's would be an attachment, opt-in.
-				origin: "companion",
-				enabledByDefault: true
-			}
-		])
+		// The narrate row specifically, not the whole set: any core spec that
+		// contributes a button lands here too, and this test is about narrate's
+		// row being a ROW — whole-list equality would make every new spec a
+		// failure in a test that has nothing to say about it.
+		expect(triggers.find((t) => t.function === "narrate")).toEqual({
+			function: "narrate",
+			kind: "button",
+			icon: "book-open-text",
+			name: "Narrate",
+			specSlug: NARRATE_SPEC_ID,
+			// Classified where it is read, not where it is used (19 §3):
+			// `core:spec/narrate` contributing to `core:input/user-message@1`
+			// is the mode owner's own namespace, so a companion — present by
+			// default. A foreign spec's would be an attachment, opt-in.
+			origin: "companion",
+			enabledByDefault: true
+		})
+	})
+
+	it("a spec contributing a button gets one, with no client code at all", async () => {
+		// The whole claim behind contributed triggers, checked on the newest one
+		// rather than on narrate: a spec declares `contributes.triggers`, the boot
+		// sync writes a row, and the composer renders it through the generic
+		// `fireTrigger` path. Nothing in the client knows what image generation is.
+		//
+		// This is also the image feature's entry point — if this row is missing
+		// there is no way for a person to reach any of it.
+		const triggers = await listGenreTriggers(db as any, STANDARD_GENRE_ID)
+		expect(triggers.find((t) => t.function === "generate-image")).toEqual({
+			function: "generate-image",
+			kind: "button",
+			icon: "image",
+			name: "Image",
+			specSlug: "core:spec/generate-image",
+			origin: "companion",
+			enabledByDefault: true
+		})
 	})
 
 	it("retiring the contributor removes its button — no UI code involved", async () => {
@@ -314,7 +336,7 @@ describe("the trigger set (19 §4, U-C5)", () => {
 			.where(eq(schema.pipelineSpecs.id, spec.id))
 		try {
 			const gone = await listGenreTriggers(db as any, STANDARD_GENRE_ID)
-			expect(gone).toEqual([])
+			expect(gone.find((t) => t.function === "narrate")).toBeUndefined()
 			// And routing agrees in the same breath: the same rows feed both.
 			expect(
 				await resolveFunctionSpec(

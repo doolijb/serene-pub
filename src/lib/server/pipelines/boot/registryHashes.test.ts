@@ -64,7 +64,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:consumer/attach-audio@1": "2a3ce393ac3d8",
 	"core:consumer/attach-image@1": "dce5f172a6edb",
 	"core:consumer/create-lore-entry@1": "f8eff8031562c",
-	"core:consumer/create-message@1": "1338e0ae6946f",
+	// Re-projected by 0174: a `media` in-port, so an image can be posted AS a new
+	// message. `attach-image` could not do it — a message created inside a run is
+	// not a valid target for a later node — which left no path at all from a
+	// render to a posted image.
+	"core:consumer/create-message@1": "14a3a9a68ea88d",
 	"core:consumer/emit-socket@1": "7658edce87c6",
 	"core:consumer/graph-proposal@1": "437560532d042",
 	"core:consumer/save-plugin-data@1": "1548f67cc814f",
@@ -200,6 +204,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// The cast scope (2026-08-26): scripts over what extract-cast publishes.
 	// A new type — inserts a row, conflicts with nothing, needs no migration.
 	"core:script:cast/transform@1": "16b4355ec1eb01",
+	// Local image generation: the modality twin of generate-text, same node kind,
+	// its shape naming which one. A new type — inserts a row, needs no migration.
+	"core:provider/generate-image@1": "b65cebb39e937",
 	"test:task/passthrough@1": "cf73634860fe1",
 	"test:task/sloppy-stream@1": "13093e6bda129",
 	"test:task/slow@1": "cf73634860fe1"

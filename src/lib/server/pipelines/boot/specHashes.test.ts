@@ -76,7 +76,14 @@ const PUBLISHED: Record<string, string> = {
 	"core:spec/summarize-character@1.2.0": "460b20537ef94",
 	"core:spec/summarize-scene@1.2.0": "42b49662a7449",
 	"core:spec/summarize-history@1.2.0": "235d7d8abbef1",
-	"core:spec/graph-build@1.1.0": "122aaab2d9ed79"
+	"core:spec/graph-build@1.1.0": "122aaab2d9ed79",
+	// 1.0.0: the echo spec — the minimal action harness that proves the review
+	// gate end to end (a button fires it, `create-message` parks, the modal's
+	// form IS the entry). Template for the image provider spec.
+	"core:spec/echo@1.0.0": "155ebfa1de7484",
+	// 1.0.0: local image generation end to end — a composer button, the review
+	// gate as the prompt entry, and the render posted as a message.
+	"core:spec/generate-image@1.0.0": "7be8979159e48"
 }
 
 describe("published spec hashes", () => {

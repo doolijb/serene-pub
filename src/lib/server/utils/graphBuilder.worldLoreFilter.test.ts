@@ -33,7 +33,16 @@ vi.mock("./getConnectionAdapter", () => ({
 }))
 
 const conn = { id: 1, name: "c", type: "openai_session" } as any
-const sampling = { id: 1, name: "s" } as any
+// A real post-0171 row: a shape naming its vocabulary, values, and the
+// switchboard saying which of them are in play. The `as any` used to hide
+// that this literal was not a row at all.
+const sampling = {
+	id: 1,
+	name: "s",
+	shape: "core:shape/text-gen@1",
+	values: {},
+	enabled: []
+} as any
 const contextConfig = { id: 1 } as any
 const promptConfig = { id: 1 } as any
 

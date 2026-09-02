@@ -1,14 +1,16 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { getContext, onDestroy, onMount, tick } from "svelte"
+	import { getContext, onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import SamplingConfigUnsavedChangesModal from "../modals/PromptConfigUnsavedChangesModal.svelte"
 	import NewNameModal from "../modals/NewNameModal.svelte"
+	import SamplingValuesForm from "./SamplingValuesForm.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { z } from "zod"
+	import { S, SAMPLING_SCHEMAS, samplingSchemaFor } from "@serene-pub/sdk"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -16,21 +18,79 @@
 		initialSelectedId?: number | null
 		/** Deep-link: open the new-config flow on mount (admin create page). */
 		startNew?: boolean
+		/** Deep-link: land straight in one category instead of the picker. */
+		initialShape?: string | null
 	}
 
 	let {
 		onclose = $bindable(),
 		initialSelectedId = null,
-		startNew = false
+		startNew = false,
+		initialShape = null
 	}: Props = $props()
 
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
 	const socket = useTypedSocket()
 
-	let activeSamplingConfigId = $derived(
-		systemSettingsCtx.settings?.defaultSamplingConfigId ?? null
+	// ── Categories ───────────────────────────────────────────────────────────
+	//
+	// Sampling configs are split by modality for the same reason connections are:
+	// the two vocabularies share nothing, and a list mixing them makes the reader
+	// check every row's shape before trusting its name. A deep link that names a
+	// config or a shape skips the picker.
+	let shape = $state<string>(initialShape ?? S.textGen)
+	let view = $state<"index" | "list">(
+		initialSelectedId != null || startNew || initialShape ? "list" : "index"
 	)
+
+	const CATEGORIES = [
+		{
+			shape: S.textGen,
+			icon: Icons.Type,
+			title: "Large Language Models",
+			blurb: "Temperature, penalties, context and response budgets — the parameters behind every generated reply."
+		},
+		{
+			shape: S.imageGen,
+			icon: Icons.Image,
+			title: "Image Generation",
+			blurb: "Steps, CFG, size, seed — shared by every image backend, whichever one a connection points at."
+		}
+	]
+
+	const categoryTitle = $derived(
+		CATEGORIES.find((c) => c.shape === shape)?.title ?? "Sampling"
+	)
+
+	function openCategory(s: string) {
+		shape = s
+		selectedSamplingId = defaultIdFor(s) ?? firstOfShape(s)
+		view = "list"
+	}
+
+	function backToIndex() {
+		view = "index"
+	}
+
+	/**
+	 * The instance default for a shape.
+	 *
+	 * One default per modality, not one shared by all of them (0172): a default
+	 * that could not say which modality it was for would hand a text config to an
+	 * image provider the moment a spec left the slot unset.
+	 */
+	function defaultIdFor(s: string): number | null {
+		const settings = systemSettingsCtx.settings
+		if (s === S.imageGen)
+			return settings?.defaultImageSamplingConfigId ?? null
+		return settings?.defaultSamplingConfigId ?? null
+	}
+
+	const firstOfShape = (s: string) =>
+		samplingConfigsList.find((c) => c.shape === s)?.id ?? null
+
+	let activeSamplingConfigId = $derived(defaultIdFor(shape))
 
 	// Sampling config has no per-user override — it's the system-wide default
 	// (systemSettingsCtx.settings.defaultSamplingConfigId), same value every
@@ -48,16 +108,12 @@
 	let unsavedChanges = $derived.by(() => {
 		if (!sampling || !originalSamplingConfig) return false
 		// Compare current sampling with original to detect changes
-		return (
-			JSON.stringify(sampling) !== JSON.stringify(originalSamplingConfig)
-		)
+		return JSON.stringify(sampling) !== JSON.stringify(originalSamplingConfig)
 	})
-	let showSelectSamplingConfig = $state(false)
 	let showUnsavedChangesModal = $state(false)
 	let showNewNameModal = $state(false)
 	let showDeleteModal = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
-	let editingField: string | null = $state(null)
 
 	// Zod validation schema
 	const samplingConfigSchema = z.object({
@@ -67,102 +123,20 @@
 	type ValidationErrors = Record<string, string>
 	let validationErrors: ValidationErrors = $state({})
 
-	type FieldType = "number" | "boolean" | "string"
+	/**
+	 * The vocabulary for the row being edited — read from the ROW's shape, not the
+	 * category, so a config reached by deep link renders its own parameters even
+	 * if the sidebar happens to have opened on the other category.
+	 */
+	const activeSchema = $derived(samplingSchemaFor(sampling?.shape))
 
-	const fieldMeta: Record<
-		string,
-		{
-			label: string
-			type: FieldType
-			min?: number
-			max?: number
-			step?: number
-			unlockedMax?: number
-			default?: number
-		}
-	> = {
-		responseTokens: {
-			label: "Response Tokens",
-			type: "number",
-			min: 1,
-			max: 4096,
-			step: 1,
-			unlockedMax: 65536
-		}, // Unlocked max for response tokens
-		contextTokens: {
-			label: "Context Tokens",
-			type: "number",
-			min: 1,
-			max: 32768,
-			step: 1,
-			unlockedMax: 524288
-		}, // Unlocked max for context tokens
-		temperature: {
-			label: "Temperature",
-			type: "number",
-			min: 0,
-			max: 2,
-			step: 0.01
-		},
-		topP: { label: "Top P", type: "number", min: 0, max: 1, step: 0.01 },
-		topK: { label: "Top K", type: "number", min: 0, max: 200, step: 1 },
-		repetitionPenalty: {
-			label: "Repetition Penalty",
-			type: "number",
-			min: 0.5,
-			max: 2,
-			step: 0.01
-		},
-		frequencyPenalty: {
-			label: "Frequency Penalty",
-			type: "number",
-			min: 0,
-			max: 2,
-			step: 0.01
-		},
-		presencePenalty: {
-			label: "Presence Penalty",
-			type: "number",
-			min: 0,
-			max: 2,
-			step: 0.01
-		},
-		seed: { label: "Seed", type: "number", min: -1, max: 999999, step: 1 }
-	}
-
-	// Helper: Show field if enabled, or if no enabled flag exists
-	function isFieldVisible(key: string) {
-		const enabledKey = key + "Enabled"
-		return (
-			key !== "isImmutable" &&
-			((sampling as any)?.[enabledKey] === undefined ||
-				(sampling as any)?.[enabledKey])
-		)
-	}
-
-	function getFieldMax(key: string): number {
-		// Check if the field is contextTokens or responseTokens
-		if (
-			(key === "contextTokens" && sampling!.contextTokensUnlocked) ||
-			(key === "responseTokens" && sampling!.responseTokensUnlocked)
-		) {
-			const unlockedMax = fieldMeta[key]?.unlockedMax
-			return unlockedMax !== undefined ? unlockedMax : getFieldMax(key)
-		}
-		// For other fields, return the defined max
-		return fieldMeta[key]?.max ?? 0
-	}
-
-	// Focus helper for manual input
-	async function focusInput(id: string) {
-		await tick()
-		const el = document.getElementById(id)
-		if (el) el.focus()
-	}
-
-	// Mock list of saved sampling for dropdown
 	let samplingConfigsList: Sockets.SamplingConfigs.List.Response["samplingConfigsList"] =
 		$state([])
+
+	/** Only the configs belonging to the category on screen. */
+	const viewConfigs = $derived(
+		samplingConfigsList.filter((c) => (c.shape ?? S.textGen) === shape)
+	)
 
 	// Drives the select's value via bind: rather than per-option `selected`
 	// attributes — the list of options gets regenerated on every save (the
@@ -186,12 +160,16 @@
 	}
 	function handleNewNameConfirm(name: string) {
 		if (!socket) return
+		// A clone carries the whole configuration — shape included, or the copy
+		// would silently become a text config and lose every value with it.
 		const newSamplingConfig = { ...sampling }
 		delete newSamplingConfig.id
+		delete newSamplingConfig.seedKey
 		delete newSamplingConfig.isImmutable
 		newSamplingConfig.name = name.trim()
+		newSamplingConfig.shape = sampling?.shape ?? shape
 		socket.emit("samplingConfigs:create", {
-			sampling: { ...newSamplingConfig, name: name.trim() }
+			sampling: newSamplingConfig as any
 		})
 		showNewNameModal = false
 	}
@@ -236,7 +214,9 @@
 
 	function handleReset() {
 		if (originalSamplingConfig) {
-			sampling = { ...originalSamplingConfig }
+			// Deep copy: `values` and `enabled` are nested, and a shallow one would
+			// hand the edited objects straight back and reset nothing.
+			sampling = structuredClone($state.snapshot(originalSamplingConfig))
 		}
 	}
 
@@ -261,13 +241,6 @@
 
 	function cancelDelete() {
 		showDeleteModal = false
-	}
-
-	function handleSelectSamplingConfig() {
-		showSelectSamplingConfig = true
-	}
-	function handleBackToSidebar() {
-		showSelectSamplingConfig = false
 	}
 
 	async function handleOnClose() {
@@ -300,6 +273,15 @@
 		message: Sockets.SamplingConfigs.List.Response
 	) {
 		samplingConfigsList = message.samplingConfigsList
+		// A selection that belongs to the other category (or to a row that has
+		// just been deleted) would render an empty panel under this heading.
+		if (
+			view === "list" &&
+			selectedSamplingId != null &&
+			!viewConfigs.some((c) => c.id === selectedSamplingId)
+		) {
+			selectedSamplingId = defaultIdFor(shape) ?? firstOfShape(shape)
+		}
 	}
 	function handleSamplingConfigsDelete(
 		_message: Sockets.SamplingConfigs.Delete.Response
@@ -320,8 +302,11 @@
 	function handleSamplingConfigsGet(
 		message: Sockets.SamplingConfigs.Get.Response
 	) {
-		sampling = { ...message.sampling }
-		originalSamplingConfig = { ...message.sampling }
+		// Cloned so the form edits a copy and `originalSamplingConfig` stays a
+		// clean baseline for the unsaved-changes comparison. Deep, because the two
+		// halves that actually get edited are nested objects.
+		sampling = structuredClone(message.sampling)
+		originalSamplingConfig = structuredClone(message.sampling)
 	}
 	function handleSamplingConfigsSetUserActive() {
 		toaster.success({ title: "Default sampling config updated" })
@@ -357,333 +342,207 @@
 	})
 </script>
 
-<div class="text-foreground min-h-100 p-4">
-	{#if showSelectSamplingConfig}
-		<!-- ENABLE / DISABLE WEIGHTS -->
-		<div
-			class="animate-fade-in border-surface-500/25 min-h-full rounded-lg border p-2 shadow-lg"
-		>
-			<div class="mb-4">
-				<PanelNavHeader
-					title="Enable/Disable Weight Options"
-					onBack={handleBackToSidebar}
-					backLabel="Back"
-				/>
-			</div>
-			<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-				{#each Object.entries(fieldMeta) as [key, meta]}
-					{#if meta.type === "number" || meta.type === "boolean"}
-						<label
-							class="hover:bg-muted flex items-center gap-2 rounded p-2 transition"
-							for="{key}Enabled"
-						>
-							<input
-								id="{key}Enabled"
-								type="checkbox"
-								checked={(sampling as any)?.[key + "Enabled"] ??
-									false}
-								onchange={(e) => {
-									if (sampling) {
-										;(sampling as any)[key + "Enabled"] = (
-											e.target as HTMLInputElement
-										).checked
-									}
-								}}
-								class="accent-primary"
-								disabled={(sampling as any)?.[
-									key + "Enabled"
-								] === undefined}
-							/>
-							<span class="font-medium">{meta.label}</span>
-						</label>
-					{/if}
-				{/each}
-			</div>
-		</div>
-	{:else if !!sampling}
-		<!-- MANAGE WEIGHTS -->
-		<div class="panel-actions mt-2 mb-2 sm:mt-0">
-			<button
-				type="button"
-				class="btn btn-sm preset-filled-primary-500"
-				onclick={handleNew}
-				title="Clone to new config"
-			>
-				<Icons.Plus size={16} />
-				Clone
-			</button>
-			<button
-				type="button"
-				class="btn btn-sm preset-filled-secondary-500"
-				onclick={handleReset}
-				disabled={!unsavedChanges}
-				title="Reset unsaved changes"
-			>
-				<Icons.RefreshCcw size={16} />
-				Reset
-			</button>
-			<button
-				type="button"
-				class="btn btn-sm preset-filled-error-500"
-				onclick={handleDelete}
-				disabled={!!sampling && sampling.isImmutable}
-				title="Delete sampling config"
-			>
-				<Icons.X size={16} />
-				Delete
-			</button>
-		</div>
-		<div class="mb-4">
-			<select
-				class="select w-full"
-				bind:value={selectedSamplingId}
-				disabled={unsavedChanges}
-			>
-				{#each samplingConfigsList.filter((w) => w.isImmutable) as w}
-					{@const isDefault = w.id === activeSamplingConfigId}
-					<option value={w.id}>
-						{isDefault ? "★ " : ""}{w.name}*
-					</option>
-				{/each}
-				{#each samplingConfigsList.filter((w) => !w.isImmutable) as w}
-					{@const isDefault = w.id === activeSamplingConfigId}
-					<option value={w.id}>
-						{isDefault ? "★ " : ""}{w.name}
-					</option>
-				{/each}
-			</select>
-		</div>
-		{#if sampling && sampling.isImmutable}
-			<div
-				class="preset-tonal-warning mb-4 flex items-center gap-2 rounded-xl p-2 text-sm"
-			>
-				<Icons.Info size={16} class="shrink-0" />
-				This is a built-in config (marked with a trailing *) — edit freely,
-				then use "New" to save your changes as a copy.
-			</div>
-		{/if}
-		<PanelToolbar label="Sampling config actions" class="mb-4">
-			<button
-				type="button"
-				class="btn btn-sm preset-tonal-primary min-w-[8.5rem] flex-1"
-				onclick={handleSelectSamplingConfig}
-			>
-				<Icons.CheckSquare size={16} />
-				Select Samplers
-			</button>
-			<button
-				type="button"
-				class="btn btn-sm preset-filled-success-500 min-w-[6rem] flex-1"
-				onclick={handleUpdate}
-				disabled={(!!sampling && sampling.isImmutable) ||
-					!unsavedChanges}
-			>
-				<Icons.Save size={16} /> Update
-			</button>
-			<button
-				type="button"
-				class="btn btn-sm preset-filled-warning-500 shrink-0"
-				onclick={handleSetDefault}
-				disabled={!selectedSamplingId ||
-					selectedSamplingId === activeSamplingConfigId}
-				title={selectedSamplingId === activeSamplingConfigId
-					? "Already the default"
-					: "Set as default"}
-			>
-				<Icons.Star
-					size={16}
-					fill={selectedSamplingId === activeSamplingConfigId
-						? "currentColor"
-						: "none"}
-				/>
-				{selectedSamplingId === activeSamplingConfigId
-					? "Default"
-					: "Set Default"}
-			</button>
-		</PanelToolbar>
+{#if view === "index"}
+	<div class="text-foreground flex h-full flex-col gap-3 p-4">
+		<p class="text-muted-foreground text-sm">
+			Select a category to view and edit its sampling configurations.
+		</p>
 
-		<form class="space-y-4">
-			<div class="flex flex-col gap-1">
-				<label class="font-semibold" for="samplingName">Name</label>
-				<input
-					id="samplingName"
-					type="text"
-					bind:value={sampling.name}
-					class="input {validationErrors.name
-						? 'border-error-500'
-						: ''}"
-					disabled={!!sampling && sampling.isImmutable}
-					oninput={() => {
-						if (validationErrors.name) {
-							const { name, ...rest } = validationErrors
-							validationErrors = rest
-						}
-					}}
-				/>
-				{#if validationErrors.name}
-					<p class="text-error-500 mt-1 text-sm" role="alert">
-						{validationErrors.name}
-					</p>
-				{/if}
-			</div>
-			{#each Object.entries(fieldMeta) as [key, meta]}
-				{#if isFieldVisible(key)}
-					<div class="flex flex-col gap-1">
-						<label class="font-semibold" for={key}>
-							{meta?.label ?? key}
-						</label>
-						{#if meta?.type === "number"}
-							<div class="flex flex-col items-center gap-2">
-								<input
-									type="range"
-									min={meta.min}
-									max={getFieldMax(key)}
-									step={meta.step}
-									id={key}
-									value={(sampling as any)?.[key] ?? 0}
-									oninput={(e) => {
-										if (sampling) {
-											;(sampling as any)[key] =
-												parseFloat(
-													(
-														e.target as HTMLInputElement
-													).value
-												)
-										}
-									}}
-									class="accent-primary w-full"
-								/>
-								<div
-									class="text-muted-foreground flex w-full justify-between gap-1 text-xs"
-								>
-									<span
-										title="Minimum value"
-										class="select-none"
-									>
-										{meta.min}
-									</span>
-									{#if editingField === key}
-										<input
-											type="number"
-											min={meta.min}
-											max={getFieldMax(key)}
-											step={meta.step}
-											value={(sampling as any)?.[key] ??
-												0}
-											oninput={(e) => {
-												if (sampling) {
-													;(sampling as any)[key] =
-														parseFloat(
-															(
-																e.target as HTMLInputElement
-															).value
-														)
-												}
-											}}
-											id={key + "-manual"}
-											class="border-primary input w-16 rounded border"
-											onblur={() => (editingField = null)}
-											onkeydown={(e) => {
-												if (
-													e.key === "Enter" ||
-													e.key === "Escape"
-												)
-													editingField = null
-											}}
-										/>
-									{:else}
-										<button
-											class="hover:bg-muted cursor-pointer rounded px-1 py-0.5"
-											title="Edit"
-											onclick={async () => {
-												editingField = key
-												await focusInput(
-													key + "-manual"
-												)
-											}}
-										>
-											{(sampling as any)?.[key]}
-										</button>
-									{/if}
-									<span
-										title="Maximum value"
-										class="select-none"
-									>
-										{getFieldMax(key)}
-									</span>
-								</div>
-
-								{#if key === "responseTokens"}
-									<div class="mt-2 flex items-center gap-2">
-										<input
-											type="checkbox"
-											id="responseTokensUnlocked"
-											bind:checked={
-												sampling.responseTokensUnlocked
-											}
-											class="accent-primary"
-										/>
-										<label
-											for="responseTokensUnlocked"
-											class="text-sm"
-										>
-											Unlock max
-										</label>
-									</div>
-								{:else if key === "contextTokens"}
-									<div class="mt-2 flex items-center gap-2">
-										<input
-											type="checkbox"
-											id="contextTokensUnlocked"
-											bind:checked={
-												sampling.contextTokensUnlocked
-											}
-											class="accent-primary"
-										/>
-										<label
-											for="contextTokensUnlocked"
-											class="text-sm"
-										>
-											Unlock max
-										</label>
-									</div>
-								{/if}
-							</div>
-						{:else if meta?.type === "boolean"}
-							<input
-								type="checkbox"
-								id={key}
-								checked={(sampling as any)?.[key] ?? false}
-								onchange={(e) => {
-									if (sampling) {
-										;(sampling as any)[key] = (
-											e.target as HTMLInputElement
-										).checked
-									}
-								}}
-								class="accent-primary"
-							/>
-						{:else}
-							<input
-								type="text"
-								id={key}
-								value={(sampling as any)?.[key] ?? ""}
-								oninput={(e) => {
-									if (sampling) {
-										;(sampling as any)[key] = (
-											e.target as HTMLInputElement
-										).value
-									}
-								}}
-								class="input"
-							/>
-						{/if}
+		{#each CATEGORIES as cat (cat.shape)}
+			{@const count = samplingConfigsList.filter(
+				(c) => (c.shape ?? S.textGen) === cat.shape
+			).length}
+			{@const defaultName = samplingConfigsList.find(
+				(c) => c.id === defaultIdFor(cat.shape)
+			)?.name}
+			<button
+				class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
+				onclick={() => openCategory(cat.shape)}
+			>
+				<div class="flex items-start gap-3">
+					<div
+						class="bg-primary-500/10 text-primary-500 mt-0.5 shrink-0 rounded-lg p-2"
+					>
+						<cat.icon size={20} />
 					</div>
-				{/if}
-			{/each}
-		</form>
-	{/if}
-</div>
+					<div class="min-w-0 flex-1">
+						<div class="flex items-center justify-between gap-2">
+							<span class="font-semibold">{cat.title}</span>
+							<Icons.ChevronRight
+								size={16}
+								class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5"
+							/>
+						</div>
+						<p class="text-muted-foreground mt-0.5 text-sm">
+							{cat.blurb}
+						</p>
+						<div
+							class="text-muted-foreground mt-2 flex items-center gap-3 text-xs"
+						>
+							<span>
+								{count}
+								{count === 1 ? "config" : "configs"}
+							</span>
+							{#if defaultName}
+								<span
+									class="text-success-600 dark:text-success-400 flex items-center gap-1 font-medium"
+								>
+									<Icons.CheckCircle size={12} />
+									{defaultName}
+								</span>
+							{/if}
+						</div>
+					</div>
+				</div>
+			</button>
+		{/each}
+	</div>
+{:else}
+	<div class="text-foreground min-h-100 p-4">
+		<div class="mb-3">
+			<PanelNavHeader
+				title={categoryTitle}
+				onBack={backToIndex}
+				backLabel="Categories"
+			/>
+		</div>
+
+		{#if !viewConfigs.length}
+			<p class="text-muted-foreground py-8 text-center text-sm">
+				No sampling configurations in this category yet.
+			</p>
+		{:else if !!sampling}
+			<div class="panel-actions mt-2 mb-2 sm:mt-0">
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-primary-500"
+					onclick={handleNew}
+					title="Clone to new config"
+				>
+					<Icons.Plus size={16} />
+					Clone
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-secondary-500"
+					onclick={handleReset}
+					disabled={!unsavedChanges}
+					title="Reset unsaved changes"
+				>
+					<Icons.RefreshCcw size={16} />
+					Reset
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-error-500"
+					onclick={handleDelete}
+					disabled={!!sampling && sampling.isImmutable}
+					title="Delete sampling config"
+				>
+					<Icons.X size={16} />
+					Delete
+				</button>
+			</div>
+			<div class="mb-4">
+				<select
+					class="select w-full"
+					bind:value={selectedSamplingId}
+					disabled={unsavedChanges}
+				>
+					{#each viewConfigs.filter((w) => w.isImmutable) as w}
+						{@const isDefault = w.id === activeSamplingConfigId}
+						<option value={w.id}>
+							{isDefault ? "★ " : ""}{w.name}*
+						</option>
+					{/each}
+					{#each viewConfigs.filter((w) => !w.isImmutable) as w}
+						{@const isDefault = w.id === activeSamplingConfigId}
+						<option value={w.id}>
+							{isDefault ? "★ " : ""}{w.name}
+						</option>
+					{/each}
+				</select>
+			</div>
+			{#if sampling && sampling.isImmutable}
+				<div
+					class="preset-tonal-warning mb-4 flex items-center gap-2 rounded-xl p-2 text-sm"
+				>
+					<Icons.Info size={16} class="shrink-0" />
+					This is a built-in config (marked with a trailing *) — clone it
+					to make changes.
+				</div>
+			{/if}
+			<PanelToolbar label="Sampling config actions" class="mb-4">
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-success-500 min-w-[6rem] flex-1"
+					onclick={handleUpdate}
+					disabled={(!!sampling && sampling.isImmutable) ||
+						!unsavedChanges}
+				>
+					<Icons.Save size={16} /> Update
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-warning-500 shrink-0"
+					onclick={handleSetDefault}
+					disabled={!selectedSamplingId ||
+						selectedSamplingId === activeSamplingConfigId}
+					title={selectedSamplingId === activeSamplingConfigId
+						? "Already the default"
+						: "Set as default"}
+				>
+					<Icons.Star
+						size={16}
+						fill={selectedSamplingId === activeSamplingConfigId
+							? "currentColor"
+							: "none"}
+					/>
+					{selectedSamplingId === activeSamplingConfigId
+						? "Default"
+						: "Set Default"}
+				</button>
+			</PanelToolbar>
+
+			<form class="space-y-4">
+				<div class="flex flex-col gap-1">
+					<label class="font-semibold" for="samplingName">Name</label>
+					<input
+						id="samplingName"
+						type="text"
+						bind:value={sampling.name}
+						class="input {validationErrors.name
+							? 'border-error-500'
+							: ''}"
+						disabled={!!sampling && sampling.isImmutable}
+						oninput={() => {
+							if (validationErrors.name) {
+								const { name, ...rest } = validationErrors
+								validationErrors = rest
+							}
+						}}
+					/>
+					{#if validationErrors.name}
+						<p class="text-error-500 mt-1 text-sm" role="alert">
+							{validationErrors.name}
+						</p>
+					{/if}
+				</div>
+
+				<!-- Every parameter the shape declares, each with its own switch.
+				     The old form listed nine hand-picked samplers and a separate
+				     "Select Samplers" screen to toggle them; the rest of the table
+				     was unreachable. -->
+				<SamplingValuesForm
+					schema={activeSchema}
+					bind:values={sampling.values}
+					bind:enabled={sampling.enabled}
+					disabled={sampling.isImmutable}
+				/>
+			</form>
+		{/if}
+	</div>
+{/if}
 
 <SamplingConfigUnsavedChangesModal
 	open={showUnsavedChangesModal}

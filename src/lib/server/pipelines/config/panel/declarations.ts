@@ -266,6 +266,11 @@ function declsForSlot(
 			label: humanizeCamel(slotName),
 			...(slotDescription ? { description: slotDescription } : {}),
 			control,
+			// The modality this slot speaks, carried through so the picker can
+			// offer only what fits (F17). Without it every connection and every
+			// sampling config is a candidate for every slot, and the first thing
+			// an image node would be offered is a text connection.
+			...(decl.shape ? { shape: decl.shape } : {}),
 			...(decl.kind === "wire" && decl.format
 				? { authorDefault: decl.format }
 				: {})

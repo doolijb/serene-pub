@@ -14,6 +14,7 @@
 
 import { getConnectionAdapter } from "../getConnectionAdapter"
 import { extractJson } from "../extractJson"
+import { resolveSampling } from "../resolveSampling"
 import { TokenCounters } from "../TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { runQueuedLLMCall } from "../runQueuedLLMCall"
@@ -185,7 +186,16 @@ async function runGeneration(
 
 	const adapter = new AdapterClass.Adapter({
 		connection: opts.connection,
-		sampling: { ...opts.sampling, maxTokens: opts.maxTokens },
+		// Every sub-task's config arrives here as a row, so this is the one place
+		// the summarizer turns one into what an adapter takes: the parameters
+		// actually switched on, defaults applied. The row's `name` is still read
+		// off the row below — identity is not a parameter, and a key called
+		// `name` sitting among the samplers is one collision away from being sent
+		// as one.
+		sampling: {
+			...resolveSampling(opts.sampling),
+			maxTokens: opts.maxTokens
+		},
 		contextConfig: opts.contextConfig,
 		promptConfig: {
 			...opts.promptConfig,

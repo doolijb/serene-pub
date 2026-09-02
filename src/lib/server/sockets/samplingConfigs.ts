@@ -4,8 +4,26 @@ import { eq } from "drizzle-orm"
 import { user } from "./users"
 import { systemSettingsGet } from "./systemSettings"
 import type { Handler } from "$lib/shared/events"
+import { normalizeSamplingRow, SAMPLING_SCHEMAS, S } from "@serene-pub/sdk"
 
 // --- WEIGHTS SOCKET HANDLERS ---
+
+/**
+ * A shape this build has a vocabulary for.
+ *
+ * `normalizeSamplingRow` is deliberately lenient — an unknown shape resolves to
+ * an empty schema, so it would happily normalise a row whose `enabled` list
+ * comes back empty and whose values can therefore never be sent. That is a
+ * config that exists, looks saved, and does nothing. The write path refuses it
+ * here instead. Asked of the SDK's own registry rather than a literal pair, so a
+ * third modality needs no edit in this file.
+ */
+const isKnownSamplingShape = (shape: string): boolean =>
+	Object.prototype.hasOwnProperty.call(SAMPLING_SCHEMAS, shape)
+
+/** The message a rejected shape gets, in one place because two handlers use it. */
+const unknownShapeError = (shape: string): string =>
+	`Unknown sampling shape "${shape}". A sampling config must be ${S.textGen} or ${S.imageGen}.`
 
 // Legacy functions for compatibility
 export async function samplingConfigsList(
@@ -121,11 +139,14 @@ export const samplingConfigsListHandler: Handler<
 				id: true,
 				name: true,
 				isImmutable: true,
-				// The admin changelist's glanceable columns (22-adjacent):
-				// the three numbers people actually compare presets by.
-				temperature: true,
-				contextTokens: true,
-				responseTokens: true
+				// The stored config itself (0171). There are no typed sampler
+				// columns left to project, so the numbers the admin changelist
+				// compares presets by are resolved from these three by the
+				// consumer — and `shape` is what a picker filters on, so an
+				// image node is never offered a config full of text samplers.
+				shape: true,
+				values: true,
+				enabled: true
 			},
 			orderBy: (w, { asc, desc }) => [desc(w.isImmutable), asc(w.name)]
 		})
@@ -153,10 +174,27 @@ export const samplingConfigsSetUserActive: Handler<
 			)
 		}
 
-		// Update system-wide default sampling config (replaces the old per-user active sampling)
+		// Update system-wide default sampling config (replaces the old per-user
+		// active sampling). Which of the two default columns it lands in is the
+		// ROW's own shape (0172), never a parameter the caller passes: a client
+		// that could name the column could set the image default to a text
+		// config, and the whole point of the shape is that it cannot.
+		const target = await db.query.samplingConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, params.id)
+		})
+		if (!target) {
+			const res = { error: "That sampling configuration no longer exists." }
+			emitToUser("error", res)
+			throw new Error("Sampling config not found.")
+		}
+
 		await db
 			.update(schema.systemSettings)
-			.set({ defaultSamplingConfigId: params.id })
+			.set(
+				target.shape === S.imageGen
+					? { defaultImageSamplingConfigId: params.id }
+					: { defaultSamplingConfigId: params.id }
+			)
 			.where(eq(schema.systemSettings.id, 1))
 
 		await user(socket, {}, emitToUser)
@@ -200,9 +238,28 @@ export const samplingConfigsCreate: Handler<
 			)
 		}
 
+		// An absent shape is not an error — normalizeSamplingRow defaults it to
+		// S.textGen, which is what every config was before there was a choice. A
+		// shape that names no vocabulary IS one; see isKnownSamplingShape.
+		const requestedShape = params.sampling.shape
+		if (requestedShape != null && !isKnownSamplingShape(requestedShape)) {
+			const error = unknownShapeError(requestedShape)
+			emitToUser("samplingConfigs:create:error", { error })
+			throw new Error(error)
+		}
+
+		// Normalised on the way in, so a config a person saved through the form
+		// and one this build seeded are byte-for-byte the same kind of row:
+		// values coerced to the types the shape declares (a form input arrives
+		// as "0.7"), `enabled` de-duplicated and reduced to keys that shape
+		// knows. Off-schema keys in `values` are kept — see the SDK's note; the
+		// filter belongs on the way out, in resolveSampling.
 		const [sampling] = await db
 			.insert(schema.samplingConfigs)
-			.values(params.sampling)
+			.values({
+				...params.sampling,
+				...normalizeSamplingRow(params.sampling)
+			})
 			.returning()
 
 		// Unlike every sibling *ConfigsCreate handler, this used to also call
@@ -307,6 +364,36 @@ export const samplingConfigsUpdate: Handler<
 				error: "Cannot update immutable samplingConfigs."
 			})
 			throw new Error("Cannot update immutable samplingConfigs")
+		}
+
+		// Same normalisation as create, but only when the payload actually
+		// carries one of the three sampling fields: normalising unconditionally
+		// would answer an {id, name} rename by writing shape/values/enabled the
+		// caller never mentioned, resetting the row's parameters to nothing.
+		//
+		// Merged against the stored row first, and for the same reason — a patch
+		// that sends `values` without `shape` must be coerced against the shape
+		// this row actually speaks, or an image config would be re-shaped to the
+		// text-gen default and lose every enabled key on a partial save.
+		if (
+			updateData.shape !== undefined ||
+			updateData.values !== undefined ||
+			updateData.enabled !== undefined
+		) {
+			const shape = updateData.shape ?? currentSamplingConfig?.shape
+			if (shape != null && !isKnownSamplingShape(shape)) {
+				const error = unknownShapeError(shape)
+				emitToUser("samplingConfigs:update:error", { error })
+				throw new Error(error)
+			}
+			const normalized = normalizeSamplingRow({
+				shape,
+				values: updateData.values ?? currentSamplingConfig?.values,
+				enabled: updateData.enabled ?? currentSamplingConfig?.enabled
+			})
+			updateData.shape = normalized.shape
+			updateData.values = normalized.values
+			updateData.enabled = normalized.enabled
 		}
 
 		// A raw client could target a mutable row with an {id}-only payload

@@ -12,7 +12,7 @@
 	import KoboldCppForm from "$lib/client/connectionForms/KoboldCppForm.svelte"
 	import KoboldCppManagedForm from "$lib/client/connectionForms/KoboldCppManagedForm.svelte"
 	import AnthropicForm from "$lib/client/connectionForms/AnthropicForm.svelte"
-	import FooocusForm from "$lib/client/connectionForms/FooocusForm.svelte"
+	import ImageConnectionForm from "$lib/client/connectionForms/ImageConnectionForm.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
@@ -50,8 +50,26 @@
 	type View = "index" | "connections" | "embedding"
 	let view = $state<View>("index")
 
+	// Which modality the "connections" view is managing — text (LLMs) or image
+	// generation. The two share one management view, filtered by this; the index
+	// cards set it. Image connections never take part in the text default.
+	let connectionModality = $state<"text-gen" | "image-gen">("text-gen")
+	let isImageView = $derived(connectionModality === "image-gen")
+	function openCategory(m: "text-gen" | "image-gen") {
+		connectionModality = m
+		view = "connections"
+	}
+
 	// --- State ---
 	let connectionsList: Partial<SelectConnection>[] = $state([])
+	// The connections shown in the current category view (text vs image).
+	let viewConnections = $derived(
+		connectionsList.filter(
+			(c) =>
+				CONNECTION_TYPE.modalityOf(c.type as string) ===
+				connectionModality
+		)
+	)
 	let isLoading = $state(true)
 	let connection: any = $state()
 	let originalConnection: any = $state()
@@ -454,7 +472,7 @@
 		<!-- LLM / Text Generation card -->
 		<button
 			class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
-			onclick={() => (view = "connections")}
+			onclick={() => openCategory("text-gen")}
 		>
 			<div class="flex items-start gap-3">
 				<div
@@ -488,6 +506,33 @@
 							</span>
 						</div>
 					{/if}
+				</div>
+			</div>
+		</button>
+
+		<!-- Image Generation card -->
+		<button
+			class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
+			onclick={() => openCategory("image-gen")}
+		>
+			<div class="flex items-start gap-3">
+				<div
+					class="bg-primary-500/10 text-primary-500 mt-0.5 shrink-0 rounded-lg p-2"
+				>
+					<Icons.Image size={20} />
+				</div>
+				<div class="min-w-0 flex-1">
+					<div class="flex items-center justify-between gap-2">
+						<span class="font-semibold">Image Generation</span>
+						<Icons.ChevronRight
+							size={16}
+							class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5"
+						/>
+					</div>
+					<p class="text-muted-foreground mt-0.5 text-sm">
+						Local image backends (Fooocus, …) for portraits and scene
+						art.
+					</p>
 				</div>
 			</div>
 		</button>
@@ -564,7 +609,7 @@
 				<Icons.ChevronLeft size={16} />
 			</button>
 			<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
-				LLM / Text Generation
+				{isImageView ? "Image Generation" : "LLM / Text Generation"}
 			</h2>
 		</div>
 		<div class="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
@@ -624,7 +669,7 @@
 					</div>
 				</div>
 			</div>
-			<div class="mb-4" class:hidden={!connectionsList.length}>
+			<div class="mb-4" class:hidden={!viewConnections.length}>
 				<label for="connection-select" class="sr-only">
 					Select AI connection to view
 				</label>
@@ -637,7 +682,7 @@
 					aria-label="Select AI connection to view"
 					aria-describedby="connection-help"
 				>
-					{#each connectionsList as c}
+					{#each viewConnections as c}
 						{@const typeLabel =
 							CONNECTION_TYPE.options.find(
 								(t) => t.value === c.type
@@ -674,34 +719,38 @@
 								<Icons.Save size={16} aria-hidden="true" />
 								Update
 							</button>
-							<button
-								type="button"
-								class="btn btn-sm preset-filled-warning-500 shrink-0"
-								onclick={handleSetDefault}
-								disabled={!selectedConnectionId ||
-									selectedConnectionId ===
-										defaultConnectionId ||
-									managedButDisabled}
-								title={managedButDisabled
-									? "KoboldCPP Manager must be enabled to use this connection"
-									: selectedConnectionId ===
-										  defaultConnectionId
-										? "Already the default connection"
-										: "Set as default connection"}
-								aria-label="Set selected connection as default"
-							>
-								<Icons.Star
-									size={14}
-									aria-hidden="true"
-									fill={selectedConnectionId ===
-									defaultConnectionId
-										? "currentColor"
-										: "none"}
-								/>
-								{selectedConnectionId === defaultConnectionId
-									? "Default"
-									: "Set Default"}
-							</button>
+							<!-- The system default is the TEXT connection; image
+							     connections are chosen per image node, not here. -->
+							{#if !isImageView}
+								<button
+									type="button"
+									class="btn btn-sm preset-filled-warning-500 shrink-0"
+									onclick={handleSetDefault}
+									disabled={!selectedConnectionId ||
+										selectedConnectionId ===
+											defaultConnectionId ||
+										managedButDisabled}
+									title={managedButDisabled
+										? "KoboldCPP Manager must be enabled to use this connection"
+										: selectedConnectionId ===
+											  defaultConnectionId
+											? "Already the default connection"
+											: "Set as default connection"}
+									aria-label="Set selected connection as default"
+								>
+									<Icons.Star
+										size={14}
+										aria-hidden="true"
+										fill={selectedConnectionId ===
+										defaultConnectionId
+											? "currentColor"
+											: "none"}
+									/>
+									{selectedConnectionId === defaultConnectionId
+										? "Default"
+										: "Set Default"}
+								</button>
+							{/if}
 						</div>
 						<div id="save-status" class="sr-only">
 							{unsavedChanges
@@ -738,8 +787,11 @@
 							<KoboldCppManagedForm bind:connection />
 						{:else if connection.type === CONNECTION_TYPE.ANTHROPIC}
 							<AnthropicForm bind:connection />
-						{:else if connection.type === CONNECTION_TYPE.IMAGE_FOOOCUS}
-							<FooocusForm bind:connection />
+						{:else if CONNECTION_TYPE.isImage(connection.type)}
+							<!-- One branch for every image backend: the form is
+							     generated from what the adapter declares, so a new
+							     one needs no case here and no component. -->
+							<ImageConnectionForm bind:connection />
 						{/if}
 
 						{#if connection.id}
@@ -864,10 +916,12 @@
 						class="text-surface-400 animate-spin"
 					/>
 				</div>
-			{:else if !connectionsList.length}
+			{:else if !viewConnections.length}
 				<EmptyState
-					icon={Icons.Cable}
-					message="No AI connections yet — create one to get started with AI conversations."
+					icon={isImageView ? Icons.Image : Icons.Cable}
+					message={isImageView
+						? "No image connections yet — add one (e.g. Fooocus) to generate images."
+						: "No AI connections yet — create one to get started with AI conversations."}
 				/>
 			{/if}
 		</div>
@@ -986,7 +1040,10 @@
 						</div>
 						<div>
 							<ConnectionServicePicker
-								label="AI Service"
+								label={isImageView
+									? "Image Service"
+									: "AI Service"}
+								initialModality={connectionModality}
 								bind:selectedItem={newConnectionService}
 							/>
 						</div>

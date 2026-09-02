@@ -267,126 +267,34 @@ export const samplingConfigs = pgTable("sampling_configs", {
 	name: text("name").notNull(), // Name for this sampling config (for selection)
 	isImmutable: boolean("is_immutable").notNull().default(false), // Is this the built-in config? Then we don't want to allow mutation/deletion
 
-	// Tuned defaults for roleplay:
-	// More creative and less repetitive
-	temperature: real("temperature").notNull().default(0.7), // Higher = more creative
-	temperatureEnabled: boolean("temperature_enabled").notNull().default(true),
+	/**
+	 * Which vocabulary this config speaks — the same shape id the provider that
+	 * consumes it declares (`S.textGen`, `S.imageGen`). It is what makes a config
+	 * safe to offer for a slot: a picker filters by it, so an image node is never
+	 * shown a config full of text samplers.
+	 */
+	shape: text("shape").notNull().default("core:shape/text-gen@1"),
 
-	topP: real("top_p").default(0.92), // Lower than 1, encourages diversity but not too random
-	topPEnabled: boolean("top_p_enabled").notNull().default(false),
+	/**
+	 * The parameters, keyed by the camelCase names the adapters' key maps use.
+	 *
+	 * Deliberately not typed columns (0171): thirty of them could only ever name
+	 * text samplers, so a second modality meant either a second table or a wall of
+	 * nulls. Keys the shape does not declare are kept here rather than rejected —
+	 * a row written by a newer build, or a UI-only flag like `contextTokensUnlocked`,
+	 * round-trips intact. `resolveSamplingValues` is what keeps them off the wire.
+	 */
+	values: json("values")
+		.notNull()
+		.default({})
+		.$type<Record<string, unknown>>(),
 
-	topK: integer("top_k").default(80), // Allows more token options for creative replies
-	topKEnabled: boolean("top_k_enabled").notNull().default(false),
-
-	repetitionPenalty: real("repetition_penalty").default(1.15), // Slightly encourages less repetition but not too harsh
-	repetitionPenaltyEnabled: boolean("repetition_penalty_enabled")
-		.notNull()
-		.default(false),
-
-	frequencyPenalty: real("frequency_penalty").default(0.2), // Mild penalty for repetitive phrases
-	frequencyPenaltyEnabled: boolean("frequency_penalty_enabled")
-		.notNull()
-		.default(false),
-
-	presencePenalty: real("presence_penalty").default(0.6), // Encourage new topics and freshness
-	presencePenaltyEnabled: boolean("presence_penalty_enabled")
-		.notNull()
-		.default(false),
-
-	responseTokens: integer("response_tokens").default(512), // Allow longer, richer replies
-	responseTokensEnabled: boolean("response_tokens_enabled")
-		.notNull()
-		.default(true),
-	responseTokensUnlocked: boolean("response_tokens_unlocked")
-		.notNull()
-		.default(false), // Dynamic length allowed
-
-	contextTokens: integer("context_tokens").default(4096), // Keep more conversation in memory/context
-	contextTokensEnabled: boolean("context_tokens_enabled")
-		.notNull()
-		.default(true),
-	contextTokensUnlocked: boolean("context_tokens_unlocked")
-		.notNull()
-		.default(false), // Allow for context window expansion
-
-	seed: integer("seed").default(-1), // -1 for random, can be used for deterministic sampling
-	seedEnabled: boolean("seed_enabled").notNull().default(false),
-	// Min-P sampling
-	minP: real("min_p").default(0.05),
-	minPEnabled: boolean("min_p_enabled").notNull().default(false),
-	// Typical-P sampling
-	typicalP: real("typical_p").default(1.0),
-	typicalPEnabled: boolean("typical_p_enabled").notNull().default(false),
-	// Mirostat sampling
-	mirostat: integer("mirostat").default(0), // 0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0
-	mirostatEnabled: boolean("mirostat_enabled").notNull().default(false),
-	mirostatTau: real("mirostat_tau").default(5.0),
-	mirostatTauEnabled: boolean("mirostat_tau_enabled")
-		.notNull()
-		.default(false),
-	mirostatEta: real("mirostat_eta").default(0.1),
-	mirostatEtaEnabled: boolean("mirostat_eta_enabled")
-		.notNull()
-		.default(false),
-	// XTC sampling
-	xtcProbability: real("xtc_probability").default(0.0),
-	xtcProbabilityEnabled: boolean("xtc_probability_enabled")
-		.notNull()
-		.default(false),
-	xtcThreshold: real("xtc_threshold").default(0.1),
-	xtcThresholdEnabled: boolean("xtc_threshold_enabled")
-		.notNull()
-		.default(false),
-	// DRY sampling
-	dryMultiplier: real("dry_multiplier").default(0.0),
-	dryMultiplierEnabled: boolean("dry_multiplier_enabled")
-		.notNull()
-		.default(false),
-	dryBase: real("dry_base").default(1.75),
-	dryBaseEnabled: boolean("dry_base_enabled").notNull().default(false),
-	dryAllowedLength: integer("dry_allowed_length").default(2),
-	dryAllowedLengthEnabled: boolean("dry_allowed_length_enabled")
-		.notNull()
-		.default(false),
-	dryPenaltyLastN: integer("dry_penalty_last_n").default(-1),
-	dryPenaltyLastNEnabled: boolean("dry_penalty_last_n_enabled")
-		.notNull()
-		.default(false),
-	drySequenceBreakers: json("dry_sequence_breakers")
-		.default(["\\n", ":", '"', "*"])
-		.$type<string[]>(),
-	drySequenceBreakersEnabled: boolean("dry_sequence_breakers_enabled")
-		.notNull()
-		.default(false),
-	// Dynamic temperature
-	dynatempRange: real("dynatemp_range").default(0.0),
-	dynatempRangeEnabled: boolean("dynatemp_range_enabled")
-		.notNull()
-		.default(false),
-	dynatempExponent: real("dynatemp_exponent").default(1.0),
-	dynatempExponentEnabled: boolean("dynatemp_exponent_enabled")
-		.notNull()
-		.default(false),
-	// Additional Ollama-specific
-	tfsZ: real("tfs_z").default(1.0),
-	tfsZEnabled: boolean("tfs_z_enabled").notNull().default(false),
-	repeatLastN: integer("repeat_last_n").default(64),
-	repeatLastNEnabled: boolean("repeat_last_n_enabled")
-		.notNull()
-		.default(false),
-	penalizeNewline: boolean("penalize_newline").default(false),
-	penalizeNewlineEnabled: boolean("penalize_newline_enabled")
-		.notNull()
-		.default(false),
-	// OpenAI-specific
-	logitBias: json("logit_bias").default({}).$type<Record<string, number>>(),
-	logitBiasEnabled: boolean("logit_bias_enabled").notNull().default(false),
-	// Stop sequences
-	stop: json("stop").default([]).$type<string[]>(),
-	stopEnabled: boolean("stop_enabled").notNull().default(false),
-	// Max tokens (alternative to responseTokens for OpenAI compatibility)
-	maxTokens: integer("max_tokens").default(-1),
-	maxTokensEnabled: boolean("max_tokens_enabled").notNull().default(false)
+	/**
+	 * Which keys are actually in play. A value with its key absent from here is
+	 * remembered but not sent, which is what lets a sampler be switched off and
+	 * back on without losing what it was set to.
+	 */
+	enabled: json("enabled").notNull().default([]).$type<string[]>(),
 })
 
 export const samplingRelations = relations(samplingConfigs, () => ({}))
@@ -2158,6 +2066,23 @@ export const media = pgTable(
 		/** Ordering within its group — replaces the gallery tables' only real
 		 *  function (drag-to-reorder). */
 		position: integer("position").notNull().default(0),
+
+		/**
+		 * How this was made, when something made it (0173).
+		 *
+		 * The columns above record provenance as *relationships*, because that is
+		 * what access and cleanup are decided by — and none of them can say
+		 * "SDXL, 25 steps, CFG 5, seed 819442027, this prompt", which is the whole
+		 * question a person asks about a generated image afterwards: they got one
+		 * they liked and want another like it.
+		 *
+		 * Opaque on purpose. The fields worth keeping differ per backend and will
+		 * keep changing, and nothing branches on any of it — written once at
+		 * generation, read back for display. NOT authoritative for anything;
+		 * access is decided above, and NULL (an image somebody uploaded) is the
+		 * common case.
+		 */
+		meta: json("meta").$type<Record<string, unknown> | null>(),
 		createdAt: timestamp("created_at").notNull().defaultNow()
 	},
 	(t) => [
@@ -2371,6 +2296,22 @@ export const systemSettings = pgTable("system_settings", {
 			onDelete: "set null"
 		}
 	),
+	/**
+	 * The image-generation twins of the two defaults above (0172).
+	 *
+	 * A default has to name a modality, because the two columns above cannot: a
+	 * spec that leaves its connection slot unset falls back to the instance
+	 * default, and without these the fallback for an image provider would be
+	 * whichever text connection happens to be default. Nothing would catch it
+	 * until the request reached a backend with no idea what a temperature is.
+	 */
+	defaultImageConnectionId: integer("default_image_connection_id").references(
+		() => connections.id,
+		{ onDelete: "set null" }
+	),
+	defaultImageSamplingConfigId: integer(
+		"default_image_sampling_id"
+	).references(() => samplingConfigs.id, { onDelete: "set null" }),
 	lockSamplingConfig: boolean("lock_sampling_config")
 		.notNull()
 		.default(false),
@@ -2595,6 +2536,16 @@ export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
 	}),
 	defaultSamplingConfig: one(samplingConfigs, {
 		fields: [systemSettings.defaultSamplingConfigId],
+		references: [samplingConfigs.id]
+	}),
+	defaultImageConnection: one(connections, {
+		relationName: "defaultImageConnection",
+		fields: [systemSettings.defaultImageConnectionId],
+		references: [connections.id]
+	}),
+	defaultImageSamplingConfig: one(samplingConfigs, {
+		relationName: "defaultImageSamplingConfig",
+		fields: [systemSettings.defaultImageSamplingConfigId],
 		references: [samplingConfigs.id]
 	}),
 	defaultContextConfig: one(contextConfigs, {

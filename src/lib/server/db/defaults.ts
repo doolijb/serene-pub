@@ -1,4 +1,5 @@
 import { eq, sql } from "drizzle-orm"
+import { S } from "@serene-pub/sdk"
 import { DEFAULT_CONTEXT_TEMPLATE } from "./legacyContextTemplate"
 import { db } from "."
 import * as schema from "./schema"
@@ -57,38 +58,51 @@ export async function sync() {
 		// sequence assign one. The `id` fields below are retained only because
 		// those rows already exist in the wild at those ids; migration 0092
 		// backfills their seedKey by (id, name) so they keep matching.
+		// `values` states only what DIFFERS from the shape's declared defaults
+		// (sdk/src/sampling.ts), which are the same numbers the dropped columns
+		// carried. A seed that repeated them would be a second place for the
+		// default of every sampler to live, and the two would drift. `enabled` is
+		// exhaustive, though — an unlisted key is off, so it has to be written out.
 		const defaultSamplingConfigs: Partial<SelectSamplingConfig>[] = [
 			{
 				id: 1, // Only include ID because this is a pre-seeded row before seedKey existed.
 				seedKey: "sampling-default",
 				name: "Default",
 				isImmutable: true,
-				// 8192, not the column default of 4096. This app front-loads the
-				// system block — character cards as JSON, world lore, history,
-				// the narrative graph, RAG hits — which is routinely 1.5–3k
-				// tokens before a single message, so 4096 spends over half the
-				// window before the roleplay starts and truncates within a few
-				// exchanges.
-				//
-				// Not higher, because this value does not mean the same thing on
-				// every backend (samplerMappings.ts). KoboldCPP treats it as a
-				// per-request cap and clamps it further to the server's
-				// true_max_context_length, but Ollama maps it to `num_ctx`, which
-				// ALLOCATES KV cache with no clamp. The ceiling is therefore set
-				// by the weakest machine that can run local RP at all: an 8GB
-				// card holding an 8B at Q4 has ~2.5GB spare, and 8k of KV cache
-				// on that model is ~1GB. 16k is the better experience and the
-				// wrong default.
-				contextTokens: 8192
+				shape: S.textGen,
+				values: {
+					// 8192, not the declared default of 4096. This app front-loads
+					// the system block — character cards as JSON, world lore,
+					// history, the narrative graph, RAG hits — which is routinely
+					// 1.5–3k tokens before a single message, so 4096 spends over
+					// half the window before the roleplay starts and truncates
+					// within a few exchanges.
+					//
+					// Not higher, because this value does not mean the same thing
+					// on every backend (samplerMappings.ts). KoboldCPP treats it as
+					// a per-request cap and clamps it further to the server's
+					// true_max_context_length, but Ollama maps it to `num_ctx`,
+					// which ALLOCATES KV cache with no clamp. The ceiling is
+					// therefore set by the weakest machine that can run local RP at
+					// all: an 8GB card holding an 8B at Q4 has ~2.5GB spare, and 8k
+					// of KV cache on that model is ~1GB. 16k is the better
+					// experience and the wrong default.
+					contextTokens: 8192
+				},
+				enabled: ["temperature", "responseTokens", "contextTokens"]
 			},
 			{
 				id: 2, // Only include ID because this is a pre-seeded row before seedKey existed.
 				seedKey: "sampling-disabled",
 				name: "Disabled",
 				isImmutable: true,
-				temperatureEnabled: false,
-				contextTokensEnabled: false,
-				responseTokensEnabled: false
+				shape: S.textGen,
+				// Nothing enabled: every request goes out with whatever the backend
+				// itself defaults to. That is the entire point of this row, and it
+				// is now a property you can read at a glance rather than three
+				// `*Enabled: false` overrides against a table of defaults.
+				values: {},
+				enabled: []
 			},
 			{
 				// NO `id` — the sequence assigns one. This is the first default
@@ -99,6 +113,7 @@ export async function sync() {
 				seedKey: "sampling-precise-extraction",
 				name: "Precise (Extraction)",
 				isImmutable: true,
+				shape: S.textGen,
 				// For structured extraction — graph relationship passes, scene
 				// cast, summarisation — not for roleplay. Measured against a
 				// roleplay-finetuned 26B on the narrative graph build: with the
@@ -106,29 +121,42 @@ export async function sync() {
 				// the time and 22 of 28 relationships were discarded; with these
 				// values plus constrained decoding it was 28-30 kept and 0-1
 				// discarded.
+				values: {
+					temperature: 0.2,
+					topP: 0.9,
+					topK: 20,
+					// Extraction reads a scene and emits a small object; it needs
+					// room to read, not to write.
+					contextTokens: 8192,
+					responseTokens: 1024
+				},
+				// The creative-writing samplers stay off — and now that is visible
+				// as their absence rather than as explicit `false`s. XTC
+				// deliberately drops high-probability tokens and DRY penalises
+				// repeated strings; both are actively harmful when the wanted
+				// output is a rigid, repetitive JSON shape with a fixed key order.
+				enabled: [
+					"temperature",
+					"topP",
+					"topK",
+					"contextTokens",
+					"responseTokens"
+				]
+			},
+			{
+				// The image twin of "Default", and the reason the table grew a
+				// `shape` at all. Its values are the declared defaults, so it says
+				// nothing here: 25 steps, CFG 5, 1024², batch 1, seed -1.
 				//
-				// Every sampler below is set AND enabled explicitly, because
-				// almost every `*Enabled` column defaults to false (schema.ts) —
-				// a value without its flag is inert.
-				temperature: 0.2,
-				temperatureEnabled: true,
-				topP: 0.9,
-				topPEnabled: true,
-				topK: 20,
-				topKEnabled: true,
-				// The creative-writing samplers stay off. XTC deliberately drops
-				// high-probability tokens and DRY penalises repeated strings —
-				// both are actively harmful when the wanted output is a rigid,
-				// repetitive JSON shape with a fixed key order.
-				xtcProbabilityEnabled: false,
-				dryMultiplierEnabled: false,
-				mirostatEnabled: false,
-				// Extraction reads a scene and emits a small object; it needs
-				// room to read, not to write.
-				contextTokens: 8192,
-				contextTokensEnabled: true,
-				responseTokens: 1024,
-				responseTokensEnabled: true
+				// Sampler and scheduler stay unset on purpose — the valid names are
+				// a property of the connection's checkpoint and build, so the only
+				// backend-independent answer is "whatever it already uses".
+				seedKey: "sampling-image-default",
+				name: "Default (Image)",
+				isImmutable: true,
+				shape: S.imageGen,
+				values: {},
+				enabled: ["steps", "cfg", "width", "height", "batch", "seed"]
 			}
 		]
 
@@ -799,6 +827,13 @@ export async function sync() {
 				where: (c, { eq }) => eq(c.seedKey, "graph-build-default")
 			})
 
+		// By seedKey for the same reason, and more sharply: this row is new, so
+		// it is never at a predictable id on an install that already has user
+		// configs of its own.
+		const seededImageSampling = await db.query.samplingConfigs.findFirst({
+			where: (c, { eq }) => eq(c.seedKey, "sampling-image-default")
+		})
+
 		const res = await db.query.systemSettings.findFirst({
 			where: (s, { eq }) => eq(s.id, 1)
 		})
@@ -810,7 +845,11 @@ export async function sync() {
 				defaultContextConfigId: 1,
 				defaultPromptConfigId: firstPromptConfig?.id,
 				defaultNarratorPromptConfigId: firstNarratorPromptConfig?.id,
-				defaultGraphBuildConfigId: seededGraphBuildConfig?.id
+				defaultGraphBuildConfigId: seededGraphBuildConfig?.id,
+				// No image CONNECTION default: there is nothing to point at until
+				// somebody adds one, and a modality with no connection configured
+				// should read as "not set up" rather than as a broken pointer.
+				defaultImageSamplingConfigId: seededImageSampling?.id
 			})
 		} else {
 			if (!res.defaultNarratorPromptConfigId) {
@@ -832,6 +871,18 @@ export async function sync() {
 					.update(schema.systemSettings)
 					.set({
 						defaultGraphBuildConfigId: seededGraphBuildConfig.id
+					})
+					.where(eq(schema.systemSettings.id, 1))
+			}
+			// Same backfill for the image sampling default. 0172 sets it once for
+			// installs upgrading through that migration; this covers the install
+			// that arrives later, and the one whose default was cleared by its row
+			// being deleted.
+			if (!res.defaultImageSamplingConfigId && seededImageSampling) {
+				await db
+					.update(schema.systemSettings)
+					.set({
+						defaultImageSamplingConfigId: seededImageSampling.id
 					})
 					.where(eq(schema.systemSettings.id, 1))
 			}

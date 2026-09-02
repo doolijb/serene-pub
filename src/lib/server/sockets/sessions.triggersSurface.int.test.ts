@@ -74,14 +74,17 @@ describe("sessions:triggers", () => {
 			{ sessionId: session.id },
 			noopEmit
 		)
-		expect(res.triggers).toEqual([
+		// Narrate's row specifically — every core spec contributing a button
+		// shows up here, and this test is about the mode's set REACHING a
+		// participant, not about which specs happen to be published.
+		expect(res.triggers).toContainEqual(
 			expect.objectContaining({
 				function: "narrate",
 				kind: "button",
 				name: "Narrate",
 				specSlug: "core:spec/narrate"
 			})
-		])
+		)
 
 		// A non-participant gets nothing — the list describes what a person
 		// in the session can press.

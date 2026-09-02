@@ -167,7 +167,9 @@ beforeAll(async () => {
 
 	configs = {
 		connection: { id: 1, promptFormat: "vicuna", extraJson: {} },
-		sampling: { contextTokensEnabled: false },
+		// Empty is what "the context budget is switched off" resolves to now, and
+		// both sides of the parity comparison get the same object either way.
+		sampling: {},
 		contextConfig,
 		promptConfig
 	}

@@ -150,7 +150,13 @@ describe("the option payload", () => {
 		// the respond spec happens to name a node `input`, and "input" appears
 		// inside every `core:input/…` id. Same exemption class as PROSE:
 		// a value that is legitimately public, not a leak core derived.
-		const PUBLIC_IDS = new Set(["mode"])
+		// `function` and `specSlug` are a trigger's PUBLIC routing identifiers —
+		// the client fires a function by name and resolves it to a spec by slug,
+		// so both are meant to travel. They trip the scan only because the word
+		// boundary in a hyphenated name splits it: `generate-image` contains
+		// `generate`, which the respond spec happens to use as a node key. Same
+		// exemption class as `mode`: legitimately public, not derived from a node.
+		const PUBLIC_IDS = new Set(["mode", "function", "specSlug"])
 		// `prompt` is the prompts-ref option's designed payload field (the
 		// selected prompt row riding along for inline editing) — a property
 		// the panel always shipped in production, tripped here only because
@@ -1036,14 +1042,15 @@ describe("a share option carries its own bands", () => {
 			"a window appeared before one was selected"
 		).toBeUndefined()
 
+		// Both budgets are parameters since 0171 — a key present in `enabled` is
+		// the switch being on, so the window is only real when both are listed.
 		const [cfg] = await db
 			.insert(schema.samplingConfigs)
 			.values({
 				name: "Window under test",
-				userId: 1,
-				contextTokens: 8192,
-				responseTokens: 512
-			} as any)
+				values: { contextTokens: 8192, responseTokens: 512 },
+				enabled: ["contextTokens", "responseTokens"]
+			})
 			.returning()
 		await writeOption(
 			db as any,

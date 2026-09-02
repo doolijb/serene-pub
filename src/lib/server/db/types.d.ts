@@ -32,6 +32,17 @@ export global {
 	export type UpdateSamplingConfig = Partial<SelectSamplingConfig> & {
 		id: number
 	}
+	/**
+	 * A sampling config AS AN ADAPTER RECEIVES IT: flat, only the parameters
+	 * switched on, defaults already applied. Produced by `resolveSampling()`
+	 * (server/utils/resolveSampling.ts) from a `SelectSamplingConfig`.
+	 *
+	 * Global, like the row types beside it, so that the seven adapters can name
+	 * the thing they are handed without each importing it — and so that the
+	 * difference between "the row" and "what goes on the wire" is a type anyone
+	 * reading an adapter signature can see.
+	 */
+	export type ResolvedSampling = Record<string, any>
 
 	// Connection types
 	export type SelectConnection = typeof schema.connections.$inferSelect

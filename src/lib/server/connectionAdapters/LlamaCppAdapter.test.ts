@@ -86,18 +86,14 @@ describe("LlamaCppAdapter — base URL trailing-slash normalization", () => {
 })
 
 describe("LlamaCppAdapter.mapSamplingConfig()", () => {
-	test("maps known sampling keys, skipping disabled ones", async () => {
+	// `sampling` arrives already resolved, so a switched-off sampler reaches the
+	// adapter as an absent key — omission is the only "off" there is.
+	test("maps known sampling keys, skipping omitted ones", async () => {
 		// LlamaCppAdapter isn't a named export — build an adapter via the
 		// exported class on the AdapterExports object instead.
 		const adapter = new exportsDefault.Adapter({
 			connection: makeConnection(),
-			sampling: {
-				contextTokensEnabled: false,
-				temperature: 0.7,
-				temperatureEnabled: true,
-				topK: 40,
-				topKEnabled: false
-			} as any,
+			sampling: { temperature: 0.7 } as any,
 			contextConfig: {} as any,
 			promptConfig: { systemPrompt: "Test" } as any,
 			session: {

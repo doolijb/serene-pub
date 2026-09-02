@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -1263,31 +1264,101 @@ export const sessionsTriggerFunctionHandler: Handler<
 				const { runSpec } = await import(
 					"$lib/server/pipelines/runtime/runTurn"
 				)
-				const receipt = await runSpec({
-					db,
-					sessionId: params.sessionId,
+				const runRegistry = await import(
+					"$lib/server/pipelines/runtime/runRegistry"
+				)
+
+				/**
+				 * A run a person can watch and stop.
+				 *
+				 * This path used to pass no sink and no signal, so a contributed
+				 * function was a button that went quiet for as long as it took and
+				 * could not be called off. That was survivable when every such
+				 * function was a summarize step; an image render is a minute of
+				 * GPU somebody may want back the moment they see the prompt was
+				 * wrong.
+				 *
+				 * The id comes from the client when it offered one, so Cancel
+				 * works during the window before the first progress event.
+				 */
+				const runId = params.runId || randomUUID()
+				const handle = runRegistry.start({
+					runId,
 					userId,
-					specId,
-					// The same input shape a turn supplies (the winning spec's
-					// input contract is typically the mode's own type): no
-					// text, no pick — the function was the whole instruction.
-					input: {
-						text: "",
-						sessionId: params.sessionId,
-						characterId: null,
-						...(params.messageId != null
-							? { messageId: params.messageId }
-							: {}),
-						...(params.payload && typeof params.payload === "object"
-							? { payload: params.payload }
-							: {}),
-						sessionScope: {
-							sessionId: params.sessionId,
-							currentCharacterId: null
-						},
-						fields: await genreFieldsFor(db as any, params.sessionId)
-					}
+					sessionId: params.sessionId,
+					specId
 				})
+				emitToUser("pipelines:runStarted", {
+					runId,
+					sessionId: params.sessionId,
+					specId,
+					label: params.function
+				})
+
+				let lastProgress = 0
+				let receipt
+				try {
+					receipt = await runSpec({
+						db,
+						sessionId: params.sessionId,
+						userId,
+						specId,
+						runId,
+						signal: handle.controller.signal,
+						sink: {
+							onProgress: (event) => {
+								// Throttled: a preview frame is a whole image, so
+								// one per step would send more to the browser than
+								// the finished render does.
+								const now = Date.now()
+								if (now - lastProgress < 250) return
+								lastProgress = now
+								emitToUser("pipelines:progress", {
+									...event,
+									runId,
+									sessionId: params.sessionId,
+									specId,
+									label: params.function
+								})
+							}
+						},
+						// The same input shape a turn supplies (the winning spec's
+						// input contract is typically the mode's own type): no
+						// text, no pick — the function was the whole instruction.
+						input: {
+							text: "",
+							sessionId: params.sessionId,
+							characterId: null,
+							...(params.messageId != null
+								? { messageId: params.messageId }
+								: {}),
+							...(params.payload &&
+							typeof params.payload === "object"
+								? { payload: params.payload }
+								: {}),
+							sessionScope: {
+								sessionId: params.sessionId,
+								currentCharacterId: null
+							},
+							fields: await genreFieldsFor(
+								db as any,
+								params.sessionId
+							)
+						}
+					})
+				} finally {
+					// Always: a run left registered is a leak and a stale cancel
+					// target, and the client's progress card would never clear.
+					runRegistry.finish(runId)
+					emitToUser("pipelines:progress", {
+						runId,
+						sessionId: params.sessionId,
+						done: true,
+						...(handle.controller.signal.aborted
+							? { cancelled: true }
+							: {})
+					})
+				}
 				if (receipt.outcome !== "ok") {
 					const { haltExplanation } = await import(
 						"$lib/server/pipelines/runtime/runTurn"

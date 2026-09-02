@@ -790,8 +790,8 @@ three are gone. The total now arrives on the `budget` in-port from
 been bound or used by any spec.
 
 `reserveForReply` went too, and it was the same defect one level down: an
-integer defaulting to 512 sitting beside a `sampling_configs.response_tokens`
-that also defaults to 512. Context in, response out — the reserve *is* the
+integer defaulting to 512 sitting beside the sampling config's own
+`responseTokens` that also defaults to 512. Context in, response out — the reserve *is* the
 response allowance, so it is read rather than typed.
 
 The budget node uses **`slot.samplingOf("generate")`**, not its own slot. A

@@ -29,7 +29,7 @@
 
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import type { ConfigWorld, OverrideRow } from "@serene-pub/sdk"
+import { S, type ConfigWorld, type OverrideRow } from "@serene-pub/sdk"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { resolvePromptFields } from "$lib/server/pipelines/entities/prompts"
 import { declarations } from "$lib/server/pipelines/config/panel"
@@ -226,38 +226,71 @@ export async function buildWorld(
 	// A user cannot write a connection slot (F20); these layers are instance
 	// and session only, and the session's choice is an admin-permitted selection
 	// rather than a user override.
-	layer(
-		"defaults",
-		undefined,
-		provider,
-		"connection",
-		"ref",
-		idOrNull(system?.defaultConnectionId)
-	)
-	layer(
-		"session",
-		scope.sessionId,
-		provider,
-		"connection",
-		"ref",
-		idOrNull(session?.connectionId)
-	)
-	layer(
-		"defaults",
-		undefined,
-		provider,
-		"sampling",
-		"ref",
-		idOrNull(system?.defaultSamplingConfigId)
-	)
-	layer(
-		"session",
-		scope.sessionId,
-		provider,
-		"sampling",
-		"ref",
-		idOrNull(session?.samplingConfigId)
-	)
+	//
+	// Both layers name TEXT rows: `system_settings.default_connection_id` and
+	// `sessions.connection_id` predate there being a second modality and cannot
+	// say which one they mean. So they are written only onto a provider that
+	// speaks text. An image provider is left alone here and falls back through
+	// `activeConnection`, which is keyed by shape and cannot cross modalities —
+	// without this a spec that left its connection slot unset would be handed
+	// the default text connection and would carry it all the way to a backend
+	// that has no idea what a temperature is.
+	const providerShape = await providerSlotShape(db, scope, provider)
+	const providerIsText = !providerShape || providerShape === S.textGen
+
+	if (providerIsText) {
+		layer(
+			"defaults",
+			undefined,
+			provider,
+			"connection",
+			"ref",
+			idOrNull(system?.defaultConnectionId)
+		)
+		layer(
+			"session",
+			scope.sessionId,
+			provider,
+			"connection",
+			"ref",
+			idOrNull(session?.connectionId)
+		)
+		layer(
+			"defaults",
+			undefined,
+			provider,
+			"sampling",
+			"ref",
+			idOrNull(system?.defaultSamplingConfigId)
+		)
+		layer(
+			"session",
+			scope.sessionId,
+			provider,
+			"sampling",
+			"ref",
+			idOrNull(session?.samplingConfigId)
+		)
+	} else if (providerShape === S.imageGen) {
+		// The image twins. There is no session layer: a session carries a text
+		// connection and a text sampling config, and nothing else.
+		layer(
+			"defaults",
+			undefined,
+			provider,
+			"connection",
+			"ref",
+			idOrNull(system?.defaultImageConnectionId)
+		)
+		layer(
+			"defaults",
+			undefined,
+			provider,
+			"sampling",
+			"ref",
+			idOrNull(system?.defaultImageSamplingConfigId)
+		)
+	}
 
 	// ── the pipeline layer, which wins over everything above ─────────────
 	//
@@ -277,9 +310,15 @@ export async function buildWorld(
 			// The shape doubles as the connection kind (F17): a sampling config
 			// for text generation is only offerable on a text-generation
 			// connection, and saying so once here is what makes that true in the
-			// UI without a second rule.
-			shape: "core:shape/text-gen@1",
-			values: samplingValues(s)
+			// UI without a second rule. It is the row's own shape now — hardcoding
+			// text-gen here would have handed an image config to a text provider
+			// the moment a second modality existed.
+			shape: s.shape ?? "core:shape/text-gen@1",
+			values: s.values ?? {},
+			// Carried rather than applied: the executor's slot resolution runs the
+			// filter, so that a node-level override in a spec can sit ABOVE the
+			// switchboard instead of being erased by it.
+			enabled: s.enabled ?? []
 		})),
 		connections: connectionRows.map((c: any) => ({
 			id: String(c.id),
@@ -295,7 +334,20 @@ export async function buildWorld(
 			// a credential in this object would be readable by every binding.
 			material: {}
 		})),
-		activeConnection: {}
+		// The instance default per modality, which is the fallback the executor
+		// reaches for when a node's connection slot names nothing
+		// (`world.activeConnection[kind]`). Keyed by shape precisely so that
+		// falling back cannot cross modalities: an image provider with no chosen
+		// connection gets the image default or nothing, never whichever text
+		// connection happens to be default.
+		activeConnection: {
+			...(system?.defaultConnectionId
+				? { [S.textGen]: String(system.defaultConnectionId) }
+				: {}),
+			...(system?.defaultImageConnectionId
+				? { [S.imageGen]: String(system.defaultImageConnectionId) }
+				: {})
+		}
 	}
 }
 
@@ -316,6 +368,33 @@ export async function buildWorld(
  *    the dispatch path makes for a connection: the reference is what is stored,
  *    the value is what runs.
  */
+/**
+ * Which modality the provider node's connection slot speaks.
+ *
+ * Read from the spec's own declarations rather than guessed from the node key,
+ * because the key is the author's ("generate", "render", "narrate") and says
+ * nothing about what it talks to. `undefined` when there is no spec in scope —
+ * the legacy path, which is text by construction — or when the slot was authored
+ * with no shape, and the caller treats both as text.
+ */
+async function providerSlotShape(
+	db: Db,
+	scope: WorldScope,
+	providerKey: string
+): Promise<string | undefined> {
+	if (!scope.specId) return undefined
+	const [spec] = await db
+		.select()
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.slug, scope.specId))
+		.limit(1)
+	if (!spec?.activeVersionId) return undefined
+	const decls = await declarations(db as any, spec.activeVersionId)
+	return decls.find(
+		(d) => d.nodeKey === providerKey && d.control === "connection-ref"
+	)?.shape
+}
+
 async function applyPipelineLayer(
 	db: Db,
 	overrides: OverrideRow[],
@@ -613,24 +692,13 @@ function promptFields(p: any): Record<string, unknown> {
 	return fields
 }
 
-/**
- * Sampler values, minus the bookkeeping columns.
- *
- * Handed to the adapter uninterpreted (12 §2, 17 §1a) — core does not know what
- * `mirostatTau` means and should not pretend to. What core *does* do is record
- * which fields the adapter honoured and which it dropped, which is the only way
- * "why does mirostat do nothing" is ever answerable.
- */
-function samplingValues(s: any): Record<string, unknown> {
-	const skip = new Set([
-		"id",
-		"name",
-		"seedKey",
-		"isImmutable",
-		"createdAt",
-		"updatedAt"
-	])
-	return Object.fromEntries(
-		Object.entries(s).filter(([k, v]) => !skip.has(k) && v !== null)
-	)
-}
+// `samplingValues(row)` used to live here: it took `Object.entries` of the whole
+// row and kept everything outside a six-name skip list, which was how sampler
+// values were separated from bookkeeping when they were columns side by side.
+//
+// They are not columns any more (0171) — the row carries a `values` object — so
+// the projection above reads that field directly. Left as a note because the old
+// function would have gone on "working": it would have produced
+// `{shape, values, enabled}` as if those were three samplers, and handed that to
+// the adapter, where every key would have missed the key map and every real
+// sampler would have silently vanished.

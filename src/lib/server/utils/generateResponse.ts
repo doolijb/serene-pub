@@ -7,6 +7,7 @@ import { getConnectionAdapter } from "./getConnectionAdapter"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { getUserConfigurations } from "./getUserConfigurations"
+import { resolveSampling } from "./resolveSampling"
 import { broadcastToSessionUsers } from "../sockets/utils/broadcastHelpers"
 import { buildGraphContext } from "./graphContextFormatter"
 import { llmQueue, isQueueCancellation } from "./llmQueue"
@@ -316,7 +317,12 @@ export async function generateResponse({
 				sessionId
 			})
 	const connection = resolved.connection
-	const sampling = resolved.sampling ?? defaultSampling
+	// The adapter takes VALUES, not the row: resolveSampling() keeps only the
+	// keys `enabled` names, fills them from the shape's declared defaults, and
+	// hands over a flat object — so a key being present is the switch being on.
+	// The row stays behind in `resolved`, which is where the queue's
+	// samplingName label comes from.
+	const sampling = resolveSampling(resolved.sampling ?? defaultSampling)
 
 	if (!connection) {
 		await persistGenerationErrorRow(

@@ -452,7 +452,16 @@ export const narrativeGraphBuildHandler: Handler<
 			])
 		) as Record<
 			string,
-			{ systemPrompt?: string; connection?: any; sampling?: any }
+			{
+				systemPrompt?: string
+				connection?: any
+				// The sampling ROW, not a resolved parameter set (0171):
+				// buildGraphFromScenes labels each queued call with the config's
+				// name and resolves the values itself where it builds an
+				// adapter. Typed rather than `any` so handing it the wrong one
+				// of the two is a compile error here.
+				sampling?: SelectSamplingConfig
+			}
 		>
 
 		// The perspective step still supplies the build-wide fallback, since it

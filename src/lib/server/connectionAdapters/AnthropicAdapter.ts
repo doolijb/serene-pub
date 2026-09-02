@@ -43,7 +43,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
-		sampling: SelectSamplingConfig
+		sampling: ResolvedSampling
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
 		session: BasePromptSession
@@ -92,10 +92,9 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 
 	mapSamplingConfig(): Record<string, any> {
 		const result: Record<string, any> = {}
+		// `sampling` arrives already resolved (resolveSampling.ts): a key being
+		// present IS the switch being on, so the key map is the only filter left.
 		for (const [key, value] of Object.entries(this.sampling)) {
-			if (key.endsWith("Enabled")) continue
-			const enabledKey = key + "Enabled"
-			if ((this.sampling as any)[enabledKey] === false) continue
 			if (anthropicSamplingKeyMap[key]) {
 				result[anthropicSamplingKeyMap[key]] = value
 			}
@@ -182,10 +181,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 
 		const samplingConfig = this.mapSamplingConfig()
 		const maxTokens: number =
-			samplingConfig.max_tokens ||
-			(this.sampling.responseTokensEnabled
-				? this.sampling.responseTokens || 1024
-				: 1024)
+			samplingConfig.max_tokens || this.sampling.responseTokens || 1024
 
 		// Extended thinking: requires betas header and disables temperature/top_p/top_k
 		const thinkingParam: Anthropic.ThinkingConfigParam | undefined =

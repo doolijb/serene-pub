@@ -39,7 +39,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
-		sampling: SelectSamplingConfig
+		sampling: ResolvedSampling
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
 		session: BasePromptSession
@@ -73,10 +73,11 @@ class OllamaAdapter extends BaseConnectionAdapter {
 
 	mapSamplingConfig(): Record<string, any> {
 		const result: Record<string, any> = {}
+		// `sampling` arrives already resolved (resolveSampling.ts), so a key
+		// being present IS the switch being on — there is nothing left to test
+		// and the key map is the whole filter: a key it doesn't name is one
+		// Ollama has no field for.
 		for (const [key, value] of Object.entries(this.sampling)) {
-			if (key.endsWith("Enabled")) continue
-			const enabledKey = key + "Enabled"
-			if ((this.sampling as any)[enabledKey] === false) continue
 			if (ollamaSamplingKeyMap[key]) {
 				if (key === "streaming") continue
 				result[ollamaSamplingKeyMap[key]] = value

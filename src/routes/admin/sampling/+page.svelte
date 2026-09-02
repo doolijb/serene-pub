@@ -8,6 +8,7 @@
 	import { getContext, onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
+	import { resolveSamplingValues } from "@serene-pub/sdk"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import AdminList, {
 		type AdminColumn
@@ -37,25 +38,40 @@
 		systemSettingsCtx.settings?.defaultSamplingConfigId
 	)
 
+	/**
+	 * One parameter, as the config will actually use it.
+	 *
+	 * A row stores `{shape, values, enabled}`, and `values` deliberately keeps
+	 * keys that are switched off or that the shape doesn't declare — so reading
+	 * `values.temperature` straight would print a remembered number for a sampler
+	 * this config never sends. This runs the same resolution an adapter is handed
+	 * (enabled → shape → declared default), which is why an absent result is the
+	 * honest answer and renders as a dash below.
+	 */
+	function param(row: Row, key: string): number | undefined {
+		const value = resolveSamplingValues(row)[key]
+		return typeof value === "number" ? value : undefined
+	}
+
 	const columns: AdminColumn<Row>[] = [
 		{ key: "name", label: "Name", value: (r) => r.name },
 		{ key: "kind", label: "Kind", value: (r) => (r.isImmutable ? 0 : 1) },
 		{
 			key: "temperature",
 			label: "Temp",
-			value: (r) => r.temperature,
+			value: (r) => param(r, "temperature"),
 			class: "text-right"
 		},
 		{
 			key: "contextTokens",
 			label: "Context",
-			value: (r) => r.contextTokens,
+			value: (r) => param(r, "contextTokens"),
 			class: "text-right"
 		},
 		{
 			key: "responseTokens",
 			label: "Response",
-			value: (r) => r.responseTokens,
+			value: (r) => param(r, "responseTokens"),
 			class: "text-right"
 		},
 		{ key: "actions", label: "", class: "w-px text-right" }
@@ -98,11 +114,17 @@
 				>
 			{/if}
 		{:else if col.key === "temperature"}
-			<span class="font-mono text-xs">{row.temperature ?? "—"}</span>
+			<span class="font-mono text-xs"
+				>{param(row, "temperature") ?? "—"}</span
+			>
 		{:else if col.key === "contextTokens"}
-			<span class="font-mono text-xs">{row.contextTokens ?? "—"}</span>
+			<span class="font-mono text-xs"
+				>{param(row, "contextTokens") ?? "—"}</span
+			>
 		{:else if col.key === "responseTokens"}
-			<span class="font-mono text-xs">{row.responseTokens ?? "—"}</span>
+			<span class="font-mono text-xs"
+				>{param(row, "responseTokens") ?? "—"}</span
+			>
 		{:else if col.key === "kind"}
 			{#if row.isImmutable}
 				<span

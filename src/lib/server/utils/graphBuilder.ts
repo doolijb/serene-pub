@@ -20,6 +20,7 @@
  */
 
 import { getConnectionAdapter } from "./getConnectionAdapter"
+import { resolveSampling } from "./resolveSampling"
 import { TokenCounters } from "./TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { runQueuedLLMCall } from "./runQueuedLLMCall"
@@ -328,7 +329,9 @@ async function runLLM(
 
 	const adapter = new AdapterClass.Adapter({
 		connection: opts.connection,
-		sampling: opts.sampling,
+		// The adapter takes VALUES; the row is kept here because it is also
+		// what names the config in the queue (samplingName, below).
+		sampling: resolveSampling(opts.sampling),
 		contextConfig: opts.contextConfig,
 		promptConfig: { ...opts.promptConfig, systemPrompt },
 		session: fakeSession,

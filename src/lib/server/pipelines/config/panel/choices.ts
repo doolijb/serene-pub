@@ -9,6 +9,8 @@
  */
 
 import { asc, eq } from "drizzle-orm"
+import { S } from "@serene-pub/sdk"
+import { shapeOfModality } from "$lib/shared/constants/ConnectionTypes"
 import * as schema from "$lib/server/db/schema"
 import { type Db, type Decl } from "$lib/server/pipelines/config/panel/types"
 
@@ -172,14 +174,20 @@ export async function choiceSets(db: Db, specId: number) {
 		// two rows both called "Ollama" are otherwise indistinguishable in a
 		// picker, which is the situation an admin with a local and a remote box
 		// is in every day.
+		// `shape` rides along on each entry so `choicesFor` can narrow by the
+		// slot's modality. It is deliberately not a filter applied here: one
+		// panel renders many slots, and a shape-blind set built once is what
+		// lets a single query serve all of them.
 		connections: (connections as any[]).map((c) => ({
 			id: c.id,
 			label: c.name,
+			shape: shapeOfModality(c.modality),
 			...(c.model ? { description: c.model } : {})
 		})) as ChoiceList,
 		sampling: (sampling as any[]).map((s) => ({
 			id: s.id,
-			label: s.name
+			label: s.name,
+			shape: s.shape ?? S.textGen
 		})) as ChoiceList,
 		contextTemplatesBy,
 		/** The full rows, for the inline editor — same reason as `promptRows`. */
@@ -202,18 +210,37 @@ export async function choiceSets(db: Db, specId: number) {
 }
 
 /**
- * Takes the whole declaration rather than just its control, because one of the
- * four is narrowed by something only the declaration knows: a variables option
- * offers the layouts for **its** variable, and a picker showing every layout on
- * the instance would offer a personas rendering for characters.
+ * Everything in `list` that speaks `shape`.
+ *
+ * An entry carrying no shape is kept rather than dropped: rows written before
+ * the column existed read as untyped, and disappearing from every picker is a
+ * far worse failure than appearing in one where they do not belong.
+ */
+const ofShape = (list: ChoiceList, shape?: string): ChoiceList =>
+	shape
+		? (list.filter(
+				(c) => !(c as any).shape || (c as any).shape === shape
+			) as ChoiceList)
+		: list
+
+/**
+ * Takes the whole declaration rather than just its control, because two of them
+ * are narrowed by something only the declaration knows: a variables option
+ * offers the layouts for **its** variable, and a connection or sampling option
+ * offers only what its slot's modality can use.
  */
 export const choicesFor = (
 	d: Decl,
 	sets: Awaited<ReturnType<typeof choiceSets>>
 ): ChoiceList | undefined => {
 	if (d.control === "prompts-ref") return sets.prompts
-	if (d.control === "connection-ref") return sets.connections
-	if (d.control === "sampling-ref") return sets.sampling
+	// Narrowed to the slot's modality (F17): the shape doubles as the connection
+	// kind and the sampling-config kind, so an image node is never offered a text
+	// connection and a text node is never offered an image config. A slot that
+	// declares no shape keeps the whole list, which is what every slot authored
+	// before there was more than one modality to be wrong about does.
+	if (d.control === "connection-ref") return ofShape(sets.connections, d.shape)
+	if (d.control === "sampling-ref") return ofShape(sets.sampling, d.shape)
 	if (d.control === "variable-template-ref")
 		return d.variableId
 			? (sets.variableTemplatesBy.get(d.variableId) ?? [])

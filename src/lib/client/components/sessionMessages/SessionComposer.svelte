@@ -4,6 +4,7 @@
 	import MessageComposer from "$lib/client/components/sessionMessages/MessageComposer.svelte"
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import RagNotice from "$lib/client/components/sessionMessages/RagNotice.svelte"
+	import RunProgressCard from "$lib/client/components/pipelines/RunProgressCard.svelte"
 	import { getContext } from "svelte"
 
 	let systemSettingsCtx: SystemSettingsCtx = $state(
@@ -101,6 +102,13 @@
 			</button>
 		</div>
 	{:else}
+		<!-- Above the composer, because a run in flight is about the message you
+		     are about to get rather than the ones already there — and because it
+		     has to stay visible while the transcript scrolls. -->
+		{#if session?.id}
+			<RunProgressCard sessionId={session.id} />
+		{/if}
+
 		{#if session?.id && systemSettingsCtx.settings?.vectorizationEnabled}
 			<div class="rag-notice">
 				<RagNotice

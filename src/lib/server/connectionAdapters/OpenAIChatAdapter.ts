@@ -35,7 +35,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
-		sampling: SelectSamplingConfig
+		sampling: ResolvedSampling
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
 		session: BasePromptSession
@@ -239,10 +239,9 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 
 	mapSamplingConfig(): Record<string, any> {
 		const result: Record<string, any> = {}
+		// `sampling` arrives already resolved (resolveSampling.ts): a key being
+		// present IS the switch being on, so the key map is the only filter left.
 		for (const [key, value] of Object.entries(this.sampling)) {
-			if (key.endsWith("Enabled")) continue
-			const enabledKey = key + "Enabled"
-			if ((this.sampling as any)[enabledKey] === false) continue
 			if (openAISamplingKeyMap[key]) {
 				result[openAISamplingKeyMap[key]] = value
 			}

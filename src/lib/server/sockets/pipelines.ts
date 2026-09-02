@@ -2469,6 +2469,44 @@ export const pipelinesConfigsIndex: Handler<
 	}
 }
 
+/**
+ * Stop a run.
+ *
+ * Nothing could, before this: `runSpec` has accepted a signal since it existed,
+ * but every trigger path passed none — so a run, once started, went to completion
+ * whatever happened. Survivable while every triggered function was a summarize
+ * step; not for an image render, which is a minute of GPU somebody may want back
+ * the moment they see the prompt was wrong.
+ *
+ * A run that has already finished answers `found: false`. That is not an error:
+ * it is a cancel that arrived late, which is what pressing Cancel just as the
+ * result lands looks like from here.
+ */
+export const pipelinesCancelRun: Handler<
+	{ runId: string },
+	{ ok: boolean; found: boolean; error?: string }
+> = {
+	event: "pipelines:cancelRun",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user?.id
+		if (!userId) {
+			const res = { ok: false, found: false, error: "Not authenticated." }
+			emitToUser("pipelines:cancelRun", res)
+			return res
+		}
+
+		const { cancel } = await import(
+			"$lib/server/pipelines/runtime/runRegistry"
+		)
+		const { found, allowed } = cancel(params.runId, userId)
+		const res = allowed
+			? { ok: true, found }
+			: { ok: false, found: true, error: "Not your run." }
+		emitToUser("pipelines:cancelRun", res)
+		return res
+	}
+}
+
 export function registerPipelineHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -2495,6 +2533,7 @@ export function registerPipelineHandlers(
 	register(socket, pipelinesClearOption, emitToUser)
 	register(socket, pipelinesSetOptions, emitToUser)
 	register(socket, pipelinesRun, emitToUser)
+	register(socket, pipelinesCancelRun, emitToUser)
 	register(socket, pipelinesSelectConfig, emitToUser)
 	register(socket, pipelinesCreateConfig, emitToUser)
 	register(socket, pipelinesSetPresetActions, emitToUser)

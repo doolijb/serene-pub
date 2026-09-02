@@ -37,7 +37,7 @@ function makeConnection(overrides: Record<string, any> = {}): any {
 function makeAdapter(connectionOverrides: Record<string, any> = {}) {
 	return new KoboldCppAdapter({
 		connection: makeConnection(connectionOverrides),
-		sampling: { contextTokensEnabled: false } as any,
+		sampling: {} as any,
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "You are a helpful narrator." } as any,
 		session: {
@@ -65,9 +65,7 @@ describe("KoboldCppAdapter.mapSamplingConfig()", () => {
 		const adapter = makeAdapter()
 		adapter.sampling = {
 			temperature: 0.8,
-			temperatureEnabled: true,
-			topP: 0.9,
-			topPEnabled: true
+			topP: 0.9
 		} as any
 		const result = adapter.mapSamplingConfig()
 		expect(result.temperature).toBe(0.8)
@@ -75,13 +73,13 @@ describe("KoboldCppAdapter.mapSamplingConfig()", () => {
 		expect(result.sampler_order).toEqual([6, 0, 1, 3, 4, 2, 5])
 	})
 
-	test("skips a sampling key whose *Enabled flag is false", () => {
+	// `sampling` arrives already resolved, so a switched-off sampler reaches the
+	// adapter as an absent key — omission is the only "off" there is.
+	test("does not send a sampler the resolved config omits", () => {
 		const adapter = makeAdapter()
-		adapter.sampling = {
-			temperature: 0.8,
-			temperatureEnabled: false
-		} as any
+		adapter.sampling = { topP: 0.9 } as any
 		const result = adapter.mapSamplingConfig()
+		expect(result.top_p).toBe(0.9)
 		expect(result.temperature).toBeUndefined()
 	})
 })

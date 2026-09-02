@@ -11,6 +11,12 @@ export async function getUserConfigurations(
 	retryCount = 0
 ): Promise<{
 	connection: SelectConnection | null
+	/**
+	 * The row, not the parameters — same contract as `ResolvedTaskConfig.sampling`
+	 * (resolveTaskConfig.ts). Callers that hand it to an adapter run it through
+	 * `resolveSampling()` first; spreading the row would put `values`/`enabled`
+	 * on the wire and send samplers the user had switched off.
+	 */
 	sampling: SelectSamplingConfig
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig

@@ -45,7 +45,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
-		sampling: SelectSamplingConfig
+		sampling: ResolvedSampling
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
 		session: BasePromptSession
@@ -70,10 +70,11 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 
 	mapSamplingConfig(): Record<string, any> {
 		const result: Record<string, any> = {}
+		// `sampling` arrives already resolved (resolveSampling.ts), so a key
+		// being present IS the switch being on — there is nothing left to test
+		// and the key map is the whole filter: a key it doesn't name is one
+		// LM Studio has no field for.
 		for (const [key, value] of Object.entries(this.sampling)) {
-			if (key.endsWith("Enabled")) continue
-			const enabledKey = key + "Enabled"
-			if ((this.sampling as any)[enabledKey] === false) continue
 			if (lmStudioSamplingKeyMap[key]) {
 				if (key === "streaming") continue
 				// Defensive: skip if value is undefined or not a primitive (unless you expect an object)
@@ -166,14 +167,6 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 				"LMStudioAdapter: sampling config is missing or invalid"
 			)
 		}
-		if (
-			this.sampling.responseTokensEnabled === undefined ||
-			this.sampling.responseTokens === undefined
-		) {
-			throw new Error(
-				"LMStudioAdapter: sampling config missing required properties"
-			)
-		}
 
 		const modelName =
 			this.connection.model ??
@@ -220,9 +213,10 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 
 		const options: LLMPredictionOpts<unknown> = {
 			stopStrings: stop,
-			maxTokens: this.sampling.responseTokensEnabled
-				? this.sampling.responseTokens || 250
-				: 250,
+			// One fallback now covers both cases the ternary here used to split:
+			// a switched-off Response Tokens leaves no key at all, and an
+			// enabled-but-zero one is still the "no usable limit" it always was.
+			maxTokens: this.sampling.responseTokens || 250,
 			contextOverflowPolicy: "truncateMiddle",
 			...this.mapSamplingConfig(),
 			// LM Studio's SDK takes the constraint as a `structured` option

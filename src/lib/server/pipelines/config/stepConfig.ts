@@ -27,7 +27,13 @@ export interface ResolvedStepConfig {
 	prompts: Record<string, string>
 	/** Whole rows — these callers construct their own adapters. */
 	connection?: any
-	sampling?: any
+	/**
+	 * The sampling ROW, deliberately not a `ResolvedSampling` (0171). These
+	 * callers still need the row itself — its name labels the LLM queue entry —
+	 * and each resolves it with `resolveSampling()` at the one point it builds
+	 * an adapter, which is where "already resolved" has to be true.
+	 */
+	sampling?: SelectSamplingConfig
 }
 
 /**

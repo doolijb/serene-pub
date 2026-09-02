@@ -51,9 +51,8 @@ describe("seeded rows are keyed by seedKey", () => {
 			.values({
 				name: "My Tuned Config",
 				isImmutable: false,
-				temperature: 0.84,
-				topK: 110,
-				minP: 0.025
+				values: { temperature: 0.84, topK: 110, minP: 0.025 },
+				enabled: ["temperature", "topK", "minP"]
 			})
 			.returning()
 
@@ -92,7 +91,12 @@ describe("seeded rows are keyed by seedKey", () => {
 		// the preset would have taken, and the preset must land elsewhere.
 		const [theirs] = await testDb
 			.insert(schema.samplingConfigs)
-			.values({ name: "Ollama", isImmutable: false, temperature: 0.66 })
+			.values({
+				name: "Ollama",
+				isImmutable: false,
+				values: { temperature: 0.66 },
+				enabled: ["temperature"]
+			})
 			.returning()
 
 		await sync()
@@ -109,10 +113,10 @@ describe("seeded rows are keyed by seedKey", () => {
 		expect(preset).toBeDefined()
 		expect(preset.id).not.toBe(theirs.id)
 		expect(preset.isImmutable).toBe(true)
-		expect(preset.temperature).toBe(0.2)
-		// Set-but-not-enabled is inert, so the flags matter as much as values.
-		expect(preset.topKEnabled).toBe(true)
-		expect(preset.topPEnabled).toBe(true)
+		expect(preset.values.temperature).toBe(0.2)
+		// Set-but-not-enabled is inert, so `enabled` matters as much as `values`.
+		expect(preset.enabled).toContain("topK")
+		expect(preset.enabled).toContain("topP")
 
 		const [stillTheirs] = await testDb
 			.select()
@@ -127,8 +131,10 @@ describe("seeded rows are keyed by seedKey", () => {
 			.select()
 			.from(schema.samplingConfigs)
 			.where(eq(schema.samplingConfigs.seedKey, "sampling-default"))
-		expect(def.contextTokens).toBe(8192)
-		expect(def.contextTokensEnabled).toBe(true)
+		// The seed states 8192 explicitly because the shape's declared default is
+		// 4096, so this is a real stored value and not a resolution artefact.
+		expect(def.values.contextTokens).toBe(8192)
+		expect(def.enabled).toContain("contextTokens")
 	})
 
 	test("every seeded row carries a seedKey, and user rows never do", async () => {

@@ -219,6 +219,9 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 			...(this.connection.extraJson?.managedConfig ?? {}),
 			modelFile: this.connection.model
 		}
+		// The resolved value (resolveSampling.ts), so a config that never
+		// switched context tokens on loads the model at the same 4096 the
+		// adapter's own getContextTokenLimit() falls back to.
 		const contextSize = this.sampling.contextTokens ?? 4096
 		console.log(
 			`[KoboldCPP] preflight attempt ${attemptNum}: connection`,

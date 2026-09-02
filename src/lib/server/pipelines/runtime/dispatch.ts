@@ -28,6 +28,7 @@
 import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
 import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
+import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 
@@ -264,7 +265,10 @@ export async function dispatchGeneration(
 	const adapter = new Adapter({
 		session: session as any,
 		connection,
-		sampling: resolved.sampling ?? defaultSampling,
+		// Both of these are rows. An adapter takes the parameters, not the row —
+		// only the keys switched on, with the shape's defaults filled in — and
+		// `resolveSampling` is the one path between the two.
+		sampling: resolveSampling(resolved.sampling ?? defaultSampling),
 		contextConfig,
 		promptConfig,
 		currentCharacterId: request.currentCharacterId ?? null,

@@ -202,33 +202,43 @@ Shows the Ollama logo/attribution, **Ollama Base URL** (with Save), current and 
 
 ## Sampling Configs
 
-A Sampling Config is a named, reusable bundle of generation parameters — the knobs that control how "creative" vs. deterministic a model's output is. The **Sampling** sidebar lists saved configs in a dropdown (built-in ones suffixed with `*`, your active one prefixed with a star), with the usual **+** (clone into a new named config), refresh (discard unsaved edits), and delete (disabled for built-ins) toolbar buttons, plus **Update** and **Set Default** (star) buttons.
+A Sampling Config is a named, reusable bundle of generation parameters — the knobs that control how "creative" vs. deterministic a model's output is.
+
+### Categories
+
+The **Sampling** sidebar opens on a category picker, the same way Connections does:
+
+- **Large Language Models** — temperature, penalties, context and response budgets: the parameters behind every generated reply.
+- **Image Generation** — steps, CFG, size, seed and the rest, shared by every image backend whatever a connection points at.
+
+The two vocabularies have nothing in common, so a config belongs to exactly one of them and is only ever offered where it fits. Pick a category and you get its saved configs in a dropdown (built-in ones suffixed with `*`, the current default prefixed with a star), with the usual **Clone**, **Reset** (discard unsaved edits), and **Delete** (disabled for built-ins) toolbar buttons, plus **Update** and **Set Default**.
 
 ### Adjustable parameters
 
-The editor exposes nine core parameters, each as a slider with a min/max range and a click-to-edit numeric readout in the middle:
+Each parameter has its own checkbox and, when switched on, its own control — a slider with a click-to-edit numeric readout for numbers, a text box or one-per-line list for the rest. Ranges, defaults and descriptions all come from the parameter's own declaration, so the editor lists everything the category actually supports rather than a hand-picked subset.
 
-| Parameter          | Range                            | Step |
-| ------------------ | -------------------------------- | ---- |
-| Response Tokens    | 1 – 4096 (unlockable to 65536)   | 1    |
-| Context Tokens     | 1 – 32768 (unlockable to 524288) | 1    |
-| Temperature        | 0 – 2                            | 0.01 |
-| Top P              | 0 – 1                            | 0.01 |
-| Top K              | 0 – 200                          | 1    |
-| Repetition Penalty | 0.5 – 2                          | 0.01 |
-| Frequency Penalty  | 0 – 2                            | 0.01 |
-| Presence Penalty   | 0 – 2                            | 0.01 |
-| Seed               | -1 – 999999                      | 1    |
+For text generation that is roughly thirty parameters, grouped: Core (temperature, top P, top K, min P, typical P, seed), Repetition (repetition/frequency/presence penalties, repeat-last-N, penalize newline), Mirostat, XTC, DRY, Dynamic temperature (including tail-free sampling), a KoboldCPP-only group (top A, N-sigma, smoothing factor, banned tokens), and Budget (response tokens, context tokens, stop sequences, logit bias).
 
-Response Tokens and Context Tokens each have an **Unlock max** checkbox next to the slider that raises their ceiling well past the normal range (to 65,536 and 524,288 respectively) for unusually long-context models.
+For image generation: steps, CFG scale, width, height, batch, seed, sampler, scheduler, CLIP skip and denoise.
 
-### Enabling and disabling individual samplers
+Response Tokens and Context Tokens each have an **Unlock max** checkbox that raises the slider's ceiling well past the everyday range (to 65,536 and 524,288 respectively) for unusually long-context models.
 
-The **Select Samplers** button switches the sidebar into an "Enable/Disable Weight Options" screen — a checkbox grid, one per parameter, controlling whether that field is sent to the model at all (versus left at the provider's own default and hidden from the editor). This is how the built-in **Disabled** preset works: it ships with Temperature, Context Tokens, and Response Tokens all disabled, letting the connection's native defaults take over for those three.
+### Switching a parameter on and off
+
+A parameter's checkbox controls whether it is sent to the backend at all. Unchecked, the value is remembered but left out of the request, and the provider uses its own default — so turning a sampler off and on again does not lose what you had set.
+
+A parameter can be switched on and still not reach a given backend: not every connection type understands every sampler (Anthropic, for instance, accepts only temperature, top P, top K and response tokens). Those are dropped from the outgoing request and recorded as ignored rather than causing an error.
 
 ### Immutable presets
 
-Serene Pub ships two built-in, non-deletable Sampling Configs: **Default** (all nine parameters enabled with standard ranges) and **Disabled** (Temperature, Context Tokens, and Response Tokens turned off, deferring to the connection's own defaults). Both act as safe starting points to clone from via the **+** button.
+Serene Pub ships four built-in, non-deletable configs:
+
+- **Default** — temperature, response tokens and context tokens on; everything else deferring to the backend.
+- **Disabled** — nothing switched on at all, so every request goes out with the connection's own defaults.
+- **Precise (Extraction)** — low temperature with tightened top P/top K, for structured extraction rather than roleplay.
+- **Default (Image)** — 25 steps, CFG 5, 1024×1024, batch 1, random seed.
+
+All four are starting points to clone from.
 
 ### Power-user note: how sampling maps to each connection type
 

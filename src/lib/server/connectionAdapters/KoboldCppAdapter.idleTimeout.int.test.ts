@@ -51,7 +51,8 @@ function makeAdapter(baseUrl: string) {
 			promptFormat: "vicuna",
 			extraJson: {}
 		} as any,
-		sampling: { contextTokensEnabled: false } as any,
+		// Empty is what "the context budget is switched off" resolves to now:
+		sampling: {},
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "You are a helpful narrator." } as any,
 		session: {

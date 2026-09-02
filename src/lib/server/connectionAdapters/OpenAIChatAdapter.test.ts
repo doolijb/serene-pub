@@ -67,7 +67,8 @@ function makeSession(): any {
 function makeAdapter(connectionOverrides: Record<string, any> = {}) {
 	return new exportsDefault.Adapter({
 		connection: makeConnection(connectionOverrides),
-		sampling: { contextTokensEnabled: false } as any,
+		// Empty is what "the context budget is switched off" resolves to now:
+		sampling: {},
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "Test system prompt." } as any,
 		session: makeSession(),
@@ -128,14 +129,13 @@ describe("OpenAIChatAdapter — base URL trailing-slash normalization", () => {
 })
 
 describe("OpenAIChatAdapter.mapSamplingConfig()", () => {
-	test("maps known sampling keys, skipping disabled ones", () => {
+	test("maps the keys the resolved config contains; an absent key is not sent", () => {
 		const adapter = makeAdapter()
+		// `sampling` arrives resolved: topP is absent rather than disabled,
+		// because absence is the only way "switched off" is expressed now.
 		adapter.sampling = {
-			temperature: 0.7,
-			temperatureEnabled: true,
-			topP: 0.9,
-			topPEnabled: false
-		} as any
+			temperature: 0.7
+		}
 		const result = adapter.mapSamplingConfig()
 		expect(result.temperature).toBe(0.7)
 		expect(result.top_p).toBeUndefined()

@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { avatarSrc } from "$lib/client/utils/media"
+	import RunProgressCard from "$lib/client/components/pipelines/RunProgressCard.svelte"
+	import { runProgress } from "$lib/client/stores/runProgress.svelte"
+	import type { RunProgress } from "$lib/shared/sockets/progress"
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
 	import { Dialog, Portal, Popover } from "@skeletonlabs/skeleton-svelte"
@@ -1542,6 +1545,19 @@
 		modesList = msg.genres || []
 	}
 
+	/**
+	 * A long run reporting itself.
+	 *
+	 * Both events land here: `runStarted` is the same shape as a progress tick,
+	 * and treating it as one means the card appears the instant the run does
+	 * rather than after the backend's first report — which for an image render
+	 * can be several seconds of a button that looks like it did nothing.
+	 */
+	function handleRunProgress(msg: RunProgress) {
+		if (msg.sessionId != null && msg.sessionId !== sessionId) return
+		runProgress.apply(msg)
+	}
+
 	function handleSessionsTriggerFunction(
 		msg: Sockets.Sessions.TriggerFunction.Response
 	) {
@@ -1563,7 +1579,14 @@
 			showTriggerNarratorResponseModal = true
 			return
 		}
-		socket.emit("sessions:triggerFunction", { sessionId, function: fn })
+		// The run is named HERE, so Cancel works during the window between the
+		// press and the first progress event — which is exactly when somebody
+		// realises they meant something else.
+		socket.emit("sessions:triggerFunction", {
+			sessionId,
+			function: fn,
+			runId: crypto.randomUUID()
+		})
 	}
 
 	/**
@@ -1654,6 +1677,8 @@
 		socket.on("sessions:panelLayout:get", handleSessionsPanelLayoutGet)
 		socket.on("sessions:surfaceIntent", handleSurfaceIntent)
 		socket.on("sessions:triggerFunction", handleSessionsTriggerFunction)
+		socket.on("pipelines:runStarted", handleRunProgress)
+		socket.on("pipelines:progress", handleRunProgress)
 		socket.on("sessions:genres", handleSessionsModesPage)
 
 		socket.emit("scenes:scenedMessageIds", { sessionId })
@@ -1722,6 +1747,11 @@
 				"sessions:triggerFunction",
 				handleSessionsTriggerFunction
 			)
+			socket.off("pipelines:runStarted", handleRunProgress)
+			socket.off("pipelines:progress", handleRunProgress)
+			// Runs belonging to a session nobody is looking at any more. The
+			// server keeps running them; the card is what goes away.
+			runProgress.clearAll()
 			socket.off("sessions:genres", handleSessionsModesPage)
 			surfaceManager.destroy()
 		}

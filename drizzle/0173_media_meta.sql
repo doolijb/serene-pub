@@ -1,0 +1,18 @@
+-- Where a generated image came from.
+--
+-- The media table records provenance as *relationships* — which character, which
+-- persona, which session, which message — because that is what access control and
+-- cleanup are decided by. None of that can say "SDXL, 25 steps, CFG 5, seed
+-- 819442027, this prompt", and for a generated image that is the whole question a
+-- person asks about it afterwards: they got one they liked and want another.
+--
+-- Deliberately one opaque JSON column rather than typed ones. The fields worth
+-- keeping differ per backend (Fooocus records a finish reason, ComfyUI a whole
+-- workflow, a hosted API a revised prompt), the set will keep changing, and
+-- nothing in the app branches on any of it — it is written once at generation and
+-- read back for display. A column per field would be a migration per backend.
+--
+-- NOT authoritative for anything. Access is decided by the relationship columns;
+-- this is a note attached to the row, and a row with none is entirely normal —
+-- every image a person uploaded has no generation to describe.
+ALTER TABLE "media" ADD COLUMN "meta" json;

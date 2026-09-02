@@ -93,7 +93,8 @@ function makeSession(overrides: Record<string, any> = {}) {
 function makeAdapter(overrides: Record<string, any> = {}) {
 	return new exportsDefault.Adapter({
 		connection: makeConnection(),
-		sampling: { contextTokensEnabled: false } as any,
+		// Empty is what "the context budget is switched off" resolves to now:
+		sampling: {},
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "system" } as any,
 		session: makeSession(),

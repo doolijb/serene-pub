@@ -87,7 +87,11 @@ describe("samplingConfigsUpdate — empty .set() guard", () => {
 		const admin = await makeAdmin("config-crud-sampling-user")
 		const [config] = await testDb
 			.insert(schema.samplingConfigs)
-			.values({ name: "My Sampling", temperature: 0.42 })
+			.values({
+				name: "My Sampling",
+				values: { temperature: 0.42 },
+				enabled: ["temperature"]
+			})
 			.returning()
 
 		const res = await samplingConfigsUpdate.handler(
@@ -96,7 +100,36 @@ describe("samplingConfigsUpdate — empty .set() guard", () => {
 			noopEmit
 		)
 		expect(res.sampling.id).toBe(config.id)
-		expect(res.sampling.temperature).toBe(0.42)
+		expect(res.sampling.values.temperature).toBe(0.42)
+	})
+
+	test("a payload that does carry a change is still written", async () => {
+		// The other half of the guard: it must skip the empty .set(), not
+		// swallow a real edit alongside it.
+		const { samplingConfigsUpdate } = await import("./samplingConfigs")
+		const admin = await makeAdmin("config-crud-sampling-update-user")
+		const [config] = await testDb
+			.insert(schema.samplingConfigs)
+			.values({
+				name: "My Other Sampling",
+				values: { temperature: 0.42 },
+				enabled: ["temperature"]
+			})
+			.returning()
+
+		const res = await samplingConfigsUpdate.handler(
+			fakeSocket(admin.id),
+			{
+				sampling: {
+					id: config.id,
+					values: { temperature: 0.9 },
+					enabled: ["temperature"]
+				} as any
+			},
+			noopEmit
+		)
+		expect(res.sampling.id).toBe(config.id)
+		expect(res.sampling.values.temperature).toBe(0.9)
 	})
 })
 

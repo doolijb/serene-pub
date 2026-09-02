@@ -1,4 +1,13 @@
 import { getSocket } from "./socketInstance"
+import type {
+	ImageProfileSchemaParams,
+	ImageProfileSchemaResponse,
+	ImagesCancelParams,
+	ImagesCancelResponse,
+	ImagesGenerateParams,
+	ImagesGenerateResponse
+} from "$lib/shared/sockets/imageGen"
+import type { RunProgress } from "$lib/shared/sockets/progress"
 
 // Type mapping for socket events - this maps event names to their param/response types
 export type SocketEventMap = {
@@ -304,6 +313,40 @@ export type SocketEventMap = {
 	"connections:test": {
 		params: Sockets.Connections.Test.Params
 		response: Sockets.Connections.Test.Response
+	}
+	// Image generation (local image gen) — types live in shared/sockets/imageGen
+	// rather than the Sockets namespace (mid-refactor), imported at top of file.
+	"images:generate": {
+		params: ImagesGenerateParams
+		response: ImagesGenerateResponse
+	}
+	"images:cancel": {
+		params: ImagesCancelParams
+		response: ImagesCancelResponse
+	}
+	"images:profileSchema": {
+		params: ImageProfileSchemaParams
+		response: ImageProfileSchemaResponse
+	}
+	// A pipeline run a person can watch and stop. `runStarted` and `progress`
+	// are server-pushed only; `cancelRun` is the one a client emits.
+	"pipelines:runStarted": {
+		params: RunProgress
+		response: RunProgress
+	}
+	"pipelines:progress": {
+		params: RunProgress
+		response: RunProgress
+	}
+	"pipelines:cancelRun": {
+		params: { runId: string }
+		response: { ok: boolean; found: boolean; error?: string }
+	}
+	// Server-pushed only — no client ever emits it. `params` is the same shape
+	// because the map insists on one, not because anything sends it.
+	"images:progress": {
+		params: RunProgress
+		response: RunProgress
 	}
 	"connections:refreshModels": {
 		params: Sockets.Connections.RefreshModels.Params

@@ -27,6 +27,7 @@
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
+import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { runQueuedLLMCall } from "$lib/server/utils/runQueuedLLMCall"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
@@ -150,17 +151,23 @@ export async function dispatchStep(
 
 	const AdapterClass = await getConnectionAdapter(connection.type)
 
-	// The context window comes with the sampling config — it is a column on
-	// `sampling_configs`, never a knob on the node (17 §1a). A step pointed at a
-	// config with a different Context Tokens than its neighbours makes a local
-	// backend reload the model between steps, which is why the shipped configs
-	// point every step at the same one.
+	// The row is `{shape, values, enabled}`; what an adapter takes is the
+	// parameters actually switched on, defaults applied. Everything below reads
+	// those, so a key being present here *is* its switch being on — the row
+	// itself is only good for identity (`name`, below).
+	const values = resolveSampling(sampling)
+
+	// The context window comes with the sampling config — it is a parameter of
+	// the config, never a knob on the node (17 §1a). A step pointed at a config
+	// with a different Context Tokens than its neighbours makes a local backend
+	// reload the model between steps, which is why the shipped configs point
+	// every step at the same one.
 	const tokenLimit =
 		(connection as any).tokenLimit ??
 		(connection as any).contextSize ??
-		sampling?.contextTokens ??
+		values.contextTokens ??
 		4096
-	const maxTokens = sampling?.responseTokens ?? 512
+	const maxTokens = values.responseTokens ?? 512
 
 	// The connection's own configured tokenizer, not a global default — the
 	// identical fix `generateResponse.ts` and `graphBuilder.ts` both carry. A
@@ -171,7 +178,7 @@ export async function dispatchStep(
 
 	const adapter = new AdapterClass.Adapter({
 		connection,
-		sampling: { ...(sampling ?? {}), maxTokens },
+		sampling: { ...values, maxTokens },
 		// Cast rather than filled in: the adapter's types want whole rows, and a
 		// step has neither a context config nor a prompt config — it has one
 		// system prompt. The summarizer passes real rows here only because it

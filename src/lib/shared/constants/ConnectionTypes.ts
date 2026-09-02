@@ -169,4 +169,20 @@ export class CONNECTION_TYPE {
 	}
 }
 
+/**
+ * A modality as the shape id the pipeline knows it by.
+ *
+ * The two vocabularies are the same fact spelled twice — `connections.modality`
+ * is what a row stores, `core:shape/<modality>@1` is what a descriptor declares —
+ * and this is the one place that translation lives, so a slot's declared shape
+ * and a connection's stored modality can be compared without either side
+ * learning the other's spelling.
+ *
+ * Takes the modality rather than the connection type so it also serves a row
+ * whose `modality` column was set directly.
+ */
+export function shapeOfModality(modality?: string | null): string {
+	return `core:shape/${modality || "text-gen"}@1`
+}
+
 export const CONNECTION_TYPES = CONNECTION_TYPE.options

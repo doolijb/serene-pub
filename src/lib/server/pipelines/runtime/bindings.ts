@@ -154,14 +154,17 @@ function rankingParamsFrom(params: any) {
  * Tokens the context may occupy, from the window the reply will be sent
  * against.
  *
- * Derived, never typed. The window is a column on `sampling_configs` and the
- * reply's allowance is the column beside it, so the whole calculation is
- * `context - response - drift`. The node used to declare its own
- * `reserveForReply` defaulting to 512 next to a `response_tokens` defaulting to
+ * Derived, never typed. The window and the reply's allowance are both
+ * parameters of the sampling config the reply will be sent under, so the whole
+ * calculation is `context - response - drift`. The node used to declare its own
+ * `reserveForReply` defaulting to 512 next to a `responseTokens` defaulting to
  * 512 — one number with two homes, free to disagree with the model actually
  * being called, warning nobody when it did.
  */
 function contextBudgetFrom(input: any) {
+	// Already the *values*, not a `sampling_configs` row: the executor resolves
+	// a `sampling` slot through the world's config values. So a key missing here
+	// is a parameter switched off, and the fallbacks below are what applies.
 	const sampling = input?.sampling ?? {}
 	// The same fallbacks `dispatchStep` uses when it actually sends, and that
 	// is the point of repeating them rather than picking a number here: the
@@ -1102,6 +1105,49 @@ export function coreBindings(): Bindings {
 				// provider answered this turn" from the receipt, and nothing that
 				// could be replayed by whoever reads it.
 				via: result.via
+			})
+		},
+
+		/**
+		 * The image render — the structural twin of generate-text above.
+		 *
+		 * Thin on purpose: it forwards the slots' resolved values and hands back
+		 * the references the substrate stored. Everything that varies between
+		 * backends lives in the adapter, and everything that varies between
+		 * installs lives in the connection and sampling rows; there is nothing
+		 * left here for a binding to decide.
+		 */
+		"core:provider/generate-image@1": async (input: any, ctx: any) => {
+			const result: any = await ctx.call({
+				prompt: input?.prompt ?? input?.main ?? "",
+				negative: input?.negative,
+				prompts: input?.prompts,
+				connection: input?.connection,
+				sampling: input?.sampling,
+				init: input?.init
+			})
+
+			// Halts rather than errs, for the same reason generate-text does: a
+			// cancelled render is a run with no answer, not a fault to debug.
+			if (result?.isAborted)
+				return halt("the render was cancelled before it finished")
+			if (!result?.media?.length)
+				return halt("the backend finished without returning an image")
+
+			// What the backend honoured and what it could not, on the receipt —
+			// the only way "why did changing steps do nothing" is answerable.
+			ctx.reportSampling?.(
+				Object.fromEntries(
+					(result.applied ?? []).map((k: string) => [k, true])
+				),
+				result.ignored ?? []
+			)
+
+			return ok({
+				main: result.media,
+				media: result.media,
+				image: result.image,
+				caption: result.caption
 			})
 		},
 

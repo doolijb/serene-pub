@@ -11,6 +11,7 @@
 import { valueDeclOf } from "@serene-pub/sdk"
 import { asc, eq } from "drizzle-orm"
 import { getFacet } from "@serene-pub/sdk"
+import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { i18nText } from "$lib/server/pipelines/config/panel/declarations"
 import * as schema from "$lib/server/db/schema"
 import { mayWrite, type ScopeKind } from "@serene-pub/sdk"
@@ -488,15 +489,29 @@ export async function namespaceView(
 	if (samplingId != null && all.some((o) => o.control === "share")) {
 		const [row] = await db
 			.select({
-				contextTokens: schema.samplingConfigs.contextTokens,
-				responseTokens: schema.samplingConfigs.responseTokens
+				shape: schema.samplingConfigs.shape,
+				values: schema.samplingConfigs.values,
+				enabled: schema.samplingConfigs.enabled
 			})
 			.from(schema.samplingConfigs)
 			.where(eq(schema.samplingConfigs.id, samplingId))
 			.limit(1)
+		// Through resolveSampling rather than off the row (0171): both budgets
+		// are parameters now, so a config with either switched off carries no
+		// key here at all — where the NOT NULL columns this replaces always
+		// held a number. A sampling-ref naming a row that no longer exists
+		// still yields nothing, as it did before.
+		const sampling = row ? resolveSampling(row) : null
 		// The same arithmetic `core:task/context-budget@1` performs, because
-		// the number on screen has to be the number the ranker divides.
-		const window = (row?.contextTokens ?? 0) - (row?.responseTokens ?? 0)
+		// the number on screen has to be the number the ranker divides — and
+		// therefore the same fallbacks it applies when a budget is switched off
+		// (bindings.ts contextBudgetFrom, which repeats dispatchStep's for the
+		// identical reason). Zero here would hide the figure in exactly the case
+		// the ranker still has one.
+		const window = sampling
+			? (Number(sampling.contextTokens) || 4096) -
+				(Number(sampling.responseTokens) || 512)
+			: 0
 		if (window > 0)
 			for (const o of all)
 				if (o.control === "share")

@@ -344,6 +344,17 @@ export interface Decl {
 	 */
 	description?: string
 	control: string
+	/**
+	 * For a `connection-ref` or `sampling-ref` control: the modality this slot
+	 * speaks, as a shape id.
+	 *
+	 * The shape doubles as the connection kind and the sampling-config kind
+	 * (F17), so declaring it once is what makes a picker offer only the
+	 * connections and configs that fit. Absent means the slot was authored
+	 * without one and everything is a candidate — the old behaviour, and correct
+	 * only for as long as there is a single modality to be wrong about.
+	 */
+	shape?: string
 	/** The value declaration (24 T6c) — single-key, for value-decl controls. */
 	decl?: Record<string, Record<string, unknown>>
 	min?: number

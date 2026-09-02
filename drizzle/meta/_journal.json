@@ -1198,6 +1198,34 @@
       "when": 1787276896233,
       "tag": "0170_reproject_generate_text",
       "breakpoints": true
+    },
+    {
+      "idx": 171,
+      "version": "7",
+      "when": 1787276896234,
+      "tag": "0171_sampling_values",
+      "breakpoints": true
+    },
+    {
+      "idx": 172,
+      "version": "7",
+      "when": 1787276896235,
+      "tag": "0172_image_defaults",
+      "breakpoints": true
+    },
+    {
+      "idx": 173,
+      "version": "7",
+      "when": 1787276896236,
+      "tag": "0173_media_meta",
+      "breakpoints": true
+    },
+    {
+      "idx": 174,
+      "version": "7",
+      "when": 1787276896237,
+      "tag": "0174_reproject_create_message",
+      "breakpoints": true
     }
   ]
 }

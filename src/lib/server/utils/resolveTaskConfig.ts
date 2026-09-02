@@ -38,6 +38,14 @@ export const GRAPH_TASK_SUBTASK: Record<string, string> = {
 
 export interface ResolvedTaskConfig {
 	connection: SelectConnection | null
+	/**
+	 * The row, not the parameters. `values` on it is unfiltered — it still holds
+	 * the keys a user switched off, and the ones this build's shape does not
+	 * declare — so anything handing this to an adapter must put it through
+	 * `resolveSampling()` first (utils/resolveSampling.ts). The row is what
+	 * `samplingName` below is read from, which is the other half of why it stays
+	 * a row here.
+	 */
 	sampling: SelectSamplingConfig | null
 	/** Human-readable label for task queue display */
 	connectionName: string
