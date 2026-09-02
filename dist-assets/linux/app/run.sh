@@ -33,20 +33,9 @@ export SERENE_PUB_INSTALL_ROOT
 # user happened to launch from.
 cd "$DIR" || exit 1
 
-# Load environment variables from .env file if present
-ENV_FILE="$DIR/.env"
-if [ -f "$ENV_FILE" ]; then
-    echo "Loading environment variables from .env file..."
-    # Use a more portable way to load environment variables
-    while IFS='=' read -r key value; do
-        # Skip comments and empty lines
-        case "$key" in
-            '#'*|'') continue ;;
-        esac
-        # Export the variable, removing any surrounding quotes
-        export "$key"="$(echo "$value" | sed 's/^["'\'']\|["'\'']$//g')"
-    done < "$ENV_FILE"
-fi
+# .env loading is handled by preloadEnv.js before the server framework reads
+# its configuration; doing it here would incorrectly outrank the
+# data-directory .env file.
 
 echo "========================================"
 echo "Serene Pub - AI Chat Application"

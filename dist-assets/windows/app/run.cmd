@@ -38,19 +38,9 @@ REM assets) against the working directory, so it has to be this one - not
 REM wherever the user happened to launch from.
 cd /d "%DIR%"
 
-REM === Load Environment Variables ===
-set ENV_FILE=%DIR%\.env
-if exist "%ENV_FILE%" (
-    echo Loading configuration from .env file...
-    for /f "usebackq tokens=1* delims==" %%a in ("%ENV_FILE%") do (
-        set "line=%%a"
-        if not "!line:~0,1!"=="#" (
-            if not "%%a"=="" if not "%%b"=="" (
-                set "%%a=%%b"
-            )
-        )
-    )
-)
+REM .env loading is handled by preloadEnv.js before the server framework
+REM reads its configuration; doing it here would incorrectly outrank the
+REM data-directory .env file.
 
 echo ========================================
 echo Serene Pub - AI Chat Application
