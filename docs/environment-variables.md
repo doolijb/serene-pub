@@ -2,9 +2,48 @@
 
 Serene Pub is configured almost entirely through environment variables rather than a settings file — there's no single config file to hand-edit before first launch. **If you're just running Serene Pub on your own computer, you can skip this entire page** — every variable below has a sensible default, and a normal local install needs none of them. This page exists for the cases where you *do* need to change something: a portable install, running behind a reverse proxy, Docker, or tweaking a specific feature's behavior.
 
-Variables can be set however your platform normally sets them (shell export, a process manager, a Docker `environment:` block, etc.), or by placing a `.env` file in the directory you launch Serene Pub from — Serene Pub loads `.env` automatically on startup if one is present. Copying `.env.example` (in the project root) to `.env` and editing it is the easiest starting point.
+Variables can be set however your platform normally sets them (shell export, a process manager, a Docker `environment:` block, etc.), or by writing them into a `.env` file that Serene Pub reads on startup. That file belongs in your **data directory** — see [Where `.env` lives](#where-env-lives) below, which also explains why it is no longer next to the executable. Copying `.env.example` (in the project root) or the `.env.example` shipped beside the executable and editing it is the easiest starting point.
 
 For deployment-specific walkthroughs (reverse proxies, tunnels, Docker), see [Hosting Serene Pub](./hosting.md) and [DOCKER.md](https://github.com/doolijb/serene-pub/blob/main/DOCKER.md) in the repository. This page focuses on what each variable does; those cover the surrounding setup.
+
+## Where `.env` lives
+
+`.env` goes in your **data directory**, next to the database:
+
+| OS | Path |
+|---|---|
+| Linux | `~/.local/share/SerenePub/.env` |
+| Windows | `%APPDATA%\SerenePub\.env` |
+| macOS | `~/Library/Application Support/SerenePub/.env` |
+
+If you've set `SERENE_PUB_DATA_DIR`, it's `<that directory>/.env` instead. You never have to guess: the startup banner prints an `Env files:` line naming the file (or files) it actually read.
+
+Serene Pub reads three sources, highest priority first:
+
+1. **Real environment variables** — always win. A Docker `environment:` block, a systemd `Environment=`, a shell `export`, or Node's `--env-file` flag all land here.
+2. **`<dataDir>/.env`** — the file above. The place to keep configuration you edit by hand.
+3. **`<installDir>/.env`** — the directory you launch Serene Pub from. Still read, indefinitely, but **deprecated**.
+
+A lower source only supplies a variable nothing higher already set, so you can override one setting from the environment without touching your file — and a leftover install-directory `.env` can't shadow the file you actually meant to edit.
+
+### Why it moved out of the install folder
+
+Because that folder is disposable, and increasingly so:
+
+- Updating Serene Pub **replaces the install folder wholesale** — both the in-app updater and the manual "extract the new zip over your old folder" path.
+- `brew upgrade --cask` replaces the entire `.app`.
+- A macOS app bundle is code-signed; editing a file inside it breaks the signature.
+- An AppImage is a read-only filesystem, so you can't put a file beside the executable at all.
+
+In every one of those cases a `.env` in the install folder is either deleted or impossible to write in the first place — silently, taking your admin password, recovery key and hosting settings with it. Your data directory is never touched by an update, which is why the database has always lived there and why configuration now does too. **If you move `.env` back next to the executable, the next update will eat it.**
+
+### Upgrading an existing install
+
+Move your `.env` into the data directory (see the table above) and restart. Nothing breaks if you don't get around to it: the old location keeps working, and Serene Pub prints a startup notice naming the variables still coming from it so you can see exactly what an update would cost you. Serene Pub does not move the file for you.
+
+### `SERENE_PUB_DATA_DIR` is the one exception
+
+`SERENE_PUB_DATA_DIR` chooses the data directory, so it can't be read from a file inside it. It can only come from a real environment variable (a launcher script, a systemd unit, a Docker `environment:` block) or from the install-directory `.env` — which stays supported for exactly this reason. If you rely on the file, keep a copy of that one line somewhere outside the install folder, since an update deletes it.
 
 ## Portable / Self-Contained Setup
 
@@ -16,26 +55,28 @@ The most common reason to open this page: keeping Serene Pub's data in one folde
      Serene Pub.exe        (or the Linux/macOS equivalent)
      data/
    ```
-2. In that same folder, create a `.env` file:
+2. In that same folder — next to the executable — create a `.env` file containing just:
    ```
    SERENE_PUB_DATA_DIR=./data
    ```
    A relative path resolves against the directory you launch Serene Pub *from* — so always launch it from inside `serene-pub-portable/`, not by referencing the executable from elsewhere.
+
+   This is the [one variable](#serene_pub_data_dir-is-the-one-exception) that has to live beside the executable rather than in the data directory, since it's what chooses that directory. Put everything *else* in `data/.env`, where an update can't delete it. Serene Pub prints a startup notice listing anything it's still reading from the install folder.
 3. Launch normally. On first run, Serene Pub creates the database and `meta.json` inside `data/`. From then on, copying the entire `serene-pub-portable/` folder anywhere — a different computer, a USB drive — brings your characters, sessions, connections, and settings with it.
 
-If you're launching a built app directly with `node` rather than a packaged executable, prefer Node's own `--env-file` flag over relying on Serene Pub's automatic `.env` loading:
+If you're launching a built app directly with `node` rather than a packaged executable, Node's own `--env-file` flag is an alternative to Serene Pub's automatic `.env` loading:
 
 ```
-node --env-file=.env build/index.js
+node --env-file=data/.env build/index.js
 ```
 
-This guarantees every variable in `.env` — including `SERENE_PUB_DATA_DIR` — is set before any code runs at all, rather than depending on module load order. A few variables further down this page (`PORT`, `HOST`, `PROTOCOL_HEADER`, `HOST_HEADER`, `ORIGIN`) are read by the underlying server framework itself, before Serene Pub's own `.env` loading gets a chance to run, so `--env-file` is the safest choice generally, not just for a portable setup specifically.
+That turns the file's contents into real environment variables before any code runs at all, which puts them in the highest-priority source and sidesteps module load order entirely. It isn't required — Serene Pub loads `.env` early enough for `PORT`, `HOST`, `PROTOCOL_HEADER`, `HOST_HEADER` and `ORIGIN` (which the underlying server framework reads before the app's own code runs) to apply — but it's the most explicit option, and the fallback if you're using a custom entrypoint that doesn't go through `build/index.js`. The startup banner tells you which case you're in.
 
 ## Data & Storage
 
 | Variable | Default | Description |
 |---|---|---|
-| `SERENE_PUB_DATA_DIR` | OS-appropriate user data directory | Where the database, `meta.json` (the secret key backing sessions and stored passphrases), the embedding model cache, and downloaded KoboldCPP binaries/models all live. Set this to keep everything in one folder you control — see [Portable / Self-Contained Setup](#portable--self-contained-setup) above. |
+| `SERENE_PUB_DATA_DIR` | OS-appropriate user data directory | Where the database, `meta.json` (the secret key backing sessions and stored passphrases), your `.env`, the embedding model cache, and downloaded KoboldCPP binaries/models all live. Set this to keep everything in one folder you control — see [Portable / Self-Contained Setup](#portable--self-contained-setup) above. Because it chooses the directory `.env` is read from, it's the one variable that cannot be set in `<dataDir>/.env` — see [the exception](#serene_pub_data_dir-is-the-one-exception). |
 
 ## Feature Toggles
 

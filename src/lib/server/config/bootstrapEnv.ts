@@ -23,12 +23,32 @@ import {
 	isWildcardAllowed
 } from "$lib/server/sockets/originAllowlist"
 
-/** What preloadEnv.js recorded, when it ran. Absent under `vite dev` (no
- * build/index.js) and under a hand-rolled entrypoint. */
-function preloadRecord(): { derived: Record<string, string> } | null {
+/**
+ * What preloadEnv.js recorded, when it ran. Absent under `vite dev` (no
+ * build/index.js) and under a hand-rolled entrypoint.
+ *
+ * Everything past `derived` is optional because a build from before the .env
+ * relocation — or a test that fabricates the marker — publishes the old
+ * one-field shape.
+ */
+type EnvPreloadRecord = {
+	derived: Record<string, string>
+	/** Resolved data directory. */
+	dataDir?: string
+	/** Where <dataDir>/.env is looked for. */
+	dataEnvPath?: string
+	/** .env files actually read, in precedence order. */
+	loaded?: string[]
+	/** The deprecated install-dir .env, only when it supplied something. */
+	legacyEnvPath?: string | null
+	/** Which keys it supplied. Names only — never values. */
+	legacyKeys?: string[]
+}
+
+function preloadRecord(): EnvPreloadRecord | null {
 	const record = (
 		globalThis as unknown as {
-			__serenePubEnvPreloaded?: { derived: Record<string, string> }
+			__serenePubEnvPreloaded?: EnvPreloadRecord
 		}
 	).__serenePubEnvPreloaded
 	return record ?? null
@@ -95,6 +115,24 @@ export function buildStartupBanner(): string[] {
 	lines.push(`${PREFIX} ${describeOriginAllowlistConfig()}`)
 
 	const record = preloadRecord()
+
+	// Which .env files were read is otherwise unknowable from the outside, and
+	// there are now two candidate locations — so say it rather than making the
+	// operator guess which of their files the running server picked up.
+	if (record?.loaded) {
+		const files = record.loaded.map((file) =>
+			file === record.dataEnvPath
+				? file
+				: `${file} (install dir — deprecated)`
+		)
+		lines.push(
+			`${PREFIX} Env files:   ` +
+				(files.length > 0
+					? files.join(", ")
+					: `none found (looked in ${record.dataEnvPath})`)
+		)
+	}
+
 	const derived = record ? Object.entries(record.derived) : []
 	if (derived.length > 0) {
 		lines.push(
@@ -118,25 +156,78 @@ export function buildStartupBanner(): string[] {
 }
 
 /**
- * The one-time migration notice. Returns null when no deprecated variable is
- * set, so a modern install prints nothing. Deliberately not a per-request
+ * The deprecated .env LOCATION, as opposed to the deprecated variables above.
+ *
+ * Fires only when the install-directory file actually supplied a value —
+ * having one that is fully shadowed by the environment or by <dataDir>/.env
+ * changes nothing, so warning about it would be noise. Key names only: this
+ * file holds admin passwords and recovery keys.
+ */
+function buildLegacyEnvFileNotice(): string[] | null {
+	const record = preloadRecord()
+	const legacyPath = record?.legacyEnvPath
+	const keys = record?.legacyKeys ?? []
+	if (!legacyPath || keys.length === 0) return null
+
+	const lines = [
+		`${PREFIX} DEPRECATED .env location: ${legacyPath} supplied ` +
+			`${keys.join(", ")}.`
+	]
+
+	// SERENE_PUB_DATA_DIR is the one key that genuinely cannot move: it
+	// chooses the directory the other file is read from.
+	const movable = keys.filter((k) => k !== "SERENE_PUB_DATA_DIR")
+	if (movable.length > 0) {
+		lines.push(
+			`${PREFIX}   Updating Serene Pub replaces the install directory ` +
+				"wholesale, which deletes that file. Move " +
+				`${movable.join(", ")} to:`
+		)
+		lines.push(`${PREFIX}       ${record?.dataEnvPath}`)
+	}
+	if (keys.includes("SERENE_PUB_DATA_DIR")) {
+		lines.push(
+			`${PREFIX}   SERENE_PUB_DATA_DIR has to stay in the install ` +
+				"directory — it chooses the data directory, so it cannot be " +
+				"read from a file inside it. Set it in the real environment " +
+				"instead, or keep a copy: an update replaces that file."
+		)
+	}
+	lines.push(
+		`${PREFIX}   See docs/environment-variables.md for where .env now lives.`
+	)
+	return lines
+}
+
+/**
+ * The one-time migration notice. Returns null when nothing deprecated is in
+ * use, so a modern install prints nothing. Deliberately not a per-request
  * warning: these are configuration facts, not events.
  */
 export function buildLegacyMigrationNotice(): string[] | null {
-	const active = DEPRECATED_VARS.filter((v) => process.env[v.name]?.trim())
-	if (active.length === 0) return null
+	const lines: string[] = []
 
-	const lines = [
-		`${PREFIX} DEPRECATED hosting variables are in use. They still work and ` +
-			"nothing is broken, but one PUBLIC_URL replaces all of them:"
-	]
-	for (const v of active) {
-		const value = process.env[v.name]!.trim()
-		lines.push(`${PREFIX}   ${v.name}=${value}`)
-		lines.push(`${PREFIX}       -> ${v.replacement(value)}`)
+	const active = DEPRECATED_VARS.filter((v) => process.env[v.name]?.trim())
+	if (active.length > 0) {
+		lines.push(
+			`${PREFIX} DEPRECATED hosting variables are in use. They still work and ` +
+				"nothing is broken, but one PUBLIC_URL replaces all of them:"
+		)
+		for (const v of active) {
+			const value = process.env[v.name]!.trim()
+			lines.push(`${PREFIX}   ${v.name}=${value}`)
+			lines.push(`${PREFIX}       -> ${v.replacement(value)}`)
+		}
+		lines.push(
+			`${PREFIX}   See docs/hosting.md for the full migration guide.`
+		)
 	}
-	lines.push(`${PREFIX}   See docs/hosting.md for the full migration guide.`)
-	return lines
+
+	// Same reporting path on purpose: one deprecation notice, not two
+	// competing ones.
+	lines.push(...(buildLegacyEnvFileNotice() ?? []))
+
+	return lines.length > 0 ? lines : null
 }
 
 /** Warning for the origin allowlist being switched off entirely. */

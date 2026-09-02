@@ -168,3 +168,118 @@ describe("buildWildcardWarning", () => {
 		)
 	})
 })
+
+/**
+ * .env moved to the data directory because upgrades replace the install
+ * directory. The banner is the only thing that tells an operator which of the
+ * two files the running server actually read, and the notice is the only thing
+ * that tells them a file about to be deleted by the next update is still
+ * carrying settings.
+ */
+describe("env file reporting", () => {
+	test("names the env files that were read", async () => {
+		;(globalThis as any).__serenePubEnvPreloaded = {
+			derived: {},
+			dataEnvPath: "/data/SerenePub/.env",
+			loaded: ["/data/SerenePub/.env"]
+		}
+		const { buildStartupBanner } = await load()
+		const banner = buildStartupBanner().join("\n")
+		expect(banner).toContain("Env files:   /data/SerenePub/.env")
+		expect(banner).not.toContain("deprecated")
+	})
+
+	test("marks the install-directory file as the deprecated location", async () => {
+		;(globalThis as any).__serenePubEnvPreloaded = {
+			derived: {},
+			dataEnvPath: "/data/SerenePub/.env",
+			loaded: ["/data/SerenePub/.env", "/opt/serene-pub/.env"]
+		}
+		const { buildStartupBanner } = await load()
+		expect(buildStartupBanner().join("\n")).toContain(
+			"/opt/serene-pub/.env (install dir — deprecated)"
+		)
+	})
+
+	test("says where it looked when there is no env file at all", async () => {
+		;(globalThis as any).__serenePubEnvPreloaded = {
+			derived: {},
+			dataEnvPath: "/data/SerenePub/.env",
+			loaded: []
+		}
+		const { buildStartupBanner } = await load()
+		expect(buildStartupBanner().join("\n")).toContain(
+			"none found (looked in /data/SerenePub/.env)"
+		)
+	})
+
+	test("no env file line at all from a build that predates the move", async () => {
+		// Old marker shape: one field, no `loaded`. Reporting a guess would be
+		// worse than reporting nothing.
+		;(globalThis as any).__serenePubEnvPreloaded = { derived: {} }
+		const { buildStartupBanner } = await load()
+		expect(buildStartupBanner().join("\n")).not.toContain("Env files:")
+	})
+})
+
+describe("deprecated .env location notice", () => {
+	test("names the keys to move and where to move them", async () => {
+		;(globalThis as any).__serenePubEnvPreloaded = {
+			derived: {},
+			dataEnvPath: "/data/SerenePub/.env",
+			loaded: ["/opt/serene-pub/.env"],
+			legacyEnvPath: "/opt/serene-pub/.env",
+			legacyKeys: ["PORT", "TRUSTED_PROXIES"]
+		}
+		const { buildLegacyMigrationNotice } = await load()
+		const notice = buildLegacyMigrationNotice()!.join("\n")
+		expect(notice).toContain(
+			"DEPRECATED .env location: /opt/serene-pub/.env"
+		)
+		expect(notice).toContain("PORT, TRUSTED_PROXIES")
+		expect(notice).toContain("/data/SerenePub/.env")
+		expect(notice).toContain("docs/environment-variables.md")
+	})
+
+	test("silent when the legacy file supplied nothing", async () => {
+		// Present but fully shadowed: nothing would be lost by deleting it.
+		;(globalThis as any).__serenePubEnvPreloaded = {
+			derived: {},
+			dataEnvPath: "/data/SerenePub/.env",
+			loaded: ["/data/SerenePub/.env", "/opt/serene-pub/.env"],
+			legacyEnvPath: null,
+			legacyKeys: []
+		}
+		const { buildLegacyMigrationNotice } = await load()
+		expect(buildLegacyMigrationNotice()).toBeNull()
+	})
+
+	test("does not tell the operator to move SERENE_PUB_DATA_DIR, which cannot move", async () => {
+		;(globalThis as any).__serenePubEnvPreloaded = {
+			derived: {},
+			dataEnvPath: "/data/SerenePub/.env",
+			loaded: ["/opt/serene-pub/.env"],
+			legacyEnvPath: "/opt/serene-pub/.env",
+			legacyKeys: ["SERENE_PUB_DATA_DIR"]
+		}
+		const { buildLegacyMigrationNotice } = await load()
+		const notice = buildLegacyMigrationNotice()!.join("\n")
+		expect(notice).toContain("SERENE_PUB_DATA_DIR has to stay")
+		expect(notice).not.toContain("Move SERENE_PUB_DATA_DIR")
+	})
+
+	test("reports the location alongside deprecated variables, in one notice", async () => {
+		process.env.SOCKETS_HTTPS_HOSTS = "tunnel.example.com"
+		;(globalThis as any).__serenePubEnvPreloaded = {
+			derived: {},
+			dataEnvPath: "/data/SerenePub/.env",
+			loaded: ["/opt/serene-pub/.env"],
+			legacyEnvPath: "/opt/serene-pub/.env",
+			legacyKeys: ["PORT"]
+		}
+		const { buildLegacyMigrationNotice } = await load()
+		const notice = buildLegacyMigrationNotice()!.join("\n")
+		expect(notice).toContain("DEPRECATED hosting variables")
+		expect(notice).toContain("DEPRECATED .env location")
+	})
+})
