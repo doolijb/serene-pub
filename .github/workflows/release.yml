@@ -318,6 +318,16 @@ jobs:
               shell: bash
               run: node scripts/check-dist-size.js ${{ matrix.target }}
 
+            # The archive keeps the version in its FILENAME, but its single
+            # top-level entry is the unversioned "serene-pub" directory inside
+            # the staging directory — never the staging directory itself.
+            # Zipping the versioned staging directory is what produced
+            # serene-pub-v0.6.0-linux-x64/serene-pub-0.6.0-linux-x64/<app> for
+            # everyone whose extractor creates a folder named after the
+            # archive. Unversioned is also what makes "extract the new zip over
+            # your old folder" a valid manual upgrade, which is safe now that
+            # .env and the database live in the OS data directory rather than
+            # beside the app.
             - name: Zip dist directory (Windows)
               if: runner.os == 'Windows'
               shell: pwsh
@@ -331,8 +341,16 @@ jobs:
                     Get-ChildItem
                     exit 1
                   }
-                  Compress-Archive -Path $distDir -DestinationPath "../serene-pub-$env:REF_NAME-${{ matrix.target }}.zip"
+                  if (-not (Test-Path "$distDir/serene-pub")) {
+                    Write-Error "$distDir does not contain a serene-pub directory (scripts/dist-layout.js)"
+                    Get-ChildItem $distDir
+                    exit 1
+                  }
+                  cd $distDir
+                  Compress-Archive -Path "serene-pub" -DestinationPath "../../serene-pub-$env:REF_NAME-${{ matrix.target }}.zip"
 
+            # Same single unversioned top-level entry as the Windows step
+            # above — see the comment there for why.
             - name: Zip dist directory (Unix)
               if: runner.os != 'Windows'
               shell: bash
@@ -346,7 +364,14 @@ jobs:
                     ls -la
                     exit 1
                   fi
-                  zip -r "../serene-pub-$REF_NAME-${{ matrix.target }}.zip" "$DIST_DIR"
+                  if [ ! -d "$DIST_DIR/serene-pub" ]; then
+                    echo "Error: $DIST_DIR does not contain a serene-pub directory (scripts/dist-layout.js)"
+                    ls -la "$DIST_DIR"
+                    exit 1
+                  fi
+                  # -y keeps the macOS .app bundle's symlinks as symlinks.
+                  cd "$DIST_DIR"
+                  zip -r -y "../../serene-pub-$REF_NAME-${{ matrix.target }}.zip" serene-pub
 
             - name: Upload release assets
               uses: softprops/action-gh-release@v2

@@ -2,38 +2,104 @@ Welcome to Serene Pub for Windows!
 
 Thank you for downloading Serene Pub.
 
-To run the app:
+What's in this folder
+---------------------
+
+   serene-pub\
+     Serene Pub.bat      <- double-click to start
+     run.cmd             <- the same thing, from a command prompt
+     .env.example        <- settings reference
+     app\                <- the application itself
+       run.cmd           <- starts only the server, no launcher
+
+Everything that IS the application lives in "app". An update replaces that one
+folder in a single move, which is why nothing you own is kept inside it — your
+database and settings live in your data directory instead (see Configuration
+below).
+
+To run the app
+--------------
 
 1. Extract the archive to your preferred location.
-2. Double-click the "Serene Pub.bat" file to start Serene Pub.
+2. Double-click "Serene Pub.bat" to start Serene Pub.
 
    - Node.js runtime is included - no installation or download required!
    - The application will start immediately.
+   - From a command prompt, "run.cmd" does the same thing.
+   - Running it as a service, or debugging a startup problem? Use "app\run.cmd"
+     instead. It starts the Node server and nothing else — no launcher, no
+     browser — and prints the server's output directly.
 
-3. Optional Configuration:
-   - Copy ".env.example" to ".env" to customize settings
-   - Edit ".env" to set custom data directory: SERENE_PUB_DATA_DIR=C:\path\to\data
-   - Change server ports: SOCKETS_PORT=3001, PORT=3000
-   - Disable auto-browser opening: SERENE_AUTO_OPEN=1
+3. On your Windows PC, access Serene Pub from http://localhost:3000.
 
-4. On your Windows PC, access Serene Pub from http://localhost:3000.
+4. To stop the application, press Ctrl+C in the command window.
 
-5. To stop the application, press Ctrl+C in the command window.
+Configuration
+-------------
 
-Notes:
-- Serene Pub will attempt to automatically identify your local network IP address, allowing access across other devices (e.g. mobile phones.)
+Serene Pub runs with no configuration at all — this section is only for
+changing something specific, like the port.
+
+Settings go in a ".env" file in your DATA directory, not in this folder:
+
+      %APPDATA%\SerenePub\.env
+
+".env.example" (at the top of this folder) lists every available setting with
+an explanation; copy it to the path above and edit it there. Common ones:
+
+   - PORT=3000                    change the web UI's port
+   - HOST=127.0.0.1               local connections only
+   - SERENE_AUTO_OPEN=1           don't open a browser tab on startup
+   - SERENE_PUB_DATA_DIR=...      keep your data somewhere else entirely
+
+Why the data directory and not this folder? Because an update replaces the
+application folder, so a settings file kept next to the program is deleted the
+first time you upgrade. Serene Pub prints the settings files it actually read
+each time it starts.
+
+(SERENE_PUB_DATA_DIR is the one exception: it chooses the data directory, so it
+has to be set in a ".env" at the top of this folder, or as a real environment
+variable. A relative path like ".\data" is resolved against this folder, so it
+means the same place wherever you launch from.)
+
+Upgrading
+---------
+
+Download the new release and extract it over your existing "serene-pub" folder,
+replacing files when asked. Your database and settings are untouched — they
+live in your data directory, not here.
+
+Notes
+-----
+
+- Serene Pub will attempt to automatically identify your local network IP
+  address, allowing access across other devices (e.g. mobile phones.)
     - To find your local IP, open Command Prompt and run: ipconfig
-    - Look for the "IPv4 Address" under your active network adapter (e.g., 192.168.1.42). You can access Serene Pub from your phone at http://<your-ip>:3000
+    - Look for the "IPv4 Address" under your active network adapter (e.g.
+      192.168.1.42). You can access Serene Pub from your phone at
+      http://<your-ip>:3000
 
-Troubleshooting:
-- If double-clicking "run.cmd" does not start the app, you may need to run it as administrator
-- Ensure all files were extracted properly from the ZIP archive
-- This is open source software - you can review all code at https://github.com/doolijb/serene-pub
+Troubleshooting
+---------------
 
-Uninstall:
-- To remove Serene Pub, simply delete the extracted folder. No files are installed outside this directory.
+- If double-clicking "Serene Pub.bat" does not start the app, try running
+  "run.cmd" from a command prompt so you can read the output.
+- Ensure all files were extracted properly from the ZIP archive — extracting
+  only part of it leaves the app unable to start.
+- This is open source software - you can review all code at
+  https://github.com/doolijb/serene-pub
 
-Feedback & Help:
+Uninstall
+---------
+
+- Delete this folder to remove the program.
+- Your characters, sessions and settings live separately, in
+  %APPDATA%\SerenePub — delete that too if you want everything gone, or keep it
+  to carry your data to a future install.
+
+Feedback & Help
+---------------
+
 - For questions, feedback, or to report issues, please visit:
   https://github.com/doolijb/serene-pub
 

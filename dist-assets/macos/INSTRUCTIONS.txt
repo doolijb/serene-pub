@@ -2,44 +2,113 @@ Welcome to Serene Pub for macOS!
 
 Thank you for downloading Serene Pub.
 
-To run the app:
+What's in this folder
+---------------------
+
+   serene-pub/
+     Serene Pub.app               <- double-click to start
+       Contents/Resources/app/    <- the application itself
+         run.sh                   <- starts only the server, no launcher
+     run.sh                       <- the same thing, from a terminal
+     .env.example                 <- settings reference
+
+Everything that IS the application lives inside the bundle's "app" folder. An
+update replaces that one folder in a single move, which is why nothing you own
+is kept inside it — your database and settings live in your data directory
+instead (see Configuration below).
+
+To run the app
+--------------
 
 1. Extract the archive to your preferred location.
 
-2. Open the Terminal app.
+2. Double-click "Serene Pub.app".
 
-3. Navigate to the extracted folder (e.g., serene-pub-<version>-macos):
-      cd /path/to/serene-pub-<version>-macos
+   The first launch may be blocked because the app isn't notarized: right-click
+   (or Control-click) it, choose "Open", and confirm.
 
-4. Run the app with:
+   Prefer a terminal? Open Terminal, then:
+
+      cd /path/to/serene-pub
       bash run.sh
 
-5. Node.js runtime is included - no installation or download required! The application will start immediately.
+   Headless Mac, a launchd job, or debugging a startup problem? Run
+   "Serene Pub.app/Contents/Resources/app/run.sh" instead. It starts the Node
+   server and nothing else — no launcher, no browser — and prints the server's
+   output directly.
 
-6. To stop the application, press Ctrl+C in the terminal window.
+3. Node.js runtime is included - no installation or download required! The
+   application will start immediately.
 
-7. Optional Configuration:
-   - Copy ".env.example" to ".env" to customize settings
-   - Edit ".env" to set custom data directory: SERENE_PUB_DATA_DIR=/path/to/data
-   - Change server ports: SOCKETS_PORT=3001, PORT=3000
-   - Disable auto-browser opening: SERENE_AUTO_OPEN=1
+4. To stop the application, press Ctrl+C in the terminal window.
 
-8. On your Mac, access Serene Pub from http://localhost:3000.
+5. On your Mac, access Serene Pub from http://localhost:3000.
 
-Notes:
-- Serene Pub will attempt to automatically identify your local network IP address, allowing access across other devices (e.g. mobile phones.)
-    - To find your local IP, run: hostname -I | awk '{print $1}'
-    - For example, if the result is 192.168.1.42, you can access Serene Pub from your phone at http://192.168.1.42:3000
+Configuration
+-------------
 
-Troubleshooting:
+Serene Pub runs with no configuration at all — this section is only for
+changing something specific, like the port.
+
+Settings go in a ".env" file in your DATA directory, not in this folder:
+
+      ~/Library/Application Support/SerenePub/.env
+
+".env.example" (at the top of this folder) lists every available setting with
+an explanation; copy it to the path above and edit it there. Common ones:
+
+   - PORT=3000                    change the web UI's port
+   - HOST=127.0.0.1               local connections only
+   - SERENE_AUTO_OPEN=1           don't open a browser tab on startup
+   - SERENE_PUB_DATA_DIR=...      keep your data somewhere else entirely
+
+Why the data directory and not the app folder? Because an update replaces the
+application folder, and editing a file inside a signed .app bundle breaks its
+signature. Serene Pub prints the settings files it actually read each time it
+starts.
+
+(SERENE_PUB_DATA_DIR is the one exception: it chooses the data directory, so it
+has to be set in a ".env" at the top of this folder, or as a real environment
+variable. A relative path like "./data" is resolved against this folder, so it
+means the same place wherever you launch from.)
+
+Upgrading
+---------
+
+Download the new release and extract it over your existing "serene-pub" folder,
+replacing files when asked. Your database and settings are untouched — they
+live in your data directory, not here.
+
+Notes
+-----
+
+- Serene Pub will attempt to automatically identify your local network IP
+  address, allowing access across other devices (e.g. mobile phones.)
+    - To find your local IP, run: ipconfig getifaddr en0
+    - For example, if the result is 192.168.1.42, you can access Serene Pub
+      from your phone at http://192.168.1.42:3000
+
+Troubleshooting
+---------------
+
+- If macOS refuses to open the app, right-click it and choose "Open" rather
+  than double-clicking.
 - If you get a permission error, run: chmod +x run.sh
-- If your system does not have curl or a supported terminal, install curl (brew install curl) or use the terminal method above.
+- If the app fails to start and the window closes too fast to read, run the
+  bundle's Contents/Resources/app/run.sh from a terminal.
 
-Feedback & Help:
+Feedback & Help
+---------------
+
 - For questions, feedback, or to report issues, please visit:
   https://github.com/doolijb/serene-pub
 
-Uninstall:
-- To remove Serene Pub, simply delete the extracted folder. No files are installed outside this directory.
+Uninstall
+---------
+
+- Delete this folder to remove the program.
+- Your characters, sessions and settings live separately, in
+  ~/Library/Application Support/SerenePub — delete that too if you want
+  everything gone, or keep it to carry your data to a future install.
 
 Enjoy using Serene Pub!

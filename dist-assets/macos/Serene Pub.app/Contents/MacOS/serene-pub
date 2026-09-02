@@ -1,7 +1,7 @@
 #!/bin/bash
 # Serene Pub Application Launcher for macOS
-# This launches the main run.sh script
+# Launches the bare entrypoint inside this bundle's Resources/app directory,
+# which holds the entire application so an update can replace it in one rename.
 APP_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-BUNDLE_DIR="$( cd "$APP_DIR/../.." &> /dev/null && pwd )"
-cd "$BUNDLE_DIR"
-exec ./run.sh
+RESOURCES_DIR="$( cd "$APP_DIR/../Resources" &> /dev/null && pwd )"
+exec "$RESOURCES_DIR/app/run.sh"

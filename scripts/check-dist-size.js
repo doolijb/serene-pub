@@ -12,6 +12,7 @@ import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import { dirSizeBytes, SIZE_THRESHOLD_MB } from "./prune-dist.js"
+import { appDir, bundleRootDir } from "./dist-layout.js"
 
 import pkg from "../package.json" with { type: "json" }
 
@@ -23,7 +24,11 @@ if (!targetName) {
 	process.exit(1)
 }
 
-const distDir = path.resolve(
+// The staging directory, not the directory that gets zipped: measuring it
+// covers the shipped serene-pub/ tree and would also catch anything stray left
+// beside it. dirSizeBytes recurses, so the payload moving down into app/
+// changes nothing about the total.
+const stageDir = path.resolve(
 	__dirname,
 	"../dist",
 	`serene-pub-${pkg.version}-${targetName}`
@@ -52,11 +57,11 @@ function printLargest(dir, limit, label) {
 	}
 }
 
-const sizeMb = dirSizeBytes(distDir) / (1024 * 1024)
+const sizeMb = dirSizeBytes(stageDir) / (1024 * 1024)
 const thresholdMb = SIZE_THRESHOLD_MB[targetName]
 
 console.log(
-	`${targetName}: ${sizeMb.toFixed(1)} MB (dist/${path.basename(distDir)})`
+	`${targetName}: ${sizeMb.toFixed(1)} MB (dist/${path.basename(stageDir)})`
 )
 
 if (!thresholdMb) {
@@ -77,7 +82,11 @@ if (sizeMb > thresholdMb) {
 	// hand. This failure is only actionable if you can see WHAT grew, and the
 	// dist exists solely on the CI runner — so print the breakdown here, at
 	// the one moment it is available.
-	printLargest(path.join(distDir, "node_modules"), 15, "node_modules")
-	printLargest(distDir, 10, "dist root")
+	// Point the breakdown at the payload, where all the weight actually is —
+	// the top of the extracted folder only holds docs and launchers.
+	const payloadDir = appDir(stageDir, targetName)
+	printLargest(path.join(payloadDir, "node_modules"), 15, "node_modules")
+	printLargest(payloadDir, 10, "the app payload")
+	printLargest(bundleRootDir(stageDir), 10, "the extracted folder")
 	process.exit(1)
 }

@@ -9,9 +9,9 @@
 	<key>CFBundleName</key>
 	<string>Serene Pub</string>
 	<key>CFBundleVersion</key>
-	<string>0.4.1</string>
+	<string>0.6.0-pr-1</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.4.1</string>
+	<string>0.6.0-pr-1</string>
 	<key>CFBundleIconFile</key>
 	<string>favicon.icns</string>
 	<key>CFBundlePackageType</key>

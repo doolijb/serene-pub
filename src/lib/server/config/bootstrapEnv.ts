@@ -41,6 +41,8 @@ type EnvPreloadRecord = {
 	loaded?: string[]
 	/** The deprecated install-dir .env, only when it supplied something. */
 	legacyEnvPath?: string | null
+	/** Legacy .env files that exist but were not the one used. */
+	legacyIgnoredPaths?: string[]
 	/** Which keys it supplied. Names only — never values. */
 	legacyKeys?: string[]
 }
@@ -131,6 +133,17 @@ export function buildStartupBanner(): string[] {
 					? files.join(", ")
 					: `none found (looked in ${record.dataEnvPath})`)
 		)
+
+		// There are two legacy locations (the install root, and the working
+		// directory when a release entrypoint has cd'd into app/). Only one is
+		// ever in effect, so a second one sitting there unread is exactly the
+		// kind of thing an operator edits for an hour before noticing.
+		for (const ignored of record.legacyIgnoredPaths ?? []) {
+			lines.push(
+				`${PREFIX}              ${ignored} exists but was IGNORED — ` +
+					"the file above took precedence."
+			)
+		}
 	}
 
 	const derived = record ? Object.entries(record.derived) : []

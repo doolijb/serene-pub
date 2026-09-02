@@ -1,5 +1,8 @@
 // scripts/bundle-dist.js
-// Bundles app and launcher for each OS into ./dist/serene-pub-<version>-<os>/
+// Bundles app and launcher for each OS into
+// ./dist/serene-pub-<version>-<os>/serene-pub/ — see scripts/dist-layout.js for
+// why the shipped directory is unversioned and why the payload sits under
+// app/.
 
 import fs from "fs"
 import path from "path"
@@ -8,17 +11,31 @@ import child_process from "child_process"
 
 import pkg from "../package.json" with { type: "json" }
 import { pruneDist } from "./prune-dist.js"
+import { appDir, bundleRootDir } from "./dist-layout.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const version = pkg.version
 const distDir = path.resolve(__dirname, "../dist")
 const buildDir = path.resolve(__dirname, "../build")
-const filesToCopy = ["LICENSE", "README.md", "NOTICE.md", "KEYBINDINGS.md"]
+// Top-level docs, copied beside the app/ payload rather than into it — they
+// are for the person who extracted the folder, not for the runtime.
+// KEYBINDINGS.md used to be listed here and no longer exists in the repo; the
+// copy loop skips missing files silently, so it was a dead entry rather than a
+// build failure.
+const filesToCopy = ["LICENSE", "README.md", "NOTICE.md"]
 
 function copyRecursive(src, dest) {
+	// existsSync follows symlinks, so a dangling one is skipped here rather
+	// than throwing further down.
 	if (!fs.existsSync(src)) return
-	if (fs.lstatSync(src).isDirectory()) {
+	// statSync, not lstatSync: npm installs a `file:` dependency as a SYMLINK
+	// to a directory (this repo has several — @serene-pub/* point at the
+	// sibling SDK checkout), and lstat reports those as not-a-directory, so
+	// the copy fell through to copyFileSync and died with EISDIR. A shipped
+	// node_modules has to contain real files anyway: a symlink out of the
+	// bundle is dangling the moment the zip is extracted on another machine.
+	if (fs.statSync(src).isDirectory()) {
 		fs.mkdirSync(dest, { recursive: true })
 		for (const file of fs.readdirSync(src)) {
 			copyRecursive(path.join(src, file), path.join(dest, file))
@@ -302,61 +319,183 @@ if (!target) {
 		}
 
 		// 2. Create dist bundle
-		const outDir = path.join(
+		//
+		// Three directories, three jobs (scripts/dist-layout.js explains why):
+		//   stageDir   dist/serene-pub-<version>-<target> — versioned and
+		//              per-target so several targets coexist and release.yml can
+		//              still find the one it just built. Never shipped.
+		//   bundleRoot stageDir/serene-pub — the single, UNVERSIONED entry that
+		//              gets zipped, so extracting yields serene-pub/ exactly once
+		//              and "extract over your old folder" is a valid upgrade.
+		//   payloadDir bundleRoot/app (or, on macOS, the same thing inside the
+		//              .app bundle's Resources) — everything that IS the
+		//              application, in one directory a future updater can replace
+		//              with a single rename.
+		const stageDir = path.join(
 			distDir,
 			`serene-pub-${version}-${target.name}`
 		)
-		if (fs.existsSync(outDir))
-			fs.rmSync(outDir, { recursive: true, force: true })
-		fs.mkdirSync(outDir, { recursive: true })
+		const bundleRoot = bundleRootDir(stageDir)
+		const payloadDir = appDir(stageDir, target.name)
+		if (fs.existsSync(stageDir))
+			fs.rmSync(stageDir, { recursive: true, force: true })
+		fs.mkdirSync(payloadDir, { recursive: true })
 
-		// Copy build. static/ is NOT copied separately — build/client already
-		// contains everything SvelteKit put there from static/ at build time,
-		// so a second copy was pure duplication (see userSettings.ts's
-		// manifest-path fallback for the one runtime reader that used to
-		// depend on the static/ copy specifically).
-		copyRecursive(buildDir, path.join(outDir, "build"))
-
-		// Copy node_modules (assuming it's already prepared for this target)
-		copyRecursive(
-			path.resolve(__dirname, "../node_modules"),
-			path.join(outDir, "node_modules")
+		const platformDir = path.resolve(
+			__dirname,
+			`../dist-assets/${target.name.split("-")[0]}`
 		)
+		const isWindows = target.platform === "win32"
+
+		// ── What the user sees when they extract ────────────────────────────
+		// Docs and launchers, at the top level, outside the payload: they are
+		// for the person who extracted the folder, and the launcher in
+		// particular has to survive the payload being swapped underneath it.
+
+		// Platform-specific executables and icons. The macOS .app bundle is
+		// copied here too, before the payload is written inside it.
+		for (const file of fs.readdirSync(platformDir)) {
+			// run.* is the forwarder (copied below, needs chmod), app/ holds the
+			// bare entrypoint that belongs in the payload, and INSTRUCTIONS.txt
+			// is copied separately.
+			if (
+				file.startsWith("run.") ||
+				file === "app" ||
+				file === "INSTRUCTIONS.txt"
+			) {
+				continue
+			}
+			// A .desktop entry cannot be produced at build time: the spec
+			// requires absolute Exec=/Icon=/Path= values, and the only absolute
+			// path a build machine knows is its own. Shipping one anyway is what
+			// this repo used to do — every Linux release carried an entry
+			// pointing into the CI runner's filesystem. install-desktop-shortcut.sh
+			// writes a correct entry on the user's machine instead, so nothing
+			// with a baked-in path is allowed into the bundle even if one is
+			// left lying around in dist-assets/.
+			if (file.endsWith(".desktop")) {
+				console.warn(
+					`Skipping ${file}: a .desktop entry's absolute paths are only valid on the machine that wrote them (install-desktop-shortcut.sh writes one after extraction).`
+				)
+				continue
+			}
+
+			const srcPath = path.join(platformDir, file)
+			const destPath = path.join(bundleRoot, file)
+
+			if (fs.lstatSync(srcPath).isDirectory()) {
+				// Copy directories recursively (like .app bundles)
+				copyRecursive(srcPath, destPath)
+				console.log(`Copied directory: ${file}`)
+			} else {
+				fs.copyFileSync(srcPath, destPath)
+
+				// Make executables executable on Unix platforms
+				if (
+					!isWindows &&
+					(file === "Serene Pub" || file.endsWith(".sh"))
+				) {
+					fs.chmodSync(destPath, 0o755)
+				}
+				console.log(`Copied file: ${file}`)
+			}
+		}
+
+		// The thin forwarder into the payload — the path people bookmark, pin
+		// and put in shortcuts, kept working across an update that replaces
+		// everything under it. A later phase swaps it for a compiled launcher.
+		for (const runFile of fs
+			.readdirSync(platformDir)
+			.filter((f) => f.startsWith("run."))) {
+			const dest = path.join(bundleRoot, runFile)
+			fs.copyFileSync(path.join(platformDir, runFile), dest)
+			if (!isWindows && runFile.endsWith(".sh")) {
+				fs.chmodSync(dest, 0o755)
+			}
+		}
 
 		// Copy LICENSE, README, etc.
 		for (const file of filesToCopy) {
 			if (fs.existsSync(path.resolve(__dirname, "..", file))) {
 				fs.copyFileSync(
 					path.resolve(__dirname, "..", file),
-					path.join(outDir, file)
+					path.join(bundleRoot, file)
 				)
 			}
 		}
 
 		// Copy platform-specific instructions
-		const instrFile = path.resolve(
-			__dirname,
-			`../dist-assets/${target.name.split("-")[0]}/INSTRUCTIONS.txt`
-		)
+		const instrFile = path.join(platformDir, "INSTRUCTIONS.txt")
 		if (fs.existsSync(instrFile)) {
-			fs.copyFileSync(instrFile, path.join(outDir, "INSTRUCTIONS.txt"))
+			fs.copyFileSync(
+				instrFile,
+				path.join(bundleRoot, "INSTRUCTIONS.txt")
+			)
 		}
 
-		// Copy the shipped .env.example. This used to be generated inline by a
+		// The shipped .env.example. This used to be generated inline by a
 		// heredoc in .github/workflows/release.yml, which meant desktop users
 		// got a four-variable file that had drifted far from the repo's own
 		// .env.example and never mentioned any hosting setting at all. Keeping
 		// it as a checked-in file is the only way the two stay in sync.
-		const envExample = path.resolve(__dirname, "../dist-assets/.env.example")
+		//
+		// It belongs at the top level, not with the payload: a template has to
+		// sit where the file it is a template FOR is read from, and the legacy
+		// .env is looked for at the install root first (preloadEnv.js, via the
+		// SERENE_PUB_INSTALL_ROOT the entrypoint exports). It is also the only
+		// placement that survives an update, since app/ is replaced wholesale.
+		// The file's own text points the reader at the OS data directory, which
+		// is better still.
+		const envExample = path.resolve(
+			__dirname,
+			"../dist-assets/.env.example"
+		)
 		if (fs.existsSync(envExample)) {
-			fs.copyFileSync(envExample, path.join(outDir, ".env.example"))
+			fs.copyFileSync(envExample, path.join(bundleRoot, ".env.example"))
 		}
 
+		// ── The payload ────────────────────────────────────────────────────
+
+		// The bare entrypoint: starts the Node server and nothing else. Lives
+		// with the payload because it is version-locked to it (it knows where
+		// build/index.js and the bundled runtime are), and is the supported way
+		// to run headless, from a service unit, or while debugging.
+		const appAssetsDir = path.join(platformDir, "app")
+		for (const runFile of fs
+			.readdirSync(appAssetsDir)
+			.filter((f) => f.startsWith("run."))) {
+			const dest = path.join(payloadDir, runFile)
+			fs.copyFileSync(path.join(appAssetsDir, runFile), dest)
+			if (!isWindows && runFile.endsWith(".sh")) {
+				fs.chmodSync(dest, 0o755)
+			}
+		}
+
+		// Copy build. static/ is NOT copied separately — build/client already
+		// contains everything SvelteKit put there from static/ at build time,
+		// so a second copy was pure duplication (see userSettings.ts's
+		// manifest-path fallback for the one runtime reader that used to
+		// depend on the static/ copy specifically).
+		copyRecursive(buildDir, path.join(payloadDir, "build"))
+
+		// Copy node_modules (assuming it's already prepared for this target)
+		copyRecursive(
+			path.resolve(__dirname, "../node_modules"),
+			path.join(payloadDir, "node_modules")
+		)
+
+		// Copy drizzle migrations folder. drizzle.config.ts resolves it as the
+		// relative "./drizzle", so it has to sit beside build/ in whatever
+		// directory the entrypoint cd's into.
+		copyRecursive(
+			path.resolve(__dirname, "../drizzle"),
+			path.join(payloadDir, "drizzle")
+		)
+
 		// Copy Node.js binary for the target platform
-		const isWindows = target.platform === "win32"
 		const nodeSrcName = isWindows ? "node.exe" : "node"
 		const nodeSrcPath = path.resolve(__dirname, "..", nodeSrcName)
-		const nodeDestPath = path.join(outDir, nodeSrcName)
+		const nodeDestPath = path.join(payloadDir, nodeSrcName)
 
 		if (fs.existsSync(nodeSrcPath)) {
 			fs.copyFileSync(nodeSrcPath, nodeDestPath)
@@ -368,76 +507,16 @@ if (!target) {
 			console.warn(`Warning: Node.js binary not found at ${nodeSrcPath}`)
 		}
 
-		// Copy all run files from dist-assets/<os>/
-		const runFiles = fs
-			.readdirSync(
-				path.resolve(
-					__dirname,
-					`../dist-assets/${target.name.split("-")[0]}`
-				)
-			)
-			.filter((f) => f.startsWith("run."))
-		for (const runFile of runFiles) {
-			const src = path.resolve(
-				__dirname,
-				`../dist-assets/${target.name.split("-")[0]}/${runFile}`
-			)
-			const dest = path.join(outDir, runFile)
-			fs.copyFileSync(src, dest)
-			if (target.platform !== "win32" && runFile.endsWith(".sh")) {
-				fs.chmodSync(dest, 0o755)
-			}
-		}
-
-		// Copy platform-specific executables and icons
-		const platformDir = path.resolve(
-			__dirname,
-			`../dist-assets/${target.name.split("-")[0]}`
-		)
-		const platformFiles = fs.readdirSync(platformDir)
-
-		for (const file of platformFiles) {
-			const srcPath = path.join(platformDir, file)
-			const destPath = path.join(outDir, file)
-
-			// Skip run files (already copied above) and INSTRUCTIONS.txt (copied separately)
-			if (file.startsWith("run.") || file === "INSTRUCTIONS.txt") {
-				continue
-			}
-
-			if (fs.lstatSync(srcPath).isDirectory()) {
-				// Copy directories recursively (like .app bundles)
-				copyRecursive(srcPath, destPath)
-				console.log(`Copied directory: ${file}`)
-			} else {
-				// Copy individual files
-				fs.copyFileSync(srcPath, destPath)
-
-				// Make executables executable on Unix platforms
-				if (
-					target.platform !== "win32" &&
-					(file === "Serene Pub" || file.endsWith(".desktop"))
-				) {
-					fs.chmodSync(destPath, 0o755)
-				}
-				console.log(`Copied file: ${file}`)
-			}
-		}
-
-		// Copy drizzle migrations folder
-		copyRecursive(
-			path.resolve(__dirname, "../drizzle"),
-			path.join(outDir, "drizzle")
-		)
-
 		// Strip known-dead weight from the assembled copy — never touches the
-		// developer's real node_modules/build/drizzle, only outDir's copies.
+		// developer's real node_modules/build/drizzle, only the payload's
+		// copies.
 		console.log("Pruning dist...")
-		pruneDist(outDir, target)
+		pruneDist(payloadDir, target)
 
-		// Write minimal package.json
+		// Write minimal package.json. Beside build/ and node_modules/, where
+		// Node resolves it: it is what makes build/index.js load as ESM.
 		fs.writeFileSync(
-			path.join(outDir, "package.json"),
+			path.join(payloadDir, "package.json"),
 			JSON.stringify(
 				{
 					type: "module",
@@ -451,7 +530,9 @@ if (!target) {
 			)
 		)
 
-		console.log(`Distributable generated in dist/${path.basename(outDir)}`)
+		console.log(
+			`Distributable generated in dist/${path.basename(stageDir)}/${path.basename(bundleRoot)}`
+		)
 	} catch (err) {
 		console.error("Bundle process failed:", err)
 		process.exit(1)

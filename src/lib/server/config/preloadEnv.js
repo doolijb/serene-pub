@@ -33,13 +33,35 @@
  * Precedence, highest first:
  *   1. the real process environment (Docker `environment:`, systemd, export)
  *   2. <dataDir>/.env
- *   3. <installDir>/.env  — legacy, still honored, reported as deprecated
+ *   3. <installRoot>/.env, else <cwd>/.env  — legacy, still honored, reported
+ *      as deprecated
  *
  * The awkward part is that SERENE_PUB_DATA_DIR chooses the data directory, so
  * it cannot be read from a file inside it. Hence the three passes in
- * planEnvLoad(): the install-dir file is PARSED first purely to discover a
- * possible SERENE_PUB_DATA_DIR, and only afterwards are the two files applied
- * in precedence order.
+ * planEnvLoad(): the legacy file is PARSED first purely to discover a possible
+ * SERENE_PUB_DATA_DIR, and only afterwards are the two files applied in
+ * precedence order.
+ *
+ * ── WHAT "THE INSTALL DIRECTORY" MEANS ──────────────────────────────────────
+ *
+ * It used to be process.cwd(), which was the same thing as "the folder the
+ * user extracted" only because the release bundle put run.sh and build/ in one
+ * flat directory. A release now keeps everything that IS the application in an
+ * app/ subdirectory, so that an update can replace it with a single rename —
+ * and its entrypoint cd's into app/ (the server resolves ./drizzle and
+ * ./build/client against the working directory). process.cwd() therefore
+ * became <root>/app: a directory an update DELETES.
+ *
+ * Two things broke as a result, both of them silent data loss:
+ *   - an upgraded user's .env, still sitting at <root>/.env, stopped being read
+ *   - a relative SERENE_PUB_DATA_DIR resolved inside app/, so the next update
+ *     would take the database with it
+ *
+ * So the entrypoint that knows the layout states it: dist-assets/*\/app/run.*
+ * export SERENE_PUB_INSTALL_ROOT as the absolute parent of app/. Nothing is
+ * inferred from directory names — a source checkout, Docker, or a hand-rolled
+ * entrypoint exports nothing, installRoot falls back to process.cwd(), and
+ * behavior is exactly what it has always been there.
  */
 import fs from "node:fs"
 import path from "node:path"
@@ -63,19 +85,30 @@ export function defaultDataDir() {
 
 /**
  * @typedef {object} EnvPlan
- * @property {string} dataDir Resolved data directory.
+ * @property {string} installRoot The directory a relative data directory and
+ *   the legacy .env are anchored to. Absolute.
+ * @property {string} dataDir Resolved data directory. Always ABSOLUTE — a
+ *   relative value is anchored to `installRoot` here, once, so that
+ *   getAppDataDir(), drizzle.config.ts and every other reader downstream can
+ *   never resolve it against a different working directory.
  * @property {"environment" | "install-env" | "default"} dataDirSource Which of
  *   the three sources decided `dataDir`.
  * @property {string} dataEnvPath Absolute path of the data-directory .env.
- * @property {string} installEnvPath Absolute path of the legacy install-dir .env.
+ * @property {string[]} legacyCandidates The legacy locations considered, in the
+ *   order they were consulted.
+ * @property {string | null} legacyEnvPath The legacy .env actually used, or
+ *   null when none of the candidates exist.
+ * @property {string[]} legacyIgnoredPaths Legacy files that exist but lost to
+ *   `legacyEnvPath`. Worth naming: two .env files disagreeing, with only one of
+ *   them in effect, is otherwise invisible.
  * @property {string[]} load Files that exist, in the order dotenv must read
  *   them. Deduplicated, so a data directory that IS the install directory is
  *   listed once.
  * @property {Record<string, string>} applied What those files actually
  *   contribute — parsed keys not already present in the process environment.
- * @property {string[]} legacyKeys The subset of `applied` that only the
- *   install-dir file supplied. Empty when that file is absent, or when
- *   everything in it was already set elsewhere.
+ * @property {string[]} legacyKeys The subset of `applied` that only the legacy
+ *   file supplied. Empty when that file is absent, or when everything in it was
+ *   already set elsewhere.
  */
 
 /**
@@ -93,7 +126,12 @@ export function defaultDataDir() {
  *
  * @param {object} args
  * @param {Record<string, string | undefined>} args.processEnv Real environment.
- * @param {string} args.installDir Directory the server runs from.
+ * @param {string} args.installRoot The top of the install — the directory the
+ *   application folder sits in, stated by the entrypoint. A relative data
+ *   directory and the preferred legacy .env are both anchored here.
+ * @param {string} [args.cwd] The working directory, when it differs from
+ *   `installRoot` (a release entrypoint cd's into app/). Defaults to
+ *   `installRoot`, which is the source/Docker case where they are the same.
  * @param {(filePath: string) => string | null} args.readFile File contents, or
  *   null when the file does not exist / cannot be read.
  * @param {string} args.dataDirFallback Used when nothing names a data directory.
@@ -101,37 +139,73 @@ export function defaultDataDir() {
  */
 export function planEnvLoad({
 	processEnv,
-	installDir,
+	installRoot,
+	cwd = installRoot,
 	readFile,
 	dataDirFallback
 }) {
-	const installEnvPath = path.resolve(installDir, ".env")
-	const installSource = readFile(installEnvPath)
+	const resolvedRoot = path.resolve(installRoot)
+
+	// Both legacy locations, install root first. The root is where an upgraded
+	// user's file actually is (it predates app/, and extracting a new zip over
+	// the old folder leaves it exactly there); the working directory covers a
+	// source checkout or Docker, where it is the same file, and a hand-rolled
+	// entrypoint that cd's somewhere else.
+	const rootEnvPath = path.resolve(resolvedRoot, ".env")
+	const cwdEnvPath = path.resolve(cwd, ".env")
+	const legacyCandidates =
+		rootEnvPath === cwdEnvPath ? [rootEnvPath] : [rootEnvPath, cwdEnvPath]
+
+	/** @type {string | null} */
+	let legacyEnvPath = null
+	/** @type {string | null} */
+	let legacySource = null
+	/** @type {string[]} */
+	const legacyIgnoredPaths = []
+	for (const candidate of legacyCandidates) {
+		const source = readFile(candidate)
+		if (source === null) continue
+		if (legacyEnvPath === null) {
+			legacyEnvPath = candidate
+			legacySource = source
+		} else {
+			// Deliberately not merged. One legacy file in effect and the other
+			// named in the banner beats silently interleaving two deprecated
+			// files whose precedence nobody could reason about.
+			legacyIgnoredPaths.push(candidate)
+		}
+	}
+
 	// Pass A: parsed, never applied. Its only job here is to reveal a
 	// SERENE_PUB_DATA_DIR, which has to be known before the data-directory
 	// file can even be located.
-	const installParsed =
-		installSource === null ? null : dotenv.parse(installSource)
+	const legacyParsed =
+		legacySource === null ? null : dotenv.parse(legacySource)
 
 	/** @type {EnvPlan["dataDirSource"]} */
 	let dataDirSource = "default"
-	let dataDir = dataDirFallback
+	let rawDataDir = dataDirFallback
 	if (processEnv.SERENE_PUB_DATA_DIR) {
-		dataDir = processEnv.SERENE_PUB_DATA_DIR
+		rawDataDir = processEnv.SERENE_PUB_DATA_DIR
 		dataDirSource = "environment"
-	} else if (installParsed?.SERENE_PUB_DATA_DIR) {
-		dataDir = installParsed.SERENE_PUB_DATA_DIR
+	} else if (legacyParsed?.SERENE_PUB_DATA_DIR) {
+		rawDataDir = legacyParsed.SERENE_PUB_DATA_DIR
 		dataDirSource = "install-env"
 	}
 
-	// Relative values (the portable `SERENE_PUB_DATA_DIR=./data`) resolve
-	// against the launch directory, exactly as they do everywhere else the
-	// data directory is joined onto.
+	// A relative value (the portable `SERENE_PUB_DATA_DIR=./data`) is anchored
+	// to the install root, NOT to the working directory. In a release that
+	// working directory is the app/ folder an update replaces wholesale, so
+	// resolving `./data` there would put the user's database inside the thing
+	// being deleted. Anchoring it once, here, is also what lets every reader
+	// downstream stay unchanged: `dataDir` leaves this function absolute.
+	const dataDir = path.resolve(resolvedRoot, rawDataDir)
+
 	const dataEnvPath = path.resolve(dataDir, ".env")
-	const sameFile = dataEnvPath === installEnvPath
-	const dataSource = sameFile ? installSource : readFile(dataEnvPath)
+	const sameFile = dataEnvPath === legacyEnvPath
+	const dataSource = sameFile ? legacySource : readFile(dataEnvPath)
 	const dataParsed = sameFile
-		? installParsed
+		? legacyParsed
 		: dataSource === null
 			? null
 			: dotenv.parse(dataSource)
@@ -143,7 +217,7 @@ export function planEnvLoad({
 	/** @type {[boolean, Record<string, string> | null][]} */
 	const passes = [
 		[false, dataParsed],
-		[!sameFile, installParsed]
+		[!sameFile, legacyParsed]
 	]
 	for (const [isLegacy, parsed] of passes) {
 		if (!parsed) continue
@@ -158,13 +232,18 @@ export function planEnvLoad({
 	/** @type {string[]} */
 	const load = []
 	if (dataParsed !== null) load.push(dataEnvPath)
-	if (installParsed !== null && !sameFile) load.push(installEnvPath)
+	if (legacyParsed !== null && !sameFile && legacyEnvPath !== null) {
+		load.push(legacyEnvPath)
+	}
 
 	return {
+		installRoot: resolvedRoot,
 		dataDir,
 		dataDirSource,
 		dataEnvPath,
-		installEnvPath,
+		legacyCandidates,
+		legacyEnvPath,
+		legacyIgnoredPaths,
 		load,
 		applied,
 		legacyKeys
@@ -186,9 +265,13 @@ function derive(record, key, value) {
 	record[key] = value
 }
 
+// Stated by the entrypoint that knows the layout (dist-assets/*/app/run.*),
+// never inferred: an entrypoint that says nothing gets process.cwd(), which is
+// what a source checkout, Docker, and every pre-app/ release already relied on.
 const plan = planEnvLoad({
 	processEnv: process.env,
-	installDir: process.cwd(),
+	installRoot: process.env.SERENE_PUB_INSTALL_ROOT || process.cwd(),
+	cwd: process.cwd(),
 	readFile: (filePath) => {
 		try {
 			return fs.readFileSync(filePath, "utf8")
@@ -201,10 +284,27 @@ const plan = planEnvLoad({
 })
 
 // dotenv never overwrites a key the environment already has, so reading the
-// data-directory file first and the legacy install-dir file second produces
-// exactly the documented precedence, while still honoring anything only the
-// legacy file supplies.
+// data-directory file first and the legacy file second produces exactly the
+// documented precedence, while still honoring anything only the legacy file
+// supplies.
 for (const file of plan.load) dotenv.config({ path: file })
+
+// SERENE_PUB_DATA_DIR is the one variable whose VALUE has to be rewritten
+// rather than merely applied. Everything downstream — getAppDataDir() in
+// utils/index.ts and in drizzle.config.ts, RuntimeManager's plugin storage
+// root — reads it straight from the environment and resolves a relative value
+// against whatever the working directory happens to be by then. That is how
+// `SERENE_PUB_DATA_DIR=./data` would land inside the app/ folder an update
+// deletes. Writing the already-anchored absolute path back means no reader
+// downstream has to know any of this.
+//
+// Guarded on it already being set, so a default install is left with the
+// variable genuinely absent — RuntimeManager treats presence as "the operator
+// chose a data directory" and enabling plugin storage as a side effect of a
+// path fix would be an unrelated behavior change.
+if (process.env.SERENE_PUB_DATA_DIR) {
+	process.env.SERENE_PUB_DATA_DIR = plan.dataDir
+}
 
 /** @type {Record<string, string>} */
 const derived = {}
@@ -244,10 +344,12 @@ if (publicUrl) {
 // deprecated install-dir location when something actually came from it.
 globalThis.__serenePubEnvPreloaded = {
 	derived,
+	installRoot: plan.installRoot,
 	dataDir: plan.dataDir,
 	dataDirSource: plan.dataDirSource,
 	dataEnvPath: plan.dataEnvPath,
 	loaded: plan.load,
-	legacyEnvPath: plan.legacyKeys.length > 0 ? plan.installEnvPath : null,
+	legacyEnvPath: plan.legacyKeys.length > 0 ? plan.legacyEnvPath : null,
+	legacyIgnoredPaths: plan.legacyIgnoredPaths,
 	legacyKeys: plan.legacyKeys
 }

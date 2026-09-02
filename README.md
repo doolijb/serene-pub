@@ -350,11 +350,13 @@ No config files, no build step, no separate services to wire up.
 
 | Platform | Get Serene Pub |
 | --- | --- |
-| 🪟 **Windows** | [Download](https://github.com/doolijb/serene-pub/releases) → extract → run `run.cmd` |
-| 🍎 **macOS** | [Download](https://github.com/doolijb/serene-pub/releases) → extract → run `run.sh` (first launch may need right-click → Open; see [Troubleshooting](docs/troubleshooting.md)) |
-| 🐧 **Linux** | [Download](https://github.com/doolijb/serene-pub/releases) → extract → run `run.sh` (`install-desktop-shortcut.sh` adds a desktop icon) |
+| 🪟 **Windows** | [Download](https://github.com/doolijb/serene-pub/releases) → extract → run `Serene Pub.bat` (or `run.cmd`) |
+| 🍎 **macOS** | [Download](https://github.com/doolijb/serene-pub/releases) → extract → open `Serene Pub.app` (first launch may need right-click → Open; see [Troubleshooting](docs/troubleshooting.md)) |
+| 🐧 **Linux** | [Download](https://github.com/doolijb/serene-pub/releases) → extract → run `run.sh` (`install-desktop-shortcut.sh` adds an app-menu entry) |
 | 📱 **Android** | [Download the APK](https://github.com/doolijb/serene-pub/releases) → install → open |
 | 🐳 **Docker** | `docker compose -f docker-compose.dist.yml up -d` — see [Docker](#-docker) below |
+
+Every desktop archive extracts to a single `serene-pub/` folder. Everything that *is* the application sits in `app/` inside it, with the launcher beside it — so **to upgrade, extract the new archive over your existing folder**. Your characters, sessions and settings are never in there; they live in your [data directory](docs/environment-variables.md#where-env-lives). Running headless, or from a service unit? Use `app/run.sh` (`app\run.cmd` on Windows), which starts the server alone.
 
 Desktop opens at [http://localhost:3000](http://localhost:3000); Android opens straight into the app. The **Setup Wizard** connects an AI provider (or installs KoboldCPP/Ollama for you), then walks you through your first character, persona and chat.
 

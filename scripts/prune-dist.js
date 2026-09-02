@@ -31,8 +31,12 @@ function rmMatching(dir, predicate) {
 }
 
 /**
- * @param {string} outDir - the dist/<target>/ directory bundle-dist.js just
- *   assembled (already contains build/, static/, node_modules/, drizzle/).
+ * @param {string} outDir - the payload directory bundle-dist.js just assembled
+ *   (already contains build/, node_modules/, drizzle/). That is the bundle's
+ *   app/ directory — or, on macOS, Serene Pub.app/Contents/Resources/app — not
+ *   the top of the extracted folder; see scripts/dist-layout.js. Every path
+ *   below is relative to it, so the rules did not have to change when the
+ *   payload moved.
  * @param {{name: string, platform: string, arch: string}} target - the same
  *   target object bundle-dist.js already resolved from its targets list.
  */
@@ -255,11 +259,13 @@ export function dirSizeBytes(dir) {
 	return total
 }
 
-// Per-target uncompressed size ceiling for the CI guard (release.yml) —
-// set a comfortable margin above the measured post-prune size, not a tight
-// tripwire; the point is catching a dependency bump silently reintroducing
-// hundreds of MB, not policing byte-level drift. Re-measure and adjust
-// after any deliberate, expected size change (e.g. a new bundled feature).
+// Per-target uncompressed size ceiling for the CI guard (release.yml). Measured
+// over the whole staging directory, so it covers the app/ payload plus the docs
+// and launchers beside it. Set a comfortable margin above the measured
+// post-prune size, not a tight tripwire; the point is catching a dependency bump
+// silently reintroducing hundreds of MB, not policing byte-level drift.
+// Re-measure and adjust after any deliberate, expected size change (e.g. a new
+// bundled feature).
 //
 // Raised for the desktop targets in 0.5.0-rc-3 after a MEASURED breakdown, not
 // a wave-through. macos-arm64 came in at 308.8 MB against the old 220 ceiling,

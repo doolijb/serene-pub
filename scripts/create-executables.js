@@ -32,7 +32,10 @@ const platforms = {
 		name: "Serene Pub",
 		executable: "Serene Pub",
 		icon: "favicon.png",
-		desktop: "Serene Pub.desktop"
+		// No .desktop key: an entry can only be written once the install
+		// location is known, so install-desktop-shortcut.sh writes it on the
+		// user's machine instead. See createLinuxExecutable().
+		desktopInstaller: "install-desktop-shortcut.sh"
 	},
 	macos: {
 		name: "Serene Pub.app",
@@ -90,7 +93,7 @@ async function createExecutables() {
 		'  Windows: Convert "Serene Pub.bat" to "Serene Pub.exe" with custom icon'
 	)
 	console.log(
-		'  Linux: Use "Serene Pub" executable or "Serene Pub.desktop" file'
+		'  Linux: Use the "Serene Pub" executable, or run install-desktop-shortcut.sh to add a menu entry'
 	)
 	console.log("  macOS: Convert favicon.png to .icns and place in app bundle")
 }
@@ -129,22 +132,33 @@ async function createLinuxExecutable(platformDir, config) {
 	// the user actually extracted the release — a value baked in here, at
 	// build time, only ever reflects the build machine's own path (this repo
 	// shipped exactly that bug: the checked-in .desktop file pointed at a
-	// path that exists on no user's machine). Generate an installer script
-	// instead, shipped alongside run.sh, that a user runs once after
-	// extracting — it resolves its own directory at runtime (same pattern
-	// already used by the executable wrapper below) and writes the .desktop
-	// file with the correct local paths right there.
+	// path that exists on no user's machine, and bundle-dist.js copied it
+	// verbatim into every Linux release). Generate an installer script
+	// instead, shipped at the top of the extracted folder, that a user runs
+	// once — it resolves its own directory at runtime (same pattern already
+	// used by the executable wrapper below) and writes the entry, with the
+	// correct local paths, into the user's own applications directory where
+	// the desktop menu actually reads it from.
 	const installScript = path.join(platformDir, "install-desktop-shortcut.sh")
 	const installScriptContent = `#!/bin/bash
-# Creates a Linux desktop shortcut for Serene Pub, pointing at wherever this
-# script actually lives — run this once after extracting the release.
+# Adds Serene Pub to your applications menu, pointing at wherever this folder
+# actually is — run this once after extracting the release, and again if you
+# move the folder. Nothing else is installed anywhere on your system.
 set -e
 DIR="$( cd "$( dirname "\${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
+# The spec-mandated location for a per-user entry. The menu only reads entries
+# from here (or the system-wide /usr/share/applications) — a .desktop file left
+# sitting in the extracted folder is not "installed" in any sense, which is
+# what the previous version of this script produced.
+APPS_DIR="\${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+DESKTOP_FILE="$APPS_DIR/serene-pub.desktop"
+mkdir -p "$APPS_DIR"
+
 # Only Exec= needs the Desktop Entry spec's own quoting rules — it's the one
 # field parsed as a command line (space-separated arguments), so a value
-# containing a space (the common case here — "Serene Pub" is the app's own
-# name) must be double-quoted, with any literal backslash/backtick/dollar/
+# containing a space (the common case here — people extract into paths with
+# spaces) must be double-quoted, with any literal backslash/backtick/dollar/
 # double-quote within it escaped with a backslash. Icon= and Path= are plain
 # single string values, not argument lists — confirmed against
 # desktop-file-validate, which flags a quoted Icon/Path as *not* looking
@@ -154,7 +168,10 @@ escape_exec_value() {
 }
 ESCAPED_DIR="$(escape_exec_value "$DIR")"
 
-DESKTOP_FILE="$DIR/Serene Pub.desktop"
+# Exec= points at the top-level run.sh forwarder, never straight into app/:
+# app/ is the directory an update replaces wholesale, and a later release
+# swaps this forwarder for a compiled launcher at the same path. Both stay
+# true for an entry written against run.sh.
 cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Version=1.0
@@ -168,17 +185,24 @@ Categories=Network;Chat;
 StartupNotify=true
 Path=$DIR
 EOF
-chmod +x "$DESKTOP_FILE"
 
-echo "Desktop shortcut created: $DESKTOP_FILE"
-echo "Double-click it to launch Serene Pub, or copy it to ~/.local/share/applications/ to add it to your app menu."
+# Some desktops cache the menu; harmless and absent on plenty of systems.
+if command -v update-desktop-database > /dev/null 2>&1; then
+    update-desktop-database "$APPS_DIR" > /dev/null 2>&1 || true
+fi
+
+echo "Serene Pub added to your applications menu."
+echo "Entry: $DESKTOP_FILE"
+echo "Remove it again with: rm \\"$DESKTOP_FILE\\""
 `
 
 	fs.writeFileSync(installScript, installScriptContent)
 
 	try {
 		execSync(`chmod +x "${installScript}"`)
-		console.log(`   ✓ Linux desktop-shortcut installer created: ${installScript}`)
+		console.log(
+			`   ✓ Linux desktop-shortcut installer created: ${installScript}`
+		)
 	} catch (error) {
 		console.log(
 			`   ⚠️  Installer script created but chmod failed: ${installScript}`
@@ -247,15 +271,20 @@ async function createMacOSExecutable(platformDir, config) {
 `
 	fs.writeFileSync(infoPlist, plistContent)
 
-	// Create executable script that launches the existing run.sh
+	// Create executable script that launches the bare entrypoint inside the
+	// bundle. It used to cd to the .app directory and exec ./run.sh there —
+	// a path nothing ever wrote a run.sh to, so double-clicking the bundle
+	// could never have worked. The application now lives at
+	// Contents/Resources/app (one directory an update can replace in a single
+	// rename), and its run.sh is what this execs.
 	const executableScript = path.join(macOSDir, "serene-pub")
 	const scriptContent = `#!/bin/bash
 # Serene Pub Application Launcher for macOS
-# This launches the main run.sh script
+# Launches the bare entrypoint inside this bundle's Resources/app directory,
+# which holds the entire application so an update can replace it in one rename.
 APP_DIR="$( cd "$( dirname "\${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-BUNDLE_DIR="$( cd "$APP_DIR/../.." &> /dev/null && pwd )"
-cd "$BUNDLE_DIR"
-exec ./run.sh
+RESOURCES_DIR="$( cd "$APP_DIR/../Resources" &> /dev/null && pwd )"
+exec "$RESOURCES_DIR/app/run.sh"
 `
 
 	fs.writeFileSync(executableScript, scriptContent)

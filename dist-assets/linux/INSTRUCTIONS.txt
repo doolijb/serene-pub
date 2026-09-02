@@ -2,22 +2,42 @@ Welcome to Serene Pub for Linux!
 
 Thank you for downloading Serene Pub.
 
-To run the app:
+What's in this folder
+---------------------
+
+   serene-pub/
+     run.sh                       <- start here
+     Serene Pub                   <- the same thing, for double-clicking
+     install-desktop-shortcut.sh  <- optional: adds Serene Pub to your app menu
+     .env.example                 <- settings reference
+     app/                         <- the application itself
+       run.sh                     <- starts only the server, no launcher
+
+Everything that IS the application lives in "app/". An update replaces that one
+folder in a single move, which is why nothing you own is kept inside it — your
+database and settings live in your data directory instead (see Configuration
+below).
+
+To run the app
+--------------
 
 1. Extract the archive to your preferred location.
 2. Choose one of the following ways to start the app:
 
    a) Graphical (no terminal required):
-      - In your file manager, right-click the "run.sh" file.
-      - Select "Properties" and ensure "Allow executing file as program" (or similar) is checked. Save and close the dialog.
-      - Right-click the "run.sh" icon again and choose "Run as program" (wording may vary by desktop environment).
+      - In your file manager, right-click the "run.sh" file (the one at the top
+        of the folder, not the one inside "app").
+      - Select "Properties" and ensure "Allow executing file as program" (or
+        similar) is checked. Save and close the dialog.
+      - Right-click the "run.sh" icon again and choose "Run as program"
+        (wording may vary by desktop environment).
       - This will open a terminal and start the app.
 
    b) Terminal method:
       - Open a terminal window.
-      - Navigate to the extracted folder (e.g., serene-pub-<version>-linux):
+      - Navigate to the extracted folder:
 
-            cd /path/to/serene-pub-<version>-linux
+            cd /path/to/serene-pub
 
       - Run the app with:
 
@@ -25,33 +45,95 @@ To run the app:
 
       - If you get a permission error, run: chmod +x run.sh
 
-3. Node.js runtime is included - no installation or download required! The application will start immediately.
+   c) Headless / server / systemd:
+      - Run "app/run.sh" instead. It starts the Node server and nothing else —
+        no launcher, no browser — which is what you want over ssh, in a tmux
+        session, in a systemd unit, or when debugging a startup problem. It
+        takes the same settings as any other launch method.
+
+   d) Application menu:
+      - Run "install-desktop-shortcut.sh" once to add Serene Pub to your
+        desktop's application menu. It writes an entry into
+        ~/.local/share/applications/ pointing at this folder, so run it again
+        if you ever move the folder.
+
+3. Node.js runtime is included - no installation or download required! The
+   application will start immediately.
 
 4. To stop the application, press Ctrl+C in the terminal window.
 
-5. Optional Configuration:
-   - Copy ".env.example" to ".env" to customize settings
-   - Edit ".env" to set custom data directory: SERENE_PUB_DATA_DIR=/path/to/data
-   - Change server ports: SOCKETS_PORT=3001, PORT=3000
-   - Disable auto-browser opening: SERENE_AUTO_OPEN=1
+5. On your host machine, access Serene Pub from http://0.0.0.0:3000 or
+   http://localhost:3000.
 
-5. On your host machine, access Serene Pub from http://0.0.0.0:3000 or http://localhost:3000.
+Configuration
+-------------
 
-Notes:
-- Serene Pub will attempt to automatically identify your local network IP address, allowing access across other devices (e.g. mobile phones.)
-    - If you run " hostname -I | awk '{print $1}' " in the terminal and the result is 192.168.68.69, 
-    then you can access Serene Pub from your phone by navigating to http://192.168.68.69:3000
+Serene Pub runs with no configuration at all — this section is only for
+changing something specific, like the port.
 
-Troubleshooting:
-- If double-clicking "Serene Pub" does not open a terminal, try the terminal method above.
+Settings go in a ".env" file in your DATA directory, not in this folder:
+
+      ~/.local/share/SerenePub/.env
+
+".env.example" (at the top of this folder) lists every available setting with
+an explanation; copy it to the path above and edit it there. Common ones:
+
+   - PORT=3000                    change the web UI's port
+   - HOST=127.0.0.1               local connections only
+   - SERENE_AUTO_OPEN=1           don't open a browser tab on startup
+   - SERENE_PUB_DATA_DIR=...      keep your data somewhere else entirely
+
+Why the data directory and not this folder? Because an update replaces the
+application folder, so a settings file kept next to the program is deleted the
+first time you upgrade. Serene Pub prints the settings files it actually read
+each time it starts.
+
+(SERENE_PUB_DATA_DIR is the one exception: it chooses the data directory, so it
+has to be set in a ".env" at the top of this folder, or as a real environment
+variable. A relative path like "./data" is resolved against this folder, so it
+means the same place wherever you launch from.)
+
+Upgrading
+---------
+
+Download the new release and extract it over your existing "serene-pub" folder,
+replacing files when asked. Your database and settings are untouched — they
+live in your data directory, not here.
+
+Notes
+-----
+
+- Serene Pub will attempt to automatically identify your local network IP
+  address, allowing access across other devices (e.g. mobile phones.)
+    - If you run " hostname -I | awk '{print $1}' " in the terminal and the
+      result is 192.168.68.69, then you can access Serene Pub from your phone
+      by navigating to http://192.168.68.69:3000
+
+Troubleshooting
+---------------
+
+- If double-clicking "Serene Pub" does not open a terminal, try the terminal
+  method above.
 - If you see a message about missing permissions, run: chmod +x run.sh
-- If your system does not have curl or a supported terminal, install curl (sudo apt install curl) or use the terminal method above.
+- If the app fails to start and the window closes too fast to read, run
+  "app/run.sh" from a terminal — it prints the server's output directly.
+- If your system does not have curl or a supported terminal, install curl
+  (sudo apt install curl) or use the terminal method above.
 
-Feedback & Help:
+Feedback & Help
+---------------
+
 - For questions, feedback, or to report issues, please visit:
   https://github.com/doolijb/serene-pub
 
-Uninstall:
-- To remove Serene Pub, simply delete the extracted folder. No files are installed outside this directory.
+Uninstall
+---------
+
+- Delete this folder to remove the program.
+- Your characters, sessions and settings live separately, in
+  ~/.local/share/SerenePub — delete that too if you want everything gone, or
+  keep it to carry your data to a future install.
+- If you ran install-desktop-shortcut.sh, also remove
+  ~/.local/share/applications/serene-pub.desktop
 
 Enjoy using Serene Pub!
