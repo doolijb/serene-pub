@@ -652,7 +652,14 @@ async function resolveHfModel(
 			if (pullOptions.length > 0) {
 				return {
 					name: m.id,
-					description: m.description || m.pipeline_tag,
+					// NOT `|| m.pipeline_tag`. The HF *search* endpoint returns no
+					// `description` field at all, so that fallback always produced a bare
+					// tag string ("text-generation", "image-text-to-text"). Being truthy,
+					// it then won the `hf.description || ym.details.description` race in
+					// koboldCppRecommendedModelsHandler below, suppressing the curated
+					// description from recommended.yaml for every model whose repo
+					// carries a pipeline tag — 10 of 13 entries at the time of writing.
+					description: m.description,
 					downloads: m.downloads,
 					likes: m.likes,
 					trendingScore: m.trendingScore,

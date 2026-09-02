@@ -86,9 +86,24 @@ export const contextConfigsCreate: Handler<
 			)
 		}
 
+		// seedKey marks a row as one of the built-in seeded configs and is
+		// UNIQUE, so it must never come from the client. The sidebars build a
+		// "New" config by spreading the currently-selected one and deleting a
+		// couple of fields; cloning a SEEDED config therefore carried its
+		// seedKey straight through and the insert died on the unique index:
+		//   duplicate key value violates unique constraint "context_configs_seed_key_unique"
+		//   a duplicate seed_key.
+		//
+		// id is stripped for the same reason personasCreate strips it: both are
+		// server-owned, and honouring either lets a caller collide with or
+		// overwrite an existing row. Done here rather than in the sidebar
+		// because a handler must not trust its payload — the sidebar already
+		// deletes `id` and still missed this one.
+		const { id: _id, seedKey: _seedKey, ...contextConfigValues } = (params.contextConfig ?? {}) as any
+
 		const [contextConfig] = await db
 			.insert(schema.contextConfigs)
-			.values(params.contextConfig)
+			.values(contextConfigValues)
 			.returning()
 		await contextConfigsListHandler.handler(socket, {}, emitToUser)
 		const res: Sockets.ContextConfigs.Create.Response = { contextConfig }

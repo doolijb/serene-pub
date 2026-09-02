@@ -1,7 +1,15 @@
 # ============================================================
 # Stage 1 — Build
 # ============================================================
-FROM node:24-alpine AS builder
+# Must match the runtime stage's libc (Debian/glibc, see below). npm resolves
+# native packages against the *build* platform, and this stage's node_modules
+# is copied wholesale into the runtime stage — so building on Alpine picks
+# @img/sharp-linuxmusl-x64, which then can't load on glibc. sharp is a hard
+# (statically imported) dependency of @huggingface/transformers, so that
+# failure takes the whole local-embeddings engine down with it: the import
+# probe in embedding/index.ts throws, and the app reports local embeddings as
+# unsupported on every Docker deployment.
+FROM node:24-bookworm-slim AS builder
 
 WORKDIR /app
 

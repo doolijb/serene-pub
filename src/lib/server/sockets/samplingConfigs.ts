@@ -248,6 +248,26 @@ export const samplingConfigsCreate: Handler<
 			throw new Error(error)
 		}
 
+		// seedKey marks a row as one of the built-in seeded configs and is
+		// UNIQUE, so it must never come from the client. The sidebars build a
+		// "New" config by spreading the currently-selected one and deleting a
+		// couple of fields; cloning a SEEDED config therefore carried its
+		// seedKey straight through and the insert died on the unique index:
+		//   duplicate key value violates unique constraint "sampling_configs_seed_key_unique"
+		//   Key (seed_key)=(sampling-default) already exists.
+		//
+		// id is stripped for the same reason personasCreate strips it: both are
+		// server-owned, and honouring either lets a caller collide with or
+		// overwrite an existing row. Done here rather than in the sidebar
+		// because a handler must not trust its payload — the sidebar already
+		// deletes `id` and still missed this one. normalizeSamplingRow returns
+		// only shape/values/enabled, so neither key can sneak back in below.
+		const {
+			id: _id,
+			seedKey: _seedKey,
+			...samplingValues
+		} = (params.sampling ?? {}) as any
+
 		// Normalised on the way in, so a config a person saved through the form
 		// and one this build seeded are byte-for-byte the same kind of row:
 		// values coerced to the types the shape declares (a form input arrives
@@ -257,7 +277,7 @@ export const samplingConfigsCreate: Handler<
 		const [sampling] = await db
 			.insert(schema.samplingConfigs)
 			.values({
-				...params.sampling,
+				...samplingValues,
 				...normalizeSamplingRow(params.sampling)
 			})
 			.returning()

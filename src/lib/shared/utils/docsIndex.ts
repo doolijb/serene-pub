@@ -43,6 +43,7 @@ export const DOC_ORDER: string[] = [
 	"importing-from-sillytavern",
 	"troubleshooting",
 	"android",
+	"hosting",
 	"environment-variables"
 ]
 

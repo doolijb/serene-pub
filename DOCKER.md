@@ -80,7 +80,8 @@ volumes:
 
 All variables are optional unless noted. This is the Docker-relevant subset —
 for the full reference, including reverse-proxy trust settings
-(`PROTOCOL_HEADER`/`HOST_HEADER`), see [HOSTING.md](./HOSTING.md).
+(`PROTOCOL_HEADER`/`HOST_HEADER`/`TRUSTED_PROXIES`) and `PUBLIC_URL`, see
+[docs/hosting.md](./docs/hosting.md).
 
 | Variable                                         | Default                                   | Description                                                                                                        |
 | ------------------------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -114,8 +115,9 @@ Serene Pub serves the web app and its realtime connection from a single
 port (`PORT`, default `3000`), so proxying that one port is all that's
 required — but your proxy **must forward WebSocket upgrade requests**
 (`Upgrade` / `Connection` headers) for `/socket.io/` to work. See
-[HOSTING.md](./HOSTING.md#reverse-proxy--tunnel-same-host) for a full nginx
-example (including Nginx Proxy Manager) and `HOST_HEADER`, plus a
+[docs/hosting.md](./docs/hosting.md#reverse-proxy-or-tunnel-on-the-same-host)
+for a full nginx example (including Nginx Proxy Manager) and the matching
+environment variables (`PUBLIC_URL`, `TRUSTED_PROXIES`, `HOST_HEADER`), plus a
 troubleshooting table for the "mixed content" / CORS / timeout errors this
 typically shows up as when misconfigured.
 

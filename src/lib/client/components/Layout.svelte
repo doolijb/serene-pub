@@ -24,6 +24,7 @@
 	import ActivitySidebar from "$lib/client/components/sidebars/ActivitySidebar.svelte"
 	import ConnectionTimeoutModal from "$lib/client/components/ConnectionTimeoutModal.svelte"
 	import PipelineReviewModal from "$lib/client/components/pipelines/PipelineReviewModal.svelte"
+	import UpdateNoticeBar from "$lib/client/components/UpdateNoticeBar.svelte"
 	import type { Snippet } from "svelte"
 	import { Theme } from "$lib/client/consts/Theme"
 	import OllamaIcon from "./icons/OllamaIcon.svelte"
@@ -990,8 +991,25 @@
 		     panel (plan 21) — they no longer paint as fixed viewport overlays
 		     here. The `sceneImages` store is still the set path (the avatar
 		     gallery writes it); `ScenePortraitsPanel` is now their display. -->
+		<!--
+			overflow-CLIP, not overflow-hidden. Both clip identically, but
+			`hidden` still establishes a scroll container: the browser can
+			scroll it programmatically even though the user cannot. Focusing a
+			control low in a side panel (any switch under the lorebook entry's
+			Advanced Settings, for instance) therefore made the browser
+			scrollIntoView this shell, shifting the ENTIRE app up by however
+			much its content overflowed and leaving dead space at the bottom —
+			with no way to scroll back, because the overflow is hidden. That is
+			the "layout collapse" reported when toggling Pinned; it was never
+			specific to Pinned, or to lorebooks.
+
+			`clip` establishes no scroll container at all, so there is nothing
+			for focus to scroll. Fixing the underlying overflow would be the
+			other half, but this makes the shell structurally unable to move
+			regardless of what a panel's content does.
+		-->
 		<div
-			class="relative z-10 flex h-svh max-w-full min-w-full flex-1 flex-col overflow-hidden lg:flex-row lg:gap-2"
+			class="relative z-10 flex h-svh max-w-full min-w-full flex-1 flex-col overflow-clip lg:flex-row lg:gap-2"
 		>
 			<!-- Left Sidebar -->
 			<!--
@@ -1176,8 +1194,17 @@
 				{ ...panelsCtx.leftNav, ...panelsCtx.rightNav }[
 					panelsCtx.mobilePanel
 				]?.title || panelsCtx.mobilePanel}
+			<!--
+				z-45, deliberately BELOW the z-50 that Skeleton's modals portal
+				to. This was z-51 — one above the modal layer — so any modal
+				opened from inside a mobile panel (the "Create New AI
+				Connection" dialog, for instance) mounted correctly on <body>
+				and then rendered completely behind the panel it was launched
+				from. It has to stay above the mobile menu and its backdrop
+				(z-40), hence 45 rather than something lower.
+			-->
 			<div
-				class="bg-surface-100-900 fixed inset-0 z-[51] flex flex-col overflow-y-auto lg:hidden"
+				class="bg-surface-100-900 fixed inset-0 z-[45] flex flex-col overflow-y-auto lg:hidden"
 				role="dialog"
 				aria-labelledby="mobile-panel-title"
 				aria-modal="true"
@@ -1336,6 +1363,12 @@
      reply, a summarize, an event — and the card has to reach the person
      whichever screen they are on. -->
 <PipelineReviewModal />
+
+<!-- Update notice. Rendered here rather than in +layout.svelte because that
+     file is the parent of this one and so cannot read userCtx (context flows
+     down), and because a notice only an admin can act on has no business
+     appearing over the login screen. -->
+<UpdateNoticeBar isAdmin={!!userCtx.user?.isAdmin} />
 
 <style lang="postcss">
 	@reference "tailwindcss";

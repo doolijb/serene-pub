@@ -7,7 +7,11 @@ import { vitePreprocess } from "@sveltejs/vite-plugin-svelte"
 // Cloudflare with that feature on. Comma-separated. Prefer disabling such
 // features at the CDN/proxy level over widening this, since it's an
 // injected script this app has no control over — but the escape hatch
-// exists for cases where that isn't an option. See HOSTING.md.
+// exists for cases where that isn't an option. See docs/hosting.md.
+// NOTE: these are ALSO merged in at runtime by src/hooks.server.ts, which is
+// now the primary path — nothing passes them at build time for published
+// artifacts, so the build-time values here are only a convenience for people
+// building their own image.
 function cspList(envVar) {
 	return (process.env[envVar] || "")
 		.split(",")

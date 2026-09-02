@@ -5,7 +5,7 @@ Thank you for downloading Serene Pub.
 To run the app:
 
 1. Extract the archive to your preferred location.
-2. Double-click the "run.cmd" file to start Serene Pub.
+2. Double-click the "Serene Pub.bat" file to start Serene Pub.
 
    - Node.js runtime is included - no installation or download required!
    - The application will start immediately.

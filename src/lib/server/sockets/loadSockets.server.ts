@@ -1,17 +1,19 @@
-import dotenv from "dotenv"
 import os from "os"
 import { Server as SocketIOServer } from "socket.io"
 import type { Server as HttpServer } from "http"
 import { connectSockets } from "$lib/server/sockets/index"
 import { authMiddleware } from "$lib/server/sockets/auth"
 import {
-	describeOriginAllowlistConfig,
 	isOriginAllowed,
 	isWildcardAllowed
 } from "$lib/server/sockets/originAllowlist"
 import { startPeriodicVectorizationScan } from "$lib/server/embedding/vectorizationQueue"
 
-dotenv.config()
+// .env loading lives in $lib/server/config/preloadEnv, which runs before the
+// server framework reads its own configuration. It used to be a dotenv.config()
+// right here — far too late to matter, since adapter-node snapshots
+// ORIGIN/PROTOCOL_HEADER/HOST_HEADER at its own module scope and
+// $env/dynamic/public is frozen by then.
 
 /**
  * Round-12 audit fix (MEDIUM): the compose files' own comment already
@@ -39,7 +41,7 @@ export async function warnIfOpenAdminExposure() {
 	console.warn(
 		"WARNING: user accounts are disabled and ALLOWED_ORIGINS=* is set — " +
 			"every connection that can reach this port is auto-attached as an unauthenticated admin. " +
-			"If this instance isn't behind a reverse proxy or otherwise network-isolated, see HOSTING.md's " +
+			"If this instance isn't behind a reverse proxy or otherwise network-isolated, see docs/hosting.md's " +
 			'"Running behind a reverse proxy" section, or enable user accounts (Settings > System) to require login.'
 	)
 }
@@ -112,10 +114,11 @@ export async function attachSocketServer(httpServer: HttpServer) {
 	if (process.env.NODE_ENV !== "production") {
 		console.log("Socket server attached to the app server")
 	}
-	// Always printed (including production) — this is exactly the
-	// information an admin needs to confirm their deployment's actual
-	// exposure without reading docs, not just a dev convenience.
-	console.log(describeOriginAllowlistConfig())
+	// The origin-allowlist summary that used to print here is now part of the
+	// startup banner (config/bootstrapEnv), so it appears once at boot with the
+	// rest of the hosting configuration rather than when the first request
+	// happens to attach the socket server. warnIfOpenAdminExposure stays here
+	// because it needs the database, which is not available that early.
 	await warnIfOpenAdminExposure()
 
 	// Periodically (re-)start the vectorization queue if enabled — first

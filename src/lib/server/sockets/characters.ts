@@ -436,6 +436,11 @@ async function claimIncomingCharacterUuid(
 	return existing ? undefined : incomingUuid
 }
 
+/** First candidate that's actually an array, else undefined. */
+function firstArray<T>(...candidates: unknown[]): T[] | undefined {
+	return candidates.find(Array.isArray) as T[] | undefined
+}
+
 export function characterFieldsFromParsedData(
 	data: any
 ): Omit<typeof schema.characters.$inferInsert, "userId" | "isFavorite"> {
@@ -456,12 +461,23 @@ export function characterFieldsFromParsedData(
 		postHistoryInstructions: data.post_history_instructions || null,
 		characterVersion: data.character_version || null,
 		creator: data.creator || null,
-		source: Array.isArray(data.extensions?.source)
-			? data.extensions.source
-			: [],
-		groupOnlyGreetings: Array.isArray(data.extensions?.group_only_greetings)
-			? data.extensions.group_only_greetings
-			: null,
+		// V3 defines these on `data` itself; Serene Pub's own exporter (and
+		// SillyTavern before it) writes them under `extensions` instead. Read
+		// both, spec location first, or every spec-compliant card from another
+		// tool imports with these silently emptied.
+		source: firstArray(data.source, data.extensions?.source) ?? [],
+		groupOnlyGreetings:
+			firstArray(
+				data.group_only_greetings,
+				data.extensions?.group_only_greetings
+			) ?? null,
+		// Straight V3 fields with a column each — dropped entirely until now.
+		creatorNotesMultilingual:
+			data.creator_notes_multilingual &&
+			typeof data.creator_notes_multilingual === "object"
+				? data.creator_notes_multilingual
+				: null,
+		assets: firstArray(data.assets) ?? [],
 		aliases: Array.isArray(
 			data.extensions?.serenepub?.aliases ?? data.extensions?.aliases
 		)
@@ -472,35 +488,85 @@ export function characterFieldsFromParsedData(
 	}
 }
 
+/**
+ * Warnings from an import step that failed WITHOUT invalidating the import
+ * itself. Attached to the success response rather than thrown.
+ */
+export type ImportWarning = string
+
+/**
+ * Applies the avatar and tags to an already-inserted character row.
+ *
+ * The avatar write is deliberately non-fatal. It runs *after* the character
+ * row is committed, and it rejects anything over 10MB or not a recognized
+ * image — which real SillyTavern cards hit routinely, since the card IS a
+ * full-resolution PNG portrait. Letting that throw meant the caller reported
+ * "import failed" for a character that was already in the database and then
+ * appeared on the next refresh, while the character list was never told to
+ * update. The character's actual content parsed fine; only its portrait was
+ * unusable, so the honest outcome is a successful import carrying a warning.
+ *
+ * A genuine failure earlier in the import (bad card, failed insert) still
+ * throws, so an error really does mean nothing was imported.
+ */
 async function applyAvatarAndTags(
 	character: typeof schema.characters.$inferSelect,
 	avatarBuffer: Buffer | undefined,
 	tags: string[] | undefined,
 	userId: number,
 	dbOrTx: Executor = db
-) {
+): Promise<{
+	character: typeof schema.characters.$inferSelect
+	warnings: ImportWarning[]
+}> {
+	const warnings: ImportWarning[] = []
 	if (avatarBuffer) {
-		await handleCharacterAvatarUpload({
-			character,
-			avatarFile: avatarBuffer
-		})
-		const updatedCharacter = await dbOrTx.query.characters.findFirst({
-			where: eq(schema.characters.id, character.id)
-		})
-		if (updatedCharacter) Object.assign(character, updatedCharacter)
+		try {
+			await handleCharacterAvatarUpload({
+				character,
+				avatarFile: avatarBuffer
+			})
+			const updatedCharacter = await dbOrTx.query.characters.findFirst({
+				where: eq(schema.characters.id, character.id)
+			})
+			if (updatedCharacter) Object.assign(character, updatedCharacter)
+		} catch (e: any) {
+			const reason = e?.message || String(e)
+			console.warn(
+				`Character ${character.id} imported without its avatar: ${reason}`
+			)
+			warnings.push(`The card's image could not be saved: ${reason}`)
+		}
 	}
 	if (tags && tags.length > 0) {
-		await processCharacterTags(character.id, tags, userId, dbOrTx)
+		try {
+			await processCharacterTags(character.id, tags, userId, dbOrTx)
+		} catch (e: any) {
+			const reason = e?.message || String(e)
+			console.warn(
+				`Character ${character.id} imported without its tags: ${reason}`
+			)
+			warnings.push(`The card's tags could not be saved: ${reason}`)
+		}
 	}
-	return character
+	return { character, warnings }
 }
 
-/** Creates a brand-new character (+ avatar/tags) from parsed V3 spec data. */
+/**
+ * Creates a brand-new character (+ avatar/tags) from parsed V3 spec data.
+ *
+ * @param warnings optional sink for non-fatal problems (an unusable avatar or
+ * tags). Pass one from an import handler so the user can be told what was
+ * skipped; omit it and such problems are logged only. Kept as an out-param
+ * rather than widening the return type, since several callers only ever want
+ * the character.
+ */
 export async function createCharacterFromParsedData(
 	data: any,
 	avatarBuffer: Buffer | undefined,
 	userId: number,
-	dbOrTx: Executor = db
+	dbOrTx: Executor = db,
+	warnings?: ImportWarning[]
 ) {
 	const uuidToStamp = await claimIncomingCharacterUuid(
 		extractCharacterUuid(data),
@@ -516,13 +582,15 @@ export async function createCharacterFromParsedData(
 			isFavorite: false
 		})
 		.returning()
-	return applyAvatarAndTags(
+	const applied = await applyAvatarAndTags(
 		character,
 		avatarBuffer,
 		data.tags,
 		userId,
 		dbOrTx
 	)
+	warnings?.push(...applied.warnings)
+	return applied.character
 }
 
 /**
@@ -534,7 +602,8 @@ export async function overwriteCharacterFromParsedData(
 	data: any,
 	avatarBuffer: Buffer | undefined,
 	userId: number,
-	dbOrTx: Executor = db
+	dbOrTx: Executor = db,
+	warnings?: ImportWarning[]
 ) {
 	await dbOrTx
 		.update(schema.characters)
@@ -544,13 +613,15 @@ export async function overwriteCharacterFromParsedData(
 		where: eq(schema.characters.id, existingId)
 	})
 	if (!character) throw new Error("Character not found.")
-	return applyAvatarAndTags(
+	const applied = await applyAvatarAndTags(
 		character,
 		avatarBuffer,
 		data.tags,
 		userId,
 		dbOrTx
 	)
+	warnings?.push(...applied.warnings)
+	return applied.character
 }
 
 /**
@@ -576,6 +647,30 @@ export async function buildExistingCharacterComparisonData(
 		tags: character.characterTags?.map((ct) => ct.tag.name) || []
 	})
 	return { character, comparisonData: built.data }
+}
+
+/**
+ * Rebuilds and emits the character list after an import.
+ *
+ * Never throws: by the time this runs the character is already committed, so
+ * letting a list-refresh failure propagate would report a successful import as
+ * a failure — the exact confusion this whole path had. A stale sidebar is
+ * recoverable; a false "import failed" is not.
+ */
+async function refreshCharacterList(
+	socket: any,
+	emitToUser: any,
+	warnings: ImportWarning[]
+) {
+	try {
+		await charactersList.handler(socket, {}, emitToUser)
+	} catch (e: any) {
+		const reason = e?.message || String(e)
+		console.warn(`Character list refresh after import failed: ${reason}`)
+		warnings.push(
+			"The character list could not be refreshed — reload to see it."
+		)
+	}
 }
 
 export const charactersImportCard: Handler<
@@ -643,18 +738,28 @@ export const charactersImportCard: Handler<
 				}
 			}
 
+			const warnings: ImportWarning[] = []
 			const character = await createCharacterFromParsedData(
 				data,
 				avatarBuffer,
-				userId
+				userId,
+				db,
+				warnings
 			)
 
-			await charactersList.handler(socket, {}, emitToUser)
+			// Refreshed inside its own try/catch: the character is already
+			// committed at this point, so a failure to rebuild the list is not
+			// a failed import and must not be reported as one. Previously this
+			// (and the avatar write above) could throw straight into the outer
+			// catch, telling the user the import failed while leaving the
+			// character in the database and the sidebar stale.
+			await refreshCharacterList(socket, emitToUser, warnings)
 
 			const res: Sockets.Characters.ImportCard.Response = {
 				status: "created",
 				character,
-				book: lorebook ?? null
+				book: lorebook ?? null,
+				...(warnings.length > 0 ? { warnings } : {})
 			}
 			emitToUser("characters:importCard", res)
 			return res
@@ -686,6 +791,7 @@ export const charactersImportResolve: Handler<
 				await parseCharacterCardFromBase64(params.file)
 			const data = getRobustSpecV3Data(card)
 
+			const warnings: ImportWarning[] = []
 			let character
 			if (params.action === "overwrite") {
 				const existing = await db.query.characters.findFirst({
@@ -700,21 +806,26 @@ export const charactersImportResolve: Handler<
 					existing.id,
 					data,
 					avatarBuffer,
-					userId
+					userId,
+					db,
+					warnings
 				)
 			} else {
 				character = await createCharacterFromParsedData(
 					data,
 					avatarBuffer,
-					userId
+					userId,
+					db,
+					warnings
 				)
 			}
 
-			await charactersList.handler(socket, {}, emitToUser)
+			await refreshCharacterList(socket, emitToUser, warnings)
 
 			const res: Sockets.Characters.ImportResolve.Response = {
 				character,
-				book: lorebook ?? null
+				book: lorebook ?? null,
+				...(warnings.length > 0 ? { warnings } : {})
 			}
 			emitToUser("characters:importResolve", res)
 			return res

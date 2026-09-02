@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Tabs } from "@skeletonlabs/skeleton-svelte"
 	import type { ValueChangeDetails } from "@zag-js/tabs"
-	import { onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import {
 		appVersion,
 		appVersionDisplay
@@ -39,6 +39,10 @@
 		about: "About"
 	}
 	let sectionLabel = $derived(SECTION_LABELS[activeTab] ?? "")
+	// Read solely for the update notice's admin gate below. This panel is
+	// otherwise entirely per-user — instance-wide settings moved to /admin —
+	// but a notice only an admin can act on still has to know who is looking.
+	let userCtx: UserCtx = $state(getContext("userCtx"))
 	// Only the User tab has buffered, explicitly-saved fields now; Media acts
 	// immediately, so there is nothing to lose by leaving it. Kept as the
 	// shared flag rather than folded into UserSettingsTab because the guard is
@@ -105,7 +109,9 @@
 </script>
 
 <div class="flex h-full flex-col p-4">
-	{#if page.data?.isNewerReleaseAvailable}
+	<!-- Admin-only: a non-admin can't upgrade the install, so an update
+	     notice is noise for them. Same rule as UpdateNoticeBar. -->
+	{#if page.data?.isNewerReleaseAvailable && userCtx.user?.isAdmin}
 		<div
 			class="bg-surface-200-800 mb-4 flex w-full flex-col items-center justify-between gap-4 rounded p-3 text-center"
 		>

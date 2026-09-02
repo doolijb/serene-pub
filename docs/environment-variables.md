@@ -4,7 +4,7 @@ Serene Pub is configured almost entirely through environment variables rather th
 
 Variables can be set however your platform normally sets them (shell export, a process manager, a Docker `environment:` block, etc.), or by placing a `.env` file in the directory you launch Serene Pub from — Serene Pub loads `.env` automatically on startup if one is present. Copying `.env.example` (in the project root) to `.env` and editing it is the easiest starting point.
 
-For deployment-specific walkthroughs (reverse proxies, tunnels, Docker), see [Hosting Serene Pub](https://github.com/doolijb/serene-pub/blob/main/HOSTING.md) and [DOCKER.md](https://github.com/doolijb/serene-pub/blob/main/DOCKER.md) in the repository. This page focuses on what each variable does; those cover the surrounding setup.
+For deployment-specific walkthroughs (reverse proxies, tunnels, Docker), see [Hosting Serene Pub](./hosting.md) and [DOCKER.md](https://github.com/doolijb/serene-pub/blob/main/DOCKER.md) in the repository. This page focuses on what each variable does; those cover the surrounding setup.
 
 ## Portable / Self-Contained Setup
 
@@ -70,13 +70,30 @@ These are read by `@sveltejs/adapter-node` itself, before Serene Pub's own code 
 | `PORT` | `3000` | Port the web server listens on. Real-time updates share it — see [Sockets](#sockets-real-time-updates) below. |
 | `HOST` | `0.0.0.0` | Network interface the web server binds to. |
 | `ORIGIN` | inferred from the request | Explicit public origin (e.g. `https://serene.example.com`). Set this if form submissions start failing behind a reverse proxy — SvelteKit uses it for CSRF checks. |
-| `NODE_ENV` | — | Set to `production` for a production build (session cookies become `Secure`-only, among other production-mode behaviors). |
+| `NODE_ENV` | — | Set to `production` for a production build. |
+| `SERENE_PUB_SECURE_COOKIES` | unset | Set to `true` when this deployment terminates TLS itself rather than sitting behind a proxy that sets `X-Forwarded-Proto`. Declares the whole deployment HTTPS: session cookies get `Secure`/`SameSite=strict`, HSTS is advertised, and the real-time endpoint uses `https`. **Deprecated in favor of `PUBLIC_URL`**, which says the same thing and more precisely. |
+| `BODY_SIZE_LIMIT` | `512K` | Maximum request body size accepted by the web server. Raise it if large character-card or image uploads fail. |
+| `SHUTDOWN_TIMEOUT` | `30` | Seconds to wait for in-flight requests to finish during a graceful shutdown. |
+| `IDLE_TIMEOUT` | `0` (disabled) | Seconds of inactivity after which the server exits, for socket-activated setups. |
+
+## Public URL and Proxy Trust
+
+**These two variables are all a proxied deployment normally needs.** Everything else in this section exists for unusual setups or predates them.
+
+| Variable | Default | Description |
+|---|---|---|
+| `PUBLIC_URL` | unset | The address your users actually type, as a full origin including the scheme — e.g. `https://serene.example.com`. Everything else is derived from it: whether requests count as HTTPS, whether session cookies get the `Secure` flag, whether HSTS is advertised, the URL the browser is told to open its real-time connection to, and SvelteKit's CSRF origin. Applied **per request, matched on hostname**, so a request arriving on `localhost:3000` still auto-detects plain HTTP — one setting serves local and public access at the same time, with nothing to flip between them. Not a base path: `/serene` is rejected with a warning. `SERENE_PUB_PUBLIC_URL` is accepted as an alias, and `ORIGIN` is used as a fallback when neither is set. |
+| `TRUSTED_PROXIES` | `private` | Which addresses your reverse proxy connects from, comma-separated. Accepts CIDRs (`10.0.0.0/8`, `2001:db8::/32`), bare addresses, and the keywords `private` (loopback plus RFC1918 and link-local ranges — the default), `none`, and `*`. This decides whether forwarded headers are believed at all, and setting it derives `ADDRESS_HEADER`, `HOST_HEADER` and `PROTOCOL_HEADER` for you. Worth narrowing from the default: the app binds `0.0.0.0`, so `private` trusts every host on your LAN to claim a client IP. |
+
+When `PUBLIC_URL` names the same origin your proxy serves `/socket.io/` on, the real-time endpoint is advertised **without a port** — which is what makes Cloudflare Tunnel and similar setups work, since they can't expose an arbitrary port like `3001`. See [Hosting Serene Pub](./hosting.md).
+
+Serene Pub prints the configuration it actually resolved at startup, including which of these were used and any deprecated variables still set.
 
 ## Sockets (real-time updates)
 
 Real-time updates (session messages, generation progress, model status) are served from the **same port as the web app**, under `/socket.io/`. There is no second server and nothing extra to route.
 
-Earlier versions ran a separate real-time server on its own port, configured with `SOCKETS_PORT`, `SOCKETS_HTTP_MODE`, `SOCKETS_HTTPS_HOSTS` and `PUBLIC_SOCKETS_ENDPOINT`. Those variables no longer exist and are ignored if set; `SOCKETS_ALLOWED_ORIGINS` is now `ALLOWED_ORIGINS`. If you are upgrading, you can delete all of them, along with any second port mapping. A reverse proxy needs only to forward WebSocket upgrade headers (`Upgrade`, `Connection`) for the one port it already proxies.
+Earlier versions ran a separate real-time server on its own port, configured with `SOCKETS_PORT`, `SOCKETS_ENDPOINT`/`PUBLIC_SOCKETS_ENDPOINT`, `SOCKETS_HTTP_MODE` and `SOCKETS_HTTPS_HOSTS`. None of them are needed any more and none are documented here; `SOCKETS_ALLOWED_ORIGINS` is now `ALLOWED_ORIGINS`. If you are upgrading, delete all of them along with any second port mapping — Serene Pub lists whichever you still have set at startup, with the replacement for each. A reverse proxy needs only to forward WebSocket upgrade headers (`Upgrade`, `Connection`) for the one port it already proxies.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -98,17 +115,21 @@ directly.
 
 ## Reverse Proxy Trust
 
-Unset by default, meaning Serene Pub does **not** trust forwarded headers — every request looks like plain HTTP from the proxy's own address, since that's genuinely what the proxy sends. Only set these if you're actually running behind a reverse proxy or tunnel that sets the corresponding header itself.
+Unset by default, meaning Serene Pub does **not** trust forwarded headers — every request looks like plain HTTP from the proxy's own address, since that's genuinely what the proxy sends.
+
+**Setting `TRUSTED_PROXIES` fills all three of these in for you**, so you normally don't need to touch them directly. They remain available for setups using non-standard header names. Note these are read by `@sveltejs/adapter-node` itself, before Serene Pub's own code runs.
 
 | Variable | Default | Description |
 |---|---|---|
 | `HOST_HEADER` | unset | Header holding the real client-facing hostname, e.g. `x-forwarded-host`. |
 | `PROTOCOL_HEADER` | unset | Header holding the real client-facing protocol, e.g. `x-forwarded-proto`. |
-| `ADDRESS_HEADER` | unset | Header holding the real client IP, e.g. `x-forwarded-for`. **Login rate limiting depends on this being set correctly** when behind a proxy — without it, every user's failed logins share one bucket (the proxy's own address), so one person locking themselves out can lock everyone out. Only set this when a trusted proxy is actually in front of the app; setting it with no proxy present lets any client bypass rate limiting by sending a spoofed header directly. Serene Pub prints a one-time startup warning if it ever sees a forwarded-for header arrive while this is unset. |
+| `ADDRESS_HEADER` | unset | Header holding the real client IP, e.g. `x-forwarded-for`. **Login rate limiting depends on this being set correctly** when behind a proxy — without it every user's failed logins share one bucket (the proxy's own address), so one person can lock everyone out. Only trusted when the request's direct peer passes `TRUSTED_PROXIES`, so it's safe on an install that's also reached directly and a remote client can't spoof past the rate limiter. Serene Pub prints a one-time startup warning if it sees a forwarded-for header arrive while this is unset. |
+| `XFF_DEPTH` | `1` | How many proxies `@sveltejs/adapter-node` should count back through when reading `X-Forwarded-For`. Leave it alone: Serene Pub resolves the client address itself using depth-independent chain walking and never relies on this. It only affects code calling SvelteKit's `getClientAddress()` directly, which this app does not do. |
+| `PORT_HEADER` | unset | Header holding the real client-facing port. Rarely needed. |
 
 ## Content Security Policy
 
-Serene Pub ships a strict Content-Security-Policy by default; it isn't a header you can disable via an env var. These add extra allowed sources for content your hosting layer injects into the page that isn't part of the app itself — most commonly Cloudflare's "Browser Insights" beacon when a zone is proxied through Cloudflare with that feature on. Prefer disabling such features at the CDN/proxy level over widening these, since it's third-party content the app has no control over.
+Serene Pub ships a strict Content-Security-Policy by default; it isn't a header you can disable via an env var. These are applied at runtime, so they take effect on a prebuilt release or Docker image without rebuilding. These add extra allowed sources for content your hosting layer injects into the page that isn't part of the app itself — most commonly Cloudflare's "Browser Insights" beacon when a zone is proxied through Cloudflare with that feature on. Prefer disabling such features at the CDN/proxy level over widening these, since it's third-party content the app has no control over.
 
 | Variable | Default | Description |
 |---|---|---|

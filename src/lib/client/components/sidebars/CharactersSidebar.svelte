@@ -4,7 +4,8 @@
 	import { getContext, onDestroy, onMount } from "svelte"
 	import { flip } from "svelte/animate"
 	import { fade } from "svelte/transition"
-	import { FileUpload, Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
+	import FileDropzone from "$lib/client/components/FileDropzone.svelte"
 	import * as Icons from "@lucide/svelte"
 	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import { goto } from "$app/navigation"
@@ -409,10 +410,21 @@
 					return
 				}
 				importingLorebook = msg.book || null
-				toaster.success({
-					title: `Character Imported`,
-					description: `Character ${msg.character!.nickname || msg.character!.name} imported successfully.`
-				})
+				// A warning means the character DID import, but part of the
+				// card (usually an over-sized image) had to be skipped. It is
+				// deliberately not an error toast — this flow used to report a
+				// failure for a character that was in fact imported.
+				if (msg.warnings?.length) {
+					toaster.warning({
+						title: `Character Imported With Warnings`,
+						description: `${msg.character!.nickname || msg.character!.name} was imported. ${msg.warnings.join(" ")}`
+					})
+				} else {
+					toaster.success({
+						title: `Character Imported`,
+						description: `Character ${msg.character!.nickname || msg.character!.name} imported successfully.`
+					})
+				}
 				if (!!importingLorebook) {
 					importingLorebookCharacter = msg.character || null
 					showLorebookImportConfirmationModal = true
@@ -423,10 +435,17 @@
 			"characters:importResolve",
 			(msg: Sockets.Characters.ImportResolve.Response) => {
 				importingLorebook = msg.book || null
-				toaster.success({
-					title: `Character Imported`,
-					description: `Character ${msg.character.nickname || msg.character.name} imported successfully.`
-				})
+				if (msg.warnings?.length) {
+					toaster.warning({
+						title: `Character Imported With Warnings`,
+						description: `${msg.character.nickname || msg.character.name} was imported. ${msg.warnings.join(" ")}`
+					})
+				} else {
+					toaster.success({
+						title: `Character Imported`,
+						description: `Character ${msg.character.nickname || msg.character.name} imported successfully.`
+					})
+				}
 				if (!!importingLorebook) {
 					importingLorebookCharacter = msg.character || null
 					showLorebookImportConfirmationModal = true
@@ -806,32 +825,11 @@
 									Upload a file (PNG, APNG, JPEG, JPG, WEBP,
 									JSON):
 								</p>
-								<FileUpload
-									name="example"
-									accept=".png,.apng,.jpeg, .jpg, .webp, .json"
-									maxFiles={1}
+								<FileDropzone
+									name="character-card"
+									accept=".png,.apng,.jpeg,.jpg,.webp,.json"
 									onFileAccept={handleFileImport}
-									onFileReject={console.error}
-								>
-									<FileUpload.Dropzone
-										class="border-surface-300-700 bg-surface-50-950 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
-									>
-										<Icons.Upload
-											class="text-surface-700-300 h-8 w-8"
-										/>
-										<FileUpload.Trigger
-											class="btn btn-sm preset-filled-primary-500"
-										>
-											Browse
-										</FileUpload.Trigger>
-										<span
-											class="text-surface-700-300 text-xs"
-										>
-											or drag and drop
-										</span>
-										<FileUpload.HiddenInput />
-									</FileUpload.Dropzone>
-								</FileUpload>
+								/>
 							</div>
 						</div>
 						<div class="mt-4 flex gap-2">

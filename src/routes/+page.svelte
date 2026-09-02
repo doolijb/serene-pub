@@ -6,7 +6,7 @@
 	import PersonaCreator from "$lib/client/components/modals/PersonaCreatorModal.svelte"
 	import BindingLinkerModal from "$lib/client/components/modals/BindingLinkerModal.svelte"
 	import OllamaIcon from "$lib/client/components/icons/OllamaIcon.svelte"
-	import { FileUpload } from "@skeletonlabs/skeleton-svelte"
+	import FileDropzone from "$lib/client/components/FileDropzone.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { getContext, onMount, onDestroy } from "svelte"
 	import { goto } from "$app/navigation"
@@ -939,8 +939,6 @@
 									</h2>
 									<p class="text-muted-foreground mb-6">
 										Choose how you'd like to run your AI.
-										All options are free and run locally on
-										your server.
 									</p>
 								</div>
 								<div class="grid gap-3">
@@ -970,7 +968,7 @@
 													KoboldCPP <span
 														class="text-xs font-normal opacity-60"
 													>
-														— Easy
+														— Easiest
 													</span>
 												</div>
 												<p class="text-sm opacity-90">
@@ -1137,27 +1135,46 @@
 										>
 											Choose a model:
 										</label>
+										<!-- Lists what Ollama has actually pulled, which is
+										     the only thing this control can connect
+										     to. It used to hard-code four official
+										     Ollama library names (llama3.2, qwen2.5,
+										     mistral…) — a curated list of models the
+										     user very likely did not have, offered by
+										     a dropdown whose whole job is picking one
+										     they do. `installedModels` was already
+										     being fetched on connect and then never
+										     read. Serene Pub curates HF sources only;
+										     what's installed here is whatever the user
+										     pulled. -->
 										<select
 											id="ollama-model"
 											class="select w-full"
 											bind:value={selectedOllamaModel}
+											disabled={installedModels.length ===
+												0}
 										>
 											<option value="">
-												Select a model…
+												{installedModels.length === 0
+													? "No models pulled yet…"
+													: "Select a model…"}
 											</option>
-											<option value="llama3.2">
-												Llama 3.2 (Recommended)
-											</option>
-											<option value="llama3.2:1b">
-												Llama 3.2 1B (Faster, lighter)
-											</option>
-											<option value="qwen2.5">
-												Qwen 2.5
-											</option>
-											<option value="mistral">
-												Mistral 7B
-											</option>
+											{#each installedModels as model}
+												<option value={model.name}>
+													{model.name}
+												</option>
+											{/each}
 										</select>
+										{#if installedModels.length === 0}
+											<p
+												class="text-surface-700-300 mt-2 text-xs"
+											>
+												Pull a model with the command
+												above, then reopen this step —
+												the list refreshes when Serene
+												Pub reconnects to Ollama.
+											</p>
+										{/if}
 									</div>
 								{/if}
 							{:else if connectionChoice === "koboldcpp"}
@@ -1524,32 +1541,12 @@
 											Importing…
 										</div>
 									{:else}
-										<FileUpload
+										<FileDropzone
 											name="wizard-char-card"
 											accept=".png,.apng,.jpeg,.jpg,.webp,.json"
-											maxFiles={1}
+											class="border-surface-300-700 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
 											onFileAccept={handleCharacterCardImport}
-											onFileReject={console.error}
-										>
-											<FileUpload.Dropzone
-												class="border-surface-300-700 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
-											>
-												<Icons.Upload
-													class="text-surface-700-300 h-8 w-8"
-												/>
-												<FileUpload.Trigger
-													class="btn btn-sm preset-filled-primary-500"
-												>
-													Browse
-												</FileUpload.Trigger>
-												<span
-													class="text-surface-700-300 text-xs"
-												>
-													or drag and drop
-												</span>
-												<FileUpload.HiddenInput />
-											</FileUpload.Dropzone>
-										</FileUpload>
+										/>
 									{/if}
 								</div>
 								<button
@@ -1662,32 +1659,12 @@
 											Importing…
 										</div>
 									{:else}
-										<FileUpload
+										<FileDropzone
 											name="wizard-persona-card"
 											accept=".png,.apng,.jpeg,.jpg,.webp,.json"
-											maxFiles={1}
+											class="border-surface-300-700 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
 											onFileAccept={handlePersonaCardImport}
-											onFileReject={console.error}
-										>
-											<FileUpload.Dropzone
-												class="border-surface-300-700 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
-											>
-												<Icons.Upload
-													class="text-surface-700-300 h-8 w-8"
-												/>
-												<FileUpload.Trigger
-													class="btn btn-sm preset-filled-primary-500"
-												>
-													Browse
-												</FileUpload.Trigger>
-												<span
-													class="text-surface-700-300 text-xs"
-												>
-													or drag and drop
-												</span>
-												<FileUpload.HiddenInput />
-											</FileUpload.Dropzone>
-										</FileUpload>
+										/>
 									{/if}
 								</div>
 								<button

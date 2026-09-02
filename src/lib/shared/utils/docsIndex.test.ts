@@ -110,6 +110,28 @@ describe("docsIndex", () => {
 	})
 })
 
+describe("relative links out of docs/", () => {
+	/**
+	 * rewriteDocHref's regex only matches a same-directory `./name.md`, so a
+	 * `../SOMETHING.md` link is emitted verbatim and resolves to nothing when
+	 * the page is served at /docs/<slug>. The cross-link test above cannot see
+	 * this class of bug, because it only inspects hrefs that were successfully
+	 * rewritten into /docs/ URLs. troubleshooting.md shipped two such dead
+	 * links (../HOSTING.md, ../DOCKER.md) for exactly that reason.
+	 */
+	it("no doc renders a parent-directory relative link", () => {
+		for (const doc of docsIndex) {
+			const bad = doc.html.match(/href="\.\.\/[^"]*"/g)
+			expect(
+				bad,
+				`doc "${doc.slug}" links out of docs/ with ${bad?.join(", ")} — ` +
+					"use ./<slug>.md for a sibling doc, or an absolute URL for a " +
+					"file outside docs/"
+			).toBeNull()
+		}
+	})
+})
+
 describe("getAllSections", () => {
 	it("returns sections from every doc", () => {
 		const sections = getAllSections()

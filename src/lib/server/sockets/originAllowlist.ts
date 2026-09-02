@@ -4,6 +4,14 @@
 // CORS/ACAO headers the way XHR/polling is — only server-side rejection of
 // the handshake actually stops a malicious page's WebSocket from connecting).
 //
+// NOTE ON LOCATION: this module is no longer socket-specific — the HTTP login
+// path uses getHttpClientAddress() and net/publicUrl.ts uses
+// isTrustedProxyAddress(), so `sockets/` is now a misnomer. Moving it is a
+// mechanical rename deliberately left to its own commit: it has several
+// importers and a test file that imports it by relative path in every one of
+// its cases, so folding that churn into a behavioral change would bury the
+// behavioral diff.
+//
 // ONE allowlist governs the whole app. Socket.IO is attached to the same HTTP
 // server that serves the pages, so a legitimate browser tab's socket handshake
 // is genuinely same-origin — there is no longer a second port, a second
@@ -14,6 +22,13 @@
 // scheme to match would break the zero-config default for no security gain —
 // the attack this defends against is a *different site* opening a socket, and a
 // different site differs by hostname.
+import {
+	ipMatchesAny,
+	isPrivateAddress,
+	parseIpRuleList,
+	type IpRule
+} from "$lib/server/net/ipRange"
+
 /** Always allowed; this instance reached from the machine it runs on. */
 const BUILTIN_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1"] as const
 
@@ -29,6 +44,22 @@ export interface AllowedHostEntry {
 	source: AllowedHostSource
 }
 
+/**
+ * Hostnames that are always reached over HTTPS (eg. a tunnel/reverse-proxy
+ * domain) — read by net/publicUrl.ts for protocol auto-detection.
+ *
+ * @deprecated Superseded by `PUBLIC_URL`, which declares scheme and host
+ * together. Kept as a compatibility shim only: it still feeds the one
+ * allowlist below so an install that set it years ago keeps working, but it is
+ * no longer documented and nothing new should read it. See docs/hosting.md.
+ */
+export function getHttpsHosts(): string[] {
+	return (process.env.SOCKETS_HTTPS_HOSTS || "")
+		.split(",")
+		.map((h) => h.trim().toLowerCase())
+		.filter(Boolean)
+}
+
 function getEnvAllowedHosts(): string[] {
 	return (process.env.ALLOWED_ORIGINS || "")
 		.split(",")
@@ -38,11 +69,39 @@ function getEnvAllowedHosts(): string[] {
 }
 
 /**
+ * The hostname of a declared public URL, if there is a usable one.
+ *
+ * Declaring a public URL implicitly allowlists it — an admin who has said "this
+ * is where the instance lives" should not also have to repeat that hostname in
+ * ALLOWED_ORIGINS. Read directly from the environment rather than through
+ * net/publicUrl to avoid an import cycle (publicUrl imports this module); the
+ * parsing here is intentionally forgiving, since a malformed value is reported
+ * once by getConfiguredPublicUrl's own warning.
+ */
+function getDeclaredPublicUrlHost(): string | null {
+	const declared = (
+		process.env.PUBLIC_URL ||
+		process.env.SERENE_PUB_PUBLIC_URL ||
+		process.env.ORIGIN ||
+		""
+	).trim()
+	if (!declared) return null
+	try {
+		return normalizeHostname(new URL(declared).hostname)
+	} catch {
+		// ignored — surfaced once by getConfiguredPublicUrl()
+		return null
+	}
+}
+
+/**
  * Every host on the allowlist, with where it came from.
  *
  * The single source of truth for both the enforcement set below and the admin
  * surface — deriving one from the other is what stops the page from confidently
- * describing an allowlist that isn't the one being consulted.
+ * describing an allowlist that isn't the one being consulted. Anything that
+ * grants a hostname has to be listed HERE, not bolted onto
+ * getAllowedOriginHosts(), or the admin page starts lying again.
  *
  * Note what is deliberately NOT here: the zero-config same-hostname rule. An
  * Origin matching the request's own Host is allowed without appearing on any
@@ -56,7 +115,13 @@ export function listAllowedHosts(): AllowedHostEntry[] {
 		seen.add(hostname)
 		entries.push({ hostname, source: "builtin" })
 	}
-	for (const hostname of getEnvAllowedHosts()) {
+	const declaredPublicHost = getDeclaredPublicUrlHost()
+	const envHosts = [
+		...(declaredPublicHost ? [declaredPublicHost] : []),
+		...getHttpsHosts(),
+		...getEnvAllowedHosts()
+	]
+	for (const hostname of envHosts) {
 		if (seen.has(hostname)) continue
 		seen.add(hostname)
 		entries.push({ hostname, source: "env" })
@@ -86,24 +151,115 @@ export function isWildcardAllowed(): boolean {
  * (`::ffff:x.x.x.x`) explicitly — a dual-stack listener (the default for
  * `HOST=0.0.0.0` on most systems) reports IPv4 clients' remote addresses in
  * that mapped form, not bare dotted-quad. A naive check against the raw
- * value would misclassify every real LAN client as non-local. */
-export function isLocalNetworkAddress(
+ * value would misclassify every real LAN client as non-local.
+ *
+ * Now a thin alias over net/ipRange's isPrivateAddress so the `private`
+ * keyword in TRUSTED_PROXIES and this predicate can never drift apart — they
+ * have to mean the same thing for "TRUSTED_PROXIES unset behaves exactly as
+ * before" to hold. */
+export const isLocalNetworkAddress = isPrivateAddress
+
+/**
+ * Whether an address is one of *this deployment's* reverse proxies, and may
+ * therefore be believed when it claims (via a forwarded header) who the real
+ * client is or what protocol they used.
+ *
+ * `TRUSTED_PROXIES` when set; otherwise exactly isLocalNetworkAddress, which
+ * is the rule that was hardcoded before this variable existed. That default is
+ * what makes every pre-existing install behave identically.
+ *
+ * Declaring proxies explicitly buys two things the old rule could not express:
+ * a proxy on a genuinely public address (a cloud load balancer) can be
+ * trusted, and trust can be *narrowed* to one host rather than the whole local
+ * network — which matters because the app binds 0.0.0.0 by default, so
+ * "anything on the LAN" is a broad grant.
+ */
+export function isTrustedProxyAddress(
 	address: string | undefined | null
 ): boolean {
-	if (!address) return false
-	let ip = address
-	if (ip.startsWith("::ffff:")) ip = ip.slice("::ffff:".length)
-	if (ip === "::1" || ip === "localhost") return true
-	if (ip.toLowerCase().startsWith("fe80:")) return true // IPv6 link-local
-	const parts = ip.split(".").map(Number)
-	if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return false
-	const [a, b] = parts
-	if (a === 127) return true // loopback (127.0.0.0/8)
-	if (a === 10) return true // 10.0.0.0/8
-	if (a === 172 && b >= 16 && b <= 31) return true // 172.16.0.0/12
-	if (a === 192 && b === 168) return true // 192.168.0.0/16
-	if (a === 169 && b === 254) return true // link-local (169.254.0.0/16)
-	return false
+	const raw = process.env.TRUSTED_PROXIES?.trim()
+	if (!raw) return isPrivateAddress(address)
+	return ipMatchesAny(address, getTrustedProxyRules(raw))
+}
+
+/** Parsed TRUSTED_PROXIES, cached against the raw string it came from rather
+ * than in a bare `let` — tests (and the startup bootstrap) mutate process.env,
+ * and a cache that ignores that silently serves a stale ruleset. */
+let trustedProxyCache: { raw: string; rules: IpRule[] } | null = null
+
+function getTrustedProxyRules(raw: string): IpRule[] {
+	if (trustedProxyCache?.raw === raw) return trustedProxyCache.rules
+	const { rules, invalid } = parseIpRuleList(raw)
+	if (invalid.length > 0) {
+		console.warn(
+			`[Config] TRUSTED_PROXIES contains ${invalid.length} unparseable ` +
+				`entr${invalid.length === 1 ? "y" : "ies"}, ignored: ` +
+				invalid.join(", ")
+		)
+	}
+	// Every entry was garbage — fall back to the built-in private-range rule
+	// rather than to "trust nothing". A typo must not silently collapse login
+	// rate limiting into one bucket or lock out every non-browser client; the
+	// warning above is the signal, and failing to the previous behavior is the
+	// least surprising direction to fail in.
+	const effective =
+		rules.length === 0 && invalid.length > 0
+			? ([{ kind: "private" }] as IpRule[])
+			: rules
+	trustedProxyCache = { raw, rules: effective }
+	return effective
+}
+
+/**
+ * Walk a forwarded-for chain and return the first address that is NOT one of
+ * our own proxies — i.e. the closest thing to the real client we can actually
+ * justify believing.
+ *
+ * Peels from the right (nearest hop first) off `[...chain, peer]`, because
+ * append-style proxies put the value a client *claimed* at the LEFT: nginx's
+ * `$proxy_add_x_forwarded_for` appends its own observed peer to whatever
+ * arrived, so a spoofed entry can only ever be pushed further left, never
+ * closer to us. Stopping at the first untrusted hop is therefore the exact
+ * boundary between "observed by infrastructure we control" and "asserted by a
+ * stranger".
+ *
+ * Depth-independent by construction, which is why this supersedes adapter-node's
+ * XFF_DEPTH for every decision this app makes: it is correct for one proxy hop
+ * or three without anyone having to count them. A fixed-depth read fails open
+ * under a hop-count mismatch — under Cloudflare Tunnel -> nginx the header
+ * becomes `<real-client>, 127.0.0.1`, and a rightmost-only read resolves to the
+ * intermediate hop, which is itself local, and so passes every tunneled
+ * connection.
+ *
+ * Returns null only when there is nothing to report at all.
+ */
+export function resolveEffectiveClientAddress(
+	peer: string | null | undefined,
+	chain: string[]
+): string | null {
+	const hops = [...chain, peer ?? ""].map((h) => h.trim()).filter(Boolean)
+	if (hops.length === 0) return null
+	for (let i = hops.length - 1; i >= 0; i--) {
+		if (!isTrustedProxyAddress(hops[i])) return hops[i]
+	}
+	// Every hop is one of ours; the leftmost is the best claim available.
+	return hops[0]
+}
+
+/** Read a forwarded chain out of whatever ADDRESS_HEADER names. Returns [] when
+ * no header is configured or none arrived. Multi-instance headers are joined
+ * rather than reduced to the last instance — dropping an instance drops the
+ * hops inside it, and a chain check that ignores some claimed hops can pass
+ * even when the full chain contains an untrusted one. */
+function readForwardedChain(lookup: (name: string) => unknown): string[] {
+	const headerName = process.env.ADDRESS_HEADER?.trim().toLowerCase()
+	if (!headerName) return []
+	const raw = lookup(headerName)
+	if (!raw) return []
+	return String(Array.isArray(raw) ? raw.join(",") : raw)
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean)
 }
 
 /**
@@ -139,80 +295,143 @@ export function isMissingOriginAllowed(
  * would resolve to the intermediate hop, which is itself local, and pass
  * every tunneled connection.
  *
- * Delegates to isMissingOriginAllowed() per hop rather than re-deriving its
- * wildcard-opt-out/local-address logic by hand — that keeps this function
- * correct if isMissingOriginAllowed's own conditions ever change, and keeps
- * isMissingOriginAllowed itself a live, exercised function rather than a
- * dead export sitting next to a passing test file. With ADDRESS_HEADER
- * unset, this is exactly isMissingOriginAllowed(socket.handshake.address) —
- * byte-identical to today's behavior. If ALLOWED_ORIGINS=* is set,
- * isMissingOriginAllowed returns true unconditionally for every address, so
- * every hop (including a completely absent header) passes and this
- * correctly goes vacuously true — the right behavior for an explicit
- * opt-out.
+ * The wildcard opt-out is checked first and short-circuits the whole thing:
+ * ALLOWED_ORIGINS=* means the admin has declared this deployment's exposure
+ * decision belongs to their network layer, so every address passes — including
+ * a completely absent header.
+ *
+ * Now expressed via resolveEffectiveClientAddress(): "every hop is local" and
+ * "peeling trusted hops lands on a local address" are the same predicate when
+ * trusted == local, which is the default. They stay the same question when
+ * TRUSTED_PROXIES narrows or widens what counts as ours, which is the point.
  */
 export function isLocalThroughProxy(socket: {
 	handshake: { address: string; headers: Record<string, any> }
 }): boolean {
-	if (!isMissingOriginAllowed(socket.handshake.address)) return false
-	const headerName = process.env.ADDRESS_HEADER?.trim().toLowerCase()
-	if (!headerName) return true
-	const raw = socket.handshake.headers[headerName]
-	if (!raw) return true
-	// Join multi-instance headers rather than taking only the last instance
-	// — dropping any instance would drop the hops inside it, and a chain
-	// check that silently ignores some claimed hops can return true even
-	// when the full chain contains a non-local one. Node normally coalesces
-	// repeated X-Forwarded-For instances into one string before this ever
-	// sees an array, so this mostly matters for defensiveness, not the
-	// common case.
-	const parts = String(Array.isArray(raw) ? raw.join(",") : raw)
-		.split(",")
-		.map((s) => s.trim())
-		.filter(Boolean)
-	return parts.every(isMissingOriginAllowed)
+	if (isWildcardAllowed()) return true
+	const chain = readForwardedChain((name) => socket.handshake.headers[name])
+	return isLocalNetworkAddress(
+		resolveEffectiveClientAddress(socket.handshake.address, chain)
+	)
 }
 
 /**
- * A single effective address for the rate-limit key — rightmost
- * X-Forwarded-For entry (the trusted proxy's own observation, un-spoofable
- * by the client, unlike the leftmost/client-claimed entry — nginx's
- * `$proxy_add_x_forwarded_for` appends rather than replaces, so a client
- * that sends a spoofed value puts it at the LEFT), only honored when the
- * direct peer is itself local. Depth-dependent: correct for the single-hop
- * nginx recipe; under a multi-hop setup (e.g. Cloudflare Tunnel + nginx)
- * this resolves to an intermediate hop, not the true client, collapsing
- * rate-limit buckets the same way as before this function existed. Accepted
- * residual — a wrong value here costs bucket collapse, not a security
- * bypass, unlike the gate above, which is why the gate uses the
- * depth-independent chain check (isLocalThroughProxy) instead of this.
+ * A single effective address for the rate-limit key — the first hop in the
+ * forwarded chain that isn't one of our own proxies (see
+ * resolveEffectiveClientAddress for why peeling from the right is the
+ * un-spoofable direction).
  *
- * Deliberately gates on isLocalNetworkAddress here, NOT isMissingOriginAllowed
- * (unlike isLocalThroughProxy above) — this is not an oversight. Do not
- * "harmonize" the two: isMissingOriginAllowed returns true unconditionally
- * for every address once ALLOWED_ORIGINS=* is set. If this function
- * delegated to it too, a wildcard deployment would trust ANY remote peer's
- * claimed X-Forwarded-For value, letting rotating spoofed headers evade the
- * handshake rate limiter entirely for free. The wildcard is an *origin*
- * check opt-out; it must not also imply "trust arbitrary clients' address
- * claims."
+ * This used to be a rightmost-only read, which was depth-DEPENDENT: correct
+ * for the single-hop nginx recipe, but under a multi-hop setup (Cloudflare
+ * Tunnel + nginx) it resolved to an intermediate hop rather than the true
+ * client and collapsed rate-limit buckets. Peeling fixes that outright, and
+ * TRUSTED_PROXIES makes it fixable even when the intermediate hop isn't in a
+ * private range.
+ *
+ * Deliberately does NOT short-circuit on isWildcardAllowed the way
+ * isLocalThroughProxy does — this is not an oversight. Do not "harmonize" the
+ * two: the wildcard is an *origin* check opt-out, and if it also implied
+ * address trust, a wildcard deployment would believe ANY remote peer's claimed
+ * X-Forwarded-For, letting rotating spoofed headers evade the handshake rate
+ * limiter entirely for free.
  */
 export function getSocketClientAddress(socket: {
 	handshake: { address: string; headers: Record<string, any> }
 }): string {
+	const chain = readForwardedChain((name) => socket.handshake.headers[name])
+	return (
+		resolveEffectiveClientAddress(socket.handshake.address, chain) ??
+		socket.handshake.address
+	)
+}
+
+/** Last-resort rate-limit key when neither the direct peer nor the adapter
+ * can supply an address (non-node adapters, or ADDRESS_HEADER set while the
+ * header is absent and no raw socket is reachable). Every such request
+ * shares one bucket, which is the safe direction to fail: over-collapsing
+ * buckets throttles too eagerly, whereas inventing a unique per-request key
+ * would hand out an unlimited-attempt bypass for free. */
+const UNRESOLVED_CLIENT_ADDRESS = "unresolved"
+
+/**
+ * The raw TCP peer, read straight off the Node request that adapter-node
+ * hands through as `platform.req`. Deliberately NOT `event.getClientAddress()`
+ * — see getHttpClientAddress below for why that one can't be called
+ * unguarded. Returns null under adapters/dev servers that expose no such
+ * request object, which callers must treat as "locality unverifiable".
+ */
+export function getDirectPeerAddress(event: {
+	platform?: unknown
+}): string | null {
+	const req = (
+		event.platform as
+			| { req?: { socket?: { remoteAddress?: unknown } } }
+			| undefined
+	)?.req
+	const addr = req?.socket?.remoteAddress
+	return typeof addr === "string" && addr.length > 0 ? addr : null
+}
+
+/**
+ * HTTP twin of getSocketClientAddress() above, with identical trust rules:
+ * peel trusted-proxy hops off the ADDRESS_HEADER chain from the right and
+ * take the first address that isn't one of ours, honored only when the direct
+ * peer is itself trusted. Same reasoning for gating on the proxy-trust
+ * predicate rather than isMissingOriginAllowed.
+ *
+ * Exists because `event.getClientAddress()` CANNOT be called unguarded once
+ * ADDRESS_HEADER is set: adapter-node's implementation *throws* when the
+ * named header is absent from a request ("Address header was specified with
+ * ADDRESS_HEADER=... but is absent from request"). On any install reachable
+ * both through a proxy and directly (the normal case — a tunnel plus
+ * localhost/LAN access), every direct request then threw inside the login
+ * route and surfaced as a generic 500 "Authentication failed", making
+ * ADDRESS_HEADER effectively unsettable without breaking local login. Going
+ * through the raw peer + headers ourselves keeps a missing header a
+ * non-event, so ADDRESS_HEADER is safe to set on mixed-access deployments.
+ *
+ * The trust gate is what makes setting ADDRESS_HEADER safe rather than a
+ * rate-limit bypass: a client that reaches the app directly is not a trusted
+ * proxy (unless it genuinely is one), so its claimed header is ignored.
+ * Residual with the default `private` rule: a host that IS on the local
+ * network can still spoof the header. Narrow TRUSTED_PROXIES to your actual
+ * proxy, or bind HOST=127.0.0.1 when it runs on the same machine, to close it.
+ */
+export function getHttpClientAddress(event: {
+	request: Request
+	platform?: unknown
+	getClientAddress: () => string
+}): string {
 	const headerName = process.env.ADDRESS_HEADER?.trim().toLowerCase()
-	if (!headerName) return socket.handshake.address
-	if (!isLocalNetworkAddress(socket.handshake.address)) {
-		return socket.handshake.address
+	const peer = getDirectPeerAddress(event)
+
+	// No header configured: the adapter's own answer is already just the peer
+	// address and cannot throw, so prefer it (it knows about adapters whose
+	// peer we can't reach) and fall back to whatever we could read directly.
+	if (!headerName) {
+		return adapterAddressOrNull(event) ?? peer ?? UNRESOLVED_CLIENT_ADDRESS
 	}
-	const raw = socket.handshake.headers[headerName]
-	const value = Array.isArray(raw) ? raw[raw.length - 1] : raw
-	if (!value) return socket.handshake.address
-	const parts = String(value)
-		.split(",")
-		.map((s) => s.trim())
-	const last = parts[parts.length - 1]
-	return last || socket.handshake.address
+
+	if (peer === null) {
+		// Locality unverifiable — trusting a claimed header here would be
+		// trusting an unauthenticated client, so don't.
+		return adapterAddressOrNull(event) ?? UNRESOLVED_CLIENT_ADDRESS
+	}
+
+	const chain = readForwardedChain((name) => event.request.headers.get(name))
+	return resolveEffectiveClientAddress(peer, chain) ?? peer
+}
+
+/** event.getClientAddress() behind a guard, since it throws rather than
+ * returning anything when ADDRESS_HEADER names a header the request lacks. */
+function adapterAddressOrNull(event: {
+	getClientAddress: () => string
+}): string | null {
+	try {
+		return event.getClientAddress() || null
+	} catch {
+		return null
+	}
 }
 
 let hasWarnedAboutSocketAddressHeader = false
@@ -229,7 +448,7 @@ export function warnIfSocketAddressHeaderUnset(headers: Record<string, any>) {
 	console.warn(
 		"[Security] A socket handshake arrived with an X-Forwarded-For header, but ADDRESS_HEADER is not set — " +
 			"the local-network-only gate and handshake rate limiting are keying on the wrong address (likely your reverse proxy's). " +
-			"See HOSTING.md's reverse-proxy section: set ADDRESS_HEADER=x-forwarded-for, but only if you're actually behind a trusted proxy."
+			"See docs/hosting.md: setting TRUSTED_PROXIES to your proxy's address derives this and the other forwarded headers for you."
 	)
 }
 
@@ -251,26 +470,6 @@ export function describeOriginAllowlistConfig(): string {
 }
 
 /**
- * Non-browser clients (no Origin header at all — CLI tools, the Android
- * wrapper's WebView in some configurations, server-to-server) aren't subject
- * to the browser-mediated cross-origin attack this allowlist defends
- * against, so only a present Origin header is actually checked.
- *
- * @param requestHost The incoming connection's own `Host` header (eg.
- * `socket.handshake.headers.host`), when available. A same-site browser tab
- * always has an Origin hostname equal to whatever hostname it used to reach
- * this server in the first place (the socket connection is same-hostname,
- * different-port from the page that opened it) — comparing against the
- * request's own Host header is therefore a correct, zero-config default
- * that Just Works for localhost, LAN IPs, and any custom domain without the
- * admin needing to enumerate hosts anywhere. A genuinely cross-origin page's
- * Origin is the *attacker's* hostname, which never matches the Host header
- * of a request aimed at this server, so this doesn't weaken the check.
- * ALLOWED_ORIGINS remains as an explicit allowlist on top, for the rare setup
- * where Origin and Host genuinely differ — a proxy rewriting Host, say. With
- * Socket.IO attached to the app's own server, an ordinary tab never needs it.
- */
-/**
  * Strip the brackets WHATWG URL puts around an IPv6 hostname.
  *
  * `new URL("https://[::1]:3000").hostname` is `"[::1]"`, but every place this
@@ -285,6 +484,25 @@ function normalizeHostname(hostname: string): string {
 		.replace(/^\[|\]$/g, "")
 }
 
+/**
+ * Non-browser clients (no Origin header at all — CLI tools, the Android
+ * wrapper's WebView in some configurations, server-to-server) aren't subject
+ * to the browser-mediated cross-origin attack this allowlist defends
+ * against, so only a present Origin header is actually checked.
+ *
+ * @param requestHost The incoming connection's own `Host` header (eg.
+ * `socket.handshake.headers.host`), when available. A same-site browser tab
+ * always has an Origin hostname equal to whatever hostname it used to reach
+ * this server in the first place — comparing against the request's own Host
+ * header is therefore a correct, zero-config default that Just Works for
+ * localhost, LAN IPs, tunnels, and any custom domain without the admin needing
+ * to enumerate hosts anywhere. A genuinely cross-origin page's Origin is the
+ * *attacker's* hostname, which never matches the Host header of a request
+ * aimed at this server, so this doesn't weaken the check.
+ * ALLOWED_ORIGINS remains as an explicit allowlist on top, for the rare setup
+ * where Origin and Host genuinely differ — a proxy rewriting Host, say. With
+ * Socket.IO attached to the app's own server, an ordinary tab never needs it.
+ */
 export function isOriginAllowed(
 	origin: string | null | undefined,
 	requestHost?: string | null

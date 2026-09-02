@@ -51,7 +51,7 @@ Several features (local embedding models, the KoboldCPP/Ollama Managers, SillyTa
 
 ## Docker & Self-Hosting
 
-Networking, volumes, reverse proxies, and environment variables are covered in [DOCKER.md](../DOCKER.md) and [HOSTING.md](../HOSTING.md) — most "can't reach the server" or "my data disappeared after a restart" issues trace back to the `SERENE_PUB_DATA_DIR` volume not being mounted where you think it is. A few real-time symptoms behind a reverse proxy — note that as of the single-listener change, sockets share the app's port, so most of these now mean "upgrade headers aren't being forwarded" rather than "the second port isn't routed":
+Networking, volumes, reverse proxies, and environment variables are covered in [DOCKER.md](https://github.com/doolijb/serene-pub/blob/main/DOCKER.md) and [Hosting Serene Pub](./hosting.md) — most "can't reach the server" or "my data disappeared after a restart" issues trace back to the `SERENE_PUB_DATA_DIR` volume not being mounted where you think it is. A few real-time symptoms behind a reverse proxy — note that sockets now share the app's port, so most of these mean "upgrade headers aren't being forwarded" rather than "the second port isn't routed":
 
 - **Browser console shows "Mixed Content... has been blocked."** The socket connects to the same origin as the page, so this now means the page itself was served over `http://` from an `https://` context — check your proxy, and set `PROTOCOL_HEADER` if it sets `X-Forwarded-Proto`.
 - **"blocked by CORS policy" pointing at your own domain.** Your proxy is rewriting the `Host` header so it no longer matches the `Origin` the page was loaded from — set `HOST_HEADER`, or add the hostname to `ALLOWED_ORIGINS`.

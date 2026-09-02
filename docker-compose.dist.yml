@@ -32,10 +32,14 @@ services:
             # See DOCKER.md for details.
             # KOBOLDCPP_BINARY_DIR: /koboldcpp
 
-            # Running behind a reverse proxy or tunnel? See HOSTING.md. One port
-            # serves both the app and its sockets, so proxying PORT is enough —
-            # just forward WebSocket upgrade headers.
-            # HOST_HEADER: x-forwarded-host
+            # Running behind a reverse proxy or tunnel? Declare the public URL
+            # and which addresses your proxy connects from; everything else
+            # (forwarded host/proto/client-IP handling, HTTPS detection, cookie
+            # flags) is derived from these two. One port serves both the app and
+            # its realtime connection, so proxying PORT is enough — just forward
+            # the WebSocket upgrade headers. See docs/hosting.md.
+            # PUBLIC_URL: https://serene.example.com
+            # TRUSTED_PROXIES: 172.16.0.0/12
 
 volumes:
     serene-pub-data:
