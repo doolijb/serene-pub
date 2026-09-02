@@ -57,25 +57,19 @@ describe("characterFieldsFromParsedData", () => {
 		expect(row.groupOnlyGreetings).toBeNull()
 	})
 
-	test("carries V3 creator_notes_multilingual and assets into their columns", () => {
-		const assets = [
-			{ type: "icon", uri: "ccdefault:", name: "main", ext: "png" }
-		]
+	test("carries V3 creator_notes_multilingual into its column", () => {
 		const row = characterFieldsFromParsedData({
 			name: "Vex",
-			creator_notes_multilingual: { en: "hi", ja: "やあ" },
-			assets
+			creator_notes_multilingual: { en: "hi", ja: "やあ" }
 		})
 
 		expect(row.creatorNotesMultilingual).toEqual({ en: "hi", ja: "やあ" })
-		expect(row.assets).toEqual(assets)
 	})
 
-	test("leaves creator_notes_multilingual null and assets empty when absent", () => {
+	test("leaves creator_notes_multilingual null when absent", () => {
 		const row = characterFieldsFromParsedData({ name: "Vex" })
 
 		expect(row.creatorNotesMultilingual).toBeNull()
-		expect(row.assets).toEqual([])
 	})
 })
 

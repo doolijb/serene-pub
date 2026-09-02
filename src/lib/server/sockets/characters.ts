@@ -477,7 +477,10 @@ export function characterFieldsFromParsedData(
 			typeof data.creator_notes_multilingual === "object"
 				? data.creator_notes_multilingual
 				: null,
-		assets: firstArray(data.assets) ?? [],
+		// V3 `assets` (card asset descriptors) is parsed by nothing here:
+		// `characters.assets` was dropped (see schema.ts), and there's no
+		// column to put it in. Importing card assets should create `media`
+		// rows, not reinstate the column.
 		aliases: Array.isArray(
 			data.extensions?.serenepub?.aliases ?? data.extensions?.aliases
 		)
