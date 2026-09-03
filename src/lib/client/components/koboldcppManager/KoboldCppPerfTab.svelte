@@ -31,6 +31,16 @@
 	let stopping = $state(false)
 	let loadedConfig =
 		$state<Sockets.KoboldCPP.GetLoadedConfig.Response["config"]>(null)
+	/**
+	 * What is resident, per kind.
+	 *
+	 * Either may be absent: a text-only load has no image entry and an
+	 * image-only load has no text entry — and an image-only load is a normal
+	 * state now, not an edge case. Neither may be assumed present just because
+	 * something is loaded.
+	 */
+	let loadedText = $derived(loadedConfig?.resident?.text ?? null)
+	let loadedImage = $derived(loadedConfig?.resident?.image ?? null)
 
 	const statusColors: Record<string, string> = {
 		running: "bg-success-500",
@@ -341,14 +351,22 @@
 					>
 						Loaded config
 					</p>
-					{#if loadedConfig}
+					<!-- Read through the residency map, and gate on the TEXT entry
+					     rather than on `currentModel`. The loaded config used to be
+					     one flat set of text knobs; it is now `{resident: {text?,
+					     image?}}`, because what koboldcpp holds is a set of models
+					     and an image-only load has no context size or GPU layers to
+					     report. Reading the old flat shape threw on
+					     `undefined.toLocaleString()` the moment the tab opened. -->
+					{#if loadedText}
 						<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
 							<div class="flex justify-between gap-2">
 								<span class="text-surface-700-300">
 									Context
 								</span>
 								<span class="font-mono">
-									{loadedConfig.contextSize.toLocaleString()}
+									{loadedText.contextSize?.toLocaleString() ??
+										"—"}
 								</span>
 							</div>
 							<div class="flex justify-between gap-2">
@@ -356,9 +374,9 @@
 									GPU layers
 								</span>
 								<span class="font-mono">
-									{loadedConfig.gpuLayers === -1
+									{loadedText.gpuLayers === -1
 										? "auto"
-										: loadedConfig.gpuLayers}
+										: loadedText.gpuLayers}
 								</span>
 							</div>
 							<div class="flex justify-between gap-2">
@@ -366,7 +384,7 @@
 									Batch size
 								</span>
 								<span class="font-mono">
-									{loadedConfig.batchSize}
+									{loadedText.batchSize}
 								</span>
 							</div>
 							<div class="flex justify-between gap-2">
@@ -374,10 +392,39 @@
 									Flash attn
 								</span>
 								<span class="font-mono">
-									{loadedConfig.flashAttention ? "on" : "off"}
+									{loadedText.flashAttention ? "on" : "off"}
 								</span>
 							</div>
 						</div>
+					{/if}
+					{#if loadedImage}
+						<!-- An image model is resident. It carries none of the text
+						     knobs above, so it gets its own short row rather than
+						     being squeezed into a grid that would read as blanks. -->
+						<div
+							class="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-xs"
+						>
+							<div class="flex justify-between gap-2">
+								<span class="text-surface-700-300">
+									Image model
+								</span>
+								<span class="truncate font-mono">
+									{loadedImage.file}
+								</span>
+							</div>
+							{#if loadedImage.threads != null}
+								<div class="flex justify-between gap-2">
+									<span class="text-surface-700-300">
+										Image threads
+									</span>
+									<span class="font-mono">
+										{loadedImage.threads}
+									</span>
+								</div>
+							{/if}
+						</div>
+					{/if}
+					{#if loadedConfig}
 						<button
 							class="btn btn-sm preset-tonal-primary mt-2 text-xs"
 							onclick={() => (showFullConfigModal = true)}

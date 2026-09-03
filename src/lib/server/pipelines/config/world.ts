@@ -29,10 +29,20 @@
 
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { S, type ConfigWorld, type OverrideRow } from "@serene-pub/sdk"
+import {
+	S,
+	SLOT_VALUE,
+	isTransformId,
+	type ConfigWorld,
+	type OverrideRow
+} from "@serene-pub/sdk"
+import {
+	capabilityDefaults,
+	capabilityForSamplingShape
+} from "$lib/server/connections/capabilityDefaults"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { resolvePromptFields } from "$lib/server/pipelines/entities/prompts"
-import { declarations } from "$lib/server/pipelines/config/panel"
+import { declarations, type Decl } from "$lib/server/pipelines/config/panel"
 import { NARRATE_SPEC_ID, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 
 /**
@@ -227,68 +237,73 @@ export async function buildWorld(
 	// and session only, and the session's choice is an admin-permitted selection
 	// rather than a user override.
 	//
-	// Both layers name TEXT rows: `system_settings.default_connection_id` and
-	// `sessions.connection_id` predate there being a second modality and cannot
-	// say which one they mean. So they are written only onto a provider that
-	// speaks text. An image provider is left alone here and falls back through
-	// `activeConnection`, which is keyed by shape and cannot cross modalities —
-	// without this a spec that left its connection slot unset would be handed
-	// the default text connection and would carry it all the way to a backend
-	// that has no idea what a temperature is.
-	const providerShape = await providerSlotShape(db, scope, provider)
-	const providerIsText = !providerShape || providerShape === S.textGen
+	// The instance layer is keyed by CAPABILITY (`connection_defaults`), so the
+	// provider gets the default for the thing it actually needs to do rather
+	// than the default for whatever family it was filed under. The session layer
+	// is still text-only, and that is a fact about the columns rather than a
+	// policy: `sessions.connection_id` predates there being anything but text
+	// and cannot say which capability it means. Layering it onto an image
+	// provider would hand a session's chat connection to a backend that has
+	// never heard of a temperature.
+	const defaultsByCapability = await capabilityDefaults(db)
+	// The shape is the fallback and `??` is what keeps it one: a slot that named
+	// a capability never reads its declarations a second time, and a slot
+	// authored before capabilities existed still gets the answer it always got.
+	const providerCapability =
+		requiredTransform(await providerSlotRequires(db, scope, provider)) ??
+		capabilityForSamplingShape(await providerSlotShape(db, scope, provider))
+	const providerIsText = providerCapability === TEXT_CAPABILITY
+	// `undefined` means the slot's shape names no capability — an embeddings or
+	// MCP connection slot. Those layer NO default: the instance's "default
+	// connection" is a text connection, and handing it to a slot that wanted an
+	// MCP server is the cross-modality leak this whole indirection exists to
+	// prevent. It is also what they got before capabilities existed.
+	const instanceDefault = providerCapability
+		? defaultsByCapability[providerCapability]
+		: undefined
+
+	layer(
+		"defaults",
+		undefined,
+		provider,
+		"connection",
+		SLOT_VALUE,
+		// The legacy column is the fallback for text and for nothing else. It is
+		// still what starring a connection in the sidebar writes, and 0175 seeded
+		// `connection_defaults` from it *once* — so on an install where the star
+		// has moved since, the table is behind the screen, and reading only the
+		// table would drop the default a person can plainly see is set.
+		idOrNull(instanceDefault?.connectionId) ??
+			(providerIsText ? idOrNull(system?.defaultConnectionId) : undefined)
+	)
+	layer(
+		"defaults",
+		undefined,
+		provider,
+		"sampling",
+		SLOT_VALUE,
+		idOrNull(instanceDefault?.samplingConfigId) ??
+			(providerIsText
+				? idOrNull(system?.defaultSamplingConfigId)
+				: undefined)
+	)
 
 	if (providerIsText) {
 		layer(
-			"defaults",
-			undefined,
-			provider,
-			"connection",
-			"ref",
-			idOrNull(system?.defaultConnectionId)
-		)
-		layer(
 			"session",
 			scope.sessionId,
 			provider,
 			"connection",
-			"ref",
+			SLOT_VALUE,
 			idOrNull(session?.connectionId)
 		)
 		layer(
-			"defaults",
-			undefined,
-			provider,
-			"sampling",
-			"ref",
-			idOrNull(system?.defaultSamplingConfigId)
-		)
-		layer(
 			"session",
 			scope.sessionId,
 			provider,
 			"sampling",
-			"ref",
+			SLOT_VALUE,
 			idOrNull(session?.samplingConfigId)
-		)
-	} else if (providerShape === S.imageGen) {
-		// The image twins. There is no session layer: a session carries a text
-		// connection and a text sampling config, and nothing else.
-		layer(
-			"defaults",
-			undefined,
-			provider,
-			"connection",
-			"ref",
-			idOrNull(system?.defaultImageConnectionId)
-		)
-		layer(
-			"defaults",
-			undefined,
-			provider,
-			"sampling",
-			"ref",
-			idOrNull(system?.defaultImageSamplingConfigId)
 		)
 	}
 
@@ -301,6 +316,50 @@ export async function buildWorld(
 	// is worse than not having it: every screen would agree with the user and
 	// the model would not.
 	if (scope.specId) await applyPipelineLayer(db, overrides, scope)
+
+	/**
+	 * The instance default a node falls back to when its connection slot names
+	 * nothing.
+	 *
+	 * The legacy column is the fallback for text and for nothing else, for the
+	 * same reason it is above: starring a connection in the sidebar still writes
+	 * it, and 0175 seeded `connection_defaults` from it *once*, so on an install
+	 * where the star has moved since, reading only the table would drop a
+	 * default the person can plainly see is set.
+	 */
+	const defaultConnectionFor = (capability: string) =>
+		idOrNull(defaultsByCapability[capability]?.connectionId) ??
+		(capability === TEXT_CAPABILITY
+			? idOrNull(system?.defaultConnectionId)
+			: undefined)
+
+	// Published under BOTH a capability key and a shape key, which is not
+	// redundancy: the defaults are registered per CAPABILITY
+	// (`connection_defaults`), while the executor still looks this up as
+	// `world.activeConnection[kind]` with `kind` the node type's SHAPE. Only the
+	// capability keys would silently empty the fallback for every spec running
+	// today; only the shapes would put the new table out of the executor's
+	// reach. Both, until the executor is keyed by capability too.
+	const activeConnection: Record<string, string | null> = {}
+	for (const capability of new Set([
+		TEXT_CAPABILITY,
+		...Object.keys(defaultsByCapability)
+	])) {
+		const id = defaultConnectionFor(capability)
+		if (id) activeConnection[capability] = id
+	}
+	// Translated through `capabilityForSamplingShape` rather than a second table
+	// mapping the other way — two spellings of one correspondence is how the
+	// image shape ends up pointing at the text default on the day somebody adds
+	// a capability to only one of them.
+	for (const shape of [S.textGen, S.imageGen, S.tts]) {
+		// All three map, but the mapper is honest about shapes it does not know
+		// (embeddings, MCP) rather than calling them text, so the result is
+		// checked here instead of asserted away.
+		const capability = capabilityForSamplingShape(shape)
+		const id = capability ? defaultConnectionFor(capability) : undefined
+		if (id) activeConnection[shape] = id
+	}
 
 	return {
 		overrides,
@@ -332,22 +391,18 @@ export async function buildWorld(
 			// Empty by construction. Material is resolved inside the dispatch
 			// path from the encrypted column and never travels with the world —
 			// a credential in this object would be readable by every binding.
-			material: {}
+			material: {},
+			// On `metadata`'s side of the line (01 §10): a binding asking whether
+			// it may send an image is asking about the wire protocol, not about a
+			// credential. The stored cache rather than a fresh resolution —
+			// deriving it would mean importing the adapter module, which is the
+			// one thing the manifest exists to avoid. `{}` is UNDETERMINED, the
+			// shape of a connection nobody has tested, and never "can do
+			// nothing": a reader that treats it as a denial hides working
+			// connections.
+			capabilities: c.capabilities?.resolved ?? {}
 		})),
-		// The instance default per modality, which is the fallback the executor
-		// reaches for when a node's connection slot names nothing
-		// (`world.activeConnection[kind]`). Keyed by shape precisely so that
-		// falling back cannot cross modalities: an image provider with no chosen
-		// connection gets the image default or nothing, never whichever text
-		// connection happens to be default.
-		activeConnection: {
-			...(system?.defaultConnectionId
-				? { [S.textGen]: String(system.defaultConnectionId) }
-				: {}),
-			...(system?.defaultImageConnectionId
-				? { [S.imageGen]: String(system.defaultImageConnectionId) }
-				: {})
-		}
+		activeConnection
 	}
 }
 
@@ -369,19 +424,19 @@ export async function buildWorld(
  *    the value is what runs.
  */
 /**
- * Which modality the provider node's connection slot speaks.
+ * The provider node's connection declaration, as its spec authored it.
  *
  * Read from the spec's own declarations rather than guessed from the node key,
  * because the key is the author's ("generate", "render", "narrate") and says
  * nothing about what it talks to. `undefined` when there is no spec in scope —
- * the legacy path, which is text by construction — or when the slot was authored
- * with no shape, and the caller treats both as text.
+ * the legacy path, which is text by construction — or when the node declares no
+ * connection at all.
  */
-async function providerSlotShape(
+async function providerConnectionDecl(
 	db: Db,
 	scope: WorldScope,
 	providerKey: string
-): Promise<string | undefined> {
+): Promise<Decl | undefined> {
 	if (!scope.specId) return undefined
 	const [spec] = await db
 		.select()
@@ -392,7 +447,33 @@ async function providerSlotShape(
 	const decls = await declarations(db as any, spec.activeVersionId)
 	return decls.find(
 		(d) => d.nodeKey === providerKey && d.control === "connection-ref"
-	)?.shape
+	)
+}
+
+/**
+ * What the connection in that slot must be able to *do*.
+ *
+ * The successor to `providerSlotShape`, and read before it. A shape asserts a
+ * modality — "this is an image connection" — where `requires` names a transform
+ * the backend can actually be asked about, which is the same fact without the
+ * assumption that a backend is only one thing. Absent for every slot authored
+ * before capabilities existed, and the caller falls back to the shape.
+ */
+async function providerSlotRequires(
+	db: Db,
+	scope: WorldScope,
+	providerKey: string
+): Promise<readonly string[] | undefined> {
+	return (await providerConnectionDecl(db, scope, providerKey))?.requires
+}
+
+/** Which modality that slot speaks. Superseded — see `providerSlotRequires`. */
+async function providerSlotShape(
+	db: Db,
+	scope: WorldScope,
+	providerKey: string
+): Promise<string | undefined> {
+	return (await providerConnectionDecl(db, scope, providerKey))?.shape
 }
 
 async function applyPipelineLayer(
@@ -661,6 +742,28 @@ async function applyPipelineLayer(
 		}
 	}
 }
+
+/**
+ * What every legacy column, and every slot that named nothing, means.
+ *
+ * `system_settings.default_connection_id` and `sessions.connection_id` predate
+ * there being a second capability and cannot say which one they hold; a slot
+ * authored before `requires` existed is in the same position. Both resolve to
+ * this one, which is what they have always in fact been.
+ */
+const TEXT_CAPABILITY = "text->text"
+
+/**
+ * The transform a slot is shopping for, out of everything it requires.
+ *
+ * Features are passed over rather than considered: `strict_schema` qualifies a
+ * request, it is not a thing a node goes looking for a connection to provide,
+ * and `connection_defaults` registers transforms only. So a slot requiring
+ * `text->text` and `strict_schema` layers the text default rather than falling
+ * off the end of the table.
+ */
+const requiredTransform = (requires?: readonly string[]): string | undefined =>
+	requires?.find(isTransformId)
 
 const idOrNull = (v: number | null | undefined) =>
 	v == null ? undefined : String(v)

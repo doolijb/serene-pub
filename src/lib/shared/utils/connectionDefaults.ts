@@ -95,11 +95,43 @@ export const CONNECTION_DEFAULTS = {
 			logprobs: false,
 			replaceInstructPlaceholders: false,
 			enableThinking: null as boolean | null,
+			// No sdModelFile here, deliberately — a connection names exactly ONE
+			// model, and this one names a text GGUF. An image model riding along
+			// in the same row would be a second model on a row that has no way
+			// to say which of the two `connection.model` means, which is the
+			// shape KOBOLDCPP_MANAGED_IMAGE exists to replace. What is RESIDENT
+			// in the process at any moment is the model manager's business
+			// (planResidency), not this row's.
 			managedConfig: {
 				gpuLayers: -1,
 				flashAttention: false,
 				batchSize: 512
 			}
+		}
+	},
+	[CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE]: {
+		type: CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE,
+		// Display only, and the same value the managed text type carries: this
+		// type never reads its own baseUrl. The Manager's settings are
+		// authoritative for where the process actually is, which is why both the
+		// render path (dispatchImage.resolveBaseUrl) and the adapter's own
+		// testConnection resolve it from there instead.
+		baseUrl: "http://localhost:5001",
+		// What `withConnectionDefaults` writes into `connections.modality`, which
+		// is what shapeOfModality and the sidebar's Text/Image filter read.
+		modality: "image-gen",
+		// The image model this connection names. Empty until one is picked —
+		// either in the Manager ("Use for image generation") or from the
+		// Checkpoint list the form's Test button fills in.
+		model: "",
+		// No `profile` block, unlike managedConfig above — and the same choice
+		// A1111 makes below. The image load knobs (sdThreads/sdQuant) live in
+		// `extraJson.profile`, whose defaults are declared by the adapter
+		// (KoboldCppManagedImageAdapter) and materialised into the row by
+		// ImageConnectionForm, so a second copy here could only ever disagree
+		// with the schema that renders it.
+		extraJson: {
+			apiKey: ""
 		}
 	},
 	[CONNECTION_TYPE.ANTHROPIC]: {
@@ -115,11 +147,12 @@ export const CONNECTION_DEFAULTS = {
 			thinkingBudget: 8000
 		}
 	},
-	[CONNECTION_TYPE.IMAGE_FOOOCUS]: {
-		type: CONNECTION_TYPE.IMAGE_FOOOCUS,
-		// Fooocus-API's default port. Image connection, so no prompt-format /
-		// token-counter — those are text-only concerns.
-		baseUrl: "http://localhost:8888",
+	[CONNECTION_TYPE.A1111]: {
+		type: CONNECTION_TYPE.A1111,
+		// KoboldCPP's port, since that is the quickest of the four to get running
+		// and the app already manages it. An image connection, so no prompt-format
+		// or token-counter — those are text-only concerns.
+		baseUrl: "http://localhost:5001",
 		modality: "image-gen",
 		extraJson: {
 			apiKey: ""
@@ -127,7 +160,27 @@ export const CONNECTION_DEFAULTS = {
 	}
 }
 
-// OpenAI Session presets used in ConnectionsSidebar
+/**
+ * OpenAI Session presets used in ConnectionsSidebar.
+ *
+ * ## `slug`
+ *
+ * A stable key into `PRESET_CAPABILITIES` (connectionAdapters/manifest.ts), and
+ * the only reason the preset layer of capability resolution ever fires. It is
+ * NOT `value`: that is a display-order integer which would key nothing while
+ * looking like it should, and it is not `name` either, which is a label people
+ * rename.
+ *
+ * The slug is what stores "this connection is OpenRouter" on the row, which is
+ * what lets its defaults be recomputed on edit and what "reset to preset
+ * defaults" resets to. A preset with no capability entry needs no slug — absent
+ * means "custom", which is the correct answer for a bare OpenAI-compatible URL
+ * and for every row that predates this column.
+ *
+ * Adding a slug here without a matching key in `PRESET_CAPABILITIES` is
+ * harmless; adding capabilities there without a slug here is what makes them
+ * dead data, so add the pair together.
+ */
 export const OPENAI_CHAT_PRESETS = [
 	{
 		name: "Empty",
@@ -157,6 +210,7 @@ export const OPENAI_CHAT_PRESETS = [
 	},
 	{
 		name: "OpenRouter",
+		slug: "openrouter",
 		value: 3,
 		category: "cloud",
 		connectionDefaults: {
@@ -170,6 +224,7 @@ export const OPENAI_CHAT_PRESETS = [
 	},
 	{
 		name: "OpenAI (Official)",
+		slug: "openai-official",
 		value: 4,
 		category: "cloud",
 		connectionDefaults: {
@@ -183,6 +238,7 @@ export const OPENAI_CHAT_PRESETS = [
 	},
 	{
 		name: "LocalAI",
+		slug: "local-ai",
 		value: 5,
 		category: "local",
 		connectionDefaults: {
@@ -209,6 +265,7 @@ export const OPENAI_CHAT_PRESETS = [
 	},
 	{
 		name: "Groq",
+		slug: "groq",
 		value: 7,
 		category: "cloud",
 		connectionDefaults: {
@@ -222,6 +279,7 @@ export const OPENAI_CHAT_PRESETS = [
 	},
 	{
 		name: "Together AI",
+		slug: "together-ai",
 		value: 8,
 		category: "cloud",
 		connectionDefaults: {
@@ -293,6 +351,7 @@ export const OPENAI_CHAT_PRESETS = [
 	// the presets above have. Report issues and we'll drop "Experimental".
 	{
 		name: "Mistral AI (Experimental)",
+		slug: "mistral-ai",
 		value: 13,
 		category: "cloud",
 		connectionDefaults: {
@@ -319,6 +378,7 @@ export const OPENAI_CHAT_PRESETS = [
 	},
 	{
 		name: "DeepSeek (Experimental)",
+		slug: "deepseek",
 		value: 15,
 		category: "cloud",
 		connectionDefaults: {
@@ -332,6 +392,7 @@ export const OPENAI_CHAT_PRESETS = [
 	},
 	{
 		name: "Google Gemini (Experimental)",
+		slug: "google-gemini",
 		value: 16,
 		category: "cloud",
 		connectionDefaults: {
@@ -384,6 +445,7 @@ export const OPENAI_CHAT_PRESETS = [
 	},
 	{
 		name: "text-generation-webui (Experimental)",
+		slug: "text-generation-webui",
 		value: 20,
 		category: "local",
 		connectionDefaults: {
@@ -397,6 +459,7 @@ export const OPENAI_CHAT_PRESETS = [
 	},
 	{
 		name: "vLLM (Experimental)",
+		slug: "vllm",
 		value: 21,
 		category: "local",
 		connectionDefaults: {
@@ -410,6 +473,7 @@ export const OPENAI_CHAT_PRESETS = [
 	},
 	{
 		name: "SGLang (Experimental)",
+		slug: "sglang",
 		value: 22,
 		category: "local",
 		connectionDefaults: {
@@ -423,6 +487,7 @@ export const OPENAI_CHAT_PRESETS = [
 	},
 	{
 		name: "Aphrodite Engine (Experimental)",
+		slug: "aphrodite-engine",
 		value: 23,
 		category: "local",
 		connectionDefaults: {
@@ -435,6 +500,23 @@ export const OPENAI_CHAT_PRESETS = [
 		}
 	}
 ]
+
+/**
+ * A preset slug's human name, for a sentence that has to say who decided
+ * something — "The OpenRouter preset sets this", on the capability panel.
+ *
+ * Falls back to the slug itself rather than to an anonymous "a preset":
+ * `PRESET_CAPABILITIES` can key a slug this list never offers (`anthropic` does
+ * today, per the docblock above), and a name nobody recognises still answers
+ * "who decided this" better than no name at all.
+ */
+export function presetLabel(slug: string | null | undefined): string {
+	if (!slug) return "custom"
+	return (
+		OPENAI_CHAT_PRESETS.find((p) => (p as { slug?: string }).slug === slug)
+			?.name ?? slug
+	)
+}
 
 // Helper function to get connection defaults by type
 export function getConnectionDefaults(type: string): Record<string, any> {

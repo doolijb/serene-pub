@@ -459,3 +459,69 @@ describe("the narrator split, from an older configuration", () => {
 		expect(byPath.get("speakerRelationships")).toBe(43)
 	})
 })
+
+/**
+ * An author preset that sets a whole SLOT has to be readable per FIELD.
+ *
+ * `p.settings('render', { review: 'on' })` stores one row —
+ * `render|settings|<whole slot> = {"review":"on"}` — while declarations for a
+ * settings slot are per-field. The seeder looks values up by exact address, so
+ * for as long as it only matched the exact spelling, every author preset that
+ * set `settings` was dropped in silence and the config took the author default.
+ *
+ * The visible cost of that: `core:spec/generate-image` ships `review-on` as its
+ * DEFAULT preset, labelled "Ask for the prompt". The shipped config was named
+ * after it — so the panel said "Ask for the prompt" — and pressing Image
+ * rendered immediately with whatever the prompts slot happened to hold, because
+ * the one value the preset existed to set never arrived.
+ */
+describe("an author preset that sets a whole settings slot", () => {
+	const configFor = async (slug: string) => {
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, slug))
+		const res = await ensureDefaultConfig(
+			db as any,
+			spec.id,
+			spec.activeVersionId!,
+			slug
+		)
+		const rows = await valuesOf(res.configId)
+		return new Map(
+			(rows as any[]).map((r) => [`${r.nodeKey}|${r.slot}|${r.path}`, r.value])
+		)
+	}
+
+	it("reaches the field the declaration names", async () => {
+		const values = await configFor("core:spec/generate-image")
+		expect(values.get("render|settings|review")).toBe("on")
+	})
+
+	it("leaves a node the preset never mentioned on its own default", async () => {
+		// `post` (create-message) is not in the preset. Exploding a whole-slot
+		// value must not spray it across sibling nodes.
+		const values = await configFor("core:spec/generate-image")
+		expect(values.get("post|settings|review")).toBe("off")
+	})
+
+	it("names the config after the preset it actually applied", async () => {
+		// The two travelled separately before: the NAME came from the preset and
+		// the VALUES did not, which is what made the failure so hard to see.
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/generate-image"))
+		const res = await ensureDefaultConfig(
+			db as any,
+			spec.id,
+			spec.activeVersionId!,
+			"core:spec/generate-image"
+		)
+		const [config] = await db
+			.select()
+			.from(schema.pipelineConfigs)
+			.where(eq(schema.pipelineConfigs.id, res.configId))
+		expect(config.name).toBe("Ask for the prompt")
+	})
+})

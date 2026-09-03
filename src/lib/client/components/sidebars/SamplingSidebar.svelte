@@ -8,9 +8,12 @@
 	import SamplingConfigUnsavedChangesModal from "../modals/PromptConfigUnsavedChangesModal.svelte"
 	import NewNameModal from "../modals/NewNameModal.svelte"
 	import SamplingValuesForm from "./SamplingValuesForm.svelte"
+	import SamplingEnabledForm from "./SamplingEnabledForm.svelte"
+	import { countEnabled } from "./samplingFields"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { z } from "zod"
 	import { S, SAMPLING_SCHEMAS, samplingSchemaFor } from "@serene-pub/sdk"
+	import { capabilityForSamplingShape } from "$lib/shared/capabilities/samplingShape"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -40,7 +43,14 @@
 	// check every row's shape before trusting its name. A deep link that names a
 	// config or a shape skips the picker.
 	let shape = $state<string>(initialShape ?? S.textGen)
-	let view = $state<"index" | "list">(
+	// Whether the deep-linked row's own shape has been adopted yet. Not `$state`:
+	// nothing renders from it, and it flips once, the first time a list lands.
+	let deepLinkAdopted = false
+	// Three screens, one variable — the same pattern index→list already proves.
+	// "enabled" is the enable/disable screen: which parameters this config is in
+	// charge of, edited apart from their values rather than as a checkbox in
+	// front of every one of them.
+	let view = $state<"index" | "list" | "enabled">(
 		initialSelectedId != null || startNew || initialShape ? "list" : "index"
 	)
 
@@ -54,8 +64,16 @@
 		{
 			shape: S.imageGen,
 			icon: Icons.Image,
+			// The second sentence draws a real boundary, and this card is where
+			// a person first meets the family presets. Steps, CFG, samplers and
+			// seeds are the vocabulary of LOCAL diffusion; a hosted service has
+			// no such knobs to preset (gpt-image-1 takes a size ENUM, a quality
+			// word and nothing else), so what one backend alone offers —
+			// quality, background, output format — lives on its CONNECTION,
+			// declared by its adapter. Hence five model families here and no
+			// sixth "hosted" preset.
 			title: "Image Generation",
-			blurb: "Steps, CFG, size, seed — shared by every image backend, whichever one a connection points at."
+			blurb: "Steps, CFG, size, seed — shared by every image backend, whichever one a connection points at. These are the parameters of local diffusion; a hosted service's own options (quality, background, output format) live on its connection instead."
 		}
 	]
 
@@ -81,10 +99,24 @@
 	 * image provider the moment a spec left the slot unset.
 	 */
 	function defaultIdFor(s: string): number | null {
-		const settings = systemSettingsCtx.settings
-		if (s === S.imageGen)
-			return settings?.defaultImageSamplingConfigId ?? null
-		return settings?.defaultSamplingConfigId ?? null
+		// Keyed by CAPABILITY now (0175), not by a column per modality — the
+		// capability space is open, so a column pair each would not scale and
+		// every new modality would be a migration.
+		const byCapability = systemSettingsCtx.capabilityDefaults
+		// The shared mapping, not a second copy of it: a local
+		// `s === S.imageGen ? … : "text->text"` reads a TTS config's default out
+		// of the CHAT capability, because everything that is not image falls into
+		// the else. Whatever registered it used this function; so does this.
+		const capability = capabilityForSamplingShape(s)
+		const registered = capability
+			? byCapability?.[capability]?.samplingConfigId
+			: null
+		if (registered != null) return registered
+		// The text default is still mirrored onto system_settings for the legacy
+		// generation path, so it remains a valid fallback for that one capability.
+		return s === S.imageGen
+			? null
+			: (systemSettingsCtx.settings?.defaultSamplingConfigId ?? null)
 	}
 
 	const firstOfShape = (s: string) =>
@@ -108,10 +140,14 @@
 	let unsavedChanges = $derived.by(() => {
 		if (!sampling || !originalSamplingConfig) return false
 		// Compare current sampling with original to detect changes
-		return JSON.stringify(sampling) !== JSON.stringify(originalSamplingConfig)
+		return (
+			JSON.stringify(sampling) !== JSON.stringify(originalSamplingConfig)
+		)
 	})
 	let showUnsavedChangesModal = $state(false)
 	let showNewNameModal = $state(false)
+	/** A server refusal shown under the new-name input, not as a toast. */
+	let newNameError: string | undefined = $state()
 	let showDeleteModal = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 
@@ -129,6 +165,15 @@
 	 * if the sidebar happens to have opened on the other category.
 	 */
 	const activeSchema = $derived(samplingSchemaFor(sampling?.shape))
+
+	/**
+	 * "N of M" for the enable/disable nav button — the one thing the inline
+	 * checkboxes carried that the values screen no longer shows, now that it
+	 * draws only the parameters that are on.
+	 */
+	const enabledSummary = $derived(
+		countEnabled(activeSchema, sampling?.enabled)
+	)
 
 	let samplingConfigsList: Sockets.SamplingConfigs.List.Response["samplingConfigsList"] =
 		$state([])
@@ -156,6 +201,7 @@
 	}
 
 	function handleNew() {
+		newNameError = undefined
 		showNewNameModal = true
 	}
 	function handleNewNameConfirm(name: string) {
@@ -168,12 +214,18 @@
 		delete newSamplingConfig.isImmutable
 		newSamplingConfig.name = name.trim()
 		newSamplingConfig.shape = sampling?.shape ?? shape
+		newNameError = undefined
 		socket.emit("samplingConfigs:create", {
 			sampling: newSamplingConfig as any
 		})
-		showNewNameModal = false
+		// Deliberately NOT closed here. Names are unique per modality, so the
+		// server can refuse this one, and a modal that had already closed would
+		// have thrown away the name the person typed along with the clone they
+		// were halfway through making. `handleSamplingConfigsCreate` closes it
+		// once the row actually exists.
 	}
 	function handleNewNameCancel() {
+		newNameError = undefined
 		showNewNameModal = false
 	}
 
@@ -275,8 +327,38 @@
 		samplingConfigsList = message.samplingConfigsList
 		// A selection that belongs to the other category (or to a row that has
 		// just been deleted) would render an empty panel under this heading.
+		// `!== "index"` rather than `=== "list"`: the enable/disable screen
+		// edits the same selection, so a row deleted while it is open needs the
+		// same repair.
+		// A deep link names a config but not its category, so adopt the row's own
+		// shape before repairing anything.
+		//
+		// /admin/sampling/<id> passes only `initialSelectedId`, leaving `shape` at
+		// the text default. `viewConfigs` filters by shape, so an IMAGE config is
+		// never in it, the repair below fires, and the panel silently loads the
+		// TEXT default instead — under the wrong heading, with the URL still
+		// naming the image row. Harmless when one image config existed; this
+		// sprint added five prominently-named rows whose whole purpose is to be
+		// clicked.
+		//
+		// Consumed once (`pendingDeepLinkId = null`), so an ordinary list refresh
+		// can never yank someone out of the category they picked by hand.
+		if (!deepLinkAdopted) {
+			deepLinkAdopted = true
+			// Only when the link named a config WITHOUT naming a shape — a link
+			// that named both meant both, and must not be second-guessed.
+			if (initialShape == null && initialSelectedId != null) {
+				const target = samplingConfigsList.find(
+					(c: { id: number; shape?: string }) =>
+						c.id === initialSelectedId
+				)
+				if (target?.shape && target.shape !== shape)
+					shape = target.shape
+			}
+		}
+
 		if (
-			view === "list" &&
+			view !== "index" &&
 			selectedSamplingId != null &&
 			!viewConfigs.some((c) => c.id === selectedSamplingId)
 		) {
@@ -297,7 +379,31 @@
 		message: Sockets.SamplingConfigs.Create.Response
 	) {
 		selectedSamplingId = message.sampling.id
+		// The modal is closed HERE rather than on confirm — the row exists now,
+		// so there is nothing left to correct in it.
+		newNameError = undefined
+		showNewNameModal = false
 		toaster.success({ title: "Sampling Config Created" })
+	}
+	/**
+	 * A refused clone — a name already taken within this modality is the one a
+	 * person actually hits, and the answer is to type a different one. So the
+	 * message goes under the input that has to change, and the modal stays up.
+	 * Both `:error` events are listed in Layout's HANDLED_ERROR_EVENTS, or this
+	 * would arrive twice: once here, once as a generated toast.
+	 */
+	function handleSamplingConfigsCreateError(message: Sockets.ErrorResponse) {
+		newNameError = message.error
+	}
+	/**
+	 * The same refusal on a rename. Filed under `name` rather than toasted for
+	 * the same reason: it is a statement about that field, and the field is on
+	 * screen. The other update errors the server can raise (immutable row,
+	 * unknown shape) are unreachable from this form — Update is disabled on
+	 * immutable rows and the shape is never edited here.
+	 */
+	function handleSamplingConfigsUpdateError(message: Sockets.ErrorResponse) {
+		validationErrors = { ...validationErrors, name: message.error }
 	}
 	function handleSamplingConfigsGet(
 		message: Sockets.SamplingConfigs.Get.Response
@@ -318,6 +424,18 @@
 		socket.on("samplingConfigs:delete", handleSamplingConfigsDelete)
 		socket.on("samplingConfigs:update", handleSamplingConfigsUpdate)
 		socket.on("samplingConfigs:create", handleSamplingConfigsCreate)
+		// Registered and torn down BY NAMED REFERENCE. A bare
+		// `socket.off("samplingConfigs:create:error")` removes the
+		// FIRST-registered listener for the event, which is Layout's — two real
+		// bugs in this codebase already.
+		socket.on(
+			"samplingConfigs:create:error",
+			handleSamplingConfigsCreateError
+		)
+		socket.on(
+			"samplingConfigs:update:error",
+			handleSamplingConfigsUpdateError
+		)
 		socket.on("samplingConfigs:get", handleSamplingConfigsGet)
 		socket.on(
 			"samplingConfigs:setUserActive",
@@ -334,6 +452,14 @@
 		socket.off("samplingConfigs:delete", handleSamplingConfigsDelete)
 		socket.off("samplingConfigs:update", handleSamplingConfigsUpdate)
 		socket.off("samplingConfigs:create", handleSamplingConfigsCreate)
+		socket.off(
+			"samplingConfigs:create:error",
+			handleSamplingConfigsCreateError
+		)
+		socket.off(
+			"samplingConfigs:update:error",
+			handleSamplingConfigsUpdateError
+		)
 		socket.off("samplingConfigs:get", handleSamplingConfigsGet)
 		socket.off(
 			"samplingConfigs:setUserActive",
@@ -396,6 +522,44 @@
 				</div>
 			</button>
 		{/each}
+	</div>
+{:else if view === "enabled"}
+	<!-- ── ENABLE / DISABLE ────────────────────────────────────────────────
+	     Back neither saves nor discards: a switch flipped here is pending in
+	     exactly the way a slider drag is, and the same `unsavedChanges` compare,
+	     Reset and close-guard already cover `enabled` for free. -->
+	<div class="text-foreground min-h-100 p-4">
+		<div class="mb-3">
+			<PanelNavHeader
+				title="Enabled Parameters"
+				onBack={() => (view = "list")}
+				backLabel={categoryTitle}
+			/>
+		</div>
+		{#if sampling}
+			<p class="text-muted-foreground mb-4 text-sm">
+				Only the parameters switched on are sent — the rest are left to
+				the backend's own defaults. Their values are edited on the
+				previous screen, and nothing is saved until you press Update
+				there.
+			</p>
+			{#if sampling.isImmutable}
+				<!-- Repeated from the list screen: without it the switches read
+				     as broken rather than as read-only. -->
+				<div
+					class="preset-tonal-warning mb-4 flex items-center gap-2 rounded-xl p-2 text-sm"
+				>
+					<Icons.Info size={16} class="shrink-0" />
+					This is a built-in config — clone it to make changes.
+				</div>
+			{/if}
+			<SamplingEnabledForm
+				schema={activeSchema}
+				bind:values={sampling.values}
+				bind:enabled={sampling.enabled}
+				disabled={sampling.isImmutable}
+			/>
+		{/if}
 	</div>
 {:else}
 	<div class="text-foreground min-h-100 p-4">
@@ -468,8 +632,8 @@
 					class="preset-tonal-warning mb-4 flex items-center gap-2 rounded-xl p-2 text-sm"
 				>
 					<Icons.Info size={16} class="shrink-0" />
-					This is a built-in config (marked with a trailing *) — clone it
-					to make changes.
+					This is a built-in config (marked with a trailing *) — clone
+					it to make changes.
 				</div>
 			{/if}
 			<PanelToolbar label="Sampling config actions" class="mb-4">
@@ -529,14 +693,43 @@
 					{/if}
 				</div>
 
-				<!-- Every parameter the shape declares, each with its own switch.
-				     The old form listed nine hand-picked samplers and a separate
-				     "Select Samplers" screen to toggle them; the rest of the table
-				     was unreachable. -->
+				<!-- The count is the only thing the inline checkboxes carried
+				     that this screen no longer shows: it now draws just the
+				     parameters that are on, so "N of M" is how you learn there
+				     are others. -->
+				<button
+					type="button"
+					class="card preset-filled-surface-100-900 hover:preset-tonal-primary group flex w-full cursor-pointer items-center justify-between gap-2 rounded-xl p-3 text-left transition-all"
+					onclick={() => (view = "enabled")}
+					aria-label="Enabled Parameters — {enabledSummary.on} of {enabledSummary.total}"
+				>
+					<span class="flex min-w-0 items-center gap-2">
+						<Icons.ListChecks
+							size={16}
+							class="text-primary-500 shrink-0"
+						/>
+						<span class="truncate font-semibold">
+							Enabled Parameters
+						</span>
+					</span>
+					<span
+						class="text-muted-foreground flex shrink-0 items-center gap-1 text-sm"
+					>
+						{enabledSummary.on} of {enabledSummary.total}
+						<Icons.ChevronRight
+							size={16}
+							class="transition-transform group-hover:translate-x-0.5"
+						/>
+					</span>
+				</button>
+
+				<!-- Every ENABLED parameter the shape declares. The switches are
+				     next door; the old form listed nine hand-picked samplers and
+				     the rest of the table was unreachable from anywhere. -->
 				<SamplingValuesForm
 					schema={activeSchema}
 					bind:values={sampling.values}
-					bind:enabled={sampling.enabled}
+					enabled={sampling.enabled}
 					disabled={sampling.isImmutable}
 				/>
 			</form>
@@ -552,11 +745,16 @@
 />
 <NewNameModal
 	open={showNewNameModal}
-	onOpenChange={(e) => (showNewNameModal = e.open)}
+	onOpenChange={(e) => {
+		showNewNameModal = e.open
+		// Dismissed by backdrop or Escape — the refusal went with it.
+		if (!e.open) newNameError = undefined
+	}}
 	onConfirm={handleNewNameConfirm}
 	onCancel={handleNewNameCancel}
 	title="New Sampling Config"
 	description="Your current settings will be copied."
+	error={newNameError}
 />
 
 <Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>

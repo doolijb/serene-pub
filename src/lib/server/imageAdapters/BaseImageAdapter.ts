@@ -18,8 +18,8 @@
  *     config, and the adapter translates it. This is the only thing the pipeline
  *     knows about.
  *   - **The profile** (`profileSchema`, stored on `connections.extraJson.profile`)
- *     is what a *backend* offers and nothing else does: Fooocus' performance mode
- *     and style list, a ComfyUI workflow, an A1111 `override_settings` block. It
+ *     is what a *backend* offers and nothing else does: an A1111
+ *     `override_settings` block, a ComfyUI workflow, a vendor's own preset list. It
  *     is declared as a schema so core renders a form for it without knowing what
  *     any of it means.
  *
@@ -58,7 +58,7 @@ export interface ImageAdapterExports {
 	testConnection: (connection: SelectConnection) => Promise<{
 		ok: boolean
 		error?: string
-		/** Anything else the test learned that a form can use — Fooocus' style list, say. */
+		/** Anything else the test learned that a form can use — a sampler list, say. */
 		extra?: Record<string, unknown>
 	}>
 	/** What this backend can actually do, so a form can stop offering what it cannot. */

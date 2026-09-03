@@ -56,9 +56,25 @@ import "@serene-pub/contracts"
  *    did, update the hash here in the same commit as the migration.
  *
  * Adding a *new* type is safe and needs no migration — just add its line.
+ *
+ * ## Migration 0176 — answer 3, fourteen entries at once
+ *
+ * Every type with a `connection` slot gained `requires`: the capability ids that
+ * connection must satisfy, e.g. `['text->image']` on `generate-image`. Scattered
+ * through this table rather than grouped, so they are noted here instead: the
+ * providers for text, image, embeddings, speech, the four graph nodes, the two
+ * summarizers, name-entry, extract-cast, and the comfy plugin example.
+ *
+ * `shape` did not move — it still types the SLOT. `requires` is a separate fact
+ * about the CONNECTION bound to it, and it exists because filtering on the
+ * connection's `modality` scalar refused KoboldCPP an image node for being
+ * "a text connection" while it was drawing pictures from the same process.
+ *
+ * The two MCP nodes are deliberately absent: no transform id is true of a tool
+ * server, so they keep filtering by `shape` alone and their hashes did not move.
  */
 const PUBLISHED_HASHES: Record<string, string> = {
-	"chariot.comfy:render-image@1": "12d57bdcc7949f",
+	"chariot.comfy:render-image@1": "8cab45abdf9c1",
 	"chariot.dice-tray:roll@1": "b7457cf04e36d",
 	"chariot.recall:rank-recall@1": "17b9069e6e0b65",
 	"core:consumer/attach-audio@1": "2a3ce393ac3d8",
@@ -81,32 +97,32 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:input/session-created@1": "18daad12cc8870",
 	"core:query/session-greetings@1": "5c57ecc64e730",
 	"core:consumer/seed-greetings@1": "1247e34e381a2f",
-	"core:provider/embed-text@1": "1a2be2fe9ae5a9",
+	"core:provider/embed-text@1": "8bd26ad242552",
 	// Gained its two script hooks in 0.6-preview (migration 0146): `scripts`
 	// before over `content`, `castScripts` after over `cast` — the paste-rung
 	// half of replaceable cast extraction (ruling of 2026-08-26). Replacing
 	// the extractor itself stays a node rebind, never a script.
-	"core:provider/extract-cast@1": "921a1aa16cb79",
+	"core:provider/extract-cast@1": "972921f6b6931",
 	// Gained `currentCharacterId` in 0.6-preview (migration 0134): the §27l
 	// stop-string exclusion follows the next-speaker node's output through
 	// the host's payload-wins seam (19 §5).
 	// Re-projected by 0170 (policy answer 3): the type gained a multimodal
 	// contract — an `attachments` in-port, a `parts` out-port, and a declared
 	// `media` capability — before any release shipped it.
-	"core:provider/generate-text@1": "161f2572294a5c",
-	"core:provider/graph-node-description@1": "6f9762a123b0c",
-	"core:provider/graph-node-resolution@1": "e769698f56c34",
-	"core:provider/graph-perspective@1": "10d6e4b8419763",
-	"core:provider/graph-pre-filter@1": "af07bcf5d1b65",
-	"core:provider/graph-state-detection@1": "145613287cd09f",
+	"core:provider/generate-text@1": "1afa3a513d82c1",
+	"core:provider/graph-node-description@1": "175a464ce58684",
+	"core:provider/graph-node-resolution@1": "15e22620687cf1",
+	"core:provider/graph-perspective@1": "200c0141d4ebf",
+	"core:provider/graph-pre-filter@1": "f017bf224984f",
+	"core:provider/graph-state-detection@1": "16d24f04ed08c0",
 	// Re-pinned when 14 was built out (the draft stub's hash never reached an
 	// install — 0141's core wipe re-projects every row at boot).
 	"core:provider/mcp-tool@1": "2a4ceca243862",
 	"core:provider/mcp-resource@1": "9d9890414a3d8",
-	"core:provider/name-entry@1": "1b49a34a5cac88",
-	"core:provider/speak@1": "8e5f957ad71f9",
-	"core:provider/summarize-batch@1": "1030d47b263042",
-	"core:provider/summarize-synth@1": "71b9b65aee561",
+	"core:provider/name-entry@1": "17558940ee8508",
+	"core:provider/speak@1": "e36fdde93956d",
+	"core:provider/summarize-batch@1": "1432666fe0b3dd",
+	"core:provider/summarize-synth@1": "eca4138224b4b",
 	"core:query/session-cast@1": "142e94006413af",
 	"core:query/world-lore@1": "110c27164fe03f",
 	"core:query/character-lore@1": "110c27164fe03f",
@@ -206,7 +222,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:script:cast/transform@1": "16b4355ec1eb01",
 	// Local image generation: the modality twin of generate-text, same node kind,
 	// its shape naming which one. A new type — inserts a row, needs no migration.
-	"core:provider/generate-image@1": "b65cebb39e937",
+	"core:provider/generate-image@1": "1982c58b43b9ea",
 	"test:task/passthrough@1": "cf73634860fe1",
 	"test:task/sloppy-stream@1": "13093e6bda129",
 	"test:task/slow@1": "cf73634860fe1"

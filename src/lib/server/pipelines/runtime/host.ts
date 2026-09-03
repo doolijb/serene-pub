@@ -117,10 +117,11 @@ export const STEP_TYPES_FOR_TEST = STEP_TYPE_LIST
 const refId = (v: unknown): number | null => {
 	if (typeof v === "number") return v
 	if (typeof v === "string" && /^\d+$/.test(v)) return Number(v)
-	if (v && typeof v === "object") {
-		const inner = (v as any).ref ?? (v as any).id
-		return typeof inner === "number" ? inner : null
-	}
+	// Recurses rather than restating a narrower rule. The branch above already
+	// accepts a numeric string; this one used to demand a number, and the
+	// executor hands back `{id}` where the id is a STRING — so every resolved
+	// slot became null here, in the one function whose whole job is to read one.
+	if (v && typeof v === "object") return refId((v as any).ref ?? (v as any).id)
 	return null
 }
 

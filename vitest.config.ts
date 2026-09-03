@@ -4,7 +4,7 @@ import { defineConfig } from "vitest/config"
 export default defineConfig({
 	plugins: [sveltekit()],
 	test: {
-		include: ["src/**/*.{test,spec}.ts"],
+		include: ["src/**/*.{test,spec}.ts", "scripts/**/*.{test,spec}.ts"],
 		/**
 		 * Performance gates are excluded from the ordinary sweep and run on
 		 * their own (`npm run test:budgets`).

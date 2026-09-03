@@ -77,11 +77,33 @@ export interface ConfigOption {
 	 *
 	 * Sent with the option rather than fetched separately, because the list is
 	 * *scoped by the declaration* — a prompts slot may only offer prompts from
-	 * this namespace, and a connection slot only connections of the shape the
-	 * node declared. A panel that fetched "all prompts" would have to re-derive
-	 * both rules on the client, where the second copy eventually disagrees.
+	 * this namespace, and a connection slot only connections that can do what
+	 * the node declared it requires. A panel that fetched "all prompts" would
+	 * have to re-derive both rules on the client, where the second copy
+	 * eventually disagrees.
 	 */
-	choices?: Array<{ id: number; label: string; description?: string }>
+	choices?: Array<{
+		id: number
+		label: string
+		description?: string
+		/**
+		 * Offered but not usable here — it exists, it simply cannot do what this
+		 * slot requires. **The client must render these**, greyed, with `reason`
+		 * beside them. Omitting them is the behaviour this replaces: a
+		 * connection merely absent from a list makes "why isn't mine there"
+		 * unanswerable on the screen that raised the question.
+		 */
+		disabled?: boolean
+		/**
+		 * Why, in a person's words — never a raw capability id.
+		 *
+		 * Present without `disabled` for a connection nobody has tested yet,
+		 * which is *undetermined* rather than incapable: it stays selectable and
+		 * says so, because treating "we never asked" as a no would empty the
+		 * picker on every install that upgraded into the capability model.
+		 */
+		reason?: string
+	}>
 	/**
 	 * For a `prompts-ref` option: the row the resolved value points at, in
 	 * full. The dropdown alone would leave "what does this prompt actually
@@ -348,13 +370,33 @@ export interface Decl {
 	 * For a `connection-ref` or `sampling-ref` control: the modality this slot
 	 * speaks, as a shape id.
 	 *
-	 * The shape doubles as the connection kind and the sampling-config kind
-	 * (F17), so declaring it once is what makes a picker offer only the
-	 * connections and configs that fit. Absent means the slot was authored
-	 * without one and everything is a candidate — the old behaviour, and correct
-	 * only for as long as there is a single modality to be wrong about.
+	 * **Superseded by `requires`.** A shape is a single-modality label — "an
+	 * image-gen connection" — and a real backend is not one modality; KoboldCPP
+	 * answers for text, images and speech from one process. `requires` says the
+	 * same thing as a relation the connection can be asked about
+	 * (`text->image`), which is the fact without the assumption. Kept because
+	 * every slot authored before capabilities existed declares only this, and a
+	 * picker that ignored it would offer those slots everything.
 	 */
 	shape?: string
+	/**
+	 * For a `connection-ref` control: what the connection in this slot must be
+	 * able to do, as capability ids (`SlotDecl.requires`).
+	 *
+	 * The narrowing rule when present: a connection that cannot do these is
+	 * still *offered*, marked disabled with the missing capability named, so
+	 * "why isn't my connection in the list" has an answer on the screen that
+	 * raised the question.
+	 */
+	requires?: readonly string[]
+	/**
+	 * What the binding uses if present and copes without (`SlotDecl.optional`).
+	 *
+	 * Never a filter — an absent optional capability is a branch the node
+	 * already handles. Carried so the panel can say which of a connection's
+	 * powers this step would actually reach for.
+	 */
+	optional?: readonly string[]
 	/** The value declaration (24 T6c) — single-key, for value-decl controls. */
 	decl?: Record<string, Record<string, unknown>>
 	min?: number

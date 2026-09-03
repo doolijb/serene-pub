@@ -99,6 +99,13 @@
 		"pipelines:updateVariableTemplate:error",
 		"pipelines:deleteVariableTemplate:error",
 		"promptConfigs:setUserActive:error",
+		// The sampling sidebar puts both of these under the field that has to
+		// change — the clone modal's name input, or the config's Name — because
+		// a name is unique per modality now and "that one is taken" is answered
+		// by typing a different one. A toast as well would say the same thing
+		// twice, once next to the fix and once in a corner.
+		"samplingConfigs:create:error",
+		"samplingConfigs:update:error",
 		"scenes:compile:error",
 		"scenes:process:error",
 		"systemSettings:updateAccountsEnabled:error",
@@ -710,6 +717,7 @@
 				isAndroidWrapper: message.isAndroidWrapper,
 				localEmbeddingsSupported: message.localEmbeddingsSupported
 			}
+			systemSettingsCtx.capabilityDefaults = message.capabilityDefaults
 			ollamaSettingsCtx.settings = { ...message.ollamaSettings }
 			koboldCppSettingsCtx.settings = { ...message.koboldCppSettings }
 		})

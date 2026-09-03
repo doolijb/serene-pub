@@ -1226,6 +1226,41 @@
       "when": 1787276896237,
       "tag": "0174_reproject_create_message",
       "breakpoints": true
+    },
+    {
+      "idx": 175,
+      "version": "7",
+      "when": 1787276896238,
+      "tag": "0175_connection_capabilities",
+      "breakpoints": true
+    },
+    {
+      "idx": 176,
+      "version": "7",
+      "when": 1787276896239,
+      "tag": "0176_reproject_connection_requires",
+      "breakpoints": true
+    },
+    {
+      "idx": 177,
+      "version": "7",
+      "when": 1787276896240,
+      "tag": "0177_koboldcpp_image_models",
+      "breakpoints": true
+    },
+    {
+      "idx": 178,
+      "version": "7",
+      "when": 1787276896241,
+      "tag": "0178_koboldcpp_image_connections",
+      "breakpoints": true
+    },
+    {
+      "idx": 179,
+      "version": "7",
+      "when": 1787276896242,
+      "tag": "0179_sampling_name_unique_per_modality",
+      "breakpoints": true
     }
   ]
 }

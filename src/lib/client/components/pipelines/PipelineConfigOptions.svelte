@@ -1708,11 +1708,18 @@
 						? "— Global Default —"
 						: "— none —"}
 				</option>
+				<!-- `disabled` and `reason` are why a connection that cannot do
+				     this step's job is SHOWN rather than hidden. "Why isn't my
+				     connection in the list" has no answer when it is simply
+				     absent; greyed out with "Can't do Image generation." beside
+				     it answers it in place. `reason` also arrives WITHOUT
+				     `disabled` for a connection nobody has tested yet — a
+				     caveat on a choice that is still selectable. -->
 				{#each option.choices as choice (choice.id)}
-					<option value={String(choice.id)}>
+					<option value={String(choice.id)} disabled={choice.disabled}>
 						{choice.label}{choice.description
 							? ` · ${choice.description}`
-							: ""}
+							: ""}{choice.reason ? ` — ${choice.reason}` : ""}
 					</option>
 				{/each}
 			</select>

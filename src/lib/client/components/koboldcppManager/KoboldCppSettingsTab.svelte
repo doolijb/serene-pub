@@ -30,9 +30,17 @@
 	let isCheckingUpdates = $state(false)
 	let updateCheckFailed = $state(false)
 	let isSavingBaseUrl = $state(false)
-	let isSavingModelsDir = $state(false)
+	/**
+	 * WHICH directory is being saved, not just that one is.
+	 *
+	 * There are two fields now and the ack (`{ success }`) doesn't name the one
+	 * it answers for, so this is the only thing that can label the toast — and
+	 * only one save can be in flight from this tab at a time.
+	 */
+	let savingDirKind = $state<Sockets.KoboldCPP.ModelKindFilter | null>(null)
 	let baseUrlField = $state("")
 	let modelsDirField = $state("")
+	let imageModelsDirField = $state("")
 
 	// --- Managed binary update ---
 	let managedUpdateAvailable = $state(false)
@@ -78,13 +86,43 @@
 	let adminPasswordField = $state("")
 	let savingAdminPassword = $state(false)
 
+	/**
+	 * What each field last held when it was seeded FROM settings.
+	 *
+	 * A field is only re-seeded while it still equals this — i.e. while the user
+	 * has not typed in it. Without that guard, saving any one field makes the
+	 * server push `systemSettings:get`, which re-runs this effect and wipes
+	 * every OTHER field's unsaved text. That was invisible while there was one
+	 * directory to edit; with two adjacent directory inputs in the same card it
+	 * is a keystroke away, and the image field cannot even be saved first
+	 * (its Save is disabled while another save is in flight).
+	 *
+	 * Not `$state`: nothing renders from it, and making it reactive would put
+	 * this effect in a loop with itself.
+	 */
+	let seeded = {
+		baseUrl: "",
+		modelsDir: "",
+		imageModelsDir: "",
+		adminDir: ""
+	}
+
 	$effect(() => {
-		baseUrlField =
-			koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl ?? ""
-		modelsDirField =
-			koboldCppSettingsCtx.settings?.koboldCppManagerModelsDir ?? ""
-		adminDirField =
-			koboldCppSettingsCtx.settings?.koboldCppManagedBinaryDir ?? ""
+		const s = koboldCppSettingsCtx.settings
+		const next = {
+			baseUrl: s?.koboldCppManagerBaseUrl ?? "",
+			modelsDir: s?.koboldCppManagerModelsDir ?? "",
+			// Blank is a real, meaningful value here (see the field's help
+			// text), so it is mirrored as-is rather than defaulted to anything.
+			imageModelsDir: s?.koboldCppImageModelsDir ?? "",
+			adminDir: s?.koboldCppManagedBinaryDir ?? ""
+		}
+		if (baseUrlField === seeded.baseUrl) baseUrlField = next.baseUrl
+		if (modelsDirField === seeded.modelsDir) modelsDirField = next.modelsDir
+		if (imageModelsDirField === seeded.imageModelsDir)
+			imageModelsDirField = next.imageModelsDir
+		if (adminDirField === seeded.adminDir) adminDirField = next.adminDir
+		seeded = next
 	})
 
 	// In Managed mode, everything (health checks, capability display,
@@ -127,9 +165,19 @@
 		socket.emit("koboldcpp:setBaseUrl", { baseUrl: baseUrlField.trim() })
 	}
 
-	function saveModelsDir() {
-		isSavingModelsDir = true
-		socket.emit("koboldcpp:setModelsDir", { dir: modelsDirField.trim() })
+	// `kind` is required by the event and deliberately has no default: the two
+	// fields write two different columns, and a save that forgot to say which
+	// would repoint the other one — which reads to a user as every model they
+	// own disappearing at once.
+	function saveModelsDir(kind: Sockets.KoboldCPP.ModelKindFilter) {
+		savingDirKind = kind
+		socket.emit("koboldcpp:setModelsDir", {
+			dir: (kind === "image"
+				? imageModelsDirField
+				: modelsDirField
+			).trim(),
+			kind
+		})
 	}
 
 	function saveTtl() {
@@ -171,92 +219,144 @@
 		})
 	}
 
+	// Every listener below is named so onDestroy can remove THIS component's
+	// handler. A bare socket.off("event") removes the first-registered listener
+	// for that event instead — usually Layout's, which is the single writer of
+	// the settings context this whole tab reads.
+	function handleVersion(message: Sockets.KoboldCPP.Version.Response) {
+		isCheckingVersion = false
+		versionCheckFailed = false
+		currentVersion = message.version || "Unknown"
+		capabilities = message.capabilities
+	}
+
+	function handleVersionError() {
+		// Not reachable is a common, often-transient state in both modes
+		// (subprocess/instance not started yet, briefly restarting, etc.) —
+		// this fires eagerly on every mount, so a toast here would pop up
+		// immediately just from opening the tab. Surfaced instead as a quiet
+		// inline indicator next to the version fields below.
+		isCheckingVersion = false
+		versionCheckFailed = true
+		currentVersion = ""
+		capabilities = null
+	}
+
+	function handleIsUpdateAvailable(
+		message: Sockets.KoboldCPP.IsUpdateAvailable.Response
+	) {
+		isCheckingUpdates = false
+		updateCheckFailed = false
+		isUpdateAvailable = message.isUpdateAvailable
+		latestVersion = message.latestVersion ?? ""
+		releaseUrl = message.releaseUrl ?? ""
+		if (!currentVersion && message.currentVersion)
+			currentVersion = message.currentVersion
+	}
+
+	function handleIsUpdateAvailableError() {
+		// Same reasoning as koboldcpp:version:error above — eager check, quiet
+		// inline indicator instead of a toast.
+		isCheckingUpdates = false
+		updateCheckFailed = true
+	}
+
+	function handleSetBaseUrl(message: Sockets.KoboldCPP.SetBaseUrl.Response) {
+		isSavingBaseUrl = false
+		if (message.success)
+			toaster.success({ title: "KoboldCPP URL updated successfully" })
+		else toaster.error({ title: "Failed to update KoboldCPP URL" })
+	}
+
+	function handleSetModelsDir(
+		message: Sockets.KoboldCPP.SetModelsDir.Response
+	) {
+		const what =
+			savingDirKind === "image"
+				? "Image models directory"
+				: "Models directory"
+		savingDirKind = null
+		if (message.success) toaster.success({ title: `${what} saved` })
+		else toaster.error({ title: `Failed to save ${what.toLowerCase()}` })
+	}
+
+	function handleSetModelTtl() {
+		savingTtl = false
+		toaster.success({ title: "TTL updated" })
+	}
+
+	function handleSetSubprocessTimeout() {
+		savingSubprocessTimeout = false
+		toaster.success({ title: "Startup timeout updated" })
+	}
+
+	function handleSetManagedPort() {
+		savingPort = false
+		toaster.success({ title: "Port updated — restart required" })
+	}
+
+	function handleCheckManagedBinaryUpdate(
+		msg: Sockets.KoboldCPP.CheckManagedBinaryUpdate.Response
+	) {
+		isCheckingManagedUpdate = false
+		managedUpdateAvailable = msg.isUpdateAvailable
+		managedInstalledTag = msg.installedTag
+		managedLatestTag = msg.latestTag
+		managedReleaseUrl = msg.releaseUrl
+	}
+
+	function handleCheckManagedBinaryUpdateError() {
+		isCheckingManagedUpdate = false
+	}
+
+	function handleSetManagedBinaryDir(
+		message: Sockets.KoboldCPP.SetManagedBinaryDir.Response
+	) {
+		savingAdminDir = false
+		if (message.success) toaster.success({ title: "Admin directory saved" })
+		else toaster.error({ title: "Failed to save admin directory" })
+	}
+
+	function handleSetManagedAdminPassword(
+		message: Sockets.KoboldCPP.SetManagedAdminPassword.Response
+	) {
+		savingAdminPassword = false
+		if (message.success) {
+			toaster.success({ title: "Admin password saved" })
+			// Never leave the just-typed password sitting in the field — the
+			// placeholder will show bullets now that it's stored.
+			adminPasswordField = ""
+		} else {
+			toaster.error({ title: "Failed to save admin password" })
+		}
+	}
+
 	onMount(() => {
+		socket.on("koboldcpp:version", handleVersion)
+		socket.on("koboldcpp:version:error", handleVersionError)
+		socket.on("koboldcpp:isUpdateAvailable", handleIsUpdateAvailable)
 		socket.on(
-			"koboldcpp:version",
-			(message: Sockets.KoboldCPP.Version.Response) => {
-				isCheckingVersion = false
-				versionCheckFailed = false
-				currentVersion = message.version || "Unknown"
-				capabilities = message.capabilities
-			}
+			"koboldcpp:isUpdateAvailable:error",
+			handleIsUpdateAvailableError
 		)
-		socket.on("koboldcpp:version:error", () => {
-			// Not reachable is a common, often-transient state in both modes
-			// (subprocess/instance not started yet, briefly restarting, etc.)
-			// — this fires eagerly on every mount, so a toast here would pop
-			// up immediately just from opening the tab. Surfaced instead as a
-			// quiet inline indicator next to the version fields below.
-			isCheckingVersion = false
-			versionCheckFailed = true
-			currentVersion = ""
-			capabilities = null
-		})
-		socket.on(
-			"koboldcpp:isUpdateAvailable",
-			(message: Sockets.KoboldCPP.IsUpdateAvailable.Response) => {
-				isCheckingUpdates = false
-				updateCheckFailed = false
-				isUpdateAvailable = message.isUpdateAvailable
-				latestVersion = message.latestVersion ?? ""
-				releaseUrl = message.releaseUrl ?? ""
-				if (!currentVersion && message.currentVersion)
-					currentVersion = message.currentVersion
-			}
-		)
-		socket.on("koboldcpp:isUpdateAvailable:error", () => {
-			// Same reasoning as koboldcpp:version:error above — eager check,
-			// quiet inline indicator instead of a toast.
-			isCheckingUpdates = false
-			updateCheckFailed = true
-		})
-		socket.on(
-			"koboldcpp:setBaseUrl",
-			(message: Sockets.KoboldCPP.SetBaseUrl.Response) => {
-				isSavingBaseUrl = false
-				if (message.success)
-					toaster.success({
-						title: "KoboldCPP URL updated successfully"
-					})
-				else toaster.error({ title: "Failed to update KoboldCPP URL" })
-			}
-		)
-		socket.on(
-			"koboldcpp:setModelsDir",
-			(message: Sockets.KoboldCPP.SetModelsDir.Response) => {
-				isSavingModelsDir = false
-				if (message.success)
-					toaster.success({ title: "Models directory saved" })
-				else toaster.error({ title: "Failed to save models directory" })
-			}
-		)
+		socket.on("koboldcpp:setBaseUrl", handleSetBaseUrl)
+		socket.on("koboldcpp:setModelsDir", handleSetModelsDir)
 
 		if (isManaged) {
-			socket.on("koboldcpp:setModelTtl", () => {
-				savingTtl = false
-				toaster.success({ title: "TTL updated" })
-			})
-			socket.on("koboldcpp:setSubprocessTimeout", () => {
-				savingSubprocessTimeout = false
-				toaster.success({ title: "Startup timeout updated" })
-			})
-			socket.on("koboldcpp:setManagedPort", () => {
-				savingPort = false
-				toaster.success({ title: "Port updated — restart required" })
-			})
+			socket.on("koboldcpp:setModelTtl", handleSetModelTtl)
+			socket.on(
+				"koboldcpp:setSubprocessTimeout",
+				handleSetSubprocessTimeout
+			)
+			socket.on("koboldcpp:setManagedPort", handleSetManagedPort)
 			socket.on(
 				"koboldcpp:checkManagedBinaryUpdate",
-				(msg: Sockets.KoboldCPP.CheckManagedBinaryUpdate.Response) => {
-					isCheckingManagedUpdate = false
-					managedUpdateAvailable = msg.isUpdateAvailable
-					managedInstalledTag = msg.installedTag
-					managedLatestTag = msg.latestTag
-					managedReleaseUrl = msg.releaseUrl
-				}
+				handleCheckManagedBinaryUpdate
 			)
-			socket.on("koboldcpp:checkManagedBinaryUpdate:error", () => {
-				isCheckingManagedUpdate = false
-			})
+			socket.on(
+				"koboldcpp:checkManagedBinaryUpdate:error",
+				handleCheckManagedBinaryUpdateError
+			)
 			checkManagedBinaryUpdate()
 			// Also check the live instance's own reported version/capabilities —
 			// distinct from checkManagedBinaryUpdate's GitHub-release check above.
@@ -266,33 +366,11 @@
 		} else {
 			socket.on(
 				"koboldcpp:setManagedBinaryDir",
-				(message: Sockets.KoboldCPP.SetManagedBinaryDir.Response) => {
-					savingAdminDir = false
-					if (message.success)
-						toaster.success({ title: "Admin directory saved" })
-					else
-						toaster.error({
-							title: "Failed to save admin directory"
-						})
-				}
+				handleSetManagedBinaryDir
 			)
 			socket.on(
 				"koboldcpp:setManagedAdminPassword",
-				(
-					message: Sockets.KoboldCPP.SetManagedAdminPassword.Response
-				) => {
-					savingAdminPassword = false
-					if (message.success) {
-						toaster.success({ title: "Admin password saved" })
-						// Never leave the just-typed password sitting in the field —
-						// the placeholder will show bullets now that it's stored.
-						adminPasswordField = ""
-					} else {
-						toaster.error({
-							title: "Failed to save admin password"
-						})
-					}
-				}
+				handleSetManagedAdminPassword
 			)
 			checkVersion()
 			checkForUpdates()
@@ -300,21 +378,39 @@
 	})
 
 	onDestroy(() => {
-		socket.off("koboldcpp:version")
-		socket.off("koboldcpp:version:error")
-		socket.off("koboldcpp:isUpdateAvailable")
-		socket.off("koboldcpp:isUpdateAvailable:error")
-		socket.off("koboldcpp:setBaseUrl")
-		socket.off("koboldcpp:setModelsDir")
+		socket.off("koboldcpp:version", handleVersion)
+		socket.off("koboldcpp:version:error", handleVersionError)
+		socket.off("koboldcpp:isUpdateAvailable", handleIsUpdateAvailable)
+		socket.off(
+			"koboldcpp:isUpdateAvailable:error",
+			handleIsUpdateAvailableError
+		)
+		socket.off("koboldcpp:setBaseUrl", handleSetBaseUrl)
+		socket.off("koboldcpp:setModelsDir", handleSetModelsDir)
 		if (isManaged) {
-			socket.off("koboldcpp:setModelTtl")
-			socket.off("koboldcpp:setSubprocessTimeout")
-			socket.off("koboldcpp:setManagedPort")
-			socket.off("koboldcpp:checkManagedBinaryUpdate")
-			socket.off("koboldcpp:checkManagedBinaryUpdate:error")
+			socket.off("koboldcpp:setModelTtl", handleSetModelTtl)
+			socket.off(
+				"koboldcpp:setSubprocessTimeout",
+				handleSetSubprocessTimeout
+			)
+			socket.off("koboldcpp:setManagedPort", handleSetManagedPort)
+			socket.off(
+				"koboldcpp:checkManagedBinaryUpdate",
+				handleCheckManagedBinaryUpdate
+			)
+			socket.off(
+				"koboldcpp:checkManagedBinaryUpdate:error",
+				handleCheckManagedBinaryUpdateError
+			)
 		} else {
-			socket.off("koboldcpp:setManagedBinaryDir")
-			socket.off("koboldcpp:setManagedAdminPassword")
+			socket.off(
+				"koboldcpp:setManagedBinaryDir",
+				handleSetManagedBinaryDir
+			)
+			socket.off(
+				"koboldcpp:setManagedAdminPassword",
+				handleSetManagedAdminPassword
+			)
 		}
 	})
 
@@ -856,7 +952,8 @@
 		</div>
 	{/if}
 
-	<!-- Directory paths -->
+	<!-- Directory paths. Two of them since image models got their own home:
+	     Stable Diffusion checkpoints have no business sitting under llm/. -->
 	<div class="card bg-surface-100-800 flex flex-col gap-4 p-4">
 		<div>
 			<label class="block text-sm font-medium" for="koboldModelsDir">
@@ -873,24 +970,61 @@
 				/>
 				<button
 					class="btn preset-filled-primary-500"
-					onclick={saveModelsDir}
-					disabled={isSavingModelsDir}
+					onclick={() => saveModelsDir("text")}
+					disabled={savingDirKind !== null}
 				>
 					<Icons.Save size={14} />
 					Save
 				</button>
 			</div>
 			<p class="text-surface-700-300 mt-1 text-xs">
-				Server-side path where GGUF model files are stored and
+				Server-side path where GGUF text models are stored and
 				downloaded to.
+			</p>
+		</div>
+
+		<div>
+			<label class="block text-sm font-medium" for="koboldImageModelsDir">
+				Image Models Directory
+			</label>
+			<div class="flex gap-2">
+				<input
+					id="koboldImageModelsDir"
+					name="koboldImageModelsDir"
+					type="text"
+					class="input flex-1 font-mono text-sm"
+					placeholder="Same as Models Directory"
+					bind:value={imageModelsDirField}
+				/>
+				<button
+					class="btn preset-filled-primary-500"
+					onclick={() => saveModelsDir("image")}
+					disabled={savingDirKind !== null}
+				>
+					<Icons.Save size={14} />
+					Save
+				</button>
+			</div>
+			<!-- The unset contract, said plainly, because leaving this blank is
+			     the state every existing install is already in and it has to
+			     read as a working choice rather than as something missing. -->
+			<p class="text-surface-700-300 mt-1 text-xs">
+				Where Stable Diffusion models (.safetensors or .gguf) are stored
+				and downloaded to. Leave it blank and image models are looked
+				for in the Models Directory above — which is how every install
+				worked until now. Setting it never moves anything: models
+				already sitting in the Models Directory keep working either way.
 			</p>
 		</div>
 	</div>
 
-	<!-- Capabilities -->
-	{#if capabilities}
-		<div class="card bg-surface-100-800 p-4">
-			<h3 class="mb-3 text-sm font-semibold">Active Capabilities</h3>
+	<!-- Capabilities. Always rendered, including when the instance isn't
+	     answering: a managed instance spends most of its life shut down by the
+	     idle timer, which is exactly when someone comes here asking why a badge
+	     says what it says. -->
+	<div class="card bg-surface-100-800 p-4">
+		<h3 class="mb-3 text-sm font-semibold">Active Capabilities</h3>
+		{#if capabilities}
 			<div class="flex flex-wrap gap-2">
 				{#each Object.entries(capabilityLabels) as [key, label]}
 					{@const enabled =
@@ -911,8 +1045,21 @@
 					</span>
 				{/each}
 			</div>
-		</div>
-	{/if}
+		{:else}
+			<p class="text-surface-700-300 text-xs">
+				Not reachable — capabilities are read from the running instance.
+			</p>
+		{/if}
+
+		<!-- The Image Gen badge reports what the running PROCESS holds right
+		     now, which is a different question from whether an image model is
+		     connected — so this says where that second question is answered. -->
+		<p class="text-surface-700-300 mt-3 text-xs">
+			Image Gen tracks what KoboldCPP has loaded at this moment. Image
+			models are connected from the Models tab's Image list, the same way
+			text models are, and load on demand when a picture is asked for.
+		</p>
+	</div>
 
 	<!-- Attribution -->
 	<p class="text-muted-foreground text-center text-xs">

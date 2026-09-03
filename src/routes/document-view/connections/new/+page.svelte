@@ -5,16 +5,18 @@
 	import { announce } from "$lib/client/accessibility/state.svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+	import { isKoboldCppManagedType } from "$lib/shared/utils/connectionServiceItems"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
 
-	// KoboldCPP Manager connections are created from the KoboldCPP Manager
-	// page, not this generic form — see /document-view/koboldcpp.
+	// KoboldCPP Manager connections — text and image both — are created from
+	// the KoboldCPP Manager page, not this generic form; see
+	// /document-view/koboldcpp.
 	const typeOptions = CONNECTION_TYPE.options.filter(
-		(o) => o.value !== CONNECTION_TYPE.KOBOLDCPP_MANAGED
+		(o) => !isKoboldCppManagedType(o.value)
 	)
 
 	let name = $state("")

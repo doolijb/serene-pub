@@ -7,6 +7,7 @@
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { onMount, onDestroy, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { textModelOptions } from "$lib/client/components/koboldcppManager/modelKindView"
 
 	interface ManagedConfig {
 		gpuLayers: number
@@ -65,12 +66,20 @@
 	let availableModels: Sockets.KoboldCPP.ListModels.ModelFile[] = $state([])
 	let isLoadingModels = $state(false)
 
-	socket.on(
-		"koboldcpp:listModels",
-		(message: Sockets.KoboldCPP.ListModels.Response) => {
-			isLoadingModels = false
-			availableModels = message.availableModels ?? []
-		}
+	// Named so the teardown below removes only this listener — a bare
+	// socket.off("koboldcpp:listModels") drops every handler for the event,
+	// including the KoboldCPP Manager sidebar's, which can be open at the same
+	// time as this form and uses the same list to decide which tab to land on.
+	function handleListModels(message: Sockets.KoboldCPP.ListModels.Response) {
+		isLoadingModels = false
+		availableModels = message.availableModels ?? []
+	}
+	socket.on("koboldcpp:listModels", handleListModels)
+
+	// Text-kind rows only, minus the trap of dropping a stored selection that
+	// has since been classified as an image model — see textModelOptions.
+	let modelSelect = $derived(
+		textModelOptions(availableModels, connection?.model)
 	)
 
 	function refreshModels() {
@@ -168,7 +177,7 @@
 	})
 
 	onDestroy(() => {
-		socket.off("koboldcpp:listModels")
+		socket.off("koboldcpp:listModels", handleListModels)
 	})
 </script>
 
@@ -210,10 +219,18 @@
 			disabled={!managerEnabled}
 		>
 			<option value="">Select a model…</option>
-			{#each availableModels as model}
+			{#each modelSelect.options as model}
 				<option value={model.name}>{model.name}</option>
 			{/each}
 		</select>
+		{#if modelSelect.selectedIsImageModel}
+			<p class="text-warning-700-300 text-xs">
+				This is an image model — KoboldCPP can't answer chat with it,
+				and an image model needs its own connection. Pick a text model
+				here; make the image one from KoboldCPP Manager → Models →
+				Image, which creates the connection for it.
+			</p>
+		{/if}
 		<p class="text-muted-foreground text-xs">
 			Loaded automatically via KoboldCPP Manager's admin API the next time
 			this connection is used to generate.

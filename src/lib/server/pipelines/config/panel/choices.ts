@@ -9,12 +9,26 @@
  */
 
 import { asc, eq } from "drizzle-orm"
-import { S } from "@serene-pub/sdk"
+import {
+	S,
+	capabilityLabel,
+	satisfies,
+	type CapabilityId,
+	type CapabilitySet
+} from "@serene-pub/sdk"
 import { shapeOfModality } from "$lib/shared/constants/ConnectionTypes"
 import * as schema from "$lib/server/db/schema"
 import { type Db, type Decl } from "$lib/server/pipelines/config/panel/types"
 
-type ChoiceList = Array<{ id: number; label: string; description?: string }>
+type ChoiceList = Array<{
+	id: number
+	label: string
+	description?: string
+	/** Offered, but not usable here. See `ConfigOption.choices`. */
+	disabled?: boolean
+	/** Why — in a person's words, never a raw capability id. */
+	reason?: string
+}>
 
 /**
  * Everything a `*-ref` option in this pipeline may be pointed at.
@@ -174,14 +188,20 @@ export async function choiceSets(db: Db, specId: number) {
 		// two rows both called "Ollama" are otherwise indistinguishable in a
 		// picker, which is the situation an admin with a local and a remote box
 		// is in every day.
-		// `shape` rides along on each entry so `choicesFor` can narrow by the
-		// slot's modality. It is deliberately not a filter applied here: one
-		// panel renders many slots, and a shape-blind set built once is what
-		// lets a single query serve all of them.
+		// `shape` and `capabilities` ride along on each entry so `choicesFor` can
+		// narrow by what the slot asks for. Deliberately not a filter applied
+		// here: one panel renders many slots, and a set built once, blind to all
+		// of them, is what lets a single query serve them all.
 		connections: (connections as any[]).map((c) => ({
 			id: c.id,
 			label: c.name,
 			shape: shapeOfModality(c.modality),
+			// The stored cache, never a fresh resolution: deriving would mean
+			// importing the connection's adapter module, and this read happens
+			// for every connection against every slot in the panel — the one
+			// place the lazy loading costs most. `{}` means nobody has tested
+			// this connection, which is undetermined and not incapable.
+			capabilities: (c.capabilities?.resolved ?? {}) as CapabilitySet,
 			...(c.model ? { description: c.model } : {})
 		})) as ChoiceList,
 		sampling: (sampling as any[]).map((s) => ({
@@ -223,23 +243,75 @@ const ofShape = (list: ChoiceList, shape?: string): ChoiceList =>
 			) as ChoiceList)
 		: list
 
+/** `Vision`, or `Vision and Image generation` — names, never ids. */
+const nameCapabilities = (ids: readonly string[]): string => {
+	const names = ids.map((id) => capabilityLabel(id as CapabilityId))
+	if (names.length < 2) return names[0] ?? ""
+	return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+}
+
+/**
+ * Everything in `list`, judged against what the slot requires — and **nothing
+ * removed**.
+ *
+ * Hiding is the tempting implementation and the wrong one. A connection that
+ * simply is not in the dropdown makes *"why isn't mine in the list"* a question
+ * with no answer on the screen that raised it, and the honest answer — "it
+ * can't generate images" — is one this function is already holding. So an
+ * unsatisfying row stays, disabled, carrying its own reason.
+ *
+ * An entry with no capabilities at all is a connection nobody has tested yet.
+ * That is *undetermined*, not incapable, and marking it unusable would empty
+ * the picker on every install that upgraded into the capability model — so it
+ * is offered, with the uncertainty said out loud rather than resolved either way.
+ */
+const ofCapabilities = (
+	list: ChoiceList,
+	requires: readonly string[]
+): ChoiceList =>
+	list.map((entry) => {
+		const have = ((entry as any).capabilities ?? {}) as CapabilitySet
+		if (!Object.keys(have).length)
+			return {
+				...entry,
+				reason: `Not tested yet — it may not do ${nameCapabilities(requires)}.`
+			}
+		const verdict = satisfies(
+			{ requires: requires as readonly CapabilityId[] },
+			have
+		)
+		return verdict.ok
+			? entry
+			: {
+					...entry,
+					disabled: true,
+					reason: `Can't do ${nameCapabilities(verdict.missing)}.`
+				}
+	})
+
 /**
  * Takes the whole declaration rather than just its control, because two of them
  * are narrowed by something only the declaration knows: a variables option
  * offers the layouts for **its** variable, and a connection or sampling option
- * offers only what its slot's modality can use.
+ * offers only what its slot can actually use.
  */
 export const choicesFor = (
 	d: Decl,
 	sets: Awaited<ReturnType<typeof choiceSets>>
 ): ChoiceList | undefined => {
 	if (d.control === "prompts-ref") return sets.prompts
-	// Narrowed to the slot's modality (F17): the shape doubles as the connection
-	// kind and the sampling-config kind, so an image node is never offered a text
-	// connection and a text node is never offered an image config. A slot that
-	// declares no shape keeps the whole list, which is what every slot authored
-	// before there was more than one modality to be wrong about does.
-	if (d.control === "connection-ref") return ofShape(sets.connections, d.shape)
+	// Judged against what the slot declared it requires, and only narrowed by
+	// shape when it declared none — the fallback for every slot authored before
+	// a connection could say what it can do. The two rules differ in kind, not
+	// just in key: `shape` filters a row out of existence, `requires` keeps it
+	// and says why it cannot be used.
+	if (d.control === "connection-ref")
+		return d.requires?.length
+			? ofCapabilities(sets.connections, d.requires)
+			: ofShape(sets.connections, d.shape)
+	// Sampling stays on shape. A sampling config is not a backend and has no
+	// capabilities to test; its shape is the vocabulary its values speak (F17),
+	// which is exactly the right question to ask of it.
 	if (d.control === "sampling-ref") return ofShape(sets.sampling, d.shape)
 	if (d.control === "variable-template-ref")
 		return d.variableId

@@ -19,6 +19,11 @@ declare global {
 		interface PageData {
 			latestReleaseTag?: string
 			isNewerReleaseAvailable?: boolean
+			/** True when the running build carries a semver pre-release
+			 * suffix (0.6.0-pr-1, -rc.1, -beta, -dev). Set by the root
+			 * layout's server load; drives the build watermark and
+			 * suppresses every update notice. */
+			isPrerelease?: boolean
 		}
 		// interface PageState {}
 		// interface Platform {}
@@ -122,6 +127,15 @@ declare global {
 			| "charaVaultTokenIv"
 			| "charaVaultTokenAuthTag"
 		> & { isAndroidWrapper?: boolean; localEmbeddingsSupported?: boolean }
+		/**
+		 * The instance default connection and sampling config, per capability
+		 * (0175) — its own table now rather than a column pair per modality, so
+		 * it arrives beside `settings` rather than inside it.
+		 */
+		capabilityDefaults?: Record<
+			string,
+			{ connectionId: number | null; samplingConfigId: number | null }
+		>
 	}
 
 	interface OllamaSettingsCtx {

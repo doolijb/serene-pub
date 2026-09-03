@@ -71,9 +71,25 @@ export class CONNECTION_TYPE {
 	static OPENAI_CHAT = "openai"
 	static KOBOLDCPP = "koboldcpp"
 	static KOBOLDCPP_MANAGED = "koboldcpp_managed"
+	/**
+	 * Image generation through the KoboldCPP Manager.
+	 *
+	 * A second type rather than a flag on KOBOLDCPP_MANAGED, because a
+	 * connection names exactly ONE model and a text GGUF is not an image one.
+	 * Which model is RESIDENT in the process at any moment is the model
+	 * manager's business, not this row's — see `planResidency`.
+	 */
+	static readonly KOBOLDCPP_MANAGED_IMAGE = "koboldcpp_managed_image"
 	static ANTHROPIC = "anthropic"
-	/** Image generation (modality "image-gen"), Fooocus via Fooocus-API. */
-	static IMAGE_FOOOCUS = "image_fooocus"
+	/**
+	 * Image generation over the A1111-compatible wire (`/sdapi/v1/txt2img`).
+	 *
+	 * One type for four backends — KoboldCPP, AUTOMATIC1111, Forge and SD.Next all
+	 * speak it — which is the whole argument for scoping an adapter by API format
+	 * rather than by vendor. Replaces the Fooocus type: that project is abandoned
+	 * upstream, and its adapter went with it.
+	 */
+	static A1111 = "a1111"
 
 	static options: {
 		value: string
@@ -135,6 +151,17 @@ export class CONNECTION_TYPE {
 			category: "local"
 		},
 		{
+			value: CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE,
+			label: "KoboldCPP Manager (Image)",
+			description:
+				"Image generation through the KoboldCPP Manager. One connection per " +
+				"image model, loaded on demand exactly as an LLM is — KoboldCPP holds " +
+				"one model at a time today, so drawing a picture swaps the chat model out.",
+			difficulty: "Beginner - Managed for you",
+			category: "local",
+			modality: "image-gen"
+		},
+		{
 			value: CONNECTION_TYPE.ANTHROPIC,
 			label: "Anthropic (Claude)",
 			description: anthropicDesc,
@@ -142,14 +169,13 @@ export class CONNECTION_TYPE {
 			category: "cloud"
 		},
 		{
-			value: CONNECTION_TYPE.IMAGE_FOOOCUS,
-			label: "Fooocus",
+			value: CONNECTION_TYPE.A1111,
+			label: "Stable Diffusion (A1111-compatible)",
 			description:
-				"Local image generation via Fooocus-API (the FastAPI wrapper — " +
-				"Fooocus itself has no HTTP server). Start Fooocus-API (default " +
-				"port 8888) and point this at it; its native performance modes and " +
-				"styles are supported.",
-			difficulty: "Intermediate - Run Fooocus-API",
+				"Local image generation over the A1111 API — KoboldCPP with an " +
+				"image model loaded, AUTOMATIC1111, Forge or SD.Next. Point this " +
+				"at whichever is running; they all speak the same endpoints.",
+			difficulty: "Beginner (with KoboldCPP) - Simple setup",
 			category: "local",
 			modality: "image-gen"
 		}
@@ -183,6 +209,42 @@ export class CONNECTION_TYPE {
  */
 export function shapeOfModality(modality?: string | null): string {
 	return `core:shape/${modality || "text-gen"}@1`
+}
+
+/**
+ * The inverse: the modality a shape id names.
+ *
+ * `shapeOfModality` above builds `core:shape/<modality>@<version>` from a
+ * template, which is what makes reading the modality back out a PARSE rather
+ * than a guess — the grammar is asserted by the writer in this same file. Kept
+ * beside it for that reason: the two must be edited together or not at all.
+ *
+ * Deliberately NOT in `capabilities/samplingShape.ts`. That module maps a shape
+ * to a CAPABILITY, and its own doc comment explains at length why one scalar
+ * must not be made to carry both meanings — a modality is a coarse filing
+ * category ("text gen", "image gen") and says nothing about what a connection
+ * can multimodally do.
+ *
+ * Version-tolerant by construction, so `@2` still buckets with `@1`, and an
+ * unrecognised plugin shape buckets into its own namespace rather than being
+ * folded into text — which is the safe failure direction for anything scoped by
+ * this (a name is then unique within that plugin's own modality instead of
+ * silently competing with chat).
+ *
+ * ⚠ The expression is mirrored in SQL as
+ * `split_part(split_part(shape, '/', 2), '@', 1)` — migration 0179's unique
+ * index on `sampling_configs`. The two must agree character for character: a
+ * shape with no `/` yields `""` on both sides, not a fallback to "text-gen".
+ */
+export function modalityOfShape(shape?: string | null): string {
+	return ((shape ?? "").split("/")[1] ?? "").split("@")[0]
+}
+
+/** A modality as it should read to a person, e.g. in an error message. */
+export function modalityLabel(modality: string): string {
+	if (modality === "text-gen") return "text generation"
+	if (modality === "image-gen") return "image generation"
+	return modality || "this modality"
 }
 
 export const CONNECTION_TYPES = CONNECTION_TYPE.options

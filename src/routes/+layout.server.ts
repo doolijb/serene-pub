@@ -1,3 +1,5 @@
+import { appVersion } from "$lib/shared/constants/version"
+import { isPrereleaseVersion } from "$lib/shared/utils/releaseChannel"
 import type { LayoutServerLoad } from "./$types"
 
 /**
@@ -48,8 +50,29 @@ export const load: LayoutServerLoad = async (event) => {
 	// open a socket as soon as it hydrates, and a race there shows up as a
 	// spurious "Socket connection timeout" on first load.
 	await attachSocketsOnce()
+
+	// The one channel by which "this build is a pre-release" reaches the
+	// client — the same one `isNewerReleaseAvailable` already travels, so
+	// there is no second, differently-timed source for the UI to disagree
+	// with. Everything downstream (the watermark, Document View's notice)
+	// reads `page.data.isPrerelease`.
+	const isPrerelease =
+		typeof appVersion === "string" && isPrereleaseVersion(appVersion)
+
+	// Second gate on the update notice, behind the one in updateCheck.ts.
+	// That one means a pre-release never asks GitHub, so these are already
+	// undefined here; this one means that stays true even if some future
+	// caller populates locals another way. Every consumer of these two fields
+	// (UpdateNoticeBar, SettingsSidebar, the Document View about page) reads
+	// them from page data, so gating here covers all of them at once rather
+	// than asking each to remember.
 	return {
-		isNewerReleaseAvailable: event.locals.isNewerReleaseAvailable,
-		latestReleaseTag: event.locals.latestReleaseTag
+		isPrerelease,
+		isNewerReleaseAvailable: isPrerelease
+			? undefined
+			: event.locals.isNewerReleaseAvailable,
+		latestReleaseTag: isPrerelease
+			? undefined
+			: event.locals.latestReleaseTag
 	}
 }

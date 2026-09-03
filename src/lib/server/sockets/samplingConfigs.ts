@@ -5,6 +5,14 @@ import { user } from "./users"
 import { systemSettingsGet } from "./systemSettings"
 import type { Handler } from "$lib/shared/events"
 import { normalizeSamplingRow, SAMPLING_SCHEMAS, S } from "@serene-pub/sdk"
+import {
+	capabilityForSamplingShape,
+	setCapabilityDefault
+} from "$lib/server/connections/capabilityDefaults"
+import {
+	modalityLabel,
+	modalityOfShape
+} from "$lib/shared/constants/ConnectionTypes"
 
 // --- WEIGHTS SOCKET HANDLERS ---
 
@@ -24,6 +32,73 @@ const isKnownSamplingShape = (shape: string): boolean =>
 /** The message a rejected shape gets, in one place because two handlers use it. */
 const unknownShapeError = (shape: string): string =>
 	`Unknown sampling shape "${shape}". A sampling config must be ${S.textGen} or ${S.imageGen}.`
+
+/**
+ * The message a rejected NAME gets.
+ *
+ * Names it as a modality rule rather than as a constraint, because that is the
+ * thing the person has to act on: the same name is fine on the other side of the
+ * modality line, and "Default" existing for text is not a reason they cannot
+ * have "Default" for images.
+ */
+const nameTakenError = (name: string, modality: string): string =>
+	`A sampling config named "${name.trim()}" already exists for ${modalityLabel(modality)}. ` +
+	`Sampling names must be unique within a modality — pick a different name.`
+
+/**
+ * A name already spoken for by another config of the same modality, or
+ * `undefined` if it is free.
+ *
+ * Checked here rather than left to the unique index because the index's answer
+ * is a raw Postgres string ("duplicate key value violates unique constraint
+ * …_modality_name_unique") that names a constraint the person has never heard
+ * of and does not say which of the two rules — modality scoping, case folding,
+ * trimming — they tripped. Cloning is the common path into this: the sidebars
+ * build a "New" config by spreading the selected one, so the name arrives
+ * already taken.
+ *
+ * Reads the whole table and compares in JS, deliberately. It is tens of rows,
+ * and it means the comparison is `modalityOfShape` — the same expression the
+ * index is built on — rather than a second SQL spelling of it that can drift.
+ *
+ * ⚠ Not a substitute for the index. This is check-then-write, so two admins
+ * saving at once can still both pass it; the index is what actually holds the
+ * line, and the handlers below translate its violation rather than letting it
+ * through raw.
+ */
+async function nameConflict(
+	name: unknown,
+	shape: string | null | undefined,
+	excludeId?: number
+): Promise<string | undefined> {
+	if (typeof name !== "string") return undefined
+	const modality = modalityOfShape(shape)
+	const wanted = name.trim().toLowerCase()
+	const rows = await db.query.samplingConfigs.findMany({
+		columns: { id: true, name: true, shape: true }
+	})
+	const clash = rows.find(
+		(r) =>
+			r.id !== excludeId &&
+			modalityOfShape(r.shape) === modality &&
+			r.name.trim().toLowerCase() === wanted
+	)
+	return clash ? nameTakenError(clash.name, modality) : undefined
+}
+
+/**
+ * The unique index firing, as opposed to any other database error.
+ *
+ * The race the check above cannot close lands here, and it must not reach the
+ * client as a constraint name. Matched on the index name because that is what
+ * the driver puts in the message; anything else re-throws untouched, since
+ * swallowing unrelated failures into "pick a different name" would be worse
+ * than the raw error.
+ */
+const isNameTakenViolation = (e: unknown): boolean =>
+	String((e as { message?: unknown } | null)?.message ?? "").includes(
+		"sampling_configs_modality_name_unique"
+	)
 
 // Legacy functions for compatibility
 export async function samplingConfigsList(
@@ -183,19 +258,33 @@ export const samplingConfigsSetUserActive: Handler<
 			where: (c, { eq }) => eq(c.id, params.id)
 		})
 		if (!target) {
-			const res = { error: "That sampling configuration no longer exists." }
+			const res = {
+				error: "That sampling configuration no longer exists."
+			}
 			emitToUser("error", res)
 			throw new Error("Sampling config not found.")
 		}
 
-		await db
-			.update(schema.systemSettings)
-			.set(
-				target.shape === S.imageGen
-					? { defaultImageSamplingConfigId: params.id }
-					: { defaultSamplingConfigId: params.id }
-			)
-			.where(eq(schema.systemSettings.id, 1))
+		// Registered against the capability the row's SHAPE belongs to (0175) —
+		// never a column named by the caller, since a client that could name the
+		// column could make an image config the text default, and the shape
+		// exists precisely so that it cannot.
+		// A shape the mapper does not recognise registers nothing rather than
+		// falling back to text — starring a config of some future shape must not
+		// quietly become "this is now the default for chat".
+		const capability = capabilityForSamplingShape(target.shape)
+		if (capability)
+			await setCapabilityDefault(db, capability, {
+				samplingConfigId: params.id
+			})
+
+		// The text default is ALSO still mirrored onto system_settings, because
+		// the legacy generation path reads that column and has not moved.
+		if (target.shape !== S.imageGen)
+			await db
+				.update(schema.systemSettings)
+				.set({ defaultSamplingConfigId: params.id })
+				.where(eq(schema.systemSettings.id, 1))
 
 		await user(socket, {}, emitToUser)
 		if (params.id) {
@@ -274,13 +363,38 @@ export const samplingConfigsCreate: Handler<
 		// as "0.7"), `enabled` de-duplicated and reduced to keys that shape
 		// knows. Off-schema keys in `values` are kept — see the SDK's note; the
 		// filter belongs on the way out, in resolveSampling.
-		const [sampling] = await db
-			.insert(schema.samplingConfigs)
-			.values({
-				...samplingValues,
-				...normalizeSamplingRow(params.sampling)
-			})
-			.returning()
+		const normalized = normalizeSamplingRow(params.sampling)
+
+		// The normalised shape, not the raw one: an absent shape means text-gen,
+		// and asking which modality this name has to be unique in has to get the
+		// same answer the row will be written with.
+		const nameError = await nameConflict(
+			samplingValues.name,
+			normalized.shape
+		)
+		if (nameError) {
+			emitToUser("samplingConfigs:create:error", { error: nameError })
+			throw new Error(nameError)
+		}
+
+		let sampling: SelectSamplingConfig
+		try {
+			;[sampling] = await db
+				.insert(schema.samplingConfigs)
+				.values({
+					...samplingValues,
+					...normalized
+				})
+				.returning()
+		} catch (e) {
+			if (!isNameTakenViolation(e)) throw e
+			const error = nameTakenError(
+				String(samplingValues.name ?? ""),
+				modalityOfShape(normalized.shape)
+			)
+			emitToUser("samplingConfigs:create:error", { error })
+			throw new Error(error)
+		}
 
 		// Unlike every sibling *ConfigsCreate handler, this used to also call
 		// samplingConfigsSetUserActive — which writes
@@ -416,6 +530,22 @@ export const samplingConfigsUpdate: Handler<
 			updateData.enabled = normalized.enabled
 		}
 
+		// A rename — or a re-shape, which moves the row into another modality's
+		// namespace and can collide there without the name changing at all.
+		// `excludeId` is what makes saving a row under the name it already has a
+		// no-op rather than a self-collision, which is every save the form makes.
+		if (updateData.name !== undefined || updateData.shape !== undefined) {
+			const nameError = await nameConflict(
+				updateData.name ?? currentSamplingConfig?.name,
+				updateData.shape ?? currentSamplingConfig?.shape,
+				id
+			)
+			if (nameError) {
+				emitToUser("samplingConfigs:update:error", { error: nameError })
+				throw new Error(nameError)
+			}
+		}
+
 		// A raw client could target a mutable row with an {id}-only payload
 		// (no other fields present at all) — updateData then has no defined
 		// values, and an empty .set() throws rather than being a legitimate
@@ -423,15 +553,29 @@ export const samplingConfigsUpdate: Handler<
 		const hasUpdates = Object.values(updateData).some(
 			(v) => v !== undefined
 		)
-		const updatedSamplingConfig = hasUpdates
-			? (
-					await db
-						.update(schema.samplingConfigs)
-						.set(updateData)
-						.where(eq(schema.samplingConfigs.id, id))
-						.returning()
-				)[0]
-			: currentSamplingConfig!
+		let updatedSamplingConfig: SelectSamplingConfig
+		try {
+			updatedSamplingConfig = hasUpdates
+				? (
+						await db
+							.update(schema.samplingConfigs)
+							.set(updateData)
+							.where(eq(schema.samplingConfigs.id, id))
+							.returning()
+					)[0]
+				: currentSamplingConfig!
+		} catch (e) {
+			// The check above is check-then-write; this is the race closing.
+			if (!isNameTakenViolation(e)) throw e
+			const error = nameTakenError(
+				String(updateData.name ?? currentSamplingConfig?.name ?? ""),
+				modalityOfShape(
+					updateData.shape ?? currentSamplingConfig?.shape
+				)
+			)
+			emitToUser("samplingConfigs:update:error", { error })
+			throw new Error(error)
+		}
 
 		await samplingConfigsListHandler.handler(socket, {}, emitToUser)
 		await samplingConfigsGet.handler(socket, { id }, emitToUser)

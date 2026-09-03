@@ -77,16 +77,21 @@
 		}
 	}
 
-	socket.on("connections:refreshModels", (msg) => {
+		const onConnectionsRefreshModels = (msg: Sockets.Connections.RefreshModels.Response) => {
 		if (msg.models) availableLMStudioModels = msg.models
 		if (!connection.model && msg.models.length > 0) {
 			connection.model = msg.models[0].model
 		}
-	})
+	}
+	socket.on("connections:refreshModels", onConnectionsRefreshModels)
 
-	socket.on("connections:test", (msg) => {
+	// Named so `off` can name it too. A bare `socket.off("connections:test")`
+	// removes EVERY listener for that event — including the parent sidebar's,
+	// which then stops updating for the rest of the session.
+	const onConnectionsTest = (msg: Sockets.Connections.Test.Response) => {
 		testResult = msg
-	})
+	}
+	socket.on("connections:test", onConnectionsTest)
 
 	onMount(() => {
 		if (connection.baseUrl) {
@@ -95,8 +100,8 @@
 	})
 
 	onDestroy(() => {
-		socket.off("connections:refreshModels")
-		socket.off("connections:test")
+		socket.off("connections:refreshModels", onConnectionsRefreshModels)
+		socket.off("connections:test", onConnectionsTest)
 	})
 </script>
 

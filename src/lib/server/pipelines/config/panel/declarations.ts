@@ -271,6 +271,13 @@ function declsForSlot(
 			// sampling config is a candidate for every slot, and the first thing
 			// an image node would be offered is a text connection.
 			...(decl.shape ? { shape: decl.shape } : {}),
+			// What the connection must be able to do, and what the binding will
+			// use if it is there. `requires` supersedes `shape` — it asks about a
+			// transform rather than asserting a modality — so a slot declaring
+			// both is narrowed by this and the shape is left as the older answer
+			// for anything still reading it.
+			...(decl.requires?.length ? { requires: decl.requires } : {}),
+			...(decl.optional?.length ? { optional: decl.optional } : {}),
 			...(decl.kind === "wire" && decl.format
 				? { authorDefault: decl.format }
 				: {})

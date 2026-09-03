@@ -1,7 +1,7 @@
 /**
  * Image dispatch: the adapters reached with a prompt built elsewhere.
  *
- * The adapter is a fake, because what is under test is not whether Fooocus draws
+ * The adapter is a fake, because what is under test is not whether the backend draws
  * — it is the four properties that can only ever break silently:
  *
  *   1. **No connection material comes back.** A leak looks exactly like a working
@@ -23,8 +23,8 @@ const SECRET_URL = "http://192.168.1.50:8888"
 
 const imageConnection = {
 	id: 1,
-	type: "image_fooocus",
-	name: "Local Fooocus",
+	type: "a1111",
+	name: "Local A1111",
 	modality: "image-gen",
 	baseUrl: SECRET_URL,
 	model: "juggernautXL.safetensors",
@@ -63,6 +63,7 @@ class FakeAdapter {
 	}
 	async generate(req: any, opts: any = {}) {
 		seen.req = req
+		preflightLog.push("render")
 		concurrent++
 		maxConcurrent = Math.max(maxConcurrent, concurrent)
 		try {
@@ -131,14 +132,56 @@ vi.mock("$lib/server/utils/tokenCrypto", () => ({
 	decryptApiKeyField: (v: string) => `decrypted:${v}`
 }))
 
-/** What `resolveTarget` finds. Set per test. */
+/**
+ * The loader, stubbed at the one entry point the image path calls.
+ *
+ * `preflightLog` records the ORDER of preflight and render, which is the
+ * property worth testing — a preflight outside the queue would still be called.
+ *
+ * ⚠ Stub the FUNCTION the caller actually reaches, and keep it pinned to that
+ * module. Two versions of this mock have already gone stale in a way that made
+ * a real bug invisible: first it replaced the whole adapter class with
+ * `class { constructor(_p: any) {} }`, hiding that the production call went
+ * through a generation-shaped constructor and threw before preflight ran; then
+ * it stubbed `preflightManagedConnection` after that export had been deleted,
+ * so the mock was inert and the spy never fired while the tests still passed
+ * their own assertions. A mock naming something that no longer exists is worse
+ * than no mock, because vitest will happily create it.
+ */
+let preflightLog: string[] = []
+let preflightFails = false
+vi.mock("$lib/server/koboldcpp/managedPreflight", () => ({
+	ensureManagedReady: async () => {
+		preflightLog.push("preflight:start")
+		await new Promise((r) => setTimeout(r, 20))
+		if (preflightFails) throw new Error("KoboldCPP Manager is disabled.")
+		preflightLog.push("preflight:done")
+		return { baseUrl: SECRET_URL }
+	}
+}))
+// dispatchImage dynamically imports the managed image adapter for
+// `sdQuantToInt`, and that module statically imports the app's db.
+vi.mock("$lib/server/db", () => ({ db: { query: {} } }))
+
+/**
+ * What `resolveTarget` finds. Set per test.
+ *
+ * The text defaults are deliberately still here and deliberately point somewhere
+ * else: the property they prove — that an image step never reaches for the text
+ * default — did not change when the image half moved out of this table, so the
+ * decoys stay.
+ */
 let systemSettings: any = {
-	defaultImageConnectionId: 1,
-	defaultImageSamplingConfigId: 10,
-	// Deliberately different, so a test can prove the text defaults are not used.
 	defaultConnectionId: 2,
 	defaultSamplingConfigId: 99
 }
+/**
+ * The instance's image default, which is now a `connection_defaults` row keyed
+ * by capability rather than a pair of `system_settings` columns (0175).
+ */
+let capabilityDefaults: Record<string, any> = {}
+/** The KoboldCPP Manager's settings — where a MANAGED instance's address lives. */
+let koboldCppSettings: any = { koboldCppManagerBaseUrl: SECRET_URL }
 let connectionsById: Record<number, any> = {}
 let samplingById: Record<number, any> = {}
 
@@ -148,6 +191,13 @@ let samplingById: Record<number, any> = {}
  * cannot be pointed at a test one.
  */
 const fakeDb = {
+	// A managed connection's own `baseUrl` column is not authoritative — the
+	// Manager's settings are — so the image path reads them to find the process.
+	query: {
+		koboldCppSettings: {
+			findFirst: async () => koboldCppSettings
+		}
+	},
 	select: () => ({
 		from: (table: any) => ({
 			where: (_w: any) => ({
@@ -161,6 +211,11 @@ const fakeDb = {
 						return Object.values(samplingById).filter(
 							(s) => s.id === lastWhereId
 						)
+					// Keyed by capability, so `lastWhereId` is a string here.
+					if (name === "connection_defaults") {
+						const row = capabilityDefaults[lastWhereId as any]
+						return row ? [row] : []
+					}
 					return []
 				}
 			}),
@@ -208,11 +263,19 @@ beforeEach(() => {
 	maxConcurrent = 0
 	mode = "ok"
 	lastWhereId = undefined
+	preflightLog = []
+	preflightFails = false
+	koboldCppSettings = { koboldCppManagerBaseUrl: SECRET_URL }
 	connectionsById = { 1: imageConnection, 2: textConnection }
 	samplingById = { 10: imageSampling }
+	capabilityDefaults = {
+		"text->image": {
+			capability: "text->image",
+			connectionId: 1,
+			samplingConfigId: 10
+		}
+	}
 	systemSettings = {
-		defaultImageConnectionId: 1,
-		defaultImageSamplingConfigId: 10,
 		defaultConnectionId: 2,
 		defaultSamplingConfigId: 99
 	}
@@ -259,8 +322,8 @@ describe("dispatchImage — what comes back", () => {
 		expect(created[0].meta).toMatchObject({
 			prompt: "a knight at dusk",
 			seed: 4242,
-			backend: "image_fooocus",
-			connectionName: "Local Fooocus",
+			backend: "a1111",
+			connectionName: "Local A1111",
 			samplingConfig: "Default (Image)",
 			applied: ["steps", "cfg"],
 			ignored: ["denoise"]
@@ -346,14 +409,32 @@ describe("dispatchImage — resolving the target", () => {
 		expect(seen.req.steps).toBe(30)
 	})
 
-	it("refuses a connection that does not generate images", async () => {
+	it("refuses a connection that cannot draw, naming the capability", async () => {
+		// The human name, never `text->image`: somebody who switched "Image
+		// generation" off has no way to connect the id back to the toggle.
 		await expect(dispatch({ connectionId: 2 })).rejects.toThrow(
-			/does not generate images/
+			/"Local Kobold" cannot do Image generation/
 		)
 	})
 
+	it("accepts a text-typed connection whose capabilities say it draws", async () => {
+		// The case the whole capability model exists for. KoboldCPP writes replies
+		// and draws pictures from one process, so its TYPE says `text-gen` and the
+		// old `isImage(type)` check refused it — for being what it is. What it can
+		// do is the set on the row, not the label on the type.
+		connectionsById[2] = {
+			...textConnection,
+			capabilities: { resolved: { "text->image": "native" } }
+		}
+		await dispatch({ connectionId: 2 })
+		expect(seen.constructedWith.id).toBe(2)
+	})
+
 	it("says what to do when nothing is configured", async () => {
-		systemSettings = {}
+		// No registered default for the capability — the text defaults in
+		// `systemSettings` stay set, because reaching for one of those instead of
+		// reporting the gap is the failure this asserts against.
+		capabilityDefaults = {}
 		await expect(dispatch()).rejects.toThrow(
 			/no image connection is set.*default/s
 		)
@@ -406,5 +487,101 @@ describe("dispatchImage — one render at a time per connection", () => {
 		mode = "ok"
 		const out = await dispatch()
 		expect(out.media).toHaveLength(1)
+	})
+
+	it("serializes two CONNECTIONS that point at one server", async () => {
+		// The queue guards the backend, not the row that named it — "global" is
+		// a property of the process at the other end. A KoboldCPP reached as a
+		// text connection and as an image connection is two rows and one
+		// process, and it is the configuration this milestone targets. Keyed by
+		// row id, these two would each get a slot and render at once on the same
+		// server: interleaved progress, and a cancel landing on the wrong one.
+		connectionsById[3] = {
+			...imageConnection,
+			id: 3,
+			name: "Same box, second row",
+			baseUrl: `${SECRET_URL}/` // trailing slash — same server
+		}
+		mode = "slow"
+		await Promise.all([
+			dispatch({ connectionId: 1 }),
+			dispatch({ connectionId: 3 })
+		])
+		expect(maxConcurrent).toBe(1)
+		expect(created).toHaveLength(2)
+	})
+
+	it("preflights a managed KoboldCPP before rendering, inside the queue", async () => {
+		// Cold managed instance: the subprocess may not be running and the model
+		// may not be loaded, and the image path had no equivalent of the text
+		// path's preflight — so the render failed with a bare connection error
+		// pointing at the image adapter, which is the wrong file to open.
+		//
+		// The ORDER is the assertion. A preflight outside the queue would still
+		// be "called"; what matters is that it completes before the render and
+		// that both sit in one critical section, so a text generation cannot
+		// swap the model in the window between them.
+		connectionsById[5] = {
+			...imageConnection,
+			id: 5,
+			type: "koboldcpp_managed_image",
+			name: "Managed Kobold",
+			// Probed and found to draw — the milestone's actual setup. Without
+			// this the guard refuses it first and the preflight never runs,
+			// which is correct: an unprobed managed instance has not shown it
+			// can render.
+			capabilities: { resolved: { "text->image": "native" } }
+		}
+		await dispatch({ connectionId: 5 })
+		expect(preflightLog).toEqual([
+			"preflight:start",
+			"preflight:done",
+			"render"
+		])
+	})
+
+	it("does not preflight a backend nobody asked this app to start", async () => {
+		// An external KoboldCPP, an A1111, a Forge — starting those would be a
+		// surprise, and the Manager does not own them.
+		await dispatch({ connectionId: 1 })
+		expect(preflightLog).toEqual(["render"])
+	})
+
+	it("a failed preflight is reported instead of a render that cannot work", async () => {
+		connectionsById[5] = {
+			...imageConnection,
+			id: 5,
+			type: "koboldcpp_managed_image",
+			name: "Managed Kobold",
+			// Probed and found to draw — the milestone's actual setup. Without
+			// this the guard refuses it first and the preflight never runs,
+			// which is correct: an unprobed managed instance has not shown it
+			// can render.
+			capabilities: { resolved: { "text->image": "native" } }
+		}
+		preflightFails = true
+		await expect(dispatch({ connectionId: 5 })).rejects.toThrow(
+			/Manager is disabled/
+		)
+		// And the render never ran — the queue slot is released, not consumed by
+		// a request that was always going to fail at the socket.
+		expect(preflightLog).not.toContain("render")
+	})
+
+	it("does not serialize connections on DIFFERENT servers", async () => {
+		// The other half: one queue for everything would make a second backend
+		// wait on the first for no reason.
+		connectionsById[4] = {
+			...imageConnection,
+			id: 4,
+			name: "A different box",
+			baseUrl: "http://192.168.1.99:7860"
+		}
+		mode = "slow"
+		await Promise.all([
+			dispatch({ connectionId: 1 }),
+			dispatch({ connectionId: 4 })
+		])
+		expect(maxConcurrent).toBe(2)
 	})
 })

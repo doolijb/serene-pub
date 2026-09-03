@@ -70,13 +70,17 @@
 	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
 		$state(null)
 
-	socket.on("connections:test", (msg) => {
+	// Named so `off` can name it too. A bare `socket.off("connections:test")`
+	// removes EVERY listener for that event — including the parent sidebar's,
+	// which then stops updating for the rest of the session.
+	const onConnectionsTest = (msg: Sockets.Connections.Test.Response) => {
 		testResult = {
 			ok: msg.ok,
 			error: msg.error ?? undefined,
 			models: msg.models
 		}
-	})
+	}
+	socket.on("connections:test", onConnectionsTest)
 
 	function handleTestConnection() {
 		if (!validateConnection()) return
@@ -183,7 +187,7 @@
 	})
 
 	onDestroy(() => {
-		socket.off("connections:test")
+		socket.off("connections:test", onConnectionsTest)
 	})
 </script>
 

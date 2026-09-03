@@ -3,7 +3,9 @@ import {
 	buildConnectionServiceItems,
 	groupConnectionServiceItems,
 	filterConnectionServiceItems,
-	CATEGORY_ORDER
+	isKoboldCppManagedType,
+	CATEGORY_ORDER,
+	KOBOLDCPP_MANAGED_TYPES
 } from "./connectionServiceItems"
 import { CONNECTION_TYPE, CONNECTION_TYPES } from "../constants/ConnectionTypes"
 import { OPENAI_CHAT_PRESETS } from "./connectionDefaults"
@@ -11,15 +13,30 @@ import { OPENAI_CHAT_PRESETS } from "./connectionDefaults"
 describe("buildConnectionServiceItems", () => {
 	const items = buildConnectionServiceItems()
 
-	test("has one item per native type (except OPENAI_CHAT and KOBOLDCPP_MANAGED) plus one per preset", () => {
+	test("has one item per native type (except OPENAI_CHAT and the Manager-owned types) plus one per preset", () => {
 		const expectedCount =
-			CONNECTION_TYPES.length - 2 + OPENAI_CHAT_PRESETS.length
+			CONNECTION_TYPES.length -
+			1 -
+			KOBOLDCPP_MANAGED_TYPES.length +
+			OPENAI_CHAT_PRESETS.length
 		expect(items.length).toBe(expectedCount)
 	})
 
-	test("KoboldCPP Manager is never manually creatable — it's auto-created from the Manager page", () => {
+	// Both of them, not just the text one. A manually-created image Manager
+	// connection would look plausible in the picker and then fail at render
+	// time with a base URL and a model the Manager never agreed to — the
+	// Manager is the only thing that knows which files are actually on disk.
+	test("neither KoboldCPP Manager type is manually creatable — both are made from the Manager page", () => {
 		expect(
 			items.find((i) => i.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED)
+		).toBeUndefined()
+		expect(
+			items.find(
+				(i) => i.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
+			)
+		).toBeUndefined()
+		expect(
+			items.find((i) => isKoboldCppManagedType(i.type))
 		).toBeUndefined()
 	})
 
@@ -56,11 +73,11 @@ describe("buildConnectionServiceItems", () => {
 		expect(custom!.presetValue).toBe(0)
 	})
 
-	test("every native adapter type (other than OPENAI_CHAT and KOBOLDCPP_MANAGED) is present with type === its own value and no presetValue", () => {
+	test("every native adapter type (other than OPENAI_CHAT and the Manager-owned types) is present with type === its own value and no presetValue", () => {
 		for (const t of CONNECTION_TYPES) {
 			if (
 				t.value === CONNECTION_TYPE.OPENAI_CHAT ||
-				t.value === CONNECTION_TYPE.KOBOLDCPP_MANAGED
+				isKoboldCppManagedType(t.value)
 			)
 				continue
 			const item = items.find((i) => i.key === `type:${t.value}`)

@@ -1,5 +1,6 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
+import { capabilityDefaults } from "$lib/server/connections/capabilityDefaults"
 import { eq } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { isAndroidWrapper } from "$lib/server/utils"
@@ -62,7 +63,12 @@ export const systemSettingsGet: Handler<
 						!!koboldCppAdminPasswordRow?.koboldCppManagedAdminPassword
 				} as any,
 				isAndroidWrapper: isAndroidWrapper(),
-				localEmbeddingsSupported: await isLocalEmbeddingSupported()
+				localEmbeddingsSupported: await isLocalEmbeddingSupported(),
+				// The instance default per capability (0175). It used to be two
+				// columns on `system_settings` and rode along with the row; now it
+				// is its own table, so it is fetched and sent explicitly — the
+				// sidebars need it to star the default and to enable Set Default.
+				capabilityDefaults: await capabilityDefaults(db)
 			}
 
 			emitToUser("systemSettings:get", res)

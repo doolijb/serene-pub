@@ -4,6 +4,7 @@ import { DEFAULT_CONTEXT_TEMPLATE } from "./legacyContextTemplate"
 import { db } from "."
 import * as schema from "./schema"
 import { LOCAL_SERVER_SLUG } from "$lib/shared/constants/Tunnels"
+import { modalityOfShape } from "$lib/shared/constants/ConnectionTypes"
 
 // Re-exported so existing importers keep working; the definition moved out.
 export { DEFAULT_CONTEXT_TEMPLATE }
@@ -63,6 +64,8 @@ export async function sync() {
 		// carried. A seed that repeated them would be a second place for the
 		// default of every sampler to live, and the two would drift. `enabled` is
 		// exhaustive, though — an unlisted key is off, so it has to be written out.
+		// The image FAMILY presets below are the one deliberate exception, and
+		// they say why on themselves.
 		const defaultSamplingConfigs: Partial<SelectSamplingConfig>[] = [
 			{
 				id: 1, // Only include ID because this is a pre-seeded row before seedKey existed.
@@ -143,22 +146,168 @@ export async function sync() {
 					"responseTokens"
 				]
 			},
+			// ── Image presets: one per MODEL FAMILY ───────────────────────────
+			//
+			// There used to be one image row, "Default (Image)", holding `values:
+			// {}` — i.e. the shape's declared defaults of 1024², 25 steps, CFG 5.
+			// Those numbers describe SDXL. Most of what this app's own Recommended
+			// list offers is SD1.5-class or distilled, and the mismatch does not
+			// degrade gracefully: an SD1.5-class model rendered at 1024 duplicates
+			// and smears the subject, and a distilled model at CFG 5 burns. A user
+			// reported exactly that — melted, duplicated output from
+			// sdxs-512-tinySDdistilled, a 512-native distilled model.
+			//
+			// So one preset per family, and SD 1.5 is the shipped default: 512²
+			// avoids the worst failure mode outright, SDXL at 512 is merely soft
+			// rather than broken, and CFG 7 is right for the largest share of local
+			// models. The reverse — SDXL's numbers as the default — is the state
+			// being repaired.
+			//
+			// ALL FOUR NUMBERS ARE STATED on every preset, including where one
+			// happens to equal the shape's declared default. A family preset is a
+			// MATCHED SET; leaving a member implicit invites the next reader to
+			// half-copy it, and the declared defaults are precisely the values
+			// under repair here. This is the one place in this file that
+			// deliberately restates a declared default (see the note above about
+			// `values` stating only what differs) — do not "tidy" them back out.
+			//
+			// Sampler and scheduler stay unset on every one of them — the valid
+			// names are a property of the connection's checkpoint and build, so the
+			// only backend-independent answer is "whatever it already uses".
+			//
+			// And there is deliberately NO hosted/"DALL·E" sixth row. These are
+			// LOCAL-DIFFUSION families. A hosted image service has no sampling
+			// knobs to preset — gpt-image-1 takes a `size` enum, `quality`,
+			// `background` and `n`, with no steps, CFG, sampler or seed — so what
+			// it offers belongs on its CONNECTION as the adapter's `profileSchema`,
+			// and what it cannot honour is reported through `applied`/`ignored`.
+			// See the SDK's imageSamplingSchema doc comment.
 			{
-				// The image twin of "Default", and the reason the table grew a
-				// `shape` at all. Its values are the declared defaults, so it says
-				// nothing here: 25 steps, CFG 5, 1024², batch 1, seed -1.
+				// Retargeted in place, NOT replaced. This row was "Default
+				// (Image)"; it still holds the instance's `text->image` sampling
+				// default (resolved by this seedKey near the bottom of this file)
+				// and may be named by a pipeline node or a session override. A new
+				// seedKey plus a delete would strand every one of those pointers,
+				// so the same row simply becomes the SD 1.5 preset — nothing is
+				// deleted, no id moves, and the registration code needs no change.
 				//
-				// Sampler and scheduler stay unset on purpose — the valid names are
-				// a property of the connection's checkpoint and build, so the only
-				// backend-independent answer is "whatever it already uses".
+				// The visible cost is accepted: a deliberate SDXL user who left the
+				// default selected drops from 1024² to 512² and has to pick the
+				// SDXL preset. That is a release note, not a data loss, and it is
+				// the direction that protects the user who does not know to look.
 				seedKey: "sampling-image-default",
-				name: "Default (Image)",
+				name: "SD 1.5",
 				isImmutable: true,
 				shape: S.imageGen,
-				values: {},
+				values: { steps: 25, cfg: 7, width: 512, height: 512 },
+				enabled: ["steps", "cfg", "width", "height", "batch", "seed"]
+			},
+			{
+				// What the old declared defaults were actually describing, now
+				// stated as the family it belongs to rather than as "the default".
+				seedKey: "sampling-image-sdxl",
+				name: "SDXL",
+				isImmutable: true,
+				shape: S.imageGen,
+				values: { steps: 30, cfg: 6, width: 1024, height: 1024 },
+				enabled: ["steps", "cfg", "width", "height", "batch", "seed"]
+			},
+			{
+				// SD 3.x wants noticeably less guidance than SDXL; 4.5 is the
+				// middle of the range these models are tuned around.
+				seedKey: "sampling-image-sd3",
+				name: "SD 3.x",
+				isImmutable: true,
+				shape: S.imageGen,
+				values: { steps: 28, cfg: 4.5, width: 1024, height: 1024 },
+				enabled: ["steps", "cfg", "width", "height", "batch", "seed"]
+			},
+			{
+				// ⚠ CFG 1 IS CORRECT AND IS NOT A PLACEHOLDER. Flux is
+				// guidance-distilled: the guidance signal is baked into the model,
+				// so classifier-free guidance is applied on top of it. Raising this
+				// to a "normal" 5-7 burns the image out — blown highlights,
+				// posterised colour. Leave it at 1.
+				seedKey: "sampling-image-flux",
+				name: "Flux",
+				isImmutable: true,
+				shape: S.imageGen,
+				values: { steps: 20, cfg: 1, width: 1024, height: 1024 },
+				enabled: ["steps", "cfg", "width", "height", "batch", "seed"]
+			},
+			{
+				// SDXS, SD-Turbo, SDXL-Turbo, Lightning and LCM — the step-distilled
+				// families, and where the reported bug came from. They are trained
+				// to converge in a handful of steps, so 25 is wasted time and, past
+				// their trained step count, actively worse.
+				//
+				// ⚠ CFG 1 IS CORRECT HERE TOO, for the same reason as Flux: these
+				// are guidance-distilled, and raising CFG burns them. 512² because
+				// this family is overwhelmingly SD1.5-class; the one detail that
+				// separates SDXL-Turbo out is handled by picking the SDXL preset and
+				// dropping its steps.
+				seedKey: "sampling-image-turbo",
+				name: "Turbo / Distilled",
+				isImmutable: true,
+				shape: S.imageGen,
+				values: { steps: 4, cfg: 1, width: 512, height: 512 },
 				enabled: ["steps", "cfg", "width", "height", "batch", "seed"]
 			}
 		]
+
+		// ── A seed YIELDS a colliding name to the user ────────────────────────
+		//
+		// 0179 made `name` unique per modality, and this list is where that
+		// constraint is most likely to bite: the five image presets ship under
+		// names ("SD 1.5", "Flux") a person may well have already given a config
+		// of their own, and "Default" has always been an obvious thing to type.
+		//
+		// A rejected write here is not a local failure. The insert/update runs
+		// inside the one try block above, so a unique violation aborts the rest of
+		// it — context configs never seed, the system_settings insert then fails
+		// its foreign key, and the install comes up with a permanently blank page.
+		// That exact cascade is documented a few dozen lines up; this is a second
+		// route into it that this change set would otherwise have opened.
+		//
+		// The SEED moves, never the user's row. Their name is theirs, and a
+		// built-in is identified by `seedKey` no matter what it is called — so the
+		// cost of yielding is a suffix on a row the app owns, against silently
+		// renaming a row the user owns.
+		//
+		// Computed SERIALLY here, before the queries below are handed to
+		// Promise.all: it reads the snapshot taken above, so nothing in it may
+		// depend on another seed's write having landed.
+		const nameKey = (shape: string | null | undefined, name: string) =>
+			// `.trim()` is very slightly wider than SQL `btrim`'s spaces-only
+			// default (it also strips tabs and newlines). Wider is the safe
+			// direction: it can only make a seed yield a name the database would
+			// have accepted, never let a collision through to a raw violation.
+			`${modalityOfShape(shape)}/${name.trim().toLowerCase()}`
+
+		// Rows this pass is about to rewrite are excluded: a seed does not have
+		// to yield to the name it already holds.
+		const seededSamplingKeys = new Set(
+			defaultSamplingConfigs.map((d) => d.seedKey)
+		)
+		const takenSamplingNames = new Set(
+			existingSamplingConfigs
+				.filter((c) => !seededSamplingKeys.has(c.seedKey))
+				.map((c) => nameKey(c.shape, c.name))
+		)
+		for (const data of defaultSamplingConfigs) {
+			const wanted = data.name!
+			let name = wanted
+			let taken = 0
+			while (takenSamplingNames.has(nameKey(data.shape, name))) {
+				taken++
+				name =
+					taken === 1
+						? `${wanted} (Built-in)`
+						: `${wanted} (Built-in ${taken})`
+			}
+			data.name = name
+			takenSamplingNames.add(nameKey(data.shape, name))
+		}
 
 		// This list mixes rows that carry an explicit legacy `id` with rows that
 		// let the sequence assign one, and Postgres does NOT advance a sequence
@@ -830,6 +979,13 @@ export async function sync() {
 		// By seedKey for the same reason, and more sharply: this row is new, so
 		// it is never at a predictable id on an install that already has user
 		// configs of its own.
+		//
+		// It is also why the image family presets cost this block nothing.
+		// `sampling-image-default` is now the SD 1.5 preset — RETARGETED in place
+		// rather than replaced — so the shipped image default follows the seedKey
+		// with not a line changing here. Had that row been deleted and a
+		// `sampling-image-sd15` added beside the others, this lookup would have
+		// come back undefined and taken the instance's image default with it.
 		const seededImageSampling = await db.query.samplingConfigs.findFirst({
 			where: (c, { eq }) => eq(c.seedKey, "sampling-image-default")
 		})
@@ -845,11 +1001,7 @@ export async function sync() {
 				defaultContextConfigId: 1,
 				defaultPromptConfigId: firstPromptConfig?.id,
 				defaultNarratorPromptConfigId: firstNarratorPromptConfig?.id,
-				defaultGraphBuildConfigId: seededGraphBuildConfig?.id,
-				// No image CONNECTION default: there is nothing to point at until
-				// somebody adds one, and a modality with no connection configured
-				// should read as "not set up" rather than as a broken pointer.
-				defaultImageSamplingConfigId: seededImageSampling?.id
+				defaultGraphBuildConfigId: seededGraphBuildConfig?.id
 			})
 		} else {
 			if (!res.defaultNarratorPromptConfigId) {
@@ -874,18 +1026,24 @@ export async function sync() {
 					})
 					.where(eq(schema.systemSettings.id, 1))
 			}
-			// Same backfill for the image sampling default. 0172 sets it once for
-			// installs upgrading through that migration; this covers the install
-			// that arrives later, and the one whose default was cleared by its row
-			// being deleted.
-			if (!res.defaultImageSamplingConfigId && seededImageSampling) {
-				await db
-					.update(schema.systemSettings)
-					.set({
-						defaultImageSamplingConfigId: seededImageSampling.id
-					})
-					.where(eq(schema.systemSettings.id, 1))
-			}
+		}
+		// The image sampling default lives in `connection_defaults` now (0175),
+		// keyed by capability rather than as a column pair. Registered on every
+		// boot while unset, so an install that arrives after the migration — or
+		// one whose default was cleared by its row being deleted — picks the
+		// seeded config back up. No image CONNECTION default is registered:
+		// there is nothing to point at until somebody adds one, and a capability
+		// with no connection should read as "not set up" rather than as a
+		// pointer to nothing.
+		if (seededImageSampling) {
+			const { capabilityDefault, setCapabilityDefault } = await import(
+				"$lib/server/connections/capabilityDefaults"
+			)
+			const existing = await capabilityDefault(db as any, "text->image")
+			if (!existing?.samplingConfigId)
+				await setCapabilityDefault(db as any, "text->image", {
+					samplingConfigId: seededImageSampling.id
+				})
 		}
 	} catch (error) {
 		console.error("Error syncing system settings:", error)
@@ -923,6 +1081,14 @@ export async function sync() {
 					"models",
 					"llm"
 				),
+				// A sibling of models/llm, seeded on a FRESH install only —
+				// Stable-Diffusion models do not belong under "llm", and the
+				// layout always had room for this.
+				koboldCppImageModelsDir: path.join(
+					getAppDataDir(),
+					"models",
+					"image"
+				),
 				...(envBinaryDir
 					? { koboldCppManagedBinaryDir: envBinaryDir }
 					: {}),
@@ -939,6 +1105,12 @@ export async function sync() {
 					"llm"
 				)
 			}
+			// koboldCppImageModelsDir is deliberately NOT backfilled here, and
+			// this pattern must not be extended to it. NULL means "use the text
+			// directory" (modelsDir.ts); filling it in would split a working
+			// install in half — new downloads landing in models/image while
+			// every model the user actually owns sits in models/llm, and a
+			// directory on the Settings tab they never chose.
 			if (!kcppRes.koboldCppManagedBinaryDir && envBinaryDir) {
 				patch.koboldCppManagedBinaryDir = envBinaryDir
 			}

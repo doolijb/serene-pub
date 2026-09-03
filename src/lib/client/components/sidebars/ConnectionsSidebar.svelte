@@ -21,9 +21,13 @@
 		OPENAI_CHAT_PRESETS,
 		stableStringify
 	} from "$lib/shared/utils/connectionDefaults"
+	import ConnectionCapabilities from "$lib/client/components/connections/ConnectionCapabilities.svelte"
 	import EmbeddingConnectionPanel from "./EmbeddingConnectionPanel.svelte"
 	import ConnectionServicePicker from "./ConnectionServicePicker.svelte"
-	import type { ConnectionServiceItem } from "$lib/shared/utils/connectionServiceItems"
+	import {
+		isKoboldCppManagedType,
+		type ConnectionServiceItem
+	} from "$lib/shared/utils/connectionServiceItems"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -100,6 +104,10 @@
 
 	// Which connection is currently shown in the form (local view state)
 	let selectedConnectionId = $state<number | null>(null)
+	// Set only when this panel was opened pointing AT a connection (the digest
+	// seeding in onMount), and consumed by the first connections:get for that
+	// id — see handleConnectionsGet. Not $state: nothing renders from it.
+	let deepLinkedConnectionId: number | null = null
 	// The system-wide default connection
 	let defaultConnectionId = $derived(
 		systemSettingsCtx.settings?.defaultConnectionId ?? null
@@ -108,9 +116,12 @@
 	let defaultConnectionName = $derived(
 		connectionsList.find((c) => c.id === defaultConnectionId)?.name ?? null
 	)
-	// A Managed KoboldCPP connection can't be set default while the manager is off
+	// A Managed KoboldCPP connection can't be set default while the manager is
+	// off — the image one no less than the text one. Both name a file in the
+	// Manager's models directory and are loaded through its admin API, so with
+	// the Manager switched off neither can generate anything.
 	let managedButDisabled = $derived(
-		connection?.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED &&
+		isKoboldCppManagedType(connection?.type) &&
 			!koboldCppSettingsCtx?.settings?.koboldCppManagerEnabled
 	)
 
@@ -184,7 +195,7 @@
 			toaster.error({ title: "Choose an AI service to connect to" })
 			return
 		}
-		const { type, presetValue } = newConnectionService
+		const { type, presetValue, presetSlug } = newConnectionService
 		if (type === CONNECTION_TYPE.OPENAI_CHAT) {
 			const preset = OPENAI_CHAT_PRESETS.find(
 				(p) => p.value === presetValue
@@ -198,6 +209,10 @@
 			name: newConnectionName.trim(),
 			type,
 			enabled: true,
+			// Which named service this is, so capability resolution has a preset
+			// layer to consult. Undefined for a native type and for the custom
+			// entry, and undefined is the right answer there: NULL means custom.
+			preset: presetSlug,
 			...(type === CONNECTION_TYPE.OPENAI_CHAT
 				? OPENAI_CHAT_PRESETS.find((p) => p.value === presetValue)
 						?.connectionDefaults
@@ -295,6 +310,21 @@
 		if (msg.connection?.id !== selectedConnectionId) return
 		connection = { ...msg.connection }
 		originalConnection = { ...msg.connection }
+		// Follow a DEEP-LINKED connection into its own category. Arriving with
+		// one from the other modality is only possible that way (the picker
+		// below offers the current modality only), and left on text-gen the
+		// picker would have no <option> matching it — rendering blank — while
+		// Set Default would offer to star an image connection as the system's
+		// text default.
+		//
+		// Scoped to that one id, and cleared, deliberately: applying it to
+		// every load would let the ordinary mount-time fetch of the text
+		// default land AFTER the user has picked the Image category and yank
+		// them back to the text list.
+		if (msg.connection.id === deepLinkedConnectionId) {
+			deepLinkedConnectionId = null
+			connectionModality = CONNECTION_TYPE.modalityOf(msg.connection.type)
+		}
 	}
 	function handleConnectionsTest(msg: Sockets.Connections.Test.Response) {
 		if (msg.connectionId !== selectedConnectionId) return
@@ -420,6 +450,7 @@
 			digestId ?? systemSettingsCtx.settings?.defaultConnectionId ?? null
 		if (digestId) {
 			panelsCtx.digest.connectionId = undefined
+			deepLinkedConnectionId = digestId
 			view = "connections"
 		} else if (panelsCtx.digest.connectionsView) {
 			view = panelsCtx.digest.connectionsView
@@ -482,8 +513,7 @@
 				</div>
 				<div class="min-w-0 flex-1">
 					<div class="flex items-center justify-between gap-2">
-						<span class="font-semibold">Large Language Models
-						</span>
+						<span class="font-semibold">Large Language Models</span>
 						<Icons.ChevronRight
 							size={16}
 							class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5"
@@ -530,8 +560,8 @@
 						/>
 					</div>
 					<p class="text-muted-foreground mt-0.5 text-sm">
-						Local image backends (Fooocus, …) for portraits and scene
-						art.
+						Local image backends (KoboldCPP, A1111, …) for portraits
+						and scene art.
 					</p>
 				</div>
 			</div>
@@ -746,7 +776,8 @@
 											? "currentColor"
 											: "none"}
 									/>
-									{selectedConnectionId === defaultConnectionId
+									{selectedConnectionId ===
+									defaultConnectionId
 										? "Default"
 										: "Set Default"}
 								</button>
@@ -795,6 +826,17 @@
 						{/if}
 
 						{#if connection.id}
+							<!-- Mounted once, here, rather than in each of the nine
+							     forms above: this is the one place all nine share,
+							     and nine pasted copies would be nine capability
+							     sections that drift AND nine connections:test
+							     subscriptions racing. It takes the id only —
+							     everything it shows is its own fetch, so nothing it
+							     does can dirty this form's unsaved-changes
+							     baseline. -->
+							<ConnectionCapabilities
+								connectionId={connection.id}
+							/>
 							<!-- Stop guards ride the connection (18 §4b): model
 							     knowledge — "this endpoint leaks template
 							     tokens" — attaches once and reaches every
@@ -920,7 +962,7 @@
 				<EmptyState
 					icon={isImageView ? Icons.Image : Icons.Cable}
 					message={isImageView
-						? "No image connections yet — add one (e.g. Fooocus) to generate images."
+						? "No image connections yet — add one to generate images."
 						: "No AI connections yet — create one to get started with AI conversations."}
 				/>
 			{/if}

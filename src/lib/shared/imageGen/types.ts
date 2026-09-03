@@ -1,11 +1,11 @@
 /**
  * The vocabulary every image backend is spoken to in.
  *
- * Four backends are in view — Fooocus, ComfyUI, an A1111-flat server, a hosted
- * API — and no two of them agree on anything. Fooocus takes an aspect-ratio
- * *string* from a fixed list and hides steps inside `advanced_params`; ComfyUI
- * takes a whole graph; A1111 takes flat width/height; OpenAI takes a size string
- * and ignores seed, steps and CFG entirely. The only way that does not turn into
+ * Four backends are in view — an A1111-compatible server (KoboldCPP, Forge,
+ * SD.Next), ComfyUI, and a hosted API — and no two agree on anything. A1111
+ * takes flat width/height, though some servers behind that same API offer only a
+ * fixed size list; ComfyUI takes a whole graph; OpenAI takes a size string and
+ * ignores seed, steps and CFG entirely. The only way that does not turn into
  * a branch per backend in the node, the pipeline and the picker is for the
  * request to name what a person means, and for each adapter to be the single
  * place that knows how its own backend spells it.
@@ -30,7 +30,7 @@ export interface ImageGenRequest {
 	height?: number
 	/** Denoising steps. */
 	steps?: number
-	/** Classifier-free guidance (Fooocus calls it `guidance_scale`). */
+	/** Classifier-free guidance (A1111 calls it `cfg_scale`). */
 	cfg?: number
 	/** -1, or omitted, draws a fresh one. */
 	seed?: number

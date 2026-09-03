@@ -13,6 +13,7 @@
 	import KoboldCppDownloadsTab from "../koboldcppManager/KoboldCppDownloadsTab.svelte"
 	import KoboldCppSetupScreen from "../koboldcppManager/KoboldCppSetupScreen.svelte"
 	import KoboldCppBinaryVariantPicker from "../koboldcppManager/KoboldCppBinaryVariantPicker.svelte"
+	import { countTextModels } from "../koboldcppManager/modelKindView"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import KoboldCppUnsavedChangesModal from "../modals/KoboldCppUnsavedChangesModal.svelte"
@@ -44,6 +45,14 @@
 	let didAutoOpenAvailable = $state(false)
 
 	let activeTab = $state("models")
+
+	// Which half of the models directory the Models and Available tabs are
+	// about. Held HERE rather than in either tab because both tabs unmount when
+	// you leave them ({#if activeTab === …} below): per-tab state would reset to
+	// "text" every time you walked from Available over to Models, which reads as
+	// the app losing your place mid-task. Not persisted across sessions — text
+	// is the right thing to open on.
+	let modelKind = $state<Sockets.KoboldCPP.ModelKindFilter>("text")
 
 	// Section names. The tab triggers are icon-only (see PanelTab), so
 	// PanelSectionTitle is where the active section's full name is shown.
@@ -158,7 +167,12 @@
 		socket.on(
 			"koboldcpp:listModels",
 			(message: Sockets.KoboldCPP.ListModels.Response) => {
-				installedCount = message.availableModels?.length ?? 0
+				// TEXT-kind rows only. The glow this feeds exists to say "the
+				// Models tab is a dead end, go download something" — counting
+				// image models too would silently drop the cue for the one user
+				// who most needs it: the one whose only model is an SD
+				// checkpoint, which cannot answer a single chat message.
+				installedCount = countTextModels(message.availableModels ?? [])
 			}
 		)
 		if (panelsCtx?.digest?.tutorial) socket.emit("koboldcpp:listModels", {})
@@ -481,13 +495,14 @@
 				<PanelSectionTitle title={sectionLabel} />
 				<Tabs.Content value="models">
 					{#if activeTab === "models"}
-						<KoboldCppModelsTab />
+						<KoboldCppModelsTab bind:modelKind />
 					{/if}
 				</Tabs.Content>
 				<Tabs.Content value="available">
 					{#if activeTab === "available"}
 						<KoboldCppDownloadTab
 							{isLocal}
+							bind:modelKind
 							onDownloadStart={handleDownloadStart}
 						/>
 					{/if}

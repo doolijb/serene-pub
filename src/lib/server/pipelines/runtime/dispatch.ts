@@ -26,6 +26,7 @@
  */
 
 import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
+import { capabilityRefusal } from "./capabilityGuard"
 import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
@@ -260,6 +261,12 @@ export async function dispatchGeneration(
 			"no AI connection is configured, so there is nothing to send this prompt to. " +
 				"Set one up under Connections."
 		)
+
+	// A session override or a config can point this at any connection the user
+	// owns, image ones included; refusing here names the capability, where
+	// `getConnectionAdapter` would only say the type has no adapter.
+	const refusal = capabilityRefusal(connection, "text->text")
+	if (refusal) throw new DispatchError(refusal)
 
 	const { Adapter } = await getConnectionAdapter(connection.type)
 	const adapter = new Adapter({

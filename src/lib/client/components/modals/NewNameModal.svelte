@@ -21,6 +21,16 @@
 		 */
 		checkboxLabel?: string
 		checkboxChecked?: boolean
+		/**
+		 * A refusal from the server, shown under the input.
+		 *
+		 * Additive and optional: the Lorebooks, Prompts and Context callers pass
+		 * nothing and render exactly as before. Sampling passes it because names
+		 * are unique per modality, so "Default (Image)" can be taken — and a
+		 * caller that keeps this modal OPEN on refusal needs somewhere for the
+		 * message to land other than a toast behind the backdrop.
+		 */
+		error?: string
 	}
 
 	let {
@@ -31,15 +41,26 @@
 		title,
 		description,
 		checkboxLabel,
-		checkboxChecked = false
+		checkboxChecked = false,
+		error
 	}: Props = $props()
 
 	let checked = $state(checkboxChecked)
 
 	// Re-seed on each open — the modal stays mounted, so without this a second
-	// open would inherit whatever the user left the toggle on last time.
+	// open would inherit whatever the user left it in last time.
+	//
+	// The NAME is cleared for the same reason, and it stopped being cosmetic when
+	// sampling names became unique per modality: a second Clone arriving
+	// pre-filled with the name the first one used is now guaranteed to be
+	// refused, so the user had to notice and clear it by hand every time.
 	$effect(() => {
-		if (open) checked = checkboxChecked
+		if (open) {
+			checked = checkboxChecked
+			name = ""
+			validationErrors = {}
+			staleErrorFor = null
+		}
 	})
 
 	// Zod validation schema
@@ -57,6 +78,31 @@
 	})
 	let isValid = $derived(
 		!!name.trim() && Object.keys(validationErrors).length === 0
+	)
+
+	/**
+	 * The name the server's `error` was raised for.
+	 *
+	 * A server message describes the value that was SENT. Once the user edits the
+	 * field it no longer describes anything on screen, and leaving it up keeps
+	 * `aria-invalid="true"` and a `role="alert"` naming a name that is no longer
+	 * typed — telling a screen-reader user a valid field is invalid, and giving a
+	 * sighted user no way to tell whether the new name was rejected too.
+	 */
+	let staleErrorFor = $state<string | null>(null)
+	$effect(() => {
+		if (error) staleErrorFor = name
+	})
+
+	// One message under the input, from either source. The local rule wins when
+	// both are present: it describes what is wrong with what is typed NOW, while
+	// `error` describes the last thing that was sent — and is dropped as soon as
+	// the field stops matching what was sent.
+	const shownError = $derived(
+		validationErrors.name ??
+			(staleErrorFor !== null && name === staleErrorFor
+				? error
+				: undefined)
 	)
 
 	function validateForm(): boolean {
@@ -112,14 +158,14 @@
 							id="name-input"
 							bind:this={inputRef}
 							bind:value={name}
-							class="input w-full {validationErrors.name
+							class="input w-full {shownError
 								? 'border-error-500'
 								: ''}"
 							type="text"
 							placeholder="Enter a name..."
 							aria-required="true"
-							aria-invalid={!!validationErrors.name}
-							aria-describedby={validationErrors.name
+							aria-invalid={!!shownError}
+							aria-describedby={shownError
 								? "name-error"
 								: undefined}
 							onkeydown={(e) => {
@@ -136,13 +182,13 @@
 								}
 							}}
 						/>
-						{#if validationErrors.name}
+						{#if shownError}
 							<p
 								id="name-error"
 								class="text-error-500 mt-1 text-sm"
 								role="alert"
 							>
-								{validationErrors.name}
+								{shownError}
 							</p>
 						{/if}
 					</div>

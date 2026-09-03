@@ -58,11 +58,6 @@ jobs:
                       TITLE="$BASE_VERSION Development Release"
                       IS_PRERELEASE="true"
                       RUN_TESTS="false"
-                    elif [ "$SUFFIX" = "alpha" ]; then
-                      # Alpha release
-                      TITLE="$BASE_VERSION Alpha Release"
-                      IS_PRERELEASE="true"
-                      RUN_TESTS="true"
                     elif [ "$SUFFIX" = "beta" ]; then
                       # Beta release (not a pre-release)
                       TITLE="$BASE_VERSION Beta Release"
@@ -83,7 +78,10 @@ jobs:
                       IS_PRERELEASE="true"
                       RUN_TESTS="true"
                     else
-                      # Unknown suffix
+                      # Unknown suffix — fail closed. `-alpha` lands here too:
+                      # alpha nomenclature is retired, so an alpha tag is
+                      # treated as an unrecognised suffix rather than given a
+                      # branch of its own.
                       TITLE="$VERSION"
                       IS_PRERELEASE="true"
                       RUN_TESTS="false"
@@ -373,6 +371,41 @@ jobs:
                   cd "$DIST_DIR"
                   zip -r -y "../../serene-pub-$REF_NAME-${{ matrix.target }}.zip" serene-pub
 
+            # ── Pre-releases ship portable zips ONLY ───────────────────
+            #
+            # Nothing is gated here today because nothing needs gating: the
+            # two steps above are the only packaging steps in this workflow,
+            # and a zip IS the portable artifact. There is no installer, .dmg
+            # or AppImage job to switch off yet.
+            #
+            # When one is added, it goes BELOW this comment and carries:
+            #
+            #     if: needs.test.outputs.is_prerelease == 'false'
+            #
+            # (combined with the platform condition it needs anyway, e.g.
+            # `if: runner.os == 'Windows' && needs.test.outputs.is_prerelease == 'false'`).
+            # A pre-release or release candidate must not put an installer in
+            # anyone's hands: an installed build looks and behaves like a
+            # production one — Start Menu entry, file associations, an
+            # uninstaller — which is exactly the impression these builds must
+            # not give. Extracting a zip does not.
+            #
+            # ⚠ Two things to know before wiring that up:
+            #
+            #  1. `is_prerelease` here AGREES with the predicate the app uses.
+            #     isPrereleaseVersion() in src/lib/shared/utils/releaseChannel.ts
+            #     applies the same rule as the branches above: no suffix or
+            #     `-beta` is a release (beta is a maturity label, not a release
+            #     stage), everything else — including any unrecognised suffix —
+            #     is a pre-release. So a beta tag publishes as a full GitHub
+            #     release AND runs unwatermarked with update checks on, and a
+            #     gated installer job would correctly build for it. Keep the two
+            #     in step: if betas should ever be denied an installer anyway,
+            #     gate that job on a separate output rather than changing what
+            #     `prerelease:` tells GitHub below.
+            #  2. `files:` uses a glob, so a gated step that does not run just
+            #     contributes no file — the upload step itself needs no
+            #     condition.
             - name: Upload release assets
               uses: softprops/action-gh-release@v2
               with:

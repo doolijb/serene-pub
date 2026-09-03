@@ -380,6 +380,29 @@ export type SocketEventMap = {
 		params: never
 		response: { error?: string }
 	}
+	// The capability panel's own pair. Not fields on `connections:update` —
+	// that handler strips `capabilities` off the payload precisely so a stale
+	// client copy cannot overwrite a probe, and a toggle riding the update
+	// payload would undo that. `setCapability` answers with the read's response
+	// so one handler applies either, plus the broadcast to other open tabs.
+	// Neither :error is in HANDLED_ERROR_EVENTS: a capability read or write that
+	// fails is worth a toast, and Layout's onAny catch-all already gives it one.
+	"connections:capabilities": {
+		params: Sockets.Connections.Capabilities.Params
+		response: Sockets.Connections.Capabilities.Response
+	}
+	"connections:capabilities:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"connections:setCapability": {
+		params: Sockets.Connections.SetCapability.Params
+		response: Sockets.Connections.SetCapability.Response
+	}
+	"connections:setCapability:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 
 	// Persona events
 	"personas:list": {
@@ -1035,9 +1058,25 @@ export type SocketEventMap = {
 		params: Sockets.SamplingConfigs.Create.Params
 		response: Sockets.SamplingConfigs.Create.Response
 	}
+	// Both of these have been EMITTED by the server for a while (see
+	// samplingConfigs.ts) with nothing able to listen: `TypedSocket.on` is keyed
+	// on this map, so `socket.on("samplingConfigs:create:error", …)` was a type
+	// error and every one of these errors could only reach the generic toast.
+	// Registered so the sidebar can render a name collision inline, where the
+	// name that collided is. No new namespace: `ErrorResponse` is exactly what
+	// both handlers emit. `:get:error` and `:delete:error` are emitted too and
+	// deliberately left off — a toast is the right home for those.
+	"samplingConfigs:create:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"samplingConfigs:update": {
 		params: Sockets.SamplingConfigs.Update.Params
 		response: Sockets.SamplingConfigs.Update.Response
+	}
+	"samplingConfigs:update:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"samplingConfigs:delete": {
 		params: Sockets.SamplingConfigs.Delete.Params
@@ -1615,6 +1654,15 @@ export type SocketEventMap = {
 		params: Sockets.KoboldCPP.ConnectModel.Params
 		response: Sockets.KoboldCPP.ConnectModel.Response
 	}
+	// Its image counterpart: creates a koboldcpp_managed_image connection naming
+	// this file and registers it as the text->image default. Separate from
+	// connectModel because the "make it default" writers differ — text stars
+	// system_settings.default_connection_id, image registers a row in
+	// connection_defaults.
+	"koboldcpp:connectImageModel": {
+		params: Sockets.KoboldCPP.ConnectImageModel.Params
+		response: Sockets.KoboldCPP.ConnectImageModel.Response
+	}
 	"koboldcpp:perf": {
 		params: Sockets.KoboldCPP.Perf.Params
 		response: Sockets.KoboldCPP.Perf.Response
@@ -1688,6 +1736,13 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
+	// A dedicated :error because the failure is user-visible and specific — the
+	// chosen file went missing, or is not a tracked complete image model — and
+	// the Models tab has to say which, not just fail to change state.
+	"koboldcpp:connectImageModel:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"koboldcpp:setBaseUrl:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
@@ -1719,6 +1774,12 @@ export type SocketEventMap = {
 	"koboldcpp:recommendedModels:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
+	}
+	// The "It's a text model" / "It's an image model" override on an Unverified
+	// row. Writes kind_source "user", which nothing automatic may then overwrite.
+	"koboldcpp:setModelKind": {
+		params: Sockets.KoboldCPP.SetModelKind.Params
+		response: Sockets.KoboldCPP.SetModelKind.Response
 	}
 	"koboldcpp:downloadProgress": {
 		params: never

@@ -8,7 +8,10 @@
 import "$lib/server/config/bootstrapEnv"
 import { dev } from "$app/environment"
 import { appVersion } from "$lib/shared/constants/version"
-import { pickNotifiableRelease } from "$lib/shared/utils/releaseChannel"
+import {
+	getUpdateState,
+	maybeCheckForUpdates
+} from "$lib/server/updates/updateCheck"
 import type { Handle, RequestEvent } from "@sveltejs/kit"
 import { isRequestHttps } from "$lib/server/net/publicUrl"
 import { mergeCspExtras } from "$lib/server/security/csp"
@@ -34,85 +37,7 @@ declare module "@sveltejs/kit" {
 	}
 }
 
-// The full release list, NOT /releases/latest. GitHub's "latest" endpoint
-// excludes pre-releases by definition, so a beta install could never be told
-// about a newer beta through it — the channel filtering below needs to see
-// every release and decide for itself.
-const GITHUB_API_URL =
-	"https://api.github.com/repos/doolijb/serene-pub/releases?per_page=30"
-
-/** Re-check no more than once a day. Deliberately lazy rather than a timer:
- * an idle server has nobody to notify, and this keeps the check tied to
- * someone actually loading the app. */
-const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
-
-async function checkForUpdates() {
-	try {
-		console.log("[VersionCheck] Checking for new release...")
-		const res = await fetch(GITHUB_API_URL, {
-			headers: { Accept: "application/vnd.github+json" },
-			signal: AbortSignal.timeout(5000)
-		})
-		if (!res.ok) {
-			console.warn(
-				`[VersionCheck] Failed to fetch releases: HTTP ${res.status}`
-			)
-			return
-		}
-
-		const data = await res.json()
-		if (!Array.isArray(data)) {
-			console.warn("[VersionCheck] Unexpected response shape; ignoring.")
-			return
-		}
-
-		// Drafts are not published to anyone. `prerelease` is NOT used to filter
-		// here — the tag name is the authority, since that is what encodes the
-		// channel (-beta / -rc-N / -pr-N) and what the ladder understands.
-		const tags: string[] = data
-			.filter((r: any) => r && !r.draft && typeof r.tag_name === "string")
-			.map((r: any) => r.tag_name)
-
-		const notifiable =
-			typeof appVersion === "string"
-				? pickNotifiableRelease(appVersion, tags)
-				: null
-
-		latestReleaseTag = notifiable ?? undefined
-		isNewerReleaseAvailable = notifiable !== null
-
-		if (notifiable) {
-			console.log(
-				`[VersionCheck] Current: ${appVersion} — update available: ${notifiable}`
-			)
-		} else {
-			console.log(
-				`[VersionCheck] Current: ${appVersion} — no newer release on this channel.`
-			)
-		}
-	} catch (err) {
-		// Most likely cause is no internet connection (DNS failure, timeout,
-		// offline); this is expected in offline/air-gapped deployments, so
-		// don't log a scary stack trace for it.
-		const reason = err instanceof Error ? err.message : String(err)
-		console.warn(
-			`[VersionCheck] Could not check for new release (likely no internet connection): ${reason}`
-		)
-	} finally {
-		// Stamped even on failure, so an offline server retries once a day
-		// rather than on every single request.
-		lastUpdateCheckAt = Date.now()
-	}
-}
-
-let latestReleaseTag: string | undefined = undefined
-let isNewerReleaseAvailable: boolean | undefined = undefined
-/** 0 means "never checked". Compared against UPDATE_CHECK_INTERVAL_MS so a
- * long-lived server re-checks daily instead of once per process. */
-let lastUpdateCheckAt = 0
-let updateCheckInFlight: Promise<void> | null = null
-
-// One-time warning (same pattern as hasCheckedForUpdates above) for a
+// One-time warning (latched by the flag below) for a
 // login-rate-limiting footgun: loginRateLimit.ts keys its buckets on
 // getClientAddress(), which only reflects the real client IP if
 // ADDRESS_HEADER is set to match a trusted reverse proxy's forwarded-for
@@ -163,18 +88,13 @@ export const handle: Handle = async ({ event, resolve }) => {
 	const { appReady } = await import("$lib/server/startup")
 	await appReady
 
-	if (
-		!dev &&
-		!updateCheckInFlight &&
-		Date.now() - lastUpdateCheckAt > UPDATE_CHECK_INTERVAL_MS
-	) {
+	if (!dev && typeof appVersion === "string") {
 		// Fire-and-forget: don't let a slow/unreachable network delay this
 		// (or any) request. Results populate event.locals on later requests.
-		// The in-flight guard keeps a burst of concurrent requests from
-		// launching several fetches at once.
-		updateCheckInFlight = checkForUpdates().finally(() => {
-			updateCheckInFlight = null
-		})
+		// Whether it is due at all — and whether this build is permitted to
+		// ask GitHub anything in the first place — is maybeCheckForUpdates()'s
+		// call, not this one's; a pre-release never reaches the network here.
+		void maybeCheckForUpdates(appVersion)
 	}
 
 	if (
@@ -192,8 +112,9 @@ export const handle: Handle = async ({ event, resolve }) => {
 				"See docs/hosting.md's reverse-proxy section."
 		)
 	}
-	event.locals.latestReleaseTag = latestReleaseTag
-	event.locals.isNewerReleaseAvailable = isNewerReleaseAvailable
+	const updateState = getUpdateState()
+	event.locals.latestReleaseTag = updateState.latestReleaseTag
+	event.locals.isNewerReleaseAvailable = updateState.isNewerReleaseAvailable
 
 	for (const handler of middleware) {
 		await handler(event)

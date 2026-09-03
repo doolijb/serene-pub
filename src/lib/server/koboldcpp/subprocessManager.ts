@@ -585,6 +585,12 @@ async function doStart(): Promise<void> {
 		// token) is otherwise completely inert regardless of what this app
 		// sends in the request body.
 		"--jinja"
+		// NO --sdmodel here, deliberately. The process is spawned with --nomodel
+		// and every model — text or image — arrives through the admin
+		// reload_config path in modelManager.ts, which rebuilds the whole arg set
+		// from its .kcpps file. A spawn-time --sdmodel would be wiped by the first
+		// load and would only ever have applied to a window in which nothing can
+		// generate anyway.
 	]
 
 	// detached: true makes koboldcpp the leader of its own process group (setsid),

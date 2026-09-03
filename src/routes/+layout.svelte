@@ -11,6 +11,8 @@
 	import LoginForm from "$lib/client/components/LoginForm.svelte"
 	import SetupGate from "$lib/client/components/auth/SetupGate.svelte"
 	import AccessibleShell from "$lib/client/accessibility/AccessibleShell.svelte"
+	import PrereleaseWatermark from "$lib/client/components/PrereleaseWatermark.svelte"
+	import { appVersion } from "$lib/shared/constants/version"
 	import AccessibleLoginForm from "$lib/client/accessibility/AccessibleLoginForm.svelte"
 	import {
 		accessibilityModeStore,
@@ -378,6 +380,19 @@
 			</div>
 		</div>
 	</div>
+{/if}
+
+<!-- The pre-release build marker. Rendered here rather than inside
+     Layout.svelte so it is present on every screen a pre-release build can
+     show — including the login form, the setup gate and the startup-error
+     page, which render before the app shell exists and are exactly where
+     someone forms an impression of how finished this build is.
+
+     Not in Document View: a faint, click-through decoration is useless in a
+     shell built for screen readers and high contrast, so AccessibleShell
+     states the same fact as plain readable text in its footer instead. -->
+{#if page.data?.isPrerelease && !showAccessibleShell}
+	<PrereleaseWatermark version={appVersion} />
 {/if}
 
 <Toast.Group {toaster}>

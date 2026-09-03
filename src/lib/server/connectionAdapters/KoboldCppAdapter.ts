@@ -1,4 +1,8 @@
 import Handlebars from "handlebars"
+import {
+	capabilitiesFromFlags,
+	flagsFrom
+} from "$lib/server/koboldcpp/probeCapabilities"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { StopStrings } from "../utils/StopStrings"
 import { TokenCounters } from "../utils/TokenCounterManager"
@@ -556,10 +560,18 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 	}
 }
 
-// Connection test function — reused as-is by KoboldCppManagedAdapter.
+/**
+ * Connection test function — reused as-is by KoboldCppManagedAdapter.
+ *
+ * Reports `extra.capabilities` because this endpoint already carries them and
+ * this call already fetches it. Without that, KoboldCPP's `text->image` would
+ * sit at the manifest's `{tier: "probed", until: "none"}` forever: nothing else
+ * probes a text-typed connection, so the one backend that writes replies and
+ * draws pictures from the same process could never be shown to do the second.
+ */
 export async function testConnection(
 	connection: SelectConnection
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; extra?: Record<string, unknown> }> {
 	try {
 		const baseUrl =
 			normalizeBaseUrl(connection.baseUrl) || "http://localhost:5001"
@@ -586,7 +598,17 @@ export async function testConnection(
 			}
 		}
 
-		return { ok: true }
+		// What this instance can do RIGHT NOW — which models are loaded, not
+		// which software is running. Mapped from the payload already in hand.
+		const flags = flagsFrom(data)
+		return {
+			ok: true,
+			extra: {
+				version: data.version,
+				koboldCppFlags: flags,
+				capabilities: capabilitiesFromFlags(flags)
+			}
+		}
 	} catch (e: any) {
 		return {
 			ok: false,

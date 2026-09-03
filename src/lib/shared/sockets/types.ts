@@ -711,12 +711,18 @@ declare global {
 					// tab, not just the requester).
 					connectionId?: number
 					// Anything else the test learned that a form can use —
-					// Fooocus returns its style list here. A test is the moment
+					// An image backend returns its sampler list here. A test is the moment
 					// the connection is known to be reachable, so it is the
 					// cheapest place to fetch what a form cannot guess; a
 					// dedicated round trip per backend-specific list would be
 					// one more endpoint per backend.
 					extra?: Record<string, unknown>
+					// What the connection turned out to be able to do, with
+					// this test's own probe folded in (0175). Present only for
+					// a passing test — a failed one learned nothing — and the
+					// form shows it without having to re-read the row, which
+					// for an unsaved connection does not exist yet.
+					capabilities?: import("@serene-pub/sdk").CapabilitySet
 				}
 			}
 			namespace RefreshModels {
@@ -728,6 +734,109 @@ declare global {
 					error: string | null
 					connectionId?: number
 				}
+			}
+			/**
+			 * Reading a connection's capabilities for the toggle panel (0175).
+			 *
+			 * Its own event rather than a field on the row, because
+			 * `capabilities` is server-owned: connectionsUpdate strips the column
+			 * off the payload so a stale client copy can never land back on top of
+			 * a probe (the comment there records the bug that caused). A panel
+			 * that read the column out of the editor's `connection` — or wrote it
+			 * back through `connections:update` — would walk into the same one.
+			 * So the panel is handed a `connectionId` and fetches for itself.
+			 */
+			namespace Capabilities {
+				interface Params {
+					id: number
+				}
+
+				/**
+				 * The shape of the `connections.capabilities` json column.
+				 *
+				 * The same shape as `StoredCapabilities`
+				 * (server/connections/resolve.ts) on purpose: wire, server and row
+				 * model are one definition rather than three that happen to agree
+				 * today.
+				 */
+				interface Stored {
+					/**
+					 * The effective set everything reads. A CACHE of the other two
+					 * plus the static manifest — derived, never the source.
+					 */
+					resolved?: import("@serene-pub/sdk").CapabilitySet
+					/**
+					 * What a person switched by hand. THE DURABLE INTENT.
+					 *
+					 * Three states, not two. A key may be ABSENT (auto — nobody has
+					 * stated an intent, so preset and probe decide), a tier (on), or
+					 * `false` (off, explicitly). Clearing an override DELETES the
+					 * key; writing `false` to mean "stop overriding" would blind the
+					 * row to whatever its backend reports from then on.
+					 */
+					overrides?: import("@serene-pub/sdk").CapabilityOverrides
+					/**
+					 * The last successful test, and when it answered — the honest
+					 * owner of "what does this backend actually do". `at` is load
+					 * bearing for the panel: an untested connection has to say so
+					 * rather than look authoritative.
+					 */
+					probe?: {
+						found: import("@serene-pub/sdk").CapabilitySet
+						at?: string
+					}
+				}
+
+				interface Response {
+					connectionId: number
+					/**
+					 * From the SAVED row, never the editor's form state: the key
+					 * space belongs to the persisted type, and Document View's edit
+					 * page can change `type` in local state long before a save.
+					 */
+					type?: string
+					preset?: string | null
+					capabilities?: Stored
+					error?: string
+				}
+			}
+			/**
+			 * Switching ONE capability. Singular by design: a bulk `overrides`
+			 * payload lets a stale client blow away an override it never rendered,
+			 * which is the same clobber class connectionsUpdate already guards.
+			 */
+			namespace SetCapability {
+				interface Params {
+					id: number
+					capability: import("@serene-pub/sdk").CapabilityId
+					/**
+					 * THREE STATES ON THE WIRE, matching the three the column holds:
+					 *
+					 * - `null` — clear the override. The handler DELETES the key, so
+					 *   authority goes back to the probe. Reachable again after any
+					 *   toggle; a two-state control would destroy it with no way
+					 *   back.
+					 * - `"native"` — on. The only value the UI sends for on, because
+					 *   resolution clamps an override down to what the adapter can
+					 *   actually do; offering a tier on write would be a promise the
+					 *   key space may refuse.
+					 * - `"emulated"` — accepted, reserved for a future
+					 *   force-emulated control.
+					 * - `false` — off, explicitly.
+					 *
+					 * `null` rather than `undefined`: undefined does not survive
+					 * JSON, so "clear" would arrive as an absent key —
+					 * indistinguishable from a malformed payload. The wire has to be
+					 * able to SAY it.
+					 */
+					value: import("@serene-pub/sdk").ResolvedTier | false | null
+				}
+				/**
+				 * Identical to the read's, so one client handler serves both and the
+				 * two can never disagree — the same reason ScriptWrite reuses
+				 * Scripts.Response.
+				 */
+				type Response = Capabilities.Response
 			}
 		}
 
@@ -2660,6 +2769,20 @@ declare global {
 					id: number
 					label: string
 					description?: string
+					/**
+					 * Offered but not selectable — a connection that cannot do
+					 * what this slot's node needs. Shown rather than hidden,
+					 * because "why isn't my connection in the list" has no
+					 * answer when it is simply absent.
+					 */
+					disabled?: boolean
+					/**
+					 * Why, in the words the connection screen used ("Can't do
+					 * Image generation."). Also appears WITHOUT `disabled`, for
+					 * a connection nobody has tested yet — a caveat on a choice
+					 * that is still selectable.
+					 */
+					reason?: string
 				}>
 				/**
 				 * For a `prompts-ref` option: the selected prompt row in
@@ -4129,6 +4252,15 @@ declare global {
 		}
 
 		namespace KoboldCPP {
+			/** What a model file is. "unknown" = the classifier could not tell;
+			 * shown in both lists rather than hidden from either. */
+			type ModelKind = "text" | "image" | "unknown"
+			/** How good the `kind` answer is, descending: who is allowed to
+			 * overwrite it. Nothing automatic ever overwrites "user". */
+			type ModelKindSource = "user" | "detected" | "declared" | "assumed"
+			/** A kind a caller can ASK for. "unknown" is an answer, never a request. */
+			type ModelKindFilter = "text" | "image"
+
 			namespace SetBaseUrl {
 				interface Params {
 					baseUrl: string
@@ -4140,6 +4272,13 @@ declare global {
 			namespace SetModelsDir {
 				interface Params {
 					dir: string
+					/**
+					 * Which directory this sets. REQUIRED, with no default: there
+					 * are two columns now, and a caller that forgot to say would
+					 * silently repoint the other one — which reads to a user as
+					 * every model they own disappearing at once.
+					 */
+					kind: ModelKindFilter
 				}
 				interface Response {
 					success: boolean
@@ -4187,10 +4326,38 @@ declare global {
 					description?: string
 					quantization?: string
 					sizeBytes?: number
+					/** Required, not optional: every scanned file is backed by a
+					 * row whose kind/kind_source columns are NOT NULL. */
+					kind: ModelKind
+					kindSource: ModelKindSource
+					/** Why the classifier said so, for the Unverified badge's tooltip. */
+					kindReason?: string
+					/**
+					 * Which directory the file was actually found in — evidence, not
+					 * a verdict. A model whose `kind` disagrees with this is either a
+					 * user override or a legacy flat install, and the UI needs to be
+					 * able to tell those apart from a file sitting where it belongs.
+					 */
+					dirKind: ModelKindFilter
 				}
 				interface Response {
 					currentModel: string | null
 					availableModels: ModelFile[]
+					/**
+					 * The TEXT models directory is set. Keeps its original meaning
+					 * rather than widening to "either", because three client files
+					 * already read it and a silently-broadened flag would have them
+					 * claiming a directory is configured when the one they are
+					 * showing is not.
+					 */
+					/**
+					 * A models directory is configured at all.
+					 *
+					 * One flag for both kinds, because the image directory falls
+					 * back to the text one when unset — so a separate
+					 * `imageModelsDirSet` could only ever repeat this value, and a
+					 * second source for one fact is how the two come to disagree.
+					 */
 					modelsDirSet: boolean
 				}
 			}
@@ -4218,6 +4385,23 @@ declare global {
 					success: string
 				}
 			}
+			/**
+			 * The image counterpart of ConnectModel, and a separate event rather
+			 * than a `kind` param on it: the two branches share almost nothing.
+			 * Different type predicate, different "make this the default" writer —
+			 * text stars via connections:setUserActive, which writes
+			 * system_settings.default_connection_id, a slot an image connection has
+			 * no business claiming — and different response.
+			 */
+			namespace ConnectImageModel {
+				interface Params {
+					filename: string
+				}
+				interface Response {
+					success?: string
+					error?: string
+				}
+			}
 			namespace Perf {
 				interface Params {}
 				interface Response {
@@ -4234,15 +4418,36 @@ declare global {
 			}
 			namespace GetLoadedConfig {
 				interface Params {}
+				/**
+				 * One model this process believes is loaded, plus the knobs it was
+				 * loaded with. The knob fields are per-kind and mutually exclusive:
+				 * contextSize/gpuLayers/flashAttention/batchSize are text-only,
+				 * threads/quant are image-only. They are optional here rather than
+				 * split into a union because this crosses the wire and the client
+				 * reads them for display, never to decide anything.
+				 */
+				interface Resident {
+					file: string
+					contextSize?: number
+					gpuLayers?: number
+					flashAttention?: boolean
+					batchSize?: number
+					threads?: number
+					quant?: 0 | 1 | 2
+				}
 				interface Response {
-					// null if nothing loaded, or this process doesn't know (e.g. right
-					// after a restart — koboldcpp doesn't expose these for querying).
+					/**
+					 * What is resident, per kind — null if nothing is loaded, or if
+					 * this process does not know (right after a restart, say;
+					 * koboldcpp does not expose these for querying).
+					 *
+					 * A map rather than one model, because "how many are resident"
+					 * is the model manager's decision and not this payload's. Today
+					 * exactly one key is ever present; a client that reads both
+					 * keeps working when that stops being true.
+					 */
 					config: {
-						model: string
-						contextSize: number
-						gpuLayers: number
-						flashAttention: boolean
-						batchSize: number
+						resident: { text?: Resident; image?: Resident }
 						rawConfigJson: string
 					} | null
 				}
@@ -4250,6 +4455,8 @@ declare global {
 			namespace SearchModels {
 				interface Params {
 					searchTerm: string
+					/** Defaults to "text" when absent. */
+					kind?: ModelKindFilter
 				}
 				interface PullOption {
 					label: string
@@ -4265,6 +4472,10 @@ declare global {
 					trendingScore?: number
 					url?: string
 					pullOptions: PullOption[]
+					/** Repo carries the `stable-diffusion.cpp` tag — the exact GGUF
+					 * flavour koboldcpp requires. Badged and sorted first, never
+					 * filtered on: legitimate SDXL repos are tagged `diffusers`. */
+					sdcpp?: boolean
 				}
 				interface Response {
 					models: ModelResult[]
@@ -4279,6 +4490,11 @@ declare global {
 					description?: string
 					quantization?: string
 					sizeBytes?: number
+					/** The tab the user was in. Stored with kind_source "declared";
+					 * the finished file is then sniffed and may correct it — a
+					 * declaration is a guess about a file, a detection is a
+					 * measurement of the file we now hold. Defaults to "text". */
+					kind?: ModelKindFilter
 				}
 				interface Response {
 					success: boolean
@@ -4323,9 +4539,29 @@ declare global {
 					recommendedVram?: number
 					parameterSize?: string
 				}
-				interface Params {}
+				interface Params {
+					/** Defaults to "text" when absent. */
+					kind?: ModelKindFilter
+				}
 				interface Response {
 					models: RecommendedModel[]
+					/**
+					 * The catalog could not be fetched, as opposed to being
+					 * empty. The two look identical in a list and mean opposite
+					 * things: empty says "there are none, go search Hugging
+					 * Face", while failed usually means Hugging Face is exactly
+					 * what is unreachable.
+					 */
+					failed?: boolean
+				}
+			}
+			namespace SetModelKind {
+				interface Params {
+					filename: string
+					kind: ModelKindFilter
+				}
+				interface Response {
+					success: boolean
 				}
 			}
 
@@ -4730,6 +4966,18 @@ declare global {
 					// future platform gap). See embedding/index.ts's
 					// getLocalEmbeddingUnsupportedReason().
 					localEmbeddingsSupported: boolean
+				/**
+				 * The instance default connection and sampling config, per
+				 * capability (0175). Keyed by `CapabilityId`.
+				 *
+				 * Sent explicitly rather than riding on the settings row, because
+				 * it is its own table now — a column pair per capability does not
+				 * scale to an open capability space.
+				 */
+				capabilityDefaults?: Record<
+					string,
+					{ connectionId: number | null; samplingConfigId: number | null }
+				>
 				}
 			}
 			namespace UpdateOllamaManagerEnabled {

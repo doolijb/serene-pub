@@ -1,14 +1,17 @@
 import { randomUUID } from "node:crypto"
 import { db } from "$lib/server/db"
 import type { Handler } from "$lib/shared/events"
-import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { getImageAdapter } from "../utils/getImageAdapter"
+import { capabilityRefusal } from "$lib/server/pipelines/runtime/capabilityGuard"
 import { createMedia } from "$lib/server/media"
 import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { buildImageRequest } from "$lib/server/imageGen/buildRequest"
 import { S } from "@serene-pub/sdk"
+import { capabilityDefault } from "$lib/server/connections/capabilityDefaults"
 import type { RunProgress } from "$lib/shared/sockets/progress"
+import type { ImageGenProgress } from "$lib/shared/imageGen/types"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import type {
 	GeneratedMedia,
 	ImageProfileSchemaParams,
@@ -47,6 +50,65 @@ const inFlight = new Map<
 /** Progress is emitted at most this often; a render can report far faster than a UI can use. */
 const PROGRESS_THROTTLE_MS = 250
 
+/**
+ * Load the model and resolve the address for a managed image connection.
+ *
+ * Returns the connection the adapter should actually be built from. A
+ * non-managed connection passes straight through untouched — nobody asked this
+ * app to start somebody else's A1111.
+ *
+ * Deliberately a small local helper rather than an import from
+ * `dispatchImage.ts`: that module is the pipeline runtime and pulls in the media
+ * store, the template renderer and the run registry. This socket needs two facts
+ * and a function call.
+ */
+async function readyManagedTarget(
+	connection: SelectConnection,
+	decrypted: unknown,
+	signal: AbortSignal,
+	onProgress: (p: ImageGenProgress) => void
+): Promise<unknown> {
+	if (connection.type !== CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE)
+		return decrypted
+
+	if (!connection.model)
+		throw new Error(
+			`"${connection.name}" has no image model selected. Pick one in its connection settings, or use "Use for image generation" in the KoboldCPP Manager.`
+		)
+
+	const [{ ensureManagedReady }, { sdQuantToInt }] = await Promise.all([
+		import("$lib/server/koboldcpp/managedPreflight"),
+		import("$lib/server/imageAdapters/KoboldCppManagedImageAdapter")
+	])
+
+	// From NAMED fields, never a spread of `extraJson` — an upgraded row can
+	// still carry an `sdModelFile` from the design where one connection held two
+	// models, and a spread would hand it back to the loader.
+	const profile = (connection.extraJson as any)?.profile ?? {}
+	const rawThreads = Number(profile.sdThreads)
+	const threads =
+		Number.isInteger(rawThreads) && rawThreads > 0 ? rawThreads : undefined
+	const quant = sdQuantToInt(profile.sdQuant)
+
+	onProgress({
+		stage: "loading",
+		percent: 0,
+		message: `Loading image model "${connection.model}"…`
+	})
+
+	const { baseUrl } = await ensureManagedReady(
+		{
+			kind: "image",
+			file: connection.model,
+			...(threads !== undefined ? { threads } : {}),
+			...(quant !== undefined ? { quant } : {})
+		},
+		{ connectionId: connection.id, signal }
+	)
+
+	return { ...(decrypted as object), baseUrl }
+}
+
 export const imagesGenerate: Handler<
 	ImagesGenerateParams,
 	ImagesGenerateResponse
@@ -67,10 +129,14 @@ export const imagesGenerate: Handler<
 			where: (c, { eq }) => eq(c.id, params.connectionId)
 		})
 		if (!connection) return fail("Connection not found.")
-		if (!CONNECTION_TYPE.isImage(connection.type))
-			return fail(
-				"That connection is not an image-generation connection."
-			)
+		// The same guard the three dispatchers use, for the same reason: this is
+		// the fourth way into image generation, and it was the last one still
+		// asking what the connection *is* rather than what it can do. A KoboldCPP
+		// row whose probe resolved `text->image` renders fine through a pipeline;
+		// `isImage("koboldcpp")` is false, so it was refused here — the exact case
+		// getImageAdapter now routes to the A1111 adapter.
+		const refusal = capabilityRefusal(connection, "text->image")
+		if (refusal) return fail(refusal)
 
 		// Media scoped to a session becomes visible to everyone in that session,
 		// so membership is checked before the scope is honoured — an unchecked
@@ -87,9 +153,9 @@ export const imagesGenerate: Handler<
 		// The chosen config, or the instance's image default. Never the text
 		// default: an image node handed a text config would have every parameter
 		// dropped by the resolver and would silently render at backend defaults.
-		const [system] = await db.query.systemSettings.findMany({ limit: 1 })
+		const imageDefault = await capabilityDefault(db, "text->image")
 		const samplingId =
-			params.samplingConfigId ?? system?.defaultImageSamplingConfigId
+			params.samplingConfigId ?? imageDefault?.samplingConfigId
 		const sampling = samplingId
 			? await db.query.samplingConfigs.findFirst({
 					where: (c, { eq }) => eq(c.id, samplingId)
@@ -154,8 +220,24 @@ export const imagesGenerate: Handler<
 
 		let result
 		try {
+			// A managed connection needs its model loaded and its address
+			// resolved before anything is rendered — the same two steps
+			// `dispatchImage` takes, for the same two reasons. This is the
+			// FOURTH entry point into image generation and it has now been the
+			// last one converted twice running, so it is worth saying plainly:
+			// the row's own `baseUrl` is not authoritative for a managed
+			// connection (the Manager's settings are), and in managed mode the
+			// subprocess is usually not running or is holding the chat LLM, so
+			// rendering without the load gets ECONNREFUSED or draws with
+			// whatever happened to be resident.
+			const target = await readyManagedTarget(
+				connection,
+				conn,
+				controller.signal,
+				onProgress
+			)
 			const { Adapter } = await getImageAdapter(connection.type)
-			const adapter = new Adapter(conn as any)
+			const adapter = new Adapter(target as any)
 			result = await adapter.generate(req, {
 				signal: controller.signal,
 				onProgress
@@ -256,7 +338,7 @@ export const imagesGenerate: Handler<
  * rather than written.
  *
  * The alternative is a bespoke Svelte component per backend — which is what
- * `FooocusForm.svelte` was, and what four backends would have made four of, each
+ * the per-backend form used to be, and what four backends would have made four of, each
  * re-implementing the URL field and the test button around a different middle.
  * The adapter declares its own settings in the SDK's field language; core renders
  * them without knowing what a "performance selection" is.
@@ -272,7 +354,17 @@ export const imagesProfileSchema: Handler<
 			emitToUser("images:profileSchema", res)
 			return res
 		}
-		if (!CONNECTION_TYPE.isImage(params.type)) {
+		// A type, not a row, so there is no capability set to consult — and no
+		// need for one. `getImageAdapter` IS the answer to "can this type draw":
+		// it throws for a type it has no adapter for, and it is the same lookup
+		// the render path makes. Asking `isImage` here instead disagreed with it,
+		// because `koboldcpp` now routes to the A1111 adapter while its type tag
+		// still says text — so the render worked and the settings form that
+		// configures it could not be loaded.
+		let adapter
+		try {
+			adapter = await getImageAdapter(params.type)
+		} catch {
 			const res = {
 				type: params.type,
 				error: "That is not an image-generation connection type."
@@ -280,8 +372,6 @@ export const imagesProfileSchema: Handler<
 			emitToUser("images:profileSchema", res)
 			return res
 		}
-
-		const adapter = await getImageAdapter(params.type)
 		const res: ImageProfileSchemaResponse = {
 			type: params.type,
 			schema: adapter.profileSchema as

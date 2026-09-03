@@ -54,9 +54,14 @@ export default defineConfig({
 	],
 	define: {
 		__APP_VERSION__: JSON.stringify(pkg.version),
-		__APP_VERSION_DISPLAY__: JSON.stringify(
-			`v${pkg.version}${pkg.version.includes("-") ? "" : "-alpha"}`
-		)
+		// Shown to users in Settings, the admin shell and the About page, so it
+		// states the version and nothing else. It used to append "-alpha" to any
+		// version without a suffix, which meant a formal release displayed as
+		// "v0.7.0-alpha" — inventing a maturity claim the tag never made, and
+		// the exact inverse of the pre-release marker's job. Alpha nomenclature
+		// is retired; whether a build is a pre-release is decided by
+		// isPrereleaseVersion() in $lib/shared/utils/releaseChannel, never here.
+		__APP_VERSION_DISPLAY__: JSON.stringify(`v${pkg.version}`)
 	},
 	server: {
 		/**

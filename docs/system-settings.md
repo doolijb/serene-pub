@@ -99,6 +99,10 @@ The **About** tab (next to **System** in the Settings panel) is visible to every
 
 If a newer release is available on GitHub, a banner reading "A newer version of Serene Pub is available!" appears above the Settings tabs (in every tab, not just About), with a **Download here** button linking to the project's GitHub releases page. This check is informational only — Serene Pub doesn't auto-update itself.
 
+Pre-release builds are the exception. On a version carrying a pre-release suffix (`0.6.0-pr-1`, `-rc-1`, `-dev`, or any suffix Serene Pub doesn't recognise), the check is switched off entirely — GitHub is never contacted about versions, and no update notice appears anywhere. Those builds instead carry a permanent, faint version marker in the bottom-right corner of the window, so a preview build is never mistaken for a release one. The marker never intercepts clicks and fades out as your cursor approaches it.
+
+`-beta` is **not** a pre-release. Alpha and beta describe how mature the project is, not whether a build is released, so a `-beta` build is a normal release: no version marker, and update notifications work as described above.
+
 ## Admin-Only Enforcement
 
 Every toggle described above is enforced on the server as well as hidden in the UI: each update request confirms the requesting user is an admin before touching the database, and rejects the change otherwise. Hiding the **System** tab from non-admins is a convenience, not the actual security boundary — the boundary is enforced wherever the setting is actually saved.

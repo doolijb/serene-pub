@@ -61,7 +61,7 @@ export interface ImagesGenerateResponse {
  * What a backend-specific connection form needs to render itself.
  *
  * Asked for by connection TYPE rather than by id, because the form exists before
- * the connection does — someone picking "Fooocus" from the new-connection list
+ * the connection does — someone picking a backend from the new-connection list
  * needs its fields before there is a row to attach them to.
  */
 export interface ImageProfileSchemaParams {

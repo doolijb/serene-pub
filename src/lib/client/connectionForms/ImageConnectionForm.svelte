@@ -2,7 +2,7 @@
 	/**
 	 * The connection form for ANY image backend.
 	 *
-	 * This started as `FooocusForm.svelte` — a hand-written component for one
+	 * This started as a hand-written component for one
 	 * backend, which would have become four hand-written components each
 	 * re-implementing a URL field and a test button around a different middle.
 	 * The middle is the only part that differs, and an adapter already knows its
@@ -42,6 +42,16 @@
 	}
 	let testResult = $state<TestResult | null>(null)
 	let models: string[] = $derived(testResult?.models ?? [])
+	/**
+	 * A Manager-owned connection, which changes what several fields MEAN.
+	 *
+	 * Its address comes from the Manager's settings rather than this row, and its
+	 * model is required rather than optional — the file named here is the whole
+	 * content of the load request.
+	 */
+	let isManaged = $derived(
+		connection?.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
+	)
 	/** Style names and the like, learned from the test rather than guessed. */
 	let discovered = $derived(testResult?.extra ?? {})
 
@@ -169,19 +179,23 @@
 </script>
 
 {#if connection}
+	<!-- A managed connection's address is the Manager's, not this row's: the
+	     loader resolves it from koboldcpp_settings on every request and ignores
+	     whatever is stored here. Editing it would look like it worked and change
+	     nothing, so it is shown read-only with the reason. -->
 	<div class="mt-4 flex flex-col gap-1">
 		<label class="font-semibold" for="img-base">Server URL</label>
 		<input
 			id="img-base"
 			type="text"
 			class="input"
-			placeholder="http://localhost:8888"
+			placeholder="http://localhost:5001"
+			readonly={isManaged}
 			bind:value={connection.baseUrl}
 		/>
-		{#if connection.type === CONNECTION_TYPE.IMAGE_FOOOCUS}
+		{#if isManaged}
 			<p class="text-muted-foreground text-xs">
-				Fooocus itself has no HTTP API — run <b>Fooocus-API</b>
-				 (the FastAPI wrapper) and point this at it. Default port is 8888.
+				Set by the KoboldCPP Manager, in its Settings tab.
 			</p>
 		{/if}
 	</div>
@@ -234,13 +248,26 @@
 				class="select bg-background border-muted w-full rounded border"
 				bind:value={connection.model}
 			>
-				<option value="">(server default)</option>
+				<!-- For a MANAGED connection there is no server default to fall
+				     back to: the model named here is the entire content of the
+				     load request, and a blank one is refused at render time. The
+				     old wording actively recommended the one choice that cannot
+				     work. -->
+				<option value="">
+					{isManaged ? "— none selected —" : "(server default)"}
+				</option>
 				{#each models as m}
 					<option value={m}>{m}</option>
 				{/each}
 			</select>
 			<p class="text-muted-foreground text-xs">
-				The base checkpoint. Leave on default to let the server choose.
+				{#if isManaged}
+					Required. The KoboldCPP Manager loads this file on demand
+					when an image is requested.
+				{:else}
+					The base checkpoint. Leave on default to let the server
+					choose.
+				{/if}
 			</p>
 		</div>
 	{/if}
@@ -261,7 +288,7 @@
 			{#if Array.isArray(discovered.styles) && discovered.styles.length}
 				<p class="text-muted-foreground mb-2 text-xs">
 					<b>{discovered.styles.length}</b>
-					 styles available on this install. Copy the ones you want into
+					styles available on this install. Copy the ones you want into
 					the Styles field.
 				</p>
 			{/if}
@@ -361,7 +388,7 @@
 
 				<p class="text-muted-foreground text-xs">
 					Generates against the last <b>saved</b>
-					 settings and the default image sampling config, and stores the
+					settings and the default image sampling config, and stores the
 					result to your media.
 				</p>
 				{#if genError}

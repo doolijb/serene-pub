@@ -1,8 +1,5 @@
 import { KoboldCppAdapter } from "./KoboldCppAdapter"
-import {
-	fetchCurrentModelName,
-	pingKoboldCPP
-} from "$lib/server/koboldcpp/kcppHttp"
+import { fetchCurrentModelName } from "$lib/server/koboldcpp/kcppHttp"
 import type { AdapterExports } from "./BaseConnectionAdapter"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
@@ -10,24 +7,12 @@ import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { db } from "$lib/server/db"
 import * as subprocessManager from "$lib/server/koboldcpp/subprocessManager"
 import {
-	ensureModelLoaded,
 	DEFAULT_MANAGED_CONFIG,
 	resetTtl,
 	getLoadedSignature
 } from "$lib/server/koboldcpp/modelManager"
+import { ensureManagedReady } from "$lib/server/koboldcpp/managedPreflight"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
-
-// ensureModelLoaded() already waits out a normal, in-progress load — these
-// retries exist only for the rarer case where the subprocess itself needs a
-// fresh respawn (it genuinely crashed rather than just being slow). Each
-// attempt here is a full "check/spawn/load" pass, not a quick recheck, so
-// this stays a small, short list rather than a long one — the whole point
-// of one user action (a summary, a message) failing outright shouldn't be
-// "the respawn needed a 4th try" territory; a handful with light backoff
-// covers a real crash-and-recover without turning a genuine, non-transient
-// failure (bad config, disabled manager) into a long silent wait before the
-// user sees anything.
-const PREFLIGHT_RETRY_DELAYS_MS = [2000, 4000]
 
 /**
  * A KoboldCPP connection that works with Serene Pub's built-in KoboldCPP
@@ -59,8 +44,9 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 		const resetIfStillAlive = async () => {
 			const settings = await db.query.koboldCppSettings.findFirst()
 			if (!settings) return
-			// Mirrors attemptPreflight's own isAlive construction — only trust
-			// process liveness when we actually spawned/own the subprocess.
+			// Mirrors managedPreflight.attemptLoad's own isAlive construction —
+			// only trust process liveness when we actually spawned/own the
+			// subprocess.
 			const isAlive =
 				settings.koboldCppManagedMode === "managed" &&
 				!subprocessManager.isExternal()
@@ -115,180 +101,42 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 		return result
 	}
 
+	/**
+	 * The text half of a managed connection: this row's GGUF, with the knobs its
+	 * `managedConfig` carries, loaded before generation starts.
+	 *
+	 * The work itself lives in `managedPreflight.ts` because the image
+	 * connection type needs exactly the same thing without a generation to hang
+	 * it off — one process, one admin API, one loader.
+	 */
 	async preflight(signal?: AbortSignal): Promise<void> {
-		const settings = await db.query.koboldCppSettings.findFirst()
-		if (!settings?.koboldCppManagerEnabled) {
-			throw new Error(
-				"KoboldCPP Manager is disabled. Enable it in Settings to use this connection."
-			)
-		}
-		if (!this.connection.model) {
-			throw new Error("No model selected for this connection.")
-		}
-		const adminDir = settings.koboldCppManagedBinaryDir
-		if (!adminDir) {
-			throw new Error(
-				"KoboldCPP Manager needs an Admin Directory configured — set one in Settings."
-			)
-		}
-
-		// This connection type doesn't store/use its own base URL — always
-		// talk to whatever address the manager is configured for. Mutating
-		// the in-memory connection here means generate()/getContextTokenLimit()
-		// (inherited unchanged from KoboldCppAdapter) automatically pick this up.
-		this.connection = {
-			...this.connection,
-			baseUrl: settings.koboldCppManagerBaseUrl
-		}
-
-		const totalAttempts = PREFLIGHT_RETRY_DELAYS_MS.length + 1
-		for (let attemptNum = 1; ; attemptNum++) {
-			try {
-				await this.attemptPreflight(
-					settings,
-					adminDir,
-					signal,
-					attemptNum
-				)
-				return
-			} catch (err: any) {
-				if (signal?.aborted) throw err
-				const delayMs = PREFLIGHT_RETRY_DELAYS_MS[attemptNum - 1]
-				if (delayMs === undefined) throw err
-				console.warn(
-					`[KoboldCPP] preflight: attempt ${attemptNum}/${totalAttempts} failed (${err?.message || err}) — retrying in ${delayMs}ms...`
-				)
-				await new Promise((r) => setTimeout(r, delayMs))
-			}
-		}
-	}
-
-	/** One full "make sure the server is up and the right model is loaded"
-	 * pass. Always re-verifies actual liveness with a real ping rather than
-	 * trusting subprocessManager's in-memory isRunning() flag, which can go
-	 * stale (a health-check false-positive, or the process having exited/been
-	 * restarted outside this app's tracking) — so every generation gets a
-	 * fresh check, not just the first one after a cold start. */
-	private async attemptPreflight(
-		settings: NonNullable<
-			Awaited<ReturnType<typeof db.query.koboldCppSettings.findFirst>>
-		>,
-		adminDir: string,
-		signal: AbortSignal | undefined,
-		attemptNum: number
-	): Promise<void> {
-		const baseUrl = settings.koboldCppManagerBaseUrl
-		const alreadyResponding = await pingKoboldCPP(baseUrl, 3000)
-
-		// Only spawn a subprocess in "managed" mode — in "external" mode the
-		// user's own koboldcpp instance is expected to already be running
-		// with the admin API enabled.
-		if (!alreadyResponding && settings.koboldCppManagedMode !== "managed") {
-			// Nothing is listening and we're not allowed to spawn anything —
-			// left uncaught, this surfaces as a bare "fetch failed"/ECONNREFUSED
-			// from ensureModelLoaded() below, which reads like an app bug rather
-			// than a config/timing issue (e.g. Manager was switched to
-			// "External" or disabled from the settings screen — possibly
-			// mid-generation — while nothing external was actually running).
-			throw new Error(
-				`KoboldCPP is not reachable at ${baseUrl} and the Manager is in "${settings.koboldCppManagedMode ?? "unset"}" mode, so it can't be auto-started. Either start KoboldCPP externally, or switch the Manager to "Managed" mode in Settings.`
-			)
-		}
-		if (settings.koboldCppManagedMode === "managed" && !alreadyResponding) {
-			console.log(
-				`[KoboldCPP] preflight attempt ${attemptNum}: subprocess not responding, starting...`
-			)
-			try {
-				await subprocessManager.start()
-			} catch (err: any) {
-				console.error(
-					`[KoboldCPP] preflight attempt ${attemptNum}: subprocess start FAILED:`,
-					err
-				)
-				throw new Error(
-					`KoboldCPP managed subprocess failed to start: ${err?.message || err}`
-				)
-			}
-			console.log(
-				`[KoboldCPP] preflight attempt ${attemptNum}: subprocess started`
-			)
-		}
-
 		const managedConfig = {
 			...DEFAULT_MANAGED_CONFIG,
-			...(this.connection.extraJson?.managedConfig ?? {}),
-			modelFile: this.connection.model
+			...(this.connection.extraJson?.managedConfig ?? {})
 		}
-		// The resolved value (resolveSampling.ts), so a config that never
-		// switched context tokens on loads the model at the same 4096 the
-		// adapter's own getContextTokenLimit() falls back to.
-		const contextSize = this.sampling.contextTokens ?? 4096
-		console.log(
-			`[KoboldCPP] preflight attempt ${attemptNum}: connection`,
-			this.connection.id,
-			"model",
-			managedConfig.modelFile,
-			"contextSize",
-			contextSize
+		const { baseUrl } = await ensureManagedReady(
+			{
+				kind: "text",
+				// Empty rather than null: ensureManagedReady refuses a blank
+				// filename with the "No model selected" message this connection
+				// form's own validation echoes.
+				file: this.connection.model ?? "",
+				gpuLayers: managedConfig.gpuLayers,
+				flashAttention: managedConfig.flashAttention,
+				batchSize: managedConfig.batchSize,
+				// The resolved value (resolveSampling.ts), so a config that never
+				// switched context tokens on loads the model at the same 4096 the
+				// adapter's own getContextTokenLimit() falls back to.
+				contextSize: this.sampling?.contextTokens ?? 4096
+			},
+			{ connectionId: this.connection.id, signal }
 		)
 
-		// A model load can leave koboldcpp unresponsive to other requests for
-		// minutes on a large GGUF/slow disk — well beyond the health check's
-		// own failure-tolerance window. Suspend it for the duration so a slow
-		// load can never be mistaken for a crash and have its process torn
-		// down while this exact request is still waiting on it.
-		subprocessManager.suspendHealthCheck()
-		try {
-			await ensureModelLoaded({
-				connectionId: this.connection.id,
-				managedConfig,
-				baseUrl,
-				modelsDir: settings.koboldCppManagerModelsDir ?? null,
-				adminDir,
-				adminPassword: settings.koboldCppManagedAdminPassword ?? "",
-				ttlSecs: settings.koboldCppManagedModelTtlSecs ?? 300,
-				contextSize,
-				signal,
-				// Only trust process liveness as the wait signal when we
-				// actually spawned/own this subprocess — an adopted external
-				// instance has no such guarantee, so ensureModelLoaded falls
-				// back to its fixed-timeout tolerance for that case instead.
-				isAlive:
-					settings.koboldCppManagedMode === "managed" &&
-					!subprocessManager.isExternal()
-						? () => subprocessManager.isRunning()
-						: undefined
-			})
-			console.log(
-				`[KoboldCPP] preflight attempt ${attemptNum}: ensureModelLoaded completed OK`
-			)
-			subprocessManager.pingActivity()
-		} catch (err: any) {
-			console.error(
-				`[KoboldCPP] preflight attempt ${attemptNum}: ensureModelLoaded FAILED:`,
-				err
-			)
-			// An externally-owned instance almost certainly has a different
-			// --adminpassword and --admindir than this Manager is configured
-			// with, so the admin API call above (reload_config) is expected to
-			// be rejected — surface that explanation instead of the raw,
-			// undiagnosable "rejected the request" error.
-			if (settings.koboldCppManagedMode === "external") {
-				throw new Error(
-					`KoboldCPP at ${baseUrl} rejected the model-load request: ${err?.message || err}. Make sure it was started with --admin --adminpassword <matching the one configured here> --admindir <matching the one configured here>.`
-				)
-			}
-			if (subprocessManager.isExternal()) {
-				throw new Error(
-					`KoboldCPP is running on this port but wasn't started by this Manager, so its admin password/directory don't match — model loading was rejected: ${err?.message || err}. Stop the external instance and let the Manager start its own, or point this Manager at a different port.`
-				)
-			}
-			throw new Error(
-				`KoboldCPP model load failed: ${err?.message || err}`
-			)
-		} finally {
-			subprocessManager.resumeHealthCheck()
-		}
+		// This connection type doesn't store/use its own base URL — always talk
+		// to whatever address the manager is configured for. Mutating the
+		// in-memory connection here means generate()/getContextTokenLimit()
+		// (inherited unchanged from KoboldCppAdapter) automatically pick this up.
+		this.connection = { ...this.connection, baseUrl }
 	}
 }
 

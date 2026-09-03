@@ -55,10 +55,59 @@ export function parseVersion(version: string): ParsedVersion {
 export function releaseChannelRank(type: string | null): number {
 	if (!type) return 5 // formal release
 	if (type === "beta") return 4
+	// Retained for comparing against HISTORICAL builds, not because alphas are
+	// still shipped — dropping it would rank an installed 0.x-alpha at 0, below
+	// every known pre-release, and hard-fail startup for anyone upgrading off
+	// one. Do not cull this on nomenclature grounds.
 	if (type === "alpha") return 3
 	if (type === "rc") return 2
 	if (type === "pr") return 1
 	return 0
+}
+
+/**
+ * Whether a build is a pre-release — i.e. whether it must run watermarked with
+ * its update check switched off.
+ *
+ * NOT the plain semver rule. In this project `alpha` and `beta` are statements
+ * about the project's *maturity*, not about release vs pre-release: `0.6.0-beta`
+ * IS a release, and ships as a production build. `-pr-N`, `-rc-N` and `-dev`
+ * are the genuine pre-releases.
+ *
+ *   (none)          -> release
+ *   -beta           -> release   (maturity label, not a release stage)
+ *   -pr-N -rc-N -dev-> pre-release
+ *   anything else   -> pre-release, deliberately
+ *
+ * That last line is the important one: unknown suffixes FAIL CLOSED. A typo, a
+ * `-rc.1`, an `-alpha`, or a suffix invented after this was written all count
+ * as pre-releases, because the cost of wrongly watermarking a release is a
+ * cosmetic annoyance while the cost of wrongly un-watermarking a preview build
+ * is shipping something that looks production-grade and phones GitHub. Only
+ * `beta` is on the release side, and only by exact match — `-beta-2` is not
+ * `-beta`, so it too falls closed.
+ *
+ * Agrees with .github/workflows/release.yml, which marks `-beta` tags as
+ * `is_prerelease=false` on GitHub and routes every unrecognised suffix to its
+ * own fail-closed branch. There is one rule here, not two that can drift.
+ *
+ * Deliberately NOT built on parseVersion()/releaseChannelRank(): those only
+ * understand the suffix shapes this project has actually shipped
+ * (`-pr-N`, `-rc-N`, `-alpha`, `-beta`), and anything else falls through to
+ * `type: null` — i.e. an unrecognised suffix like `0.6.0-rc.1` would parse as a
+ * FORMAL RELEASE and quietly turn the gating off for exactly the builds that
+ * need it. This reads the string directly so there is no such gap.
+ *
+ * Build metadata is not a pre-release marker, so `1.0.0+abc-def` is a release;
+ * a leading `v` is tolerated so a GitHub tag name can be passed in directly.
+ */
+export function isPrereleaseVersion(version: string): boolean {
+	// Build metadata (`+...`) is dropped first, so a `-` inside it can never be
+	// mistaken for a pre-release suffix.
+	const core = version.trim().replace(/^v/i, "").split("+")[0]
+	const dash = core.indexOf("-")
+	if (dash === -1) return false // no suffix at all — a formal release
+	return core.slice(dash + 1).toLowerCase() !== "beta"
 }
 
 /** Compare two version strings. -1 if a < b, 1 if a > b, 0 if equal. */

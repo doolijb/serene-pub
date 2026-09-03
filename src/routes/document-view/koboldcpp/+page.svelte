@@ -2,6 +2,7 @@
 	import { onMount, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { announce } from "$lib/client/accessibility/state.svelte"
+	import { isListedUnder } from "$lib/client/components/koboldcppManager/modelKindView"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
@@ -61,7 +62,13 @@
 	function saveModelsDir(event: SubmitEvent) {
 		event.preventDefault()
 		savingField = "modelsDir"
-		socket.emit("koboldcpp:setModelsDir", { dir: modelsDir.trim() })
+		// `kind` is required and deliberately has no default: there are two
+		// directory columns now, and a caller that guessed would repoint the
+		// wrong one. This page has a single field and it means the text one.
+		socket.emit("koboldcpp:setModelsDir", {
+			dir: modelsDir.trim(),
+			kind: "text"
+		})
 	}
 
 	function saveManagedMode() {
@@ -167,7 +174,18 @@
 
 	function handleListModels(msg: Sockets.KoboldCPP.ListModels.Response) {
 		currentModel = msg.currentModel
-		availableModels = msg.availableModels || []
+		// Text models only. The listing now carries image models too (the scan
+		// picks up `.safetensors`, and the curated SD models are `.gguf`), and
+		// every action on this page — Load, Use as Default Connection — treats
+		// what it is given as a TEXT model. Offering an SD checkpoint here would
+		// star a connection whose model cannot answer a chat, failing later with
+		// an error naming the connection rather than the model.
+		//
+		// `isListedUnder` rather than `kind === "text"`, so an unverified file
+		// stays visible here exactly as it does in the sidebar.
+		availableModels = (msg.availableModels || []).filter((m) =>
+			isListedUnder(m.kind, "text")
+		)
 		modelsDirSet = msg.modelsDirSet
 		loaded = true
 	}

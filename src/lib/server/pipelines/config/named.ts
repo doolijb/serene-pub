@@ -191,7 +191,42 @@ export async function ensureDefaultConfig(
 			.select()
 			.from(schema.pipelinePresetValues)
 			.where(eq(schema.pipelinePresetValues.presetId, preset.id))
-		for (const r of rows as any[]) presetValues.set(addrOf(r), r.value)
+		for (const r of rows as any[]) {
+			presetValues.set(addrOf(r), r.value)
+			// A preset that sets a whole SLOT is also read per FIELD.
+			//
+			// `p.settings('render', { review: 'on' })` stores ONE row —
+			// `render|settings|null = {"review":"on"}` — because that is how the
+			// author wrote it. Declarations for a settings slot are per-field
+			// (`render|settings|review`), and the lookup below is by exact
+			// address, so the two spellings never met: every author preset that
+			// set `settings` was silently dropped and the config fell back to
+			// the author default.
+			//
+			// That was not a small miss. `core:spec/generate-image` ships
+			// `review-on` as its DEFAULT preset, labelled "Ask for the prompt" —
+			// so the shipped config was named after a preset whose one value
+			// never landed, and pressing Image rendered immediately instead of
+			// asking for a prompt. The summarize spec's `save` node had the same
+			// hole.
+			//
+			// Exploding here rather than at the writer because it also repairs
+			// preset rows already seeded on existing installs; the per-field
+			// entry is only added when the exact address is not already present,
+			// so an explicit per-field row always wins.
+			const wholeSlot = (r.path ?? "") === ""
+			const isPlainObject =
+				r.value !== null &&
+				typeof r.value === "object" &&
+				!Array.isArray(r.value)
+			if (wholeSlot && isPlainObject)
+				for (const [field, value] of Object.entries(
+					r.value as Record<string, unknown>
+				)) {
+					const key = addr(r.nodeKey, r.slot, field)
+					if (!presetValues.has(key)) presetValues.set(key, value)
+				}
+		}
 	}
 
 	const [config] = await db

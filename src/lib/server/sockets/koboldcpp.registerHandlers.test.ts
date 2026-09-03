@@ -38,6 +38,34 @@ function fakeSocket(isAdmin: boolean) {
 const noopRegister = () => {}
 const noopEmit = () => {}
 
+describe("registerKoboldCppHandlers — which events are actually wired up", () => {
+	test("the image-model event is registered and the instance-level one is gone", async () => {
+		// A handler that is exported but never registered fails in SILENCE: the
+		// client emits, nothing answers, and the only symptom is a button that
+		// does nothing. Registration is a line in a list of thirty-odd, which is
+		// exactly the kind of line that gets missed when one event replaces
+		// another.
+		const { registerKoboldCppHandlers } = await import("./koboldcpp")
+		const events: string[] = []
+
+		registerKoboldCppHandlers(
+			fakeSocket(true),
+			noopEmit,
+			(_socket: any, handler: { event: string }) => {
+				events.push(handler.event)
+			}
+		)
+
+		expect(events).toContain("koboldcpp:connectImageModel")
+		// An image model is named by a CONNECTION now — one connection, one
+		// model — so the instance-level selection this replaces must not still
+		// be answering.
+		expect(events).not.toContain("koboldcpp:setImageModel")
+		// ...and its text twin is untouched.
+		expect(events).toContain("koboldcpp:connectModel")
+	})
+})
+
 describe("registerKoboldCppHandlers — telemetry emitter admin gate", () => {
 	afterEach(() => {
 		vi.restoreAllMocks()

@@ -26,6 +26,7 @@
 
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { capabilityRefusal } from "./capabilityGuard"
 import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { runQueuedLLMCall } from "$lib/server/utils/runQueuedLLMCall"
@@ -148,6 +149,12 @@ export async function dispatchStep(
 				"connection either. Choose one in the pipeline's configuration, or " +
 				"set an instance default in system settings."
 		)
+
+	// Asked before the adapter is loaded, so an image-only connection is refused
+	// with a sentence naming the capability rather than by `getConnectionAdapter`
+	// failing to find a text adapter for its type.
+	const refusal = capabilityRefusal(connection, "text->text")
+	if (refusal) throw new StepDispatchError(refusal)
 
 	const AdapterClass = await getConnectionAdapter(connection.type)
 

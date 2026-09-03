@@ -259,43 +259,83 @@ export const usersTokenRelations = relations(userTokens, ({ many, one }) => ({
 	})
 }))
 
-export const samplingConfigs = pgTable("sampling_configs", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
-	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
-	seedKey: text("seed_key").unique(),
-	name: text("name").notNull(), // Name for this sampling config (for selection)
-	isImmutable: boolean("is_immutable").notNull().default(false), // Is this the built-in config? Then we don't want to allow mutation/deletion
+export const samplingConfigs = pgTable(
+	"sampling_configs",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** Stable seed identity, e.g. "sampling-default". NULL for user-created
+		 *  rows — see db/defaults.ts for why matching on id was unsafe. */
+		seedKey: text("seed_key").unique(),
+		name: text("name").notNull(), // Name for this sampling config (for selection)
+		isImmutable: boolean("is_immutable").notNull().default(false), // Is this the built-in config? Then we don't want to allow mutation/deletion
 
-	/**
-	 * Which vocabulary this config speaks — the same shape id the provider that
-	 * consumes it declares (`S.textGen`, `S.imageGen`). It is what makes a config
-	 * safe to offer for a slot: a picker filters by it, so an image node is never
-	 * shown a config full of text samplers.
-	 */
-	shape: text("shape").notNull().default("core:shape/text-gen@1"),
+		/**
+		 * Which vocabulary this config speaks — the same shape id the provider that
+		 * consumes it declares (`S.textGen`, `S.imageGen`). It is what makes a config
+		 * safe to offer for a slot: a picker filters by it, so an image node is never
+		 * shown a config full of text samplers.
+		 */
+		shape: text("shape").notNull().default("core:shape/text-gen@1"),
 
-	/**
-	 * The parameters, keyed by the camelCase names the adapters' key maps use.
-	 *
-	 * Deliberately not typed columns (0171): thirty of them could only ever name
-	 * text samplers, so a second modality meant either a second table or a wall of
-	 * nulls. Keys the shape does not declare are kept here rather than rejected —
-	 * a row written by a newer build, or a UI-only flag like `contextTokensUnlocked`,
-	 * round-trips intact. `resolveSamplingValues` is what keeps them off the wire.
-	 */
-	values: json("values")
-		.notNull()
-		.default({})
-		.$type<Record<string, unknown>>(),
+		/**
+		 * The parameters, keyed by the camelCase names the adapters' key maps use.
+		 *
+		 * Deliberately not typed columns (0171): thirty of them could only ever name
+		 * text samplers, so a second modality meant either a second table or a wall of
+		 * nulls. Keys the shape does not declare are kept here rather than rejected —
+		 * a row written by a newer build, or a UI-only flag like `contextTokensUnlocked`,
+		 * round-trips intact. `resolveSamplingValues` is what keeps them off the wire.
+		 */
+		values: json("values")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
 
-	/**
-	 * Which keys are actually in play. A value with its key absent from here is
-	 * remembered but not sent, which is what lets a sampler be switched off and
-	 * back on without losing what it was set to.
-	 */
-	enabled: json("enabled").notNull().default([]).$type<string[]>(),
-})
+		/**
+		 * Which keys are actually in play. A value with its key absent from here is
+		 * remembered but not sent, which is what lets a sampler be switched off and
+		 * back on without losing what it was set to.
+		 */
+		enabled: json("enabled").notNull().default([]).$type<string[]>()
+	},
+	(t) => [
+		/**
+		 * A name is unique WITHIN A MODALITY, not globally (0179).
+		 *
+		 * "Default" is a fair name for a text preset and for an image one, and
+		 * forcing them apart would make the built-ins read like workarounds. Two
+		 * image configs both called "Default (Image)" is the case worth refusing:
+		 * every picker in the app shows a config by name alone, so the person
+		 * choosing one cannot tell them apart, and users clone configs constantly.
+		 *
+		 * MODALITY IS PARSED FROM `shape`, not stored. A column would be a second
+		 * source of truth on a row that already answers the question, and a CASE
+		 * mapping would be a second copy that drifts. `split_part` is the exact
+		 * inverse of `shapeOfModality()` (shared/constants/ConnectionTypes.ts),
+		 * which builds `core:shape/<modality>@<version>` from a template — so the
+		 * grammar this relies on is asserted by the code that writes it. Version
+		 * tolerant: `@2` buckets with `@1`. An unknown plugin shape buckets into
+		 * its own namespace, which is the safe direction.
+		 *
+		 * ⚠ Nothing here touches `CapabilityId`. A modality is a coarse filing
+		 * category and a capability set is what a connection can do; this codebase
+		 * has already been burned making one scalar carry both.
+		 *
+		 * `lower` because "Default" and "default" are one name to a person.
+		 * `btrim` because NewNameModal's zod trims for VALIDATION and then hands
+		 * `onConfirm` the untrimmed string, so " Default" reaches the table intact.
+		 *
+		 * ⚠ These two expressions are duplicated verbatim in the migration's
+		 * de-duplication pass. If one is edited, the other must be — a partition
+		 * that does not match the index groups rows differently, and CREATE INDEX
+		 * then fails on exactly the installs that needed the repair.
+		 */
+		uniqueIndex("sampling_configs_modality_name_unique").on(
+			sql`split_part(split_part(${t.shape}, '/', 2), '@', 1)`,
+			sql`lower(btrim(${t.name}))`
+		)
+	]
+)
 
 export const samplingRelations = relations(samplingConfigs, () => ({}))
 
@@ -312,6 +352,40 @@ export const connections = pgTable("connections", {
 	 * a text connection.
 	 */
 	modality: text("modality").notNull().default("text-gen"),
+	/**
+	 * What this connection can actually do (0175).
+	 *
+	 * `{ resolved, overrides?, probe? }` — see `StoredCapabilities`. `resolved` is
+	 * a CACHE: the effective set that `satisfies()` reads, recomputed from the
+	 * adapter's declaration, the preset, the last probe and the user's toggles.
+	 * It is cached rather than derived on read because that read happens for every
+	 * connection against every slot in the config picker, and deriving it would
+	 * mean dynamically importing the adapter module — defeating the lazy loading
+	 * exactly where it costs most.
+	 *
+	 * The durable intent is `overrides` and `probe`; `resolved` can always be
+	 * rebuilt from those plus the static manifest.
+	 *
+	 * Its own column rather than a key in `extraJson`, which is the ADAPTER's bag:
+	 * that one holds the encrypted apiKey the crypto path walks, and every
+	 * connection form spreads it verbatim. Capabilities are core's, cross-cutting,
+	 * and read by code that has no business in an adapter's private state.
+	 */
+	capabilities: json("capabilities")
+		.notNull()
+		.default({})
+		.$type<Record<string, unknown>>(),
+	/**
+	 * Which named service this was created from — a slug, never the numeric
+	 * `value` (an ordering artifact that has already skipped an index).
+	 *
+	 * Persisted because a preset supplies capability DEFAULTS, and without it
+	 * there is no way to recompute them on edit, no source of defaults for a
+	 * capability that ships later, and nothing for "reset to preset defaults" to
+	 * reset to. NULL means custom, which is the honest answer for every row that
+	 * predates this column.
+	 */
+	preset: text("preset"),
 	baseUrl: text("base_url"), // Base URL or endpoint for API
 	model: text("model"), // Model name or identifier
 	// Ollama-specific options
@@ -322,6 +396,46 @@ export const connections = pgTable("connections", {
 	tokenCounter: text("token_counter").notNull().default("estimate"),
 	promptFormat: text("prompt_format").default("vicuna")
 })
+
+/**
+ * The instance default connection per capability.
+ *
+ * A table rather than a pair of columns per capability, because the capability
+ * space is open — a plugin may introduce a transform — so columns would mean a
+ * migration each time and a schema that grows with the vocabulary.
+ *
+ * Only TRANSFORMS are ever registered here. There is no such thing as a default
+ * tool-calling connection: a feature qualifies a request, it is not something a
+ * node goes looking for a connection to provide.
+ *
+ * Both references are `set null` rather than cascade: deleting a connection
+ * should clear the default, not delete the fact that a default exists.
+ */
+export const connectionDefaults = pgTable("connection_defaults", {
+	/** A `CapabilityId` — in practice always a transform id, e.g. `text->image`. */
+	capability: text("capability").primaryKey(),
+	connectionId: integer("connection_id").references(() => connections.id, {
+		onDelete: "set null"
+	}),
+	samplingConfigId: integer("sampling_config_id").references(
+		() => samplingConfigs.id,
+		{ onDelete: "set null" }
+	)
+})
+
+export const connectionDefaultsRelations = relations(
+	connectionDefaults,
+	({ one }) => ({
+		connection: one(connections, {
+			fields: [connectionDefaults.connectionId],
+			references: [connections.id]
+		}),
+		samplingConfig: one(samplingConfigs, {
+			fields: [connectionDefaults.samplingConfigId],
+			references: [samplingConfigs.id]
+		})
+	})
+)
 
 export const connectionsRelations = relations(connections, () => ({}))
 
@@ -2296,22 +2410,10 @@ export const systemSettings = pgTable("system_settings", {
 			onDelete: "set null"
 		}
 	),
-	/**
-	 * The image-generation twins of the two defaults above (0172).
-	 *
-	 * A default has to name a modality, because the two columns above cannot: a
-	 * spec that leaves its connection slot unset falls back to the instance
-	 * default, and without these the fallback for an image provider would be
-	 * whichever text connection happens to be default. Nothing would catch it
-	 * until the request reached a backend with no idea what a temperature is.
-	 */
-	defaultImageConnectionId: integer("default_image_connection_id").references(
-		() => connections.id,
-		{ onDelete: "set null" }
-	),
-	defaultImageSamplingConfigId: integer(
-		"default_image_sampling_id"
-	).references(() => samplingConfigs.id, { onDelete: "set null" }),
+	// The per-modality image defaults that lived here (0172) moved to
+	// `connection_defaults`, keyed by capability: a column pair per capability
+	// does not scale to an open capability space, and every new one would have
+	// been a migration.
 	lockSamplingConfig: boolean("lock_sampling_config")
 		.notNull()
 		.default(false),
@@ -2538,16 +2640,6 @@ export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
 		fields: [systemSettings.defaultSamplingConfigId],
 		references: [samplingConfigs.id]
 	}),
-	defaultImageConnection: one(connections, {
-		relationName: "defaultImageConnection",
-		fields: [systemSettings.defaultImageConnectionId],
-		references: [connections.id]
-	}),
-	defaultImageSamplingConfig: one(samplingConfigs, {
-		relationName: "defaultImageSamplingConfig",
-		fields: [systemSettings.defaultImageSamplingConfigId],
-		references: [samplingConfigs.id]
-	}),
 	defaultContextConfig: one(contextConfigs, {
 		fields: [systemSettings.defaultContextConfigId],
 		references: [contextConfigs.id]
@@ -2597,6 +2689,19 @@ export const koboldCppSettings = pgTable("koboldcpp_settings", {
 		.notNull()
 		.default("http://localhost:5001"),
 	koboldCppManagerModelsDir: text("koboldcpp_models_dir"),
+	/**
+	 * Where image models live, or NULL to use `koboldcpp_models_dir`.
+	 *
+	 * NULL is the upgrade contract, not a missing value: an install that has one
+	 * flat directory today keeps finding every model it already has, in place,
+	 * with nothing moved. Fresh installs are seeded <appdata>/models/image beside
+	 * the existing models/llm; an existing row is deliberately left NULL and never
+	 * backfilled, because backfilling would point new downloads somewhere the
+	 * user's existing models are not.
+	 *
+	 * Reads fall back across both directories (modelsDir.ts). Writes never do.
+	 */
+	koboldCppImageModelsDir: text("koboldcpp_image_models_dir"),
 	koboldCppManagedMode: text("koboldcpp_managed_mode"), // null | "managed" | "external"
 	koboldCppManagedBinaryVariant: text("koboldcpp_managed_binary_variant"),
 	koboldCppManagedBinaryDir: text("koboldcpp_managed_binary_dir"),
@@ -2615,10 +2720,21 @@ export const koboldCppSettings = pgTable("koboldcpp_settings", {
 	koboldCppManagedReleaseTag: text("koboldcpp_managed_release_tag")
 })
 
-// Tracks .gguf models in the KoboldCPP models directory, whether downloaded through
-// the UI or placed there manually — rows for manually-placed files are created on
-// discovery during a koboldcpp:listModels scan. Models with status != "complete"
-// (still downloading, or errored) are excluded from the available models list.
+// Tracks the model files in the KoboldCPP models directories — .gguf and
+// .safetensors, of two kinds (a text LLM or a Stable-Diffusion image model) —
+// whether downloaded through the UI or placed there manually. Rows for
+// manually-placed files are created on discovery during a koboldcpp:listModels
+// scan. Models with status != "complete" (still downloading, or errored) are
+// excluded from the available models list.
+//
+// `filename` stays UNIQUE now that there are two directories to scan, so one
+// file named `foo.gguf` in EACH of them is a single row whose kind/size/
+// description are whichever directory the scan wrote last. Accepted rather than
+// fixed: a composite key would ripple into ~10 `eq(filename)` queries, every
+// socket param, and `connections.model` — which stores a bare filename. The
+// damage is bounded to metadata, because `resolveModelPath` tries the kind's
+// own directory FIRST: the text connection still loads llm/foo.gguf and the
+// image connection still loads image/foo.gguf. Renaming one fixes the display.
 export const koboldCppModels = pgTable("koboldcpp_models", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	filename: text("filename").notNull().unique(),
@@ -2630,6 +2746,23 @@ export const koboldCppModels = pgTable("koboldcpp_models", {
 	sizeBytes: bigint("size_bytes", { mode: "number" }),
 	status: text("status").notNull().default("downloading"), // "downloading" | "complete" | "error"
 	errorMessage: text("error_message"),
+	/**
+	 * "text" | "image" | "unknown". Never inferred from the extension: the
+	 * curated image models at huggingface.co/koboldcpp/imgmodel are every one
+	 * of them .gguf.
+	 */
+	kind: text("kind")
+		.notNull()
+		.default("text")
+		.$type<"text" | "image" | "unknown">(),
+	/**
+	 * "user" | "detected" | "declared" | "assumed", in descending trust. A scan
+	 * may overwrite anything below "user"; nothing automatic overwrites "user".
+	 */
+	kindSource: text("kind_source")
+		.notNull()
+		.default("assumed")
+		.$type<"user" | "detected" | "declared" | "assumed">(),
 	createdAt: timestamp("created_at").notNull().defaultNow(),
 	updatedAt: timestamp("updated_at")
 		.notNull()

@@ -19,10 +19,40 @@ export interface ConnectionServiceItem {
 	type: string
 	/** Set only for OPENAI_CHAT_PRESETS-backed entries. */
 	presetValue?: number
+	/**
+	 * The preset's capability slug, stored on the connection so the preset layer
+	 * of capability resolution has something to key on. Absent for a native type
+	 * and for the custom entry — absent means "custom", which is what a bare
+	 * OpenAI-compatible URL genuinely is.
+	 */
+	presetSlug?: string
 	difficulty: string
 	description: string
 	/** Model modality — drives the picker's Text/Image button-group filter. */
 	modality: "text-gen" | "image-gen"
+}
+
+/**
+ * The KoboldCPP Manager's own connection types — the text one and the image one.
+ *
+ * A set rather than a comparison spelled out at each call site, because every
+ * consumer asks the same question of both and a third type must not be able to
+ * be half-added. Both are created FROM the Manager (Models tab → Set Default,
+ * or → Use for image generation), never from the generic New Connection picker,
+ * and neither is usable while the Manager is switched off.
+ *
+ * Two types and not one flag, because a connection names exactly ONE model and
+ * a text GGUF is not an image one.
+ */
+export const KOBOLDCPP_MANAGED_TYPES: readonly string[] = [
+	CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+	CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
+]
+
+export function isKoboldCppManagedType(
+	type: string | null | undefined
+): boolean {
+	return !!type && KOBOLDCPP_MANAGED_TYPES.includes(type)
 }
 
 export const CATEGORY_ORDER: ConnectionServiceCategory[] = [
@@ -56,10 +86,11 @@ export function buildConnectionServiceItems(): ConnectionServiceItem[] {
 		// as the single "Custom (OpenAI-Compatible)" entry instead.
 		if (t.value === CONNECTION_TYPE.OPENAI_CHAT) continue
 		// KoboldCPP Manager connections are never manually created — they're
-		// auto-created by koboldcpp:connectModel when a model is activated
-		// from the KoboldCPP Manager page (src/lib/server/sockets/koboldcpp.ts),
-		// same reasoning /document-view/connections/new already excludes it for.
-		if (t.value === CONNECTION_TYPE.KOBOLDCPP_MANAGED) continue
+		// auto-created by koboldcpp:connectModel / koboldcpp:connectImageModel
+		// when a model is activated from the KoboldCPP Manager page
+		// (src/lib/server/sockets/koboldcpp.ts), same reasoning
+		// /document-view/connections/new already excludes them for.
+		if (isKoboldCppManagedType(t.value)) continue
 		items.push({
 			key: `type:${t.value}`,
 			label: t.label,
@@ -85,6 +116,7 @@ export function buildConnectionServiceItems(): ConnectionServiceItem[] {
 			category: preset.category as ConnectionServiceCategory,
 			type: CONNECTION_TYPE.OPENAI_CHAT,
 			presetValue: preset.value,
+			presetSlug: (preset as { slug?: string }).slug,
 			difficulty: openaiType.difficulty,
 			description: openaiType.description,
 			// OpenAI-compatible presets are all text generation.

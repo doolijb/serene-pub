@@ -1,0 +1,64 @@
+-- A .gguf in the models directory is NOT necessarily a text model.
+--
+-- koboldcpp's own curated image repo (huggingface.co/koboldcpp/imgmodel)
+-- publishes its SD1.5/SDXL models as .gguf — byte-for-byte indistinguishable by
+-- filename from an LLM sitting beside them in the same folder. So kind is either
+-- measured from the file's own header or recorded by whoever actually knew, and
+-- never read off the extension. An extension rule would look correct right up
+-- until the recommended path downloaded its first image model, and then quietly
+-- offer a diffusion model as a chat connection's text model.
+ALTER TABLE "koboldcpp_models" ADD COLUMN "kind" text DEFAULT 'text' NOT NULL;--> statement-breakpoint
+
+-- How good the answer in "kind" is, and therefore who is allowed to overwrite
+-- it: 'user' > 'detected' > 'declared' > 'assumed'. A directory scan may
+-- overwrite anything below 'user' when its header read is confident; nothing
+-- automatic ever overwrites 'user'.
+--
+-- The two DEFAULTs together ARE the backfill, and both halves are load-bearing.
+--
+-- 'text' because that is precisely what this app has silently claimed about
+-- every existing row: each one was listed as a loadable model and offered to a
+-- connection as one. Writing it down changes nothing a user can see, which is
+-- the point — nothing vanishes from the Text list on upgrade.
+--
+-- 'assumed' because it marks every one of those rows for a re-sniff on the first
+-- scan afterwards. That is how an install that already had an SD model sitting
+-- in the folder corrects itself, without anyone being told to go looking. A
+-- backfill of 'detected' would have been a lie that never got revisited.
+--
+-- Rows the app merely DISCOVERED by scanning (model_url/download_url NULL) were
+-- considered for a 'unknown' backfill instead, since nobody ever declared what
+-- those were, and rejected. Both values converge on the same answer at the first
+-- scan, because 'assumed' re-sniffs either way; the only difference is what is
+-- on screen before that scan completes. 'unknown' shows in BOTH the Text and
+-- Image lists behind an amber Unverified badge, so choosing it would mean every
+-- hand-placed model in the install lighting up as suspect, and the Image list
+-- opening full of text LLMs, on upgrade day — a worse and less true first
+-- impression than the assumption the app was already making. And a migration
+-- cannot read a file, so 'unknown' would not be a measurement either, just a
+-- differently-shaped guess with more UI noise attached.
+ALTER TABLE "koboldcpp_models" ADD COLUMN "kind_source" text DEFAULT 'assumed' NOT NULL;--> statement-breakpoint
+
+-- ⚠ SUPERSEDED BY 0178, one migration later. Read that one before trusting
+-- anything here about where the image model lives.
+--
+-- This column held a single instance-level image model, on the reasoning that
+-- koboldcpp holds one text plus one image model per PROCESS and that the pairing
+-- therefore belonged to the manager rather than to any connection.
+--
+-- That was wrong, and specifically it broke the rule that a connection names
+-- exactly ONE model: a text connection plus this column meant one row loading
+-- two models, and the code that acted on it granted `text->image` to every
+-- managed connection — so a user's LLM connection advertised image generation
+-- and appeared in the image picker. 0178 drops this and replaces it with a
+-- `koboldcpp_managed_image` connection type: one row, one model, whatever kind.
+--
+-- What survived the reversal, because it was always about the PROCESS rather
+-- than about the pairing: modelManager.ts still keys its TTL timers and its
+-- residency record by baseUrl and not by connection id. Which of the models
+-- named by connections is actually resident is a scheduling decision, and it
+-- now lives in one function (`planResidency`) instead of in this column.
+--
+-- Kept as an ADD rather than folded out of this file because it may already have
+-- been applied; 0178 drops it.
+ALTER TABLE "koboldcpp_settings" ADD COLUMN "koboldcpp_managed_image_model" text;

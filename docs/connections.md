@@ -1,6 +1,6 @@
 # Connections
 
-Connections tell Serene Pub how to reach a language model — which backend, which model, which API key, and how requests should be shaped. This page covers all seven connection types, the KoboldCPP Manager and Ollama Manager sub-systems for running local models, and the related Sampling Configs, Prompt Formats, and Token Counters that control how a connection actually generates text.
+Connections tell Serene Pub how to reach a model — which backend, which model, which API key, and how requests should be shaped. This page covers every connection type (text generation and image generation both), the KoboldCPP Manager and Ollama Manager sub-systems for running local models, and the related Sampling Configs, Prompt Formats, and Token Counters that control how a connection actually generates.
 
 ## Overview
 
@@ -14,17 +14,26 @@ Creating a connection is done via the **+** button (or Ctrl/Cmd+N) in the Connec
 
 ## Connection Types At A Glance
 
-Serene Pub ships seven connection types, each with its own form and its own difficulty rating (shown in the New Connection modal):
+Serene Pub ships seven text-generation connection types, each with its own form and its own difficulty rating (shown in the New Connection modal):
 
 | Type                  | Label              | Difficulty                                 |
 | --------------------- | ------------------ | ------------------------------------------ |
 | `lmstudio`            | LM Studio          | Beginner (GUI) - Minimal setup required    |
 | `ollama`              | Ollama             | Beginner (No GUI) - Minimal setup required |
-| `openai`              | OpenAI Session        | Beginner - Nothing to install              |
+| `openai`              | OpenAI Session     | Beginner - Nothing to install              |
 | `llamacpp_completion` | Llama.cpp          | Intermediate - Not for beginners           |
 | `koboldcpp`           | KoboldCPP          | Beginner (GUI) - Simple setup              |
 | `koboldcpp_managed`   | KoboldCPP Manager  | Beginner (GUI) - Managed by Serene Pub     |
 | `anthropic`           | Anthropic (Claude) | Beginner - Nothing to install              |
+
+…plus two image-generation types, which the picker's **Image** filter lists and which image nodes in a pipeline draw from:
+
+| Type                      | Label                               | Difficulty                               |
+| ------------------------- | ----------------------------------- | ---------------------------------------- |
+| `a1111`                   | Stable Diffusion (A1111-compatible) | Beginner (with KoboldCPP) - Simple setup |
+| `koboldcpp_managed_image` | KoboldCPP Manager (Image)           | Beginner - Managed for you               |
+
+A connection names exactly **one** model, and which kind of model it names is decided by its type — so a text model and an image model are always two connections, even when they run on the same KoboldCPP process. `koboldcpp_managed_image` isn't offered in the New Connection picker at all: like its text counterpart, it's created for you from the KoboldCPP Manager (see [KoboldCPP Manager connections](#koboldcpp-manager-connections)).
 
 Every form shares a similar skeleton — a **Test Connection** button that reports "Test: Okay!" or "Test: Failed!" (with the underlying error message shown below it), a **Token Counter** dropdown, and a collapsible **Advanced Settings** section holding the Base URL and stream/behavior toggles. Forms that talk to a session-completion API also expose a **Use Session Mode** toggle; when it's switched off, a **Prompt Format** dropdown appears so you can pick how the raw text prompt is assembled instead.
 
@@ -128,11 +137,19 @@ Clicking **Download & Start** begins the download; progress (bytes downloaded / 
 
 ### Models tab
 
-The **Models** tab lists every GGUF model file present in the configured Models Directory (set in the Settings tab). Each model card shows its name, whether it's currently loaded (a "Loaded" badge), and action buttons: **Set Default** / **Default** (creates or points a **KoboldCPP Manager**-type connection at this model and marks it the system default), an **Edit** gear icon (jumps to that model's connection in the Connections sidebar, if one already exists), and **Delete** (removes the file from disk — blocked if the model backs the current default connection, with a toast explaining why). A search box filters the list by name, and a refresh button re-queries both the model list and the connections list.
+The **Models** tab lists every model file the Manager can see, split by a **Text | Image** toggle at the top of the tab. Each model card shows its name, whether it's currently loaded (a "Loaded" badge), and action buttons: **Set Default** / **Default** (creates or points a **KoboldCPP Manager**-type connection at this model and marks it the system default), an **Edit** gear icon (jumps to that model's connection in the Connections sidebar, if one already exists), and **Delete** (removes the file from disk — blocked if the model backs the current default connection, with a toast explaining why). A search box filters the list by name, and a refresh button re-queries both the model list and the connections list.
+
+Files whose type Serene Pub can't confirm from their header are shown in **both** lists wearing an **Unverified** badge, with two buttons to settle it ("It's a text model" / "It's an image model") — a file you can see on disk is never hidden from you just because the classifier gave up on it. Which folder a file sits in counts as evidence of what it is, but not as the verdict: an LLM dropped in the image folder is still recognised as an LLM.
+
+#### The Image list
+
+Switching the toggle to **Image** lists Stable Diffusion checkpoints (`.safetensors` or `.gguf`) instead, with one action of its own: **Use for image generation**. That creates a **KoboldCPP Manager (Image)** connection naming that file and registers it as the instance's image-generation default, exactly the way **Set Default** creates a text connection and stars it. The model is not loaded at that moment — it loads on demand the first time something asks for a picture.
+
+A header above the list reports three states, because "connected" and "loaded" are different questions: **Off** (no image model connected), **Loads on demand** (connected, but the running process is holding something else — the ordinary state while you're chatting), and **Loaded now**. KoboldCPP currently holds one model at a time, so asking for a picture unloads the chat model and the next message reloads it; on large models that is minutes each way, not an instant switch.
 
 ### Available and Downloads tabs
 
-The **Available** tab is where you find new models to download — a **Recommended** list of curated options (with VRAM-tier badges from "Ultra Budget" up to "Enthusiast" based on estimated VRAM need) or a **Hugging Face** search box for GGUF repos. Picking a model opens a **Select Quantization** modal listing each available quant file with its size; Q4*K_M is flagged as "Recommended" when present. Starting a download switches you to the **Downloads** tab, which shows active downloads with progress bars and a per-item **Cancel** button, plus a **Completed** section with a **Clear History** button. Model downloads (GGUF files into the Models Directory) are a separate download queue from the KoboldCPP \_binary* download described above — both have their own progress UI but work the same way under the hood.
+The **Available** tab is where you find new models to download — a **Recommended** list of curated options (with VRAM-tier badges from "Ultra Budget" up to "Enthusiast" based on estimated VRAM need) or a **Hugging Face** search box for GGUF repos. It carries the same **Text | Image** toggle as the Models tab, and switching it changes both the catalog and what a search can return; the line under the search box names the directory the download will actually land in, which matters once the two directories differ. Picking a model opens a **Select Quantization** modal listing each available quant file with its size; Q4*K_M is flagged as "Recommended" when present. Starting a download switches you to the **Downloads** tab, which shows active downloads with progress bars and a per-item **Cancel** button, plus a **Completed** section with a **Clear History** button. Model downloads (files into the Models Directory, or into the Image Models Directory when one is set and you're downloading an image model) are a separate download queue from the KoboldCPP \_binary* download described above — both have their own progress UI but work the same way under the hood.
 
 ### Performance tab: live status and model lifecycle
 
@@ -145,8 +162,9 @@ The **Settings** tab holds everything that configures the Manager itself rather 
 - **Binary** info (Managed mode) — installed variant, installed version, and latest available version, with **Check for updates** and **Change binary** buttons; an "Update available" badge and an **Update Binary** button appear when a newer release exists.
 - **Managed Settings** — **Model unload timer** (seconds of inactivity before the loaded model is unloaded from memory; 0 means never, default 300s/5 min), **Subprocess idle timeout** (seconds before the whole subprocess is shut down when idle; 0 means never, default 1800s/30 min), and **Port** (default 5001; changing it requires a restart to take effect). This Port setting can drift out of sync with the KoboldCPP **Server URL** configured on the [System Settings](./system-settings.md) tab, since the two are edited in different places — if they disagree, a warning appears under the Port field explaining that every request actually goes to the Server URL, not this Port, and the subprocess running here may be orphaned until you reconcile the two.
 - **Base URL** (External mode only — in Managed mode the URL is derived automatically from the configured port) and version/update-check info.
-- **Models Directory** — the server-side path where GGUF files are stored and downloaded to; this must be set before the Models/Available tabs can list or fetch anything.
-- **Active Capabilities** — a badge row reporting what the connected KoboldCPP build supports: Image Gen, Vision, TTS, Speech-to-Text, Embeddings, Multiplayer, Web Search, and Admin API.
+- **Models Directory** — the server-side path where GGUF text models are stored and downloaded to; this must be set before the Models/Available tabs can list or fetch anything.
+- **Image Models Directory** — where Stable Diffusion models are stored and downloaded to. **Leave it blank and image models are looked for in the Models Directory**, which is how every installation worked before this field existed — so an upgrade keeps finding every model you already have, exactly where it is. Setting a path never moves anything on disk: new downloads from the Image list land in the new folder, and models still sitting in the Models Directory keep being listed, loaded and deleted from there. Downloads only ever write to the directory for the kind being downloaded.
+- **Active Capabilities** — a badge row reporting what the connected KoboldCPP build supports: Image Gen, Vision, TTS, Speech-to-Text, Embeddings, Multiplayer, Web Search, and Admin API. **Image Gen** reports what the running process has loaded at that moment, which is a different question from whether an image model is connected — that one is answered in the Models tab's Image list.
 
 ### Power-user note: GPU layers, flash attention, batch size, and reload-on-change
 
@@ -175,6 +193,14 @@ The form's **Model** dropdown is populated straight from the Manager's model lis
 - **Batch Size** — prompt-processing batch size. Default `512`.
 
 These three are exactly the settings described in the reload-on-change note above — changing them takes effect the next time this connection generates, not instantly.
+
+### KoboldCPP Manager (Image) connections
+
+An image model gets a connection of its own, `koboldcpp_managed_image`, created by **Use for image generation** in the Models tab's Image list. It points at the same KoboldCPP process as your text connections and is managed the same way — you never set its Base URL, and the file it names lives in the Manager's own models directory. Its form (the shared image-connection form) offers the image models the Manager can see, plus the two load settings that belong to an image model rather than to a text one — the thread count and the quantization level KoboldCPP should load it at. **Test Connection** checks that the Manager is reachable and that the named file is still on disk; it deliberately does not require an image model to be loaded, because most of the time one isn't.
+
+Loading is deferred exactly as it is for text: the model is loaded when an image node actually asks for a picture, and the request reports a "loading" stage while it happens. Since KoboldCPP holds one model at a time today, that load evicts the chat model and the next message reloads it — the same on-demand swap that already happens between two LLMs, with the same cost.
+
+> **Behaviour change:** a **KoboldCPP Manager** (text) connection can no longer generate images. Previously every managed connection advertised image generation, because one instance-wide setting chose one image model for the whole process; now a connection names exactly one model and a text connection names a text one. If you had bound an image node's connection slot to your managed text connection, or were relying on an external instance you'd started yourself with `--sdmodel`, you'll need to repoint it — at a **KoboldCPP Manager (Image)** connection, or at a plain **KoboldCPP** connection, which still probes the running instance for image support and can use it. The refusal message names the missing capability (`text->image`), which is where to start.
 
 ## Ollama Manager
 
@@ -231,14 +257,31 @@ A parameter can be switched on and still not reach a given backend: not every co
 
 ### Immutable presets
 
-Serene Pub ships four built-in, non-deletable configs:
+Serene Pub ships eight built-in, non-deletable configs — three for text generation and five for image generation.
+
+Text generation:
 
 - **Default** — temperature, response tokens and context tokens on; everything else deferring to the backend.
 - **Disabled** — nothing switched on at all, so every request goes out with the connection's own defaults.
 - **Precise (Extraction)** — low temperature with tightened top P/top K, for structured extraction rather than roleplay.
-- **Default (Image)** — 25 steps, CFG 5, 1024×1024, batch 1, random seed.
 
-All four are starting points to clone from.
+Image generation, one per model family — a diffusion model rendered at the wrong size does not degrade, it duplicates and smears the subject, so the size is part of the family rather than a taste setting:
+
+- **SD 1.5** — 512×512, 25 steps, CFG 7. The shipped global default.
+- **SDXL** — 1024×1024, 30 steps, CFG 6.
+- **SD 3.x** — 1024×1024, 28 steps, CFG 4.5.
+- **Flux** — 1024×1024, 20 steps, CFG 1.
+- **Turbo / Distilled** — 512×512, 4 steps, CFG 1. Covers SDXS, SD‑Turbo, SDXL‑Turbo, Lightning and LCM.
+
+CFG 1 on Flux and Turbo / Distilled is deliberate, not a placeholder: both are guidance-distilled and burn at higher CFG.
+
+Sampler and scheduler are left unset on every image preset. The valid names are a property of the connection's checkpoint and build, so the only backend-independent answer is "whatever it already uses".
+
+All eight are starting points to clone from. Names must be unique within a modality — "Default" can exist for text generation and for image generation, but not twice for either.
+
+> **Upgrading:** the row previously shown as **Default (Image)** is now **SD 1.5**, and its values changed from 1024×1024 / 25 steps / CFG 5 to 512×512 / 25 steps / CFG 7. An install that left the built-in image default selected will render smaller; pick the **SDXL** preset if 1024² was intended.
+
+These five are a *local diffusion* vocabulary. A hosted image service — OpenAI's `gpt-image-1`, for instance — has no steps, CFG, sampler or seed at all; it takes a size from a fixed list plus quality and format options. Those live on the connection's own profile, declared by its adapter, rather than in a sampling config, and anything a backend cannot honour is reported as ignored rather than dropped silently.
 
 ### Power-user note: how sampling maps to each connection type
 
@@ -268,6 +311,7 @@ A few behaviors apply across every connection type:
 
 - **Test Connection** sends a live probe to the configured Base URL/API Key and reports success or the exact error returned, before you commit to using it anywhere.
 - **Set Default** (the star button) marks a connection as the system-wide default used by any session or Session Prompt that doesn't specify its own override — see [Prompt Configs](./prompt-configs.md) for the full per-session/per-prompt override resolution order, and [Sessions](./sessions.md) for where that plays out during a conversation.
-- A **KoboldCPP Manager** connection can't be set as the system default while the KoboldCPP Manager itself is disabled — the **Set Default** button is disabled with an explanatory tooltip in that case.
+- A **KoboldCPP Manager** connection — text or image — can't be used while the KoboldCPP Manager itself is disabled; on the text one the **Set Default** button is disabled with an explanatory tooltip in that case.
+- Image connections never take part in the system default. The star marks the default _text_ connection; the image default is registered per capability instead, and **Use for image generation** in the Manager is what sets it.
 - Deleting a connection, Sampling Config, or Context Config that's currently in use elsewhere doesn't cascade silently — model deletion from the KoboldCPP/Ollama Manager tabs, for instance, explicitly blocks removing a model that backs the current default connection, and the Connections sidebar's delete action always asks for confirmation first.
 - These sidebars (Connections, Sampling, and both tabs of Legacy configs) track unsaved changes in-memory and will pop a confirmation modal before letting you switch selections, close the sidebar, or navigate away and lose edits.
