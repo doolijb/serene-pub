@@ -5,6 +5,12 @@
  * own, and failed the moment both had to be true of the same running process.
  * Asserting them in one body is what makes a regression to global-override
  * semantics impossible to miss.
+ *
+ * That property used to be asserted through getPublicSocketsEndpoint(), which
+ * is gone: Socket.IO shares the app's HTTP server, so there is no separate
+ * endpoint to advertise. The same assertions now go through
+ * resolveRequestPublicOrigin(), which is the per-request, hostname-matched
+ * resolution they were really exercising.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
@@ -15,12 +21,6 @@ beforeEach(() => {
 		"PUBLIC_URL",
 		"SERENE_PUB_PUBLIC_URL",
 		"ORIGIN",
-		"SOCKETS_ENDPOINT",
-		"PUBLIC_SOCKETS_ENDPOINT",
-		"SOCKETS_HTTPS_HOSTS",
-		"SOCKETS_HTTP_MODE",
-		"SOCKETS_PORT",
-		"SOCKETS_ALLOWED_ORIGINS",
 		"TRUSTED_PROXIES",
 		"ADDRESS_HEADER",
 		"HOST_HEADER",
@@ -51,7 +51,7 @@ function eventWith(
 	const headers = new Headers({ host, ...(opts.headers ?? {}) })
 	const peer = opts.peer === undefined ? "127.0.0.1" : opts.peer
 	return {
-		request: new Request(`http://${host}/api/sockets-endpoint`, {
+		request: new Request(`http://${host}/api/login`, {
 			headers
 		}),
 		// Deliberately allowed to disagree with reality — several tests assert
@@ -64,73 +64,62 @@ function eventWith(
 	}
 }
 
-describe("getPublicSocketsEndpoint", () => {
-	test("unset — auto-detects per request, exactly as before", async () => {
-		const { getPublicSocketsEndpoint } = await import("./publicUrl")
-		expect(getPublicSocketsEndpoint(eventWith("localhost:3000"))).toBe(
-			"http://localhost:3001"
+describe("resolveRequestPublicOrigin", () => {
+	test("unset — auto-detects per request from the Host header", async () => {
+		const { resolveRequestPublicOrigin } = await import("./publicUrl")
+		expect(resolveRequestPublicOrigin(eventWith("localhost:3000"))).toEqual(
+			{ origin: "http://localhost:3000", source: "detected" }
 		)
 	})
 
 	test("serves the tunnel and localhost SIMULTANEOUSLY from one variable", async () => {
 		process.env.PUBLIC_URL = "https://tunnel.example.com"
-		const { getPublicSocketsEndpoint } = await import("./publicUrl")
+		const { resolveRequestPublicOrigin } = await import("./publicUrl")
 
-		// Through the proxy: same origin, no port — the proxy routes
-		// /socket.io/ to SOCKETS_PORT on the public port.
-		const viaTunnel = getPublicSocketsEndpoint(
+		// Through the proxy: the declared public origin, no port — the socket
+		// connects back to this same origin, so it has to be the one a browser
+		// can actually reach.
+		const viaTunnel = resolveRequestPublicOrigin(
 			eventWith("tunnel.example.com")
 		)
-		expect(viaTunnel).toBe("https://tunnel.example.com")
-		expect(viaTunnel).not.toContain("3001")
+		expect(viaTunnel).toEqual({
+			origin: "https://tunnel.example.com",
+			source: "public-url"
+		})
 
 		// Direct, same process, same env, same tick: unchanged behavior.
-		expect(getPublicSocketsEndpoint(eventWith("localhost:3000"))).toBe(
-			"http://localhost:3001"
+		expect(resolveRequestPublicOrigin(eventWith("localhost:3000"))).toEqual(
+			{ origin: "http://localhost:3000", source: "detected" }
 		)
 
 		// ...and back again, to catch any caching that latches on first use.
-		expect(getPublicSocketsEndpoint(eventWith("tunnel.example.com"))).toBe(
-			"https://tunnel.example.com"
-		)
+		expect(
+			resolveRequestPublicOrigin(eventWith("tunnel.example.com")).origin
+		).toBe("https://tunnel.example.com")
 	})
 
 	test("an explicit port in PUBLIC_URL is preserved", async () => {
 		process.env.PUBLIC_URL = "https://x.example.com:8443"
-		const { getPublicSocketsEndpoint } = await import("./publicUrl")
-		expect(getPublicSocketsEndpoint(eventWith("x.example.com:8443"))).toBe(
-			"https://x.example.com:8443"
-		)
+		const { resolveRequestPublicOrigin } = await import("./publicUrl")
+		expect(
+			resolveRequestPublicOrigin(eventWith("x.example.com:8443")).origin
+		).toBe("https://x.example.com:8443")
 	})
 
-	test("SOCKETS_ENDPOINT and the legacy PUBLIC_SOCKETS_ENDPOINT still win outright", async () => {
-		process.env.PUBLIC_URL = "https://tunnel.example.com"
-		process.env.PUBLIC_SOCKETS_ENDPOINT = "https://sockets.example.com"
-		let mod = await import("./publicUrl")
-		expect(mod.getPublicSocketsEndpoint(eventWith("localhost:3000"))).toBe(
-			"https://sockets.example.com"
+	test("a trusted proxy's forwarded protocol produces an https origin on an undeclared host", async () => {
+		// The detected-source path, which is what remains now that the legacy
+		// SOCKETS_HTTPS_HOSTS/SOCKETS_HTTP_MODE fallbacks are retired: no
+		// PUBLIC_URL for this hostname, so scheme comes from the forwarded
+		// header, believed because the peer is a trusted proxy.
+		const { resolveRequestPublicOrigin } = await import("./publicUrl")
+		const resolved = resolveRequestPublicOrigin(
+			eventWith("other.example.com", {
+				peer: "127.0.0.1",
+				headers: { "x-forwarded-proto": "https" }
+			})
 		)
-		process.env.SOCKETS_ENDPOINT = "https://newer.example.com"
-		mod = await import("./publicUrl")
-		expect(mod.getPublicSocketsEndpoint(eventWith("localhost:3000"))).toBe(
-			"https://newer.example.com"
-		)
-	})
-
-	test("honors SOCKETS_PORT when auto-detecting", async () => {
-		process.env.SOCKETS_PORT = "9999"
-		const { getPublicSocketsEndpoint } = await import("./publicUrl")
-		expect(getPublicSocketsEndpoint(eventWith("localhost:3000"))).toBe(
-			"http://localhost:9999"
-		)
-	})
-
-	test("legacy SOCKETS_HTTPS_HOSTS still produces an https endpoint (with port)", async () => {
-		process.env.SOCKETS_HTTPS_HOSTS = "legacy.example.com"
-		const { getPublicSocketsEndpoint } = await import("./publicUrl")
-		expect(getPublicSocketsEndpoint(eventWith("legacy.example.com"))).toBe(
-			"https://legacy.example.com:3001"
-		)
+		expect(resolved.origin).toBe("https://other.example.com")
+		expect(resolved.source).toBe("detected")
 	})
 })
 
@@ -156,14 +145,14 @@ describe("getConfiguredPublicUrl", () => {
 		// CRA/Vite/Next vocabulary, so someone will eventually set "/serene".
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
 		process.env.PUBLIC_URL = "/serene"
-		const { getConfiguredPublicUrl, getPublicSocketsEndpoint } =
+		const { getConfiguredPublicUrl, resolveRequestPublicOrigin } =
 			await import("./publicUrl")
 		expect(getConfiguredPublicUrl()).toBeNull()
 		expect(warn).toHaveBeenCalled()
 		// ...and the app still works, falling back to auto-detection.
-		expect(getPublicSocketsEndpoint(eventWith("localhost:3000"))).toBe(
-			"http://localhost:3001"
-		)
+		expect(
+			resolveRequestPublicOrigin(eventWith("localhost:3000")).origin
+		).toBe("http://localhost:3000")
 	})
 
 	test("a non-http scheme is rejected", async () => {
@@ -276,16 +265,17 @@ describe("isRequestHttps", () => {
 		expect(isRequestHttps(eventWith("localhost:3000"))).toBe(true)
 	})
 
-	test("legacy SOCKETS_HTTPS_HOSTS and SOCKETS_HTTP_MODE still work", async () => {
+	test("retired SOCKETS_HTTPS_HOSTS and SOCKETS_HTTP_MODE have no effect", async () => {
+		// Both were socket-prefixed variables answering a question that is not
+		// socket-specific. PUBLIC_URL says scheme and host together, per
+		// request, which is what neither of them could do. Asserted rather than
+		// merely deleted so re-adding a global protocol override has to delete
+		// a test that says why it was removed.
 		process.env.SOCKETS_HTTPS_HOSTS = "legacy.example.com"
-		let mod = await import("./publicUrl")
-		expect(mod.isRequestHttps(eventWith("legacy.example.com"))).toBe(true)
-		expect(mod.isRequestHttps(eventWith("other.example.com"))).toBe(false)
-
-		delete process.env.SOCKETS_HTTPS_HOSTS
 		process.env.SOCKETS_HTTP_MODE = "https"
-		mod = await import("./publicUrl")
-		expect(mod.isRequestHttps(eventWith("anything.example.com"))).toBe(true)
+		const { isRequestHttps } = await import("./publicUrl")
+		expect(isRequestHttps(eventWith("legacy.example.com"))).toBe(false)
+		expect(isRequestHttps(eventWith("anything.example.com"))).toBe(false)
 	})
 })
 
@@ -305,11 +295,11 @@ describe("partial events", () => {
 	})
 
 	test("tolerates an event with neither request nor url", async () => {
-		const { isRequestHttps, getPublicSocketsEndpoint } = await import(
+		const { isRequestHttps, resolveRequestPublicOrigin } = await import(
 			"./publicUrl"
 		)
 		expect(isRequestHttps({})).toBe(false)
-		expect(() => getPublicSocketsEndpoint({})).not.toThrow()
+		expect(() => resolveRequestPublicOrigin({})).not.toThrow()
 	})
 })
 
@@ -347,14 +337,14 @@ describe("resolveRequestPublicHost", () => {
 
 	test("a spoofed x-forwarded-host cannot activate PUBLIC_URL from an untrusted peer", async () => {
 		process.env.PUBLIC_URL = "https://tunnel.example.com"
-		const { getPublicSocketsEndpoint } = await import("./publicUrl")
+		const { resolveRequestPublicOrigin } = await import("./publicUrl")
 		expect(
-			getPublicSocketsEndpoint(
+			resolveRequestPublicOrigin(
 				eventWith("localhost:3000", {
 					peer: "203.0.113.7",
 					headers: { "x-forwarded-host": "tunnel.example.com" }
 				})
 			)
-		).toBe("http://localhost:3001")
+		).toEqual({ origin: "http://localhost:3000", source: "detected" })
 	})
 })

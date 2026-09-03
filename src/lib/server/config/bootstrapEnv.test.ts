@@ -29,6 +29,7 @@ const HOSTING_VARS = [
 	"SOCKETS_HTTPS_HOSTS",
 	"SOCKETS_HTTP_MODE",
 	"SOCKETS_PORT",
+	"ALLOWED_ORIGINS",
 	"SOCKETS_ALLOWED_ORIGINS",
 	"TRUSTED_PROXIES",
 	"SERENE_PUB_SECURE_COOKIES",
@@ -70,12 +71,17 @@ describe("buildStartupBanner", () => {
 		expect(banner).toContain("(from PUBLIC_URL)")
 	})
 
-	test("tells the operator their proxy must route /socket.io/ when same-origin", async () => {
+	// "Which address do I point my proxy at for websockets" is the question
+	// this banner most often gets read for, and the answer changed: there is no
+	// separate address, and the port to route to is PORT.
+	test("tells the operator to route /socket.io/ to the app's own port", async () => {
 		process.env.PUBLIC_URL = "https://tunnel.example.com"
+		process.env.PORT = "8080"
 		const { buildStartupBanner } = await load()
 		const banner = buildStartupBanner().join("\n")
-		expect(banner).toContain("Socket URL:  https://tunnel.example.com")
-		expect(banner).toContain("must route /socket.io/ to port 3001")
+		expect(banner).toContain("Socket URL:  same origin as above")
+		expect(banner).toContain("route /socket.io/ to port 8080")
+		expect(banner).not.toContain("3001")
 	})
 
 	test("reports the default trust rule when TRUSTED_PROXIES is unset", async () => {
@@ -121,50 +127,81 @@ describe("buildLegacyMigrationNotice", () => {
 	})
 
 	test("lists exactly the deprecated variables that are set, with replacements", async () => {
-		process.env.SOCKETS_HTTPS_HOSTS = "tunnel.example.com"
+		// SERENE_PUB_SECURE_COOKIES is the only genuinely deprecated-but-honored
+		// hosting variable left: it declares "TLS terminates here", a fact with
+		// no HTTP-derivable signal, so unlike the retired socket variables it is
+		// still read.
+		process.env.SERENE_PUB_SECURE_COOKIES = "true"
 		const { buildLegacyMigrationNotice } = await load()
 		const notice = buildLegacyMigrationNotice()!.join("\n")
 		expect(notice).toContain("DEPRECATED")
-		expect(notice).toContain("SOCKETS_HTTPS_HOSTS=tunnel.example.com")
-		expect(notice).toContain("PUBLIC_URL=https://tunnel.example.com")
-		// Not set, so must not be mentioned.
-		expect(notice).not.toContain("SOCKETS_HTTP_MODE")
+		expect(notice).toContain("SERENE_PUB_SECURE_COOKIES=true")
+		expect(notice).toContain("PUBLIC_URL=https://<your public hostname>")
 		expect(notice).toContain("docs/hosting.md")
+		// Retired, not deprecated — must not be described as still working.
+		expect(notice).not.toContain("SOCKETS_HTTP_MODE")
+		expect(notice).not.toContain("ALLOWED_ORIGINS")
 	})
 
-	test("covers each deprecated variable", async () => {
-		process.env.SOCKETS_HTTP_MODE = "https"
-		process.env.SERENE_PUB_SECURE_COOKIES = "true"
+	// The second-listener variables are a different fact from the deprecated
+	// ones: they are not honored at all any more, so a notice that lumps them
+	// in with "these still work" would be actively wrong. An operator whose
+	// compose file still carries SOCKETS_PORT: 3001 has to be told it does
+	// nothing rather than left to assume it does.
+	test("reports the retired socket variables as IGNORED, not deprecated", async () => {
+		process.env.SOCKETS_PORT = "3001"
 		process.env.PUBLIC_SOCKETS_ENDPOINT = "https://s.example.com"
 		const { buildLegacyMigrationNotice } = await load()
 		const notice = buildLegacyMigrationNotice()!.join("\n")
-		expect(notice).toContain("SOCKETS_HTTP_MODE")
-		expect(notice).toContain("SERENE_PUB_SECURE_COOKIES")
-		expect(notice).toContain("PUBLIC_SOCKETS_ENDPOINT")
-		expect(notice).toContain("SOCKETS_ENDPOINT=<same value>")
+		expect(notice).toContain("IGNORED")
+		expect(notice).toContain("SOCKETS_PORT=3001")
+		expect(notice).toContain(
+			"PUBLIC_SOCKETS_ENDPOINT=https://s.example.com"
+		)
+		// Must not be described as still working.
+		expect(notice).not.toContain(
+			"SOCKETS_PORT=3001 — no effect, still works"
+		)
 	})
 
 	test("says nothing is broken — these still work", async () => {
-		process.env.SOCKETS_HTTPS_HOSTS = "x.example.com"
+		process.env.SERENE_PUB_SECURE_COOKIES = "true"
 		const { buildLegacyMigrationNotice } = await load()
 		expect(buildLegacyMigrationNotice()!.join("\n")).toContain("still work")
 	})
-})
 
-describe("buildWildcardWarning", () => {
-	test("null unless the wildcard is actually active", async () => {
-		const { buildWildcardWarning } = await load()
-		expect(buildWildcardWarning()).toBeNull()
-
-		process.env.SOCKETS_ALLOWED_ORIGINS = "example.com"
-		expect(buildWildcardWarning()).toBeNull()
-	})
-
-	test("fires on SOCKETS_ALLOWED_ORIGINS=*", async () => {
+	// ALLOWED_ORIGINS is the first RETIRED entry with no replacement to point
+	// at: every other one is a thing to re-express under a new name, whereas
+	// origin trust is derived now and there is nothing left to set. An operator
+	// told only "ignored" would go looking for the new spelling.
+	test("reports the retired origin variables as IGNORED with no replacement", async () => {
+		process.env.ALLOWED_ORIGINS = "example.com"
 		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
-		const { buildWildcardWarning } = await load()
-		expect(buildWildcardWarning()!.join("\n")).toContain(
-			"origin allowlist is disabled"
-		)
+		const { buildLegacyMigrationNotice } = await load()
+		const notice = buildLegacyMigrationNotice()!.join("\n")
+		expect(notice).toContain("IGNORED")
+		expect(notice).toContain("ALLOWED_ORIGINS=example.com")
+		expect(notice).toContain("SOCKETS_ALLOWED_ORIGINS=*")
+		expect(notice).toContain("NO replacement variable")
+		expect(notice).toContain("automatic")
+		// Must not appear in the "these still work" half.
+		expect(notice).not.toContain("DEPRECATED")
+	})
+
+	test("reports the retired protocol variables as IGNORED, pointing at PUBLIC_URL", async () => {
+		process.env.SOCKETS_HTTPS_HOSTS = "tunnel.example.com"
+		process.env.SOCKETS_HTTP_MODE = "https"
+		const { buildLegacyMigrationNotice } = await load()
+		const notice = buildLegacyMigrationNotice()!.join("\n")
+		expect(notice).toContain("IGNORED")
+		expect(notice).toContain("SOCKETS_HTTPS_HOSTS=tunnel.example.com")
+		expect(notice).toContain("SOCKETS_HTTP_MODE=https")
+		expect(notice).toContain("PUBLIC_URL=https://<your public hostname>")
+		expect(notice).not.toContain("DEPRECATED")
 	})
 })
+
+// describe("buildWildcardWarning") lived here. Nothing can set the origin
+// wildcard any more, so the warning has no reachable condition and the function
+// is gone; ALLOWED_ORIGINS is reported through RETIRED_VARS above instead,
+// which the two IGNORED tests cover.

@@ -5,19 +5,24 @@
  * Before this module those two questions had four independent implementations
  * — the socket endpoint's protocol guess, the cookie Secure flag, SvelteKit's
  * own event.url, and the HSTS header — each reading different environment
- * variables and disagreeing in different deployments. `PUBLIC_URL` replaces
+ * variables and disagreeing in different deployments. `PUBLIC_URL` replaced
  * the pile of fragments (SOCKETS_HTTPS_HOSTS + SOCKETS_HTTP_MODE + HOST_HEADER
  * + PROTOCOL_HEADER + PUBLIC_SOCKETS_ENDPOINT) an admin previously had to
- * assemble by hand.
+ * assemble by hand; the SOCKETS_-prefixed ones are retired outright now, so
+ * `PUBLIC_URL` and `TRUSTED_PROXIES` are the whole surface.
  *
  * The key design property: the configured URL is parsed ONCE but applied
  * PER REQUEST, keyed on hostname. That is what lets a single variable serve a
  * tunnel and direct localhost access simultaneously — the thing the old
  * PUBLIC_SOCKETS_ENDPOINT (a global override) structurally could not do.
+ *
+ * The socket-endpoint half of that history is now moot: Socket.IO shares the
+ * app's own HTTP server, so the real-time endpoint IS this origin and there is
+ * nothing separate to advertise. What remains here is the public origin and
+ * the HTTPS question, which the cookie Secure flag, HSTS and CSRF still need.
  */
 import {
 	getDirectPeerAddress,
-	getHttpsHosts,
 	isTrustedProxyAddress
 } from "$lib/server/sockets/originAllowlist"
 
@@ -211,77 +216,21 @@ export function isRequestHttps(event: PublicUrlRequestLike): boolean {
 		if (proto?.toLowerCase() === "https") return true
 	}
 
-	// @deprecated SOCKETS_HTTPS_HOSTS — superseded by PUBLIC_URL, which says
-	// scheme and host together. Still honored indefinitely.
-	const host = resolveRequestPublicHost(event)
-	if (getHttpsHosts().includes(host)) return true
-
-	// @deprecated SOCKETS_HTTP_MODE — a global protocol override, superseded by
-	// PUBLIC_URL. Applies regardless of which host a request arrived on, which
-	// is why it was never a good answer for a mixed-access install.
-	if (process.env.SOCKETS_HTTP_MODE?.trim().toLowerCase() === "https") {
-		return true
-	}
-
 	return false
 }
 
-/** The protocol the socket server BINDS with (as opposed to the protocol a
- * browser should use to reach it). Defaults to http; see the note in
- * isRequestHttps about why the advertised protocol is computed separately. */
-export function getSocketsHttpMode() {
-	const mode = process.env.SOCKETS_HTTP_MODE
-	if (!mode) return "http"
-	const normalized = mode.trim().toLowerCase()
-	if (normalized === "https" || normalized === "http") return normalized
-	return "http"
-}
-
-export function getSocketsPort() {
-	return process.env.SOCKETS_PORT || "3001"
-}
-
-/**
- * The URL the browser should open its socket connection to.
- *
- * Order:
- *  1. An explicit full override (SOCKETS_ENDPOINT, or its legacy
- *     PUBLIC_SOCKETS_ENDPOINT spelling). Global — same answer for every
- *     request — which is why it is a last resort rather than the main path.
- *  2. A matching PUBLIC_URL: return that origin with NO port appended. This
- *     is the same-origin topology every hosting recipe recommends, where the
- *     proxy routes /socket.io/ to SOCKETS_PORT on the public port. Appending
- *     :3001 there produced a URL the proxy cannot serve at all — Cloudflare,
- *     for instance, proxies neither arbitrary ports nor tunnels them — and was
- *     the concrete failure that motivated this whole module.
- *  3. Otherwise auto-detect per request, exactly as before.
- *
- * The separate-public-port topology (socket server exposed on its own port)
- * keeps case 1 as its escape hatch, so it needs no new variable.
- */
-export function getPublicSocketsEndpoint(event?: PublicUrlRequestLike): string {
-	const configured = (
-		process.env.SOCKETS_ENDPOINT ||
-		process.env.PUBLIC_SOCKETS_ENDPOINT ||
-		""
-	).trim()
-	if (configured) return configured
-
-	if (!event) {
-		// No request context (startup banner, describe-config). Report what a
-		// request to the configured public host would get.
-		const url = getConfiguredPublicUrl()
-		if (url) return url.origin
-		return `${getSocketsHttpMode()}://localhost:${getSocketsPort()}`
-	}
-
-	const { origin, source } = resolveRequestPublicOrigin(event)
-	if (source === "public-url") return origin
-
-	const host = resolveRequestPublicHost(event)
-	const scheme = isRequestHttps(event) ? "https" : "http"
-	return `${scheme}://${host}:${getSocketsPort()}`
-}
+// getSocketsHttpMode(), getSocketsPort() and getPublicSocketsEndpoint() lived
+// here until Socket.IO started sharing the app's HTTP server. All three existed
+// to answer "where is the OTHER server?" — the bind protocol of a second
+// listener, its port, and the URL to hand a browser so it could find it. With
+// one listener the browser opens its socket against the page's own origin with
+// no URL at all, so the questions are gone rather than answered differently.
+//
+// SOCKETS_HTTP_MODE and SOCKETS_HTTPS_HOSTS lingered afterwards as deprecated
+// fallbacks inside isRequestHttps(), and are now gone too: both were
+// socket-prefixed variables answering a question that is not socket-specific,
+// and PUBLIC_URL says scheme and host together per request, which is what
+// neither of them could do.
 
 /** One-line summary for the startup banner. */
 export function describePublicUrlConfig(): string {

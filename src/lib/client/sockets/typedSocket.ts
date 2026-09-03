@@ -1,4 +1,4 @@
-import * as skio from "sveltekit-io"
+import { getSocket } from "./socketInstance"
 
 // Type mapping for socket events - this maps event names to their param/response types
 export type SocketEventMap = {
@@ -1804,7 +1804,7 @@ export interface TypedSocket {
 
 // Create a typed socket wrapper
 export function createTypedSocket(): TypedSocket {
-	const socket = skio.get() as any
+	const socket = getSocket()
 
 	if (!socket) {
 		throw new Error(
@@ -1858,11 +1858,25 @@ export function createTypedSocket(): TypedSocket {
 		get connected() {
 			return socket?.connected || false
 		},
+		// `join`/`leave` are SERVER-side Socket.IO methods — a client socket has
+		// no such thing, so both of these have always been no-ops here, and
+		// nothing in the app calls them. The existence check is what kept that
+		// harmless; the cast is only to perform it, since the client `Socket`
+		// type (correctly) does not declare either name. Previously the whole
+		// socket was `as any`, which hid the mismatch entirely. Left in place
+		// rather than removed: dropping them narrows the exported TypedSocket
+		// interface, which is a separate change from sharing one HTTP listener.
 		join: (room: string) => {
-			if (socket?.join) socket.join(room)
+			const s = socket as unknown as {
+				join?: (room: string) => void
+			}
+			if (s.join) s.join(room)
 		},
 		leave: (room: string) => {
-			if (socket?.leave) socket.leave(room)
+			const s = socket as unknown as {
+				leave?: (room: string) => void
+			}
+			if (s.leave) s.leave(room)
 		},
 		disconnect: () => {
 			if (socket?.disconnect) socket.disconnect()

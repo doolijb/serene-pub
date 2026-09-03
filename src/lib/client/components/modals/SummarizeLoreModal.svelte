@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { getSocket } from "$lib/client/sockets/socketInstance"
 	import { onDestroy, onMount } from "svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -97,7 +97,7 @@
 	 */
 	let activeActivityId = $state<string | null>(null)
 
-	const socket = skio.get()!
+	const socket = getSocket()!
 	// Only used for resolveOrCreateBindingByName, which needs the type-safe
 	// on/off/emit wrapper the rest of this file's older code predates.
 	const typedSocket = useTypedSocket()
@@ -515,7 +515,8 @@
 	})
 
 	onDestroy(() => {
-		// skio.get()! returns Server | Socket union — .off() signatures are incompatible
+		// Widened to any: this file's older code calls .off() with handler
+		// signatures the typed client Socket won't accept.
 		const s = socket as any
 		activeCleanup?.()
 		s.off("lorebooks:list", handleLorebooksList)

@@ -157,18 +157,19 @@
 	}
 
 	/**
-	 * loadSocketsClient() rethrows on any failure — /api/sockets-endpoint being
-	 * unreachable, a connect_error (blocked port, CORS, TLS), or its own 10s
-	 * connection timeout. This call had no catch and the template had no third
-	 * branch, so every one of those produced a silently blank page plus an
-	 * unhandled rejection. ConnectionTimeoutModal can't cover it either: that
-	 * lives inside <Layout>, which only renders once socketsInitialized is
-	 * true.
+	 * loadSocketsClient() rethrows on any failure — /api/socket-token being
+	 * unreachable, a connect_error (CORS, TLS, a proxy that drops the
+	 * WebSocket upgrade), or its own 10s connection timeout. This call had no
+	 * catch and the template had no third branch, so every one of those
+	 * produced a silently blank page plus an unhandled rejection.
+	 * ConnectionTimeoutModal can't cover it either: that lives inside
+	 * <Layout>, which only renders once socketsInitialized is true.
 	 *
-	 * The most likely cause in a real deployment is a reverse proxy or tunnel
-	 * that forwards the web port but not the separate realtime port, so the
-	 * message below names that explicitly rather than saying "something went
-	 * wrong".
+	 * The socket shares the app's own origin, so there is no separate port to
+	 * misconfigure any more. What remains is a proxy that serves the page but
+	 * won't pass /socket.io/ through, or won't forward the WebSocket upgrade —
+	 * so the message below names that explicitly rather than saying "something
+	 * went wrong".
 	 */
 	async function startup() {
 		startupError = null
@@ -192,8 +193,8 @@
 			startupError =
 				reason?.trim() ||
 				"The realtime connection failed to start and reported no reason. " +
-					"This is usually the socket server (SOCKETS_PORT) not being reachable " +
-					"through your reverse proxy or tunnel."
+					"This is usually a reverse proxy or tunnel not passing /socket.io/ " +
+					"through, or not forwarding the WebSocket upgrade."
 		} finally {
 			clearTimeout(spinnerTimer)
 			showStartupSpinner = false
@@ -275,10 +276,12 @@
 				for chats and live updates could not be established.
 			</p>
 			<p class="text-sm opacity-90">
-				Serene Pub runs a second server for realtime updates, separate
-				from the web server. If you're behind a reverse proxy, tunnel,
-				or Docker port mapping, check that it forwards that server too —
-				this is the most common cause.
+				Realtime updates travel over the same address as this page,
+				under <code>/socket.io/</code>. If you're behind a reverse
+				proxy, tunnel, or Docker port mapping, check that it forwards
+				WebSocket upgrade requests and isn't routing
+				<code>/socket.io/</code> somewhere else — that's the most
+				common cause.
 			</p>
 			<p class="font-mono text-xs opacity-70">{startupError}</p>
 			<div class="flex flex-wrap items-center justify-center gap-3 pt-2">

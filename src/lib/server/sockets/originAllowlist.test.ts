@@ -3,8 +3,9 @@
  * wrapper, server-to-server) used to be allowed unconditionally, which,
  * combined with accounts-disabled-by-default and HOST=0.0.0.0-by-default,
  * meant any internet-reachable non-browser client got a tokenless admin
- * session. Fixed by scoping it to the local network by default, with
- * SOCKETS_ALLOWED_ORIGINS=* as an explicit opt-out.
+ * session. Fixed by scoping it to the local network — now unconditionally, the
+ * opt-out variable having been retired along with the rest of the
+ * socket-specific origin configuration.
  *
  * The `::ffff:`-mapped test cases are the one most likely to be silently
  * broken by a naive implementation: a dual-stack listener (the default for
@@ -17,10 +18,14 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest"
 const ORIGINAL_ENV = { ...process.env }
 
 beforeEach(() => {
-	delete process.env.SOCKETS_ALLOWED_ORIGINS
 	delete process.env.ADDRESS_HEADER
 	delete process.env.TRUSTED_PROXIES
+	// All three feed the implicit allowlist (same fallback chain as
+	// getConfiguredPublicUrl), so a developer's real shell env must not leak
+	// into the cases that assert an origin is NOT allowed.
 	delete process.env.PUBLIC_URL
+	delete process.env.SERENE_PUB_PUBLIC_URL
+	delete process.env.ORIGIN
 })
 
 function socketWith(address: string, headers: Record<string, any> = {}) {
@@ -78,17 +83,11 @@ describe("isLocalNetworkAddress", () => {
 })
 
 describe("isMissingOriginAllowed", () => {
-	test("mirrors isLocalNetworkAddress when no wildcard is configured", async () => {
+	test("mirrors isLocalNetworkAddress, with nothing able to widen it", async () => {
 		const { isMissingOriginAllowed } = await import("./originAllowlist")
 		expect(isMissingOriginAllowed("192.168.1.50")).toBe(true)
 		expect(isMissingOriginAllowed("203.0.113.7")).toBe(false)
-	})
-
-	test("allows any address when SOCKETS_ALLOWED_ORIGINS=* is set", async () => {
-		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
-		const { isMissingOriginAllowed } = await import("./originAllowlist")
-		expect(isMissingOriginAllowed("203.0.113.7")).toBe(true)
-		expect(isMissingOriginAllowed(undefined)).toBe(true)
+		expect(isMissingOriginAllowed(undefined)).toBe(false)
 	})
 })
 
@@ -102,7 +101,7 @@ describe("isLocalThroughProxy", () => {
 		).toBe(true)
 	})
 
-	test("peer non-local, no ADDRESS_HEADER/wildcard — false regardless of header", async () => {
+	test("peer non-local, no ADDRESS_HEADER — false regardless of header", async () => {
 		const { isLocalThroughProxy } = await import("./originAllowlist")
 		expect(
 			isLocalThroughProxy(
@@ -145,13 +144,18 @@ describe("isLocalThroughProxy", () => {
 		).toBe(true)
 	})
 
-	test("wildcard opt-out set, peer non-local, no forwarded-for header — still accepted", async () => {
-		// The case a hand-decomposed (isWildcardAllowed() || isLocalNetworkAddress())
-		// predicate could silently break: rejecting a connection an admin
-		// deliberately opted in to allowing.
-		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+	test("peer non-local, no forwarded-for header — rejected, with no way to opt in", async () => {
+		// The knowingly-accepted capability loss: a non-browser client (no
+		// Origin header) reaching this deployment from outside the local
+		// network used to be allowed by setting the origin wildcard, which is
+		// retired. Nothing widens this now — asserted here so a future
+		// "convenience" escape hatch has to delete a test that says why.
 		const { isLocalThroughProxy } = await import("./originAllowlist")
-		expect(isLocalThroughProxy(socketWith("203.0.113.7"))).toBe(true)
+		expect(isLocalThroughProxy(socketWith("203.0.113.7"))).toBe(false)
+		// ...including with a public PUBLIC_URL declared, which allowlists an
+		// ORIGIN hostname and must not be mistaken for address trust.
+		process.env.PUBLIC_URL = "https://serene.example.com"
+		expect(isLocalThroughProxy(socketWith("203.0.113.7"))).toBe(false)
 	})
 
 	test("multi-instance header (array) — joins all instances rather than dropping earlier ones", async () => {
@@ -190,11 +194,11 @@ describe("getSocketClientAddress", () => {
 		).toBe("203.0.113.5")
 	})
 
-	test("ADDRESS_HEADER set, non-local peer, spoofed header — ignores the header (deliberately NOT isMissingOriginAllowed-gated)", async () => {
-		// If this delegated to isMissingOriginAllowed the way isLocalThroughProxy
-		// does, a wildcard deployment would trust any remote peer's claimed
-		// forwarded-for value, letting spoofed headers evade the rate limiter.
-		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+	test("ADDRESS_HEADER set, non-local peer, spoofed header — ignores the header (gated on proxy trust, not on a locality verdict)", async () => {
+		// Whether to believe a claimed X-Forwarded-For is a question about the
+		// hop that sent it. Deciding it from an origin/locality verdict would
+		// mean believing a stranger's claimed address, and rotating spoofed
+		// headers would then evade the handshake rate limiter for free.
 		process.env.ADDRESS_HEADER = "x-forwarded-for"
 		const { getSocketClientAddress } = await import("./originAllowlist")
 		expect(
@@ -224,7 +228,9 @@ function httpEventWith(
 	return {
 		request: new Request("http://localhost/api/login", { headers }),
 		platform:
-			peer === null ? undefined : { req: { socket: { remoteAddress: peer } } },
+			peer === null
+				? undefined
+				: { req: { socket: { remoteAddress: peer } } },
 		getClientAddress: () => {
 			if (opts.adapterThrows) {
 				throw new Error(
@@ -271,7 +277,6 @@ describe("getHttpClientAddress", () => {
 	})
 
 	test("ADDRESS_HEADER set, non-local peer — ignores the claimed header", async () => {
-		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
 		process.env.ADDRESS_HEADER = "x-forwarded-for"
 		const { getHttpClientAddress } = await import("./originAllowlist")
 		expect(
@@ -302,7 +307,9 @@ describe("getHttpClientAddress", () => {
 		process.env.ADDRESS_HEADER = "x-forwarded-for"
 		const { getHttpClientAddress } = await import("./originAllowlist")
 		expect(
-			getHttpClientAddress(httpEventWith(null, {}, { adapterThrows: true }))
+			getHttpClientAddress(
+				httpEventWith(null, {}, { adapterThrows: true })
+			)
 		).toBe("unresolved")
 	})
 
@@ -452,45 +459,141 @@ describe("TRUSTED_PROXIES", () => {
 	})
 })
 
-describe("isOriginAllowed — wildcard", () => {
-	test("allows a genuinely cross-origin request when SOCKETS_ALLOWED_ORIGINS=* is set", async () => {
-		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
-		const { isOriginAllowed } = await import("./originAllowlist")
-		expect(
-			isOriginAllowed("https://evil.example.com", "my-server.local")
-		).toBe(true)
-	})
-
-	test("* can be combined with other comma-separated values", async () => {
-		process.env.SOCKETS_ALLOWED_ORIGINS = "serene.example.com,*"
-		const { isOriginAllowed } = await import("./originAllowlist")
-		expect(isOriginAllowed("https://evil.example.com", "host")).toBe(true)
-	})
-
-	test("without the wildcard, a genuinely cross-origin request is still rejected", async () => {
+describe("isOriginAllowed", () => {
+	test("a genuinely cross-origin page is rejected", async () => {
 		const { isOriginAllowed } = await import("./originAllowlist")
 		expect(
 			isOriginAllowed("https://evil.example.com", "my-server.local")
 		).toBe(false)
 	})
+
+	test("an Origin matching the request's own Host is allowed — the zero-config default", async () => {
+		// The whole reason no configuration is needed: a same-site tab's Origin
+		// hostname IS whatever hostname it used to reach this server, because
+		// the handshake goes to the very server that served the page.
+		const { isOriginAllowed } = await import("./originAllowlist")
+		expect(
+			isOriginAllowed("https://serene.example.com", "serene.example.com")
+		).toBe(true)
+		expect(
+			isOriginAllowed("http://192.168.1.50:3000", "192.168.1.50")
+		).toBe(true)
+		// The Host header carries a port; the Origin comparison is by hostname.
+		expect(
+			isOriginAllowed("http://192.168.1.50", "192.168.1.50:3000")
+		).toBe(true)
+		// Scheme deliberately does not have to match: one deployment reached
+		// over http on the LAN and https through a proxy is one deployment.
+		expect(
+			isOriginAllowed("http://serene.example.com", "serene.example.com")
+		).toBe(true)
+	})
+
+	test("loopback names are allowed regardless of the request's Host", async () => {
+		const { isOriginAllowed } = await import("./originAllowlist")
+		for (const origin of [
+			"http://localhost:5173",
+			"http://127.0.0.1:3000"
+		]) {
+			expect(isOriginAllowed(origin, "internal.local"), origin).toBe(true)
+		}
+	})
+
+	test("PUBLIC_URL's hostname is implicitly allowlisted — the Host-rewriting-proxy case", async () => {
+		// The one setup same-Host matching cannot serve: a proxy that rewrites
+		// Host to an internal name, so the browser's Origin and the Host this
+		// server sees genuinely differ. Declaring the public URL covers it, and
+		// it is now the ONLY way to add a hostname.
+		process.env.PUBLIC_URL = "https://serene.example.com"
+		const { isOriginAllowed } = await import("./originAllowlist")
+		expect(
+			isOriginAllowed("https://serene.example.com", "app-internal")
+		).toBe(true)
+		// ...and only that hostname; declaring one does not widen anything else.
+		expect(
+			isOriginAllowed("https://evil.example.com", "app-internal")
+		).toBe(false)
+	})
+
+	test("SERENE_PUB_PUBLIC_URL and ORIGIN allowlist their hostname too", async () => {
+		// Same three-way fallback getConfiguredPublicUrl() uses, so an install
+		// that only ever set ORIGIN is not silently narrower.
+		process.env.SERENE_PUB_PUBLIC_URL = "https://alias.example.com"
+		let mod = await import("./originAllowlist")
+		expect(
+			mod.isOriginAllowed("https://alias.example.com", "app-internal")
+		).toBe(true)
+
+		delete process.env.SERENE_PUB_PUBLIC_URL
+		process.env.ORIGIN = "https://legacy-origin.example.com"
+		mod = await import("./originAllowlist")
+		expect(
+			mod.isOriginAllowed(
+				"https://legacy-origin.example.com",
+				"app-internal"
+			)
+		).toBe(true)
+	})
+
+	test("a malformed PUBLIC_URL allowlists nothing rather than throwing", async () => {
+		process.env.PUBLIC_URL = "/serene"
+		const { isOriginAllowed } = await import("./originAllowlist")
+		expect(
+			isOriginAllowed("https://serene.example.com", "app-internal")
+		).toBe(false)
+		// The same-Host path still works, so a typo cannot lock a tab out.
+		expect(
+			isOriginAllowed("https://serene.example.com", "serene.example.com")
+		).toBe(true)
+	})
+
+	test("no Origin header at all is not this function's decision", async () => {
+		// Non-browser clients are gated by isLocalThroughProxy in auth.ts, not
+		// here — see that describe block for the local-network requirement.
+		const { isOriginAllowed } = await import("./originAllowlist")
+		expect(isOriginAllowed(undefined, "serene.example.com")).toBe(true)
+		expect(isOriginAllowed(null, "serene.example.com")).toBe(true)
+		expect(isOriginAllowed("", "serene.example.com")).toBe(true)
+	})
+
+	test("an unparseable Origin is rejected, not treated as absent", async () => {
+		const { isOriginAllowed } = await import("./originAllowlist")
+		expect(isOriginAllowed("not-a-url", "serene.example.com")).toBe(false)
+	})
+
+	test("a missing Host header falls through to the allowlist rather than matching anything", async () => {
+		const { isOriginAllowed } = await import("./originAllowlist")
+		expect(isOriginAllowed("https://evil.example.com", undefined)).toBe(
+			false
+		)
+		expect(isOriginAllowed("http://localhost", undefined)).toBe(true)
+	})
 })
 
 describe("describeOriginAllowlistConfig", () => {
-	test("reports the wildcard state distinctly", async () => {
-		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+	test("reports the derived default when nothing is declared", async () => {
 		const { describeOriginAllowlistConfig } = await import(
 			"./originAllowlist"
 		)
-		expect(describeOriginAllowlistConfig()).toMatch(/\*/)
+		const described = describeOriginAllowlistConfig()
+		expect(described).toContain("same-hostname")
+		expect(described).toContain("local network")
 	})
 
-	test("lists explicit extra hosts when configured", async () => {
-		process.env.SOCKETS_ALLOWED_ORIGINS = "serene.example.com"
+	test("names the PUBLIC_URL host it picked up, so an admin can confirm it applied", async () => {
+		process.env.PUBLIC_URL = "https://serene.example.com"
 		const { describeOriginAllowlistConfig } = await import(
 			"./originAllowlist"
 		)
-		expect(describeOriginAllowlistConfig()).toContain(
-			"serene.example.com"
+		const described = describeOriginAllowlistConfig()
+		expect(described).toContain("serene.example.com")
+		expect(described).toContain("PUBLIC_URL")
+	})
+
+	test("does not list the built-in loopback hosts as if they were configuration", async () => {
+		const { describeOriginAllowlistConfig } = await import(
+			"./originAllowlist"
 		)
+		expect(describeOriginAllowlistConfig()).not.toContain("127.0.0.1")
 	})
 })

@@ -4,24 +4,16 @@
  * play. Imported first by hooks.server.ts so it runs once, before any request.
  *
  * The banner exists because the hosting configuration was previously
- * unknowable from the outside: an operator could set SOCKETS_HTTPS_HOSTS and
- * HOST_HEADER, have one of them silently not apply, and have no way to tell
- * short of curling an internal API route. Printing the resolved answer turns
- * "why is my socket URL wrong" into a line of log output.
+ * unknowable from the outside: an operator could set two overlapping hosting
+ * variables, have one of them silently not apply, and have no way to tell short
+ * of curling an internal API route. Printing the resolved answer turns "why is
+ * my public URL wrong" into a line of log output.
  */
 import dotenv from "dotenv"
 import { dev } from "$app/environment"
 import { installPrettyConsole } from "$lib/server/utils/prettyConsole"
-import {
-	describePublicUrlConfig,
-	getConfiguredPublicUrl,
-	getPublicSocketsEndpoint,
-	getSocketsPort
-} from "$lib/server/net/publicUrl"
-import {
-	describeOriginAllowlistConfig,
-	isWildcardAllowed
-} from "$lib/server/sockets/originAllowlist"
+import { describePublicUrlConfig } from "$lib/server/net/publicUrl"
+import { describeOriginAllowlistConfig } from "$lib/server/sockets/originAllowlist"
 
 /** What preloadEnv.js recorded, when it ran. Absent under `vite dev` (no
  * build/index.js) and under a hand-rolled entrypoint. */
@@ -47,21 +39,64 @@ const DEPRECATED_VARS: {
 	replacement: (value: string) => string
 }[] = [
 	{
-		name: "SOCKETS_HTTPS_HOSTS",
-		replacement: (v) => `PUBLIC_URL=https://${v.split(",")[0].trim()}`
-	},
-	{
-		name: "SOCKETS_HTTP_MODE",
-		replacement: () => "PUBLIC_URL=https://<your public hostname>"
-	},
-	{
 		name: "SERENE_PUB_SECURE_COOKIES",
 		replacement: () => "PUBLIC_URL=https://<your public hostname>"
+	}
+]
+
+/**
+ * Variables that are no longer read at all, as opposed to the deprecated-but-
+ * honored one above. Two generations of socket-specific configuration ended up
+ * here: the ones that named the second HTTP listener Socket.IO used to run on,
+ * and the ones that gave the real-time layer its own origin and protocol trust.
+ * Both are answered by ordinary HTTP facts now — PORT binds the one server, and
+ * PUBLIC_URL/TRUSTED_PROXIES say what this deployment is reached as.
+ *
+ * Reported separately and worded differently on purpose. "Still works, but
+ * there's a better name for it" and "this value is being ignored" are different
+ * facts, and an operator whose compose file still says SOCKETS_PORT: 3001
+ * deserves the second one rather than silence.
+ *
+ * ALLOWED_ORIGINS is the one entry here that has no replacement to point at,
+ * and its note has to say so plainly: every other retired variable is a thing
+ * to re-express, whereas origin trust is now derived and there is nothing left
+ * to set. An operator told only "ignored" would reasonably go looking for the
+ * new spelling of it, and there isn't one.
+ */
+const RETIRED_VARS: { name: string; note: string }[] = [
+	{
+		name: "SOCKETS_PORT",
+		note: "no second listener exists — PORT binds the one server, which serves /socket.io/ too"
+	},
+	{
+		name: "SOCKETS_ENDPOINT",
+		note: "the browser now opens its socket against the page's own origin"
 	},
 	{
 		name: "PUBLIC_SOCKETS_ENDPOINT",
-		replacement: () =>
-			"SOCKETS_ENDPOINT=<same value>, or drop it — PUBLIC_URL covers same-origin setups"
+		note: "the browser now opens its socket against the page's own origin"
+	},
+	{
+		name: "ALLOWED_ORIGINS",
+		note:
+			"origin trust is automatic now and there is NO replacement variable — an " +
+			"origin whose hostname matches the one the request arrived on is always " +
+			"allowed, and PUBLIC_URL's hostname is allowed alongside it, which covers " +
+			"a proxy that rewrites Host to an internal name. Non-browser clients with " +
+			"no Origin header are restricted to the local network, and that can no " +
+			"longer be widened"
+	},
+	{
+		name: "SOCKETS_ALLOWED_ORIGINS",
+		note: "the older spelling of ALLOWED_ORIGINS; see above — there is no replacement for either"
+	},
+	{
+		name: "SOCKETS_HTTPS_HOSTS",
+		note: "use PUBLIC_URL=https://<your public hostname>, which says scheme and host together"
+	},
+	{
+		name: "SOCKETS_HTTP_MODE",
+		note: "use PUBLIC_URL=https://<your public hostname>; a global protocol override never suited an install reached both directly and through a proxy"
 	}
 ]
 
@@ -73,15 +108,14 @@ export function buildStartupBanner(): string[] {
 		`${PREFIX} Local URL:   http://localhost:${process.env.PORT || "3000"}`
 	)
 
-	const socketUrl = getPublicSocketsEndpoint()
-	const sameOrigin =
-		getConfiguredPublicUrl() !== null &&
-		!process.env.SOCKETS_ENDPOINT &&
-		!process.env.PUBLIC_SOCKETS_ENDPOINT
+	// Not a URL of its own any more: Socket.IO is attached to the server the
+	// two lines above describe. Stated rather than dropped, because "which
+	// address do I point my proxy at for websockets" was the single most
+	// common hosting question this banner exists to answer — and the answer
+	// changed.
 	lines.push(
-		sameOrigin
-			? `${PREFIX} Socket URL:  ${socketUrl}   (same origin — your proxy must route /socket.io/ to port ${getSocketsPort()})`
-			: `${PREFIX} Socket URL:  ${socketUrl}`
+		`${PREFIX} Socket URL:  same origin as above — route /socket.io/ to ` +
+			`port ${process.env.PORT || "3000"} and forward the WebSocket upgrade`
 	)
 
 	const proxies = process.env.TRUSTED_PROXIES?.trim()
@@ -123,33 +157,45 @@ export function buildStartupBanner(): string[] {
  * warning: these are configuration facts, not events.
  */
 export function buildLegacyMigrationNotice(): string[] | null {
-	const active = DEPRECATED_VARS.filter((v) => process.env[v.name]?.trim())
-	if (active.length === 0) return null
+	const lines: string[] = []
 
-	const lines = [
-		`${PREFIX} DEPRECATED hosting variables are in use. They still work and ` +
-			"nothing is broken, but one PUBLIC_URL replaces all of them:"
-	]
-	for (const v of active) {
-		const value = process.env[v.name]!.trim()
-		lines.push(`${PREFIX}   ${v.name}=${value}`)
-		lines.push(`${PREFIX}       -> ${v.replacement(value)}`)
+	const active = DEPRECATED_VARS.filter((v) => process.env[v.name]?.trim())
+	if (active.length > 0) {
+		lines.push(
+			`${PREFIX} DEPRECATED hosting variables are in use. They still work and ` +
+				"nothing is broken, but there is a current setting for each:"
+		)
+		for (const v of active) {
+			const value = process.env[v.name]!.trim()
+			lines.push(`${PREFIX}   ${v.name}=${value}`)
+			lines.push(`${PREFIX}       -> ${v.replacement(value)}`)
+		}
 	}
+
+	const retired = RETIRED_VARS.filter((v) => process.env[v.name]?.trim())
+	if (retired.length > 0) {
+		lines.push(
+			`${PREFIX} IGNORED hosting variables are set. Real-time updates share ` +
+				"the app's own server, port and origin trust, so these have no " +
+				"effect and can be removed:"
+		)
+		for (const v of retired) {
+			lines.push(
+				`${PREFIX}   ${v.name}=${process.env[v.name]!.trim()} — ${v.note}`
+			)
+		}
+	}
+
+	if (lines.length === 0) return null
 	lines.push(`${PREFIX}   See docs/hosting.md for the full migration guide.`)
 	return lines
 }
 
-/** Warning for the socket origin allowlist being switched off entirely. */
-export function buildWildcardWarning(): string[] | null {
-	if (!isWildcardAllowed()) return null
-	return [
-		`${PREFIX} WARNING: SOCKETS_ALLOWED_ORIGINS=* — the socket origin ` +
-			"allowlist is disabled, so any web page can open a socket to this " +
-			"server. The Docker compose files no longer set this; same-hostname " +
-			"origins are allowed automatically with no configuration. Remove it " +
-			"unless you specifically need cross-hostname access."
-	]
-}
+// buildWildcardWarning() lived here, warning that ALLOWED_ORIGINS=* had
+// switched the origin allowlist off. There is no longer any variable that can
+// do that, so the warning has no reachable condition; ALLOWED_ORIGINS is
+// reported by RETIRED_VARS above instead, which is the accurate thing to tell
+// an operator who still has it set.
 
 let bootstrapped = false
 
@@ -167,8 +213,6 @@ function bootstrap() {
 	for (const line of buildStartupBanner()) console.log(line)
 	const notice = buildLegacyMigrationNotice()
 	if (notice) for (const line of notice) console.warn(line)
-	const wildcard = buildWildcardWarning()
-	if (wildcard) for (const line of wildcard) console.warn(line)
 }
 
 bootstrap()
