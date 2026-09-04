@@ -41,8 +41,12 @@
 	let { connection = $bindable() } = $props()
 
 	const socket = useTypedSocket()
-	const defaultExtraJson =
-		CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].extraJson
+	// Shared by the Ollama and llmman connection types (llmman serves the
+	// Ollama API on a different port), so key defaults off the actual type.
+	const defaults =
+		CONNECTION_DEFAULTS[connection.type] ??
+		CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA]
+	const defaultExtraJson = defaults.extraJson
 
 	let availableOllamaModels: any[] = $state([])
 	let ollamaFields: ExtraFieldData | undefined = $state()
@@ -253,7 +257,7 @@
 				id="baseUrl"
 				type="text"
 				bind:value={connection.baseUrl}
-				placeholder="http://localhost:11434/"
+				placeholder={defaults.baseUrl}
 				required
 				class="input"
 			/>

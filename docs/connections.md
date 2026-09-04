@@ -1,6 +1,6 @@
 # Connections
 
-Connections tell Serene Pub how to reach a language model — which backend, which model, which API key, and how requests should be shaped. This page covers all seven connection types, the KoboldCPP Manager and Ollama Manager sub-systems for running local models, and the related Sampling Configs, Prompt Formats, and Token Counters that control how a connection actually generates text.
+Connections tell Serene Pub how to reach a language model — which backend, which model, which API key, and how requests should be shaped. This page covers all eight connection types, the KoboldCPP Manager and Ollama Manager sub-systems for running local models, and the related Sampling Configs, Prompt Formats, and Token Counters that control how a connection actually generates text.
 
 ## Overview
 
@@ -12,12 +12,13 @@ Creating a connection is done via the **+** button (or Ctrl/Cmd+N) in the Connec
 
 ## Connection Types At A Glance
 
-Serene Pub ships seven connection types, each with its own form and its own difficulty rating (shown in the New Connection modal):
+Serene Pub ships eight connection types, each with its own form and its own difficulty rating (shown in the New Connection modal):
 
 | Type                  | Label              | Difficulty                                 |
 | --------------------- | ------------------ | ------------------------------------------ |
 | `lmstudio`            | LM Studio          | Beginner (GUI) - Minimal setup required    |
 | `ollama`              | Ollama             | Beginner (No GUI) - Minimal setup required |
+| `llmman`              | llmman             | Beginner (No GUI) - Minimal setup required |
 | `openai`              | OpenAI Chat        | Beginner - Nothing to install              |
 | `llamacpp_completion` | Llama.cpp          | Intermediate - Not for beginners           |
 | `koboldcpp`           | KoboldCPP          | Beginner (GUI) - Simple setup              |
@@ -33,6 +34,10 @@ The LM Studio form has a **Model** dropdown (populated by a **Refresh Models** b
 ## Ollama
 
 The Ollama connection form has a **Model** dropdown populated via **Refresh Models**, plus **Test Connection**. Advanced Settings expose the **Base URL** (default `http://localhost:11434/`), a **Keep Alive** control split into a number field and a unit dropdown (`ms` / `s` / `m` / `h`, default `300ms`), and three switches: **Use Chat Mode**, **Stream**, and **Think** (passes Ollama's `think` flag for reasoning-capable models). This connection type talks to a manually-installed, already-running Ollama server — for browsing, pulling, and deleting Ollama models from inside Serene Pub, see [Ollama Manager](#ollama-manager) below, which is a separate admin sidebar from this connection form.
+
+## llmman
+
+[llmman](https://github.com/llmmanorg/llmman) is a local model runner that serves the Ollama API (alongside OpenAI- and Anthropic-compatible ones) on port 17434. The llmman connection type reuses the Ollama connection form and adapter above exactly — same **Model** dropdown, **Refresh Models**, **Test Connection**, Keep Alive, and Use Chat Mode / Stream / Think switches — with the **Base URL** defaulting to `http://localhost:17434/` instead. Start the server with `llmman serve` and pull models with `llmman pull <model>` (e.g. `gemma4`, or `hf.co/unsloth/Qwen3.5-0.8B-GGUF` straight from Hugging Face); models then appear in the **Model** dropdown after **Refresh Models**. The [Ollama Manager](#ollama-manager) sidebar is not wired to llmman.
 
 ## OpenAI Chat & Compatible Endpoint Presets
 

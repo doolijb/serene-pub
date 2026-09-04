@@ -385,7 +385,11 @@
 		}
 		onclose = handleOnClose
 
-		if (connection?.type === "ollama" && connection.baseUrl) {
+		if (
+			(connection?.type === CONNECTION_TYPE.OLLAMA ||
+				connection?.type === CONNECTION_TYPE.LLMMAN) &&
+			connection.baseUrl
+		) {
 			handleRefreshModels()
 		}
 	})
@@ -691,7 +695,7 @@
 								Enter a descriptive name for this AI connection
 							</div>
 						</div>
-						{#if connection.type === CONNECTION_TYPE.OLLAMA}
+						{#if connection.type === CONNECTION_TYPE.OLLAMA || connection.type === CONNECTION_TYPE.LLMMAN}
 							<OllamaForm bind:connection />
 						{:else if connection.type === CONNECTION_TYPE.OPENAI_CHAT}
 							<OpenAIForm bind:connection />

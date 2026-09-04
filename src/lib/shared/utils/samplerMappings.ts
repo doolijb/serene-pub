@@ -201,6 +201,7 @@ export function getSamplingKeyMap(
 		case CONNECTION_TYPE.OPENAI_CHAT:
 			return openAISamplingKeyMap
 		case CONNECTION_TYPE.OLLAMA:
+		case CONNECTION_TYPE.LLMMAN:
 			return ollamaSamplingKeyMap
 		case CONNECTION_TYPE.LM_STUDIO:
 			return lmStudioSamplingKeyMap
@@ -552,8 +553,9 @@ export function getUnsupportedSamplers(
 					explanation = "OpenAI API does not support this sampler"
 					break
 				case CONNECTION_TYPE.OLLAMA:
+				case CONNECTION_TYPE.LLMMAN:
 					explanation =
-						"Ollama does not currently support this sampler"
+						"Ollama API does not currently support this sampler"
 					break
 				case CONNECTION_TYPE.LM_STUDIO:
 					explanation = "LM Studio API does not support this sampler"

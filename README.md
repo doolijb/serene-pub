@@ -289,7 +289,7 @@ A story that remembers itself, so you don't have to keep notes.
 
 Bring your own model, or download and run one from inside the app.
 
-- **AI Model Agnostic:** OpenAI, Anthropic, Ollama, KoboldCPP, LM Studio, Llama.cpp and more
+- **AI Model Agnostic:** OpenAI, Anthropic, Ollama, llmman, KoboldCPP, LM Studio, Llama.cpp and more
 - **KoboldCPP Manager:** Download the binary, browse and download GGUF models, load or switch between them, all in-app
 - **Ollama Manager:** Search, download and activate Ollama models from a built-in UI. No command line
 - **Per-Task AI Override:** Point chat, narrator and summarizer at different connections. Run dialogue on a fast local model, summarization on a heavyweight cloud one
