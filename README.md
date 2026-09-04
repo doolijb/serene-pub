@@ -379,8 +379,8 @@ Prefer Docker? `docker compose -f docker-compose.dev.yml up -d --build` builds f
 Pre-built images are published to the GitHub Container Registry on every release:
 
 ```
-ghcr.io/doolijb/serene-pub:latest   ← always the latest stable release
-ghcr.io/doolijb/serene-pub:0.5.0    ← exact version pin
+ghcr.io/doolijb/serene-pub:latest        ← newest stable or beta release
+ghcr.io/doolijb/serene-pub:0.5.3-beta    ← exact version pin
 ```
 
 **Quickstart** — download [`docker-compose.dist.yml`](docker-compose.dist.yml) from the release assets, then:
@@ -394,7 +394,7 @@ The web UI will be at **http://localhost:3000**.
 **Data directory** — database, model cache and uploads live under `SERENE_PUB_DATA_DIR`, defaulting to `/data` and mounted as a named volume. For a host path instead:
 
 ```bash
-docker run -p 3000:3000 -p 3001:3001 \
+docker run -p 3000:3000 \
   -e SERENE_PUB_DATA_DIR=/data \
   -v "$(pwd)/serene-pub-data":/data \
   ghcr.io/doolijb/serene-pub:latest

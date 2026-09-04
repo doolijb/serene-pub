@@ -23,14 +23,13 @@ it must do beyond ordinary HTTP proxying is **forward the WebSocket upgrade**
 (the `Upgrade` and `Connection` headers); without that, the page loads fine and
 real-time features silently fail to connect.
 
-> **Upgrading from a version before this changed?** Serene Pub used to run a
-> second WebSocket server on `SOCKETS_PORT` (default `3001`). That port is gone
-> — nothing binds it. `SOCKETS_PORT`, `SOCKETS_ENDPOINT` and
-> `PUBLIC_SOCKETS_ENDPOINT` are now ignored (Serene Pub says so at startup if
-> you still have them set), and a proxy rule routing `/socket.io/` to `:3001`
-> must be pointed at `PORT` instead. `ALLOWED_ORIGINS` and its older spelling
-> `SOCKETS_ALLOWED_ORIGINS` are ignored too — origin trust is derived
-> automatically now, with nothing to configure; see the migration table below.
+> **Upgrading from 0.5.2 or earlier?** Serene Pub used to run a second
+> WebSocket server on `SOCKETS_PORT` (default `3001`). That port is gone —
+> nothing binds it. One thing genuinely breaks (a proxy rule routing
+> `/socket.io/` to `:3001`), a few settings are now ignored, and everything else
+> carries over untouched. Read
+> [Upgrading from 0.5.2 or earlier](#upgrading-from-052-or-earlier) before you
+> pull.
 
 ## The two settings that matter
 
@@ -127,18 +126,172 @@ See [DOCKER.md](https://github.com/doolijb/serene-pub/blob/main/DOCKER.md). The
 same guidance applies — the container exposes one port (`PORT`), and the compose
 files carry commented-out `PUBLIC_URL` and `TRUSTED_PROXIES` examples.
 
-## Migrating to PUBLIC_URL
+## Upgrading from 0.5.2 or earlier
 
-Nothing below is broken and nothing needs changing on a schedule — the old
-variables are still honored. But one `PUBLIC_URL` replaces all of them, and
-Serene Pub prints a notice at startup listing whichever ones you still have set.
+Serene Pub used to run **two** listeners: the web app on `PORT`, and a separate
+Socket.IO server on `SOCKETS_PORT` (default `3001`). From 0.5.3 there is one
+listener. `PORT` binds it, and it serves `/socket.io/` itself.
+
+Most installs upgrade with no changes at all. Exactly one thing genuinely stops
+working, and it's worth checking first.
+
+### 1. A proxy rule sending `/socket.io/` to port 3001 — this one breaks
+
+**Symptom:** the page loads normally and then nothing happens. Messages don't
+stream, model status never arrives, generation appears to hang forever. There's
+no error page and often nothing useful in the console — the socket simply never
+connects, so the app looks frozen rather than broken.
+
+**Cause:** nothing listens on `3001` any more, so a proxy rule pointing there
+has no upstream to reach.
+
+**Fix:** delete the special-cased `/socket.io/` rule and let your normal
+upstream serve that path along with everything else, making sure the WebSocket
+`Upgrade`/`Connection` headers are forwarded.
+
+nginx — one `location` covers the whole site:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name serene.example.com;
+
+    # If you have a block like this, delete it — nothing listens on 3001:
+    #
+    #   location /socket.io/ {
+    #       proxy_pass http://localhost:3001;
+    #   }
+
+    location / {
+        proxy_pass         http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade $http_upgrade;
+        proxy_set_header   Connection "upgrade";
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Forwarded-Host $host;
+    }
+}
+```
+
+`proxy_http_version 1.1` together with the `Upgrade`/`Connection` pair is what
+lets nginx pass a WebSocket handshake through. Without them the page still
+loads and the socket still fails — the same symptom as pointing at `3001`, from
+a different cause.
+
+Caddy — `reverse_proxy` forwards WebSocket upgrades on its own, so once the
+`/socket.io/` special case is gone the whole site is one line:
+
+```caddy
+serene.example.com {
+	# Delete any handle/reverse_proxy pair that routed sockets separately:
+	#
+	#   handle /socket.io/* {
+	#       reverse_proxy localhost:3001
+	#   }
+
+	reverse_proxy localhost:3000
+}
+```
+
+### 2. A leftover `-p 3001:3001` and `SOCKETS_PORT` — harmless
+
+**Nothing is wrong here.** Publishing a container port that nothing inside the
+container listens on is not an error: Docker sets up the forward, no process
+accepts on it, and the container starts and runs exactly as it should.
+`SOCKETS_PORT` is simply read by nothing.
+
+You will, however, see both named at startup:
+
+```
+[Serene Pub] IGNORED hosting variables are set. Real-time updates share the app's own server, port and origin trust, so these have no effect and can be removed:
+[Serene Pub]   SOCKETS_PORT=3001 — no second listener exists — PORT binds the one server, which serves /socket.io/ too
+```
+
+That notice is housekeeping, not a failure report. Drop the `- "3001:3001"`
+line from your compose file and `SOCKETS_PORT` from your environment whenever
+it's convenient; your instance works the same either way.
+
+### 3. `ALLOWED_ORIGINS` and `SOCKETS_ALLOWED_ORIGINS` are ignored
+
+Origin trust isn't configured any more. An origin whose hostname matches the
+hostname the request itself arrived on is always allowed — that covers
+`localhost`, a LAN IP, a port-mapped Docker host and any custom domain, with
+nothing set at all — and `PUBLIC_URL`'s hostname is allowed alongside it, which
+covers the one case that rule can't serve: a proxy that rewrites `Host` to an
+internal name.
+
+For nearly every install, the old allowlist was naming exactly the hostnames
+that are now derived automatically, so deleting it changes nothing.
+
+Two things really are gone, with no replacement:
+
+- **`ALLOWED_ORIGINS=*` can't be re-created.** The check can no longer be
+  switched off by any setting. With accounts disabled — the default — that
+  wildcard handed an unauthenticated admin session to anything that could reach
+  the port, which is why it was removed rather than renamed.
+- **A non-browser client that sends no `Origin` header is accepted from the
+  local network only, and that can't be widened.** If you were using the
+  allowlist to let a script or a server-to-server integration connect from
+  outside your LAN, that path is closed. Enable user accounts and connect with a
+  token instead.
+
+### 4. `SOCKETS_HTTP_MODE` and `SOCKETS_HTTPS_HOSTS` are ignored — check your cookies
+
+These are the ones that can go wrong quietly. Both used to declare "this
+deployment is HTTPS", and both are now read by nothing.
+
+You're affected if **all** of the following are true:
+
+- a TLS-terminating proxy sits in front of Serene Pub, and
+- you relied on `SOCKETS_HTTP_MODE=https` or `SOCKETS_HTTPS_HOSTS=<your host>`
+  to say so, and
+- you have none of `PUBLIC_URL`, `TRUSTED_PROXIES` or
+  `SERENE_PUB_SECURE_COOKIES` set.
+
+In that case Serene Pub no longer has any way to know the deployment is HTTPS.
+Nothing errors and the site keeps loading: session cookies quietly lose their
+`Secure` flag and HSTS stops being advertised, on a site still served over
+HTTPS. Serene Pub prints a targeted warning at startup when it sees exactly this
+combination.
+
+The fix is to state the public address:
+
+```
+PUBLIC_URL=https://serene.example.com
+TRUSTED_PROXIES=127.0.0.1
+```
+
+`PUBLIC_URL=https://<your public hostname>` is the replacement for both
+variables: it gives scheme and host together and is matched per request, so a
+request arriving on `localhost:3000` still auto-detects plain HTTP at the same
+time — there's nothing to flip between local and public access. Add
+`TRUSTED_PROXIES` naming the address your proxy connects from if one fronts
+you; that's what makes `X-Forwarded-Proto` believed at all, and it derives
+`ADDRESS_HEADER`, `HOST_HEADER` and `PROTOCOL_HEADER` for you.
+
+## Deprecated and ignored variables
+
+Two different things live here, and the difference matters. A **deprecated**
+variable still works, so you can migrate whenever you feel like it. An
+**ignored** variable is read by nothing and its value has no effect at all.
+Serene Pub prints both lists at startup, worded to match.
+
+### Deprecated — still honored, migrate whenever
+
+Nothing in this table is broken and nothing needs changing on a schedule. One
+`PUBLIC_URL` replaces all of them.
 
 | Deprecated (still honored) | Replace with |
 |---|---|
 | `SERENE_PUB_SECURE_COOKIES=true` | `PUBLIC_URL=https://<your hostname>` |
 | `HOST_HEADER`, `PROTOCOL_HEADER`, `ADDRESS_HEADER` | `TRUSTED_PROXIES=<your proxy's address>` derives all three. |
 
-And these are **ignored**, not deprecated — remove them:
+### Ignored — read by nothing, remove them
+
+These have no effect whatsoever. See
+[Upgrading from 0.5.2 or earlier](#upgrading-from-052-or-earlier) above for
+which of them actually breaks something (one does) and which are just clutter.
 
 | Ignored | Why |
 |---|---|
@@ -224,9 +377,9 @@ reports the resolved answer, not what you wrote.
 | Symptom | Likely cause |
 |---|---|
 | "Socket connection timeout", no CORS or 404 error at all | The WebSocket upgrade isn't getting through. Check that your proxy passes the `Upgrade` and `Connection` headers on `/socket.io/` (and that WebSockets are enabled at your CDN, if you use one). |
-| Console shows "Mixed Content... has been blocked" | Something is rewriting the connection to `http://` on an `https://` page. Set `PUBLIC_URL=https://<your hostname>` and check your proxy sends `X-Forwarded-Proto`. |
+| Console shows "Mixed Content... has been blocked" | Not the real-time connection — it uses the page's own origin and cannot mismatch. Serene Pub does not know it is served over HTTPS, so something else emits an `http://` URL. Set `PUBLIC_URL=https://<your hostname>` and check your proxy sends `X-Forwarded-Proto`. |
 | "blocked by CORS policy" pointing at your own domain | The `Origin` the browser sent doesn't match the `Host` your proxy forwarded — usually a proxy rewriting `Host` to an internal name. Forward the real one (`proxy_set_header Host $host`), or set `PUBLIC_URL` to the hostname your users actually type, which allowlists it. |
-| Socket requests 404 at `/socket.io/...` | Requests aren't reaching the app at all, or reached it before the first page render — reload once, and check your proxy isn't intercepting `/socket.io/` and routing it elsewhere (a rule left over from the old `:3001` setup will do this). |
+| Socket requests 404 at `/socket.io/...` | Requests aren't reaching the app at all, or reached it before the first page render — reload once, and check your proxy isn't intercepting `/socket.io/` and routing it elsewhere. A rule left over from the old `:3001` setup does exactly this; see [Upgrading from 0.5.2 or earlier](#upgrading-from-052-or-earlier). |
 | Login rate limiting locks out everyone at once | `ADDRESS_HEADER` isn't set, so every user shares your proxy's address as one bucket. Set `TRUSTED_PROXIES`, which derives it. |
 | Browser refuses to load `http://localhost:3000`, forcing HTTPS | An older build advertised HSTS over plain HTTP. Clear the entry at `chrome://net-internals/#hsts`. Fixed in current versions. |
 | `.env` changes don't seem to apply | Variables read by the server framework itself (`PORT`, `HOST`, `ORIGIN`, `PROTOCOL_HEADER`, `HOST_HEADER`, `ADDRESS_HEADER`, `XFF_DEPTH`) must be set before any code runs. Current builds load `.env` early enough automatically; if you use a custom entrypoint, launch with `node --env-file=.env build/index.js`. The startup banner tells you which case you're in. |

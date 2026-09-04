@@ -23,12 +23,38 @@ export interface ParsedVersion {
 }
 
 /** Format: X.Y.Z, X.Y.Z-type, or X.Y.Z-type-N. A leading `v` is tolerated so
- * GitHub tag names (`v0.5.0-beta`) can be passed in directly. */
+ * GitHub tag names (`v0.5.0-beta`) can be passed in directly.
+ *
+ * Note what this does NOT accept: a compound suffix. `0.5.3-beta-rc-1` is two
+ * type words plus a number, and it matches nothing here — see
+ * `isParseableVersion` below for why that mattered enough to name. */
+const VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)(?:-(\d+))?)?$/i
+
+function normalizeVersion(version: string): string {
+	return version.trim().replace(/^v/i, "")
+}
+
+/**
+ * Whether `parseVersion` can actually read this string.
+ *
+ * `parseVersion` returns `{0, 0, 0, type: null}` for anything it cannot match,
+ * which is indistinguishable from a real "0.0.0" — and "0.0.0" is exactly the
+ * sentinel a freshly created `meta.json` carries. That collision is not
+ * theoretical: shipping `0.5.3-beta-rc-1` (a compound suffix the pattern above
+ * rejects) made an unreadable app version compare EQUAL to a brand-new
+ * database, so the migration gate in `db/index.ts` reported "versions match"
+ * and skipped every migration. Every fresh install came up with no tables at
+ * all, and never self-healed, because `meta.json` stayed on the sentinel.
+ *
+ * Any caller deciding something on a comparison must be able to tell "these are
+ * equal" apart from "I could not read one of them".
+ */
+export function isParseableVersion(version: string): boolean {
+	return VERSION_PATTERN.test(normalizeVersion(version))
+}
+
 export function parseVersion(version: string): ParsedVersion {
-	const match = version
-		.trim()
-		.replace(/^v/i, "")
-		.match(/^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)(?:-(\d+))?)?$/i)
+	const match = normalizeVersion(version).match(VERSION_PATTERN)
 	if (!match) {
 		return { major: 0, minor: 0, patch: 0, type: null, num: 0 }
 	}
