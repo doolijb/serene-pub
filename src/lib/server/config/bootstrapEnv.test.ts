@@ -29,6 +29,7 @@ const HOSTING_VARS = [
 	"SOCKETS_HTTPS_HOSTS",
 	"SOCKETS_HTTP_MODE",
 	"SOCKETS_PORT",
+	"ALLOWED_ORIGINS",
 	"SOCKETS_ALLOWED_ORIGINS",
 	"TRUSTED_PROXIES",
 	"SERENE_PUB_SECURE_COOKIES",
@@ -70,12 +71,17 @@ describe("buildStartupBanner", () => {
 		expect(banner).toContain("(from PUBLIC_URL)")
 	})
 
-	test("tells the operator their proxy must route /socket.io/ when same-origin", async () => {
+	// "Which address do I point my proxy at for websockets" is the question
+	// this banner most often gets read for, and the answer changed: there is no
+	// separate address, and the port to route to is PORT.
+	test("tells the operator to route /socket.io/ to the app's own port", async () => {
 		process.env.PUBLIC_URL = "https://tunnel.example.com"
+		process.env.PORT = "8080"
 		const { buildStartupBanner } = await load()
 		const banner = buildStartupBanner().join("\n")
-		expect(banner).toContain("Socket URL:  https://tunnel.example.com")
-		expect(banner).toContain("must route /socket.io/ to port 3001")
+		expect(banner).toContain("Socket URL:  same origin as above")
+		expect(banner).toContain("route /socket.io/ to port 8080")
+		expect(banner).not.toContain("3001")
 	})
 
 	test("reports the default trust rule when TRUSTED_PROXIES is unset", async () => {
@@ -121,50 +127,242 @@ describe("buildLegacyMigrationNotice", () => {
 	})
 
 	test("lists exactly the deprecated variables that are set, with replacements", async () => {
-		process.env.SOCKETS_HTTPS_HOSTS = "tunnel.example.com"
+		// SERENE_PUB_SECURE_COOKIES is the only genuinely deprecated-but-honored
+		// hosting variable left: it declares "TLS terminates here", a fact with
+		// no HTTP-derivable signal, so unlike the retired socket variables it is
+		// still read.
+		process.env.SERENE_PUB_SECURE_COOKIES = "true"
 		const { buildLegacyMigrationNotice } = await load()
 		const notice = buildLegacyMigrationNotice()!.join("\n")
 		expect(notice).toContain("DEPRECATED")
-		expect(notice).toContain("SOCKETS_HTTPS_HOSTS=tunnel.example.com")
-		expect(notice).toContain("PUBLIC_URL=https://tunnel.example.com")
-		// Not set, so must not be mentioned.
-		expect(notice).not.toContain("SOCKETS_HTTP_MODE")
+		expect(notice).toContain("SERENE_PUB_SECURE_COOKIES=true")
+		expect(notice).toContain("PUBLIC_URL=https://<your public hostname>")
 		expect(notice).toContain("docs/hosting.md")
+		// Retired, not deprecated — must not be described as still working.
+		expect(notice).not.toContain("SOCKETS_HTTP_MODE")
+		expect(notice).not.toContain("ALLOWED_ORIGINS")
 	})
 
-	test("covers each deprecated variable", async () => {
-		process.env.SOCKETS_HTTP_MODE = "https"
-		process.env.SERENE_PUB_SECURE_COOKIES = "true"
+	// The second-listener variables are a different fact from the deprecated
+	// ones: they are not honored at all any more, so a notice that lumps them
+	// in with "these still work" would be actively wrong. An operator whose
+	// compose file still carries SOCKETS_PORT: 3001 has to be told it does
+	// nothing rather than left to assume it does.
+	test("reports the retired socket variables as IGNORED, not deprecated", async () => {
+		process.env.SOCKETS_PORT = "3001"
 		process.env.PUBLIC_SOCKETS_ENDPOINT = "https://s.example.com"
 		const { buildLegacyMigrationNotice } = await load()
 		const notice = buildLegacyMigrationNotice()!.join("\n")
-		expect(notice).toContain("SOCKETS_HTTP_MODE")
-		expect(notice).toContain("SERENE_PUB_SECURE_COOKIES")
-		expect(notice).toContain("PUBLIC_SOCKETS_ENDPOINT")
-		expect(notice).toContain("SOCKETS_ENDPOINT=<same value>")
+		expect(notice).toContain("IGNORED")
+		expect(notice).toContain("SOCKETS_PORT=3001")
+		expect(notice).toContain(
+			"PUBLIC_SOCKETS_ENDPOINT=https://s.example.com"
+		)
+		// Must not be described as still working.
+		expect(notice).not.toContain(
+			"SOCKETS_PORT=3001 — no effect, still works"
+		)
 	})
 
 	test("says nothing is broken — these still work", async () => {
-		process.env.SOCKETS_HTTPS_HOSTS = "x.example.com"
+		process.env.SERENE_PUB_SECURE_COOKIES = "true"
 		const { buildLegacyMigrationNotice } = await load()
 		expect(buildLegacyMigrationNotice()!.join("\n")).toContain("still work")
 	})
-})
 
-describe("buildWildcardWarning", () => {
-	test("null unless the wildcard is actually active", async () => {
-		const { buildWildcardWarning } = await load()
-		expect(buildWildcardWarning()).toBeNull()
-
-		process.env.SOCKETS_ALLOWED_ORIGINS = "example.com"
-		expect(buildWildcardWarning()).toBeNull()
+	// ALLOWED_ORIGINS is the first RETIRED entry with no replacement to point
+	// at: every other one is a thing to re-express under a new name, whereas
+	// origin trust is derived now and there is nothing left to set. An operator
+	// told only "ignored" would go looking for the new spelling.
+	test("reports the retired origin variables as IGNORED with no replacement", async () => {
+		process.env.ALLOWED_ORIGINS = "example.com"
+		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+		const { buildLegacyMigrationNotice } = await load()
+		const notice = buildLegacyMigrationNotice()!.join("\n")
+		expect(notice).toContain("IGNORED")
+		expect(notice).toContain("ALLOWED_ORIGINS=example.com")
+		expect(notice).toContain("SOCKETS_ALLOWED_ORIGINS=*")
+		expect(notice).toContain("NO replacement variable")
+		expect(notice).toContain("automatic")
+		// Must not appear in the "these still work" half.
+		expect(notice).not.toContain("DEPRECATED")
 	})
 
-	test("fires on SOCKETS_ALLOWED_ORIGINS=*", async () => {
+	test("reports the retired protocol variables as IGNORED, pointing at PUBLIC_URL", async () => {
+		process.env.SOCKETS_HTTPS_HOSTS = "tunnel.example.com"
+		process.env.SOCKETS_HTTP_MODE = "https"
+		const { buildLegacyMigrationNotice } = await load()
+		const notice = buildLegacyMigrationNotice()!.join("\n")
+		expect(notice).toContain("IGNORED")
+		expect(notice).toContain("SOCKETS_HTTPS_HOSTS=tunnel.example.com")
+		expect(notice).toContain("SOCKETS_HTTP_MODE=https")
+		expect(notice).toContain("PUBLIC_URL=https://<your public hostname>")
+		expect(notice).not.toContain("DEPRECATED")
+	})
+})
+
+// describe("buildWildcardWarning") lived here. Nothing can set the origin
+// wildcard any more, so the warning has no reachable condition and the function
+// is gone; ALLOWED_ORIGINS is reported through RETIRED_VARS above instead,
+// which the two IGNORED tests cover.
+
+/**
+ * The IGNORED list above is an inventory and fires identically for a leftover
+ * SOCKETS_PORT (harmless) and for the SOCKETS_HTTP_MODE that was this
+ * deployment's only declaration of HTTPS (not harmless: the cookie Secure flag
+ * and HSTS follow it). These tests pin the distinction — the targeted warning
+ * must fire for the second and stay silent for the first, and must stay silent
+ * the moment a live replacement is configured, or it becomes another line an
+ * operator learns to scroll past.
+ */
+describe("buildLoadBearingRetirementWarnings", () => {
+	test("silent on an install with nothing retired set", async () => {
+		const { buildLoadBearingRetirementWarnings } = await load()
+		expect(buildLoadBearingRetirementWarnings()).toEqual([])
+	})
+
+	// The headline case: TLS-terminating proxy whose only HTTPS declaration was
+	// SOCKETS_HTTP_MODE. Nothing errors after the upgrade, so the warning is
+	// the only signal the operator gets.
+	test("fires for SOCKETS_HTTP_MODE=https with no replacement, naming PUBLIC_URL", async () => {
+		process.env.SOCKETS_HTTP_MODE = "https"
+		const { buildLoadBearingRetirementWarnings } = await load()
+		const warning = buildLoadBearingRetirementWarnings().join("\n")
+		expect(warning).toContain("SP-HOSTING-HTTPS-DETECTION")
+		expect(warning).toContain("SOCKETS_HTTP_MODE")
+		expect(warning).toContain("Secure flag")
+		expect(warning).toContain(
+			"Fix: PUBLIC_URL=https://<the hostname your users type>"
+		)
+		// Only the HTTPS entry — SOCKETS_HTTP_MODE never fed the allowlist.
+		expect(warning).not.toContain("SP-HOSTING-ORIGIN-ALLOWLIST")
+	})
+
+	test("fires for SOCKETS_HTTPS_HOSTS with no replacement", async () => {
+		process.env.SOCKETS_HTTPS_HOSTS = "tunnel.example.com"
+		const { buildLoadBearingRetirementWarnings } = await load()
+		const warning = buildLoadBearingRetirementWarnings().join("\n")
+		expect(warning).toContain("SP-HOSTING-HTTPS-DETECTION")
+		expect(warning).toContain("SOCKETS_HTTPS_HOSTS")
+	})
+
+	// Set is not the same as load-bearing: this value never made anything
+	// HTTPS, so there is nothing to lose and nothing to say.
+	test("silent for SOCKETS_HTTP_MODE=http — it was never load-bearing", async () => {
+		process.env.SOCKETS_HTTP_MODE = "http"
+		const { buildLoadBearingRetirementWarnings } = await load()
+		expect(buildLoadBearingRetirementWarnings()).toEqual([])
+	})
+
+	test.each([
+		["PUBLIC_URL", "https://chat.example.com"],
+		["SERENE_PUB_PUBLIC_URL", "https://chat.example.com"],
+		["ORIGIN", "https://chat.example.com"],
+		["TRUSTED_PROXIES", "10.0.0.0/8"],
+		["SERENE_PUB_SECURE_COOKIES", "true"]
+	])(
+		"silent once %s is configured — the replacement is already in place",
+		async (name, value) => {
+			process.env.SOCKETS_HTTP_MODE = "https"
+			process.env[name] = value
+			const { buildLoadBearingRetirementWarnings } = await load()
+			expect(buildLoadBearingRetirementWarnings()).toEqual([])
+		}
+	)
+
+	// An empty value in a compose file is not a declaration, so it must not
+	// silence the warning the way a real one does.
+	test("an empty replacement value does not count as configured", async () => {
+		process.env.SOCKETS_HTTP_MODE = "https"
+		process.env.PUBLIC_URL = "   "
+		const { buildLoadBearingRetirementWarnings } = await load()
+		expect(buildLoadBearingRetirementWarnings().join("\n")).toContain(
+			"SP-HOSTING-HTTPS-DETECTION"
+		)
+	})
+
+	// The retirement nobody thinks about: SOCKETS_ALLOWED_ORIGINS and
+	// SOCKETS_HTTPS_HOSTS both fed the socket origin allowlist, and `*` switched
+	// it off outright. Behind a Host-rewriting proxy that is a hard break — the
+	// page loads and then never receives data — so it gets its own id.
+	test("fires separately for the origin allowlist SOCKETS_ALLOWED_ORIGINS used to widen", async () => {
 		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
-		const { buildWildcardWarning } = await load()
-		expect(buildWildcardWarning()!.join("\n")).toContain(
-			"origin allowlist is disabled"
+		const { buildLoadBearingRetirementWarnings } = await load()
+		const warning = buildLoadBearingRetirementWarnings().join("\n")
+		expect(warning).toContain("SP-HOSTING-ORIGIN-ALLOWLIST")
+		expect(warning).toContain("Host header")
+		expect(warning).toContain(
+			"Fix: PUBLIC_URL=https://<the hostname your users type>"
+		)
+		// Not an HTTPS declaration, so the other entry must not fire.
+		expect(warning).not.toContain("SP-HOSTING-HTTPS-DETECTION")
+	})
+
+	// TRUSTED_PROXIES answers "which hops may I believe about protocol and
+	// client address". The origin allowlist reads PUBLIC_URL and nothing else,
+	// so declaring proxies must not silence this one.
+	test("TRUSTED_PROXIES does not silence the origin allowlist warning", async () => {
+		process.env.SOCKETS_ALLOWED_ORIGINS = "chat.example.com"
+		process.env.TRUSTED_PROXIES = "10.0.0.0/8"
+		const { buildLoadBearingRetirementWarnings } = await load()
+		expect(buildLoadBearingRetirementWarnings().join("\n")).toContain(
+			"SP-HOSTING-ORIGIN-ALLOWLIST"
+		)
+	})
+
+	test("PUBLIC_URL silences both entries at once", async () => {
+		process.env.SOCKETS_HTTP_MODE = "https"
+		process.env.SOCKETS_HTTPS_HOSTS = "chat.example.com"
+		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+		process.env.PUBLIC_URL = "https://chat.example.com"
+		const { buildLoadBearingRetirementWarnings } = await load()
+		expect(buildLoadBearingRetirementWarnings()).toEqual([])
+	})
+
+	// Values are echoed once by the IGNORED inventory; repeating them here
+	// would put every hostname on screen twice for no added information.
+	test("names the variables without echoing their values", async () => {
+		process.env.SOCKETS_HTTPS_HOSTS = "tunnel.example.com"
+		const { buildLoadBearingRetirementWarnings } = await load()
+		expect(buildLoadBearingRetirementWarnings().join("\n")).not.toContain(
+			"tunnel.example.com"
+		)
+	})
+
+	// The exact environment an operator upgrading a 0.5.x Docker deployment
+	// still has in their compose file. The generic inventory and the targeted
+	// warnings have to arrive together: the first says what is being ignored,
+	// the second says which of those actually cost them something.
+	test("an upgrading 0.5.x Docker environment gets both the inventory and the targeted warnings", async () => {
+		process.env.SOCKETS_PORT = "3001"
+		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+		process.env.ALLOWED_ORIGINS = "*"
+		process.env.SOCKETS_HTTP_MODE = "https"
+		process.env.SOCKETS_HTTPS_HOSTS = "example.com"
+		const { buildLegacyMigrationNotice } = await load()
+		const notice = buildLegacyMigrationNotice()!.join("\n")
+		expect(notice).toContain("IGNORED")
+		expect(notice).toContain("SOCKETS_PORT=3001")
+		expect(notice).toContain("SP-HOSTING-HTTPS-DETECTION")
+		expect(notice).toContain("SP-HOSTING-ORIGIN-ALLOWLIST")
+		// The targeted block belongs after the inventories, not inside a list
+		// whose heading already said these have no effect.
+		expect(notice.indexOf("IGNORED")).toBeLessThan(
+			notice.indexOf("SP-HOSTING-HTTPS-DETECTION")
+		)
+	})
+
+	// A harmless leftover must not produce an action item, or the operator
+	// learns that these warnings never mean anything.
+	test("a leftover SOCKETS_PORT alone produces no targeted warning", async () => {
+		process.env.SOCKETS_PORT = "3001"
+		const {
+			buildLegacyMigrationNotice,
+			buildLoadBearingRetirementWarnings
+		} = await load()
+		expect(buildLoadBearingRetirementWarnings()).toEqual([])
+		expect(buildLegacyMigrationNotice()!.join("\n")).not.toContain(
+			"WARNING ["
 		)
 	})
 })

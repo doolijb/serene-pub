@@ -32,7 +32,7 @@ To run the app:
 5. Optional Configuration:
    - Copy ".env.example" to ".env" to customize settings
    - Edit ".env" to set custom data directory: SERENE_PUB_DATA_DIR=/path/to/data
-   - Change server ports: SOCKETS_PORT=3001, PORT=3000
+   - Change the server port: PORT=3000 (real-time updates share it)
    - Disable auto-browser opening: SERENE_AUTO_OPEN=1
 
 5. On your host machine, access Serene Pub from http://0.0.0.0:3000 or http://localhost:3000.

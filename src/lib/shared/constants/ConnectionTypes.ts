@@ -28,6 +28,15 @@ const ollamaDesc = `
 
 const ollamaDiff = "Beginner (No GUI) - Minimal setup required"
 
+const llmmanDesc = `
+<p>Serene Pub supports <a class="text-primary-500 hover:underline" href="https://github.com/llmmanorg/llmman" target="_blank">llmman</a>, a local model runner that serves the Ollama API (alongside OpenAI- and Anthropic-compatible ones) on port 17434.</p>
+<p>This connection type uses the same native Ollama API integration as the Ollama connection, pointed at llmman's default port.</p>
+<p>Models are pulled as OCI artifacts (Docker Hub, GHCR, quay, any registry) or straight from Hugging Face (<code>hf.co/org/model</code>), and served by llama.cpp, vLLM, or mlx-lm.</p>
+<p>Start the server with <code>llmman serve</code> and pull a model with <code>llmman pull gemma4</code>.</p>
+`
+
+const llmmanDiff = "Beginner (No GUI) - Minimal setup required"
+
 const openaiChatDesc = `
 <p>Serene Pub supports OpenAI's chat completion API.</p>
 <p>It provides a powerful API for generating chat completions and supports various models.</p>
@@ -68,6 +77,7 @@ export class CONNECTION_TYPE {
 	static LLAMACPP_COMPLETION = "llamacpp_completion"
 	static LM_STUDIO = "lmstudio"
 	static OLLAMA = "ollama"
+	static LLMMAN = "llmman"
 	static OPENAI_CHAT = "openai"
 	static KOBOLDCPP = "koboldcpp"
 	static KOBOLDCPP_MANAGED = "koboldcpp_managed"
@@ -96,6 +106,13 @@ export class CONNECTION_TYPE {
 			label: "Ollama",
 			description: ollamaDesc,
 			difficulty: ollamaDiff,
+			category: "local"
+		},
+		{
+			value: CONNECTION_TYPE.LLMMAN,
+			label: "llmman",
+			description: llmmanDesc,
+			difficulty: llmmanDiff,
 			category: "local"
 		},
 		{

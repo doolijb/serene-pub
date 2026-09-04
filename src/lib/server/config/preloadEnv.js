@@ -10,10 +10,10 @@
  * Why it has to be this early: @sveltejs/adapter-node reads ORIGIN,
  * PROTOCOL_HEADER, HOST_HEADER, ADDRESS_HEADER, XFF_DEPTH and PORT at the
  * module scope of its own handler, before any application code runs. The app's
- * only dotenv.config() used to live in the socket module, which is imported
- * exclusively by /api/sockets-endpoint — so .env was not read until the first
- * request to that one route, by which point the adapter had long since
- * snapshotted its configuration and $env/dynamic/public had been frozen.
+ * only dotenv.config() used to live in the socket module, which was reached
+ * only from a route — so .env was not read until the first request, by which
+ * point the adapter had long since snapshotted its configuration and
+ * $env/dynamic/public had been frozen.
  * Under Docker and bare `node build/index.js`, every one of those variables
  * set only in .env was therefore silently ignored.
  *

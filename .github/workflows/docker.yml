@@ -46,6 +46,22 @@ jobs:
                   fi
                   echo "Tag: $TAG  →  stable=$( [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta)?$ ]] && echo true || echo false )"
 
+                  # docker/metadata-action's type=semver decomposed tags
+                  # ({{major}}, {{major}}.{{minor}}) are silently suppressed
+                  # whenever the source tag has a semver prerelease part —
+                  # even with enable=true — because -beta counts as a
+                  # prerelease by strict semver even though this project
+                  # treats it as a maturity label. So major/minor are
+                  # extracted here as plain literals and fed to explicit
+                  # type=raw entries below, which aren't subject to that
+                  # suppression.
+                  if [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+ ]]; then
+                    MAJOR="${BASH_REMATCH[1]}"
+                    MINOR="${BASH_REMATCH[2]}"
+                  fi
+                  echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
+                  echo "major_minor=$MAJOR.$MINOR" >> "$GITHUB_OUTPUT"
+
             - name: Set up QEMU (multi-platform support)
               uses: docker/setup-qemu-action@v3
 
@@ -78,12 +94,18 @@ jobs:
               uses: docker/metadata-action@v5
               with:
                   images: ghcr.io/${{ github.repository }}
-                  flavor: |
-                      latest=${{ steps.classify.outputs.stable }}
+                  # latest/{{major}}/{{major}}.{{minor}} are emitted as
+                  # explicit type=raw entries (using the literals computed
+                  # in the Classify release step above) rather than via
+                  # flavor:latest= or type=semver — both of those are
+                  # suppressed by docker/metadata-action whenever the tag
+                  # has a semver prerelease part (e.g. -beta), which would
+                  # silently drop them for this project's beta releases.
                   tags: |
                       type=semver,pattern={{version}}
-                      type=semver,pattern={{major}}.{{minor}},enable=${{ steps.classify.outputs.stable }}
-                      type=semver,pattern={{major}},enable=${{ steps.classify.outputs.stable }}
+                      type=raw,value=latest,enable=${{ steps.classify.outputs.stable }}
+                      type=raw,value=${{ steps.classify.outputs.major_minor }},enable=${{ steps.classify.outputs.stable }}
+                      type=raw,value=${{ steps.classify.outputs.major }},enable=${{ steps.classify.outputs.stable }}
 
             - name: Build and push image
               uses: docker/build-push-action@v6

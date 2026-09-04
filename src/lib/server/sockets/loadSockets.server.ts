@@ -1,72 +1,68 @@
-import * as skio from "sveltekit-io"
+import { Server as SocketIOServer } from "socket.io"
+import type { Server as HttpServer } from "http"
 import { connectSockets } from "$lib/server/sockets/index"
 import { authMiddleware } from "$lib/server/sockets/auth"
 import { isOriginAllowed } from "$lib/server/sockets/originAllowlist"
-import {
-	getSocketsHttpMode,
-	getSocketsPort
-} from "$lib/server/net/publicUrl"
 
 // .env loading moved to $lib/server/config/preloadEnv, which runs before the
 // server framework reads its own configuration. It used to be a dotenv.config()
-// right here — but this module is imported only by /api/sockets-endpoint, so
-// .env was not read until the first request to that route, long after
-// adapter-node had already snapshotted ORIGIN/PROTOCOL_HEADER/HOST_HEADER and
-// after $env/dynamic/public was frozen.
+// right here — but this module is only reached from a route load, so .env was
+// not read until the first page render, long after adapter-node had already
+// snapshotted ORIGIN/PROTOCOL_HEADER/HOST_HEADER and after $env/dynamic/public
+// was frozen.
+
+// warnIfOpenAdminExposure() lived here: it warned when ALLOWED_ORIGINS=* was
+// combined with the accounts-disabled default, because the wildcard switched
+// off BOTH the origin check and the local-network requirement for no-Origin
+// clients, leaving a tokenless admin session reachable by anything that could
+// route to this port. It is gone because its condition became unreachable, not
+// because the concern stopped mattering: there is no longer any variable that
+// can switch either check off. A cross-origin page must now match the request's
+// own Host (a different site differs by hostname) or the declared PUBLIC_URL,
+// and a no-Origin client must resolve to a local-network address
+// unconditionally.
+//
+// Do not resurrect it keyed on something else, such as accounts-disabled plus
+// HOST=0.0.0.0. That is the default configuration of a normal LAN install, so
+// the warning would fire for nearly every user and be trained away. The
+// original was gated on an explicitly-set variable precisely because that is an
+// operator *declaration*, whereas network topology is not. The residual case it
+// does not cover — someone deliberately port-forwarding an accounts-disabled
+// instance and browsing to it directly, where Origin equals Host by
+// construction — was never what this warned about, and is covered by the
+// accounts-mode note in docs/hosting.md's security section.
+
+let attached = false
 
 /**
- * Round-12 audit fix (MEDIUM): the compose files' own comment already
- * documents the tradeoff of SOCKETS_ALLOWED_ORIGINS=* (the Docker Compose
- * default), but there was no *runtime* signal of it — only something an
- * admin has to go read. Disabled-accounts mode (the default) auto-attaches
- * every connection to the first admin with no token at all (see auth.ts);
- * combined with the wildcard origin, a self-hoster running this with no
- * reverse proxy in front exposes that unauthenticated admin session to
- * whatever can route to this port. Purely informational — logs a warning,
- * doesn't change behavior; the compose defaults are a deliberate,
- * already-documented choice, not something to override here. Called once
- * at startup (see loadSocketsServer below); factored out as its own
- * function so it's testable without spinning up a real server.
+ * Attach Socket.IO to the HTTP server that already serves the app.
+ *
+ * There is no second listener, no second port, and no socket-specific host or
+ * protocol configuration — `HOST`/`PORT` bind the one server, and a socket
+ * handshake is same-origin with the page that opened it. Everything a separate
+ * listener used to need (`SOCKETS_PORT`, `SOCKETS_HTTP_MODE`,
+ * `SOCKETS_ENDPOINT`, and the `/api/sockets-endpoint` discovery round-trip)
+ * existed only to tell a browser where the *other* server was. Same-origin
+ * answers that question by construction.
+ *
+ * Called from the root layout's server load (see src/routes/+layout.server.ts
+ * for why there and not from hooks.server.ts), which owns nothing itself — the
+ * `http.Server` is published on `globalThis` by whichever thing created it:
+ * the Vite plugin in dev, the generated `build/index.js` wrapper in production.
+ * Idempotent, because that load runs on every page render.
+ *
+ * Deliberately does NOT wait on any explicit startup/readiness signal: this
+ * module statically imports `connectSockets`, whose handler modules statically
+ * import `$lib/server/db`, and that module has top-level `await`s (migrations
+ * and seed sync). ESM therefore finishes database startup before this
+ * function's body can run at all. That is the same guarantee the old
+ * `/api/sockets-endpoint` route relied on.
  */
-export async function warnIfOpenAdminExposure() {
-	const { isWildcardAllowed } = await import(
-		"$lib/server/sockets/originAllowlist"
-	)
-	if (!isWildcardAllowed()) return
+export async function attachSocketServer(httpServer: HttpServer) {
+	if (attached) return
+	attached = true
 
-	const { db } = await import("$lib/server/db")
-	const systemSettings = await db.query.systemSettings.findFirst({
-		columns: { isAccountsEnabled: true }
-	})
-	if (systemSettings?.isAccountsEnabled) return
-
-	console.warn(
-		"WARNING: user accounts are disabled and SOCKETS_ALLOWED_ORIGINS=* is set — " +
-			"every connection that can reach this port is auto-attached as an unauthenticated admin. " +
-			"If this instance isn't behind a reverse proxy or otherwise network-isolated, see docs/hosting.md's " +
-			'"Running behind a reverse proxy" section, or enable user accounts (Settings > System) to require login.'
-	)
-}
-
-// Moved to $lib/server/net/publicUrl, which resolves the socket endpoint as
-// one case of the deployment's public URL rather than as its own parallel
-// scheme. Re-exported here so existing importers keep working.
-export {
-	getPublicSocketsEndpoint,
-	getSocketsHttpMode,
-	getSocketsPort
-} from "$lib/server/net/publicUrl"
-
-export async function loadSocketsServer() {
-	// Mirrors @sveltejs/adapter-node's own HOST env var (default 0.0.0.0) so a
-	// single HOST=127.0.0.1 locks down both the main app server and this socket
-	// server together — previously this was hardcoded to 0.0.0.0 with no way to
-	// restrict it at all, even for deployments (like the Android wrapper) that
-	// only ever need loopback access.
-	const bindHost = process.env.HOST || "0.0.0.0"
-	const host = `${getSocketsHttpMode()}://${bindHost}:${getSocketsPort()}`
-
-	const io = await skio.setup(host, {
+	const io = new SocketIOServer(httpServer, {
 		// Governs the polling transport's CORS headers (Socket.IO tries polling
 		// before upgrading to WebSocket by default, so this has to actually
 		// work, not just be a formality — WS enforcement itself happens
@@ -80,8 +76,9 @@ export async function loadSocketsServer() {
 		// zero-config default as isOriginAllowed()'s requestHost param: a
 		// same-site tab's Origin hostname equals whatever hostname it used to
 		// reach this server, so comparing against the request's own Host header
-		// works for localhost/LAN IPs/custom domains without requiring
-		// SOCKETS_HTTPS_HOSTS/SOCKETS_ALLOWED_ORIGINS to be configured at all.
+		// works for localhost/LAN IPs/custom domains with no configuration
+		// at all — which is now the only way it works, there being no
+		// variable to widen or disable it.
 		cors: (
 			req: any,
 			callback: (err: Error | null, options?: any) => void
@@ -96,25 +93,20 @@ export async function loadSocketsServer() {
 		maxHttpBufferSize: 1e8
 	})
 
-	// Add authentication middleware
-	if ("use" in io && typeof io.use === "function") {
-		io.use(authMiddleware as any)
-	}
-
-	if (typeof (io as any).to !== "function") {
-		;(io as any).to = () => ({ emit: () => {} })
-	}
+	// `io` is a real Socket.IO `Server` now. It used to be `Server | Socket` —
+	// sveltekit-io's setup() returned the same union on client and server — so
+	// this was guarded with `"use" in io` and a `.to` shim for the branch that
+	// could never actually happen here. Both are gone with the union.
+	io.use(authMiddleware as any)
 
 	connectSockets(io as any)
 	if (process.env.NODE_ENV !== "production") {
-		console.log("Socket server ready at", host)
+		console.log("Socket server attached to the app server")
 	}
 	// The origin-allowlist summary that used to print here is now part of the
 	// startup banner (config/bootstrapEnv), so it appears once at boot with the
-	// rest of the hosting configuration rather than on the first request to
-	// /api/sockets-endpoint. warnIfOpenAdminExposure stays here because it
-	// needs the database, which is not available that early.
-	await warnIfOpenAdminExposure()
+	// rest of the hosting configuration rather than when the first page render
+	// happens to attach the socket server.
 
 	// Periodically (re-)start the vectorization queue if enabled — first
 	// tick runs immediately, so this is also the boot-time trigger. Does NOT
@@ -156,4 +148,3 @@ async function warmLocalEmbeddingSupportProbe() {
 		console.error("[embedding] Local-embedding support probe failed:", err)
 	}
 }
-

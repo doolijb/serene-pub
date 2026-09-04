@@ -22,22 +22,26 @@ The first startup runs database migrations automatically and creates an admin ac
 
 ## Image tags
 
-| Tag          | What you get                                         |
-| ------------ | ---------------------------------------------------- |
-| `latest`     | Latest **stable** or **beta** release                |
-| `1`, `1.2`   | Latest stable or beta within that major / minor line |
-| `1.2.3`      | Exact stable version                                 |
-| `1.2.3-beta` | Beta release                                         |
-| `1.2.3-rc-1` | Pre-release — release candidate                      |
-| `1.2.3-pr-5` | Pre-release build                                    |
+| Tag          | What you get                                   |
+| ------------ | ---------------------------------------------- |
+| `latest`     | Newest **stable** or **beta** release          |
+| `0`          | Newest stable or beta in the `0.x` line        |
+| `0.5`        | Newest stable or beta in the `0.5.x` line      |
+| `0.5.3`      | That exact stable version                      |
+| `0.5.3-beta` | That exact beta release                        |
+| `0.5.3-rc-1` | Release candidate — pre-release, never aliased |
+| `0.5.3-pr-5` | Pre-release build from a pull request          |
 
-**`latest`, major, and minor aliases are updated on stable and beta releases.**  
-Release candidates (`-rc-*`) and pre-release builds (`-pr-*`) are published but never assigned to `latest`, so pinning to `latest` will not pull those builds.
+A stable release (`v0.5.3`) and a beta release (`v0.5.3-beta`) both move
+`latest` and both move the major and minor aliases — beta is treated as a
+release here, not a pre-release. Release candidates (`-rc-*`) and pre-release
+builds (`-pr-*`) are published under their exact version only and never touch
+`latest`, `0` or `0.5`, so pinning to any of those three will not pull them.
 
 To pin to an exact version (recommended for production):
 
 ```yaml
-image: ghcr.io/doolijb/serene-pub:1.2.3
+image: ghcr.io/doolijb/serene-pub:0.5.3-beta
 ```
 
 ---
@@ -50,6 +54,13 @@ docker compose -f docker-compose.dist.yml up -d
 ```
 
 Database migrations run automatically on startup. Back up your data volume before upgrading across major versions.
+
+**Coming from 0.5.2 or earlier?** Real-time updates used to run on a second
+server (`SOCKETS_PORT`, default `3001`) and that port is gone. A proxy rule
+routing `/socket.io/` to `:3001` will break; a leftover `-p 3001:3001` mapping
+and `SOCKETS_PORT` variable will not, and are cleanup rather than an emergency.
+See [Upgrading from 0.5.2 or earlier](./docs/hosting.md#upgrading-from-052-or-earlier)
+for the whole list, with nginx and Caddy snippets.
 
 ---
 
@@ -80,50 +91,52 @@ volumes:
 
 All variables are optional unless noted. This is the Docker-relevant subset —
 for the full reference, including reverse-proxy trust settings
-(`PROTOCOL_HEADER`/`HOST_HEADER`) and socket endpoint overrides
-(`SOCKETS_HTTPS_HOSTS`/`PUBLIC_SOCKETS_ENDPOINT`), see
+(`PROTOCOL_HEADER`/`HOST_HEADER`) and the deprecated hosting variables, see
 [docs/hosting.md](./docs/hosting.md).
 
 | Variable                                         | Default                                   | Description                                                                                                        |
 | ------------------------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `SERENE_PUB_DATA_DIR`                            | `/data`                                   | Directory for all persistent data                                                                                  |
 | `PORT`                                           | `3000`                                    | HTTP port the web server listens on                                                                                |
-| `SOCKETS_PORT`                                   | `3001`                                    | WebSocket server port                                                                                              |
 | `SERENE_AUTO_OPEN`                               | `1` (disabled)                            | Baked into the image (there's no browser to open in a container) and set again in both compose files — no need to touch this yourself |
 | `NODE_ENV`                                       | `production`                              | Node.js environment                                                                                                |
 | `USER_TOKEN_EXPIRATION_HOURS`                    | `168`                                     | Session lifetime in hours (168 = 7 days)                                                                           |
 | `TRANSFORMERS_CACHE`                             | `$SERENE_PUB_DATA_DIR/transformers-cache` | Override embedding model cache directory                                                                           |
-| `SOCKETS_ALLOWED_ORIGINS`                        | `*` (in both compose files)               | Disables the app-level socket origin allowlist. Both `docker-compose.dist.yml` and `docker-compose.dev.yml` ship with this set, since a Docker deployment's network exposure is already controlled by its port mapping and/or a reverse proxy — see the comment above `SOCKETS_ALLOWED_ORIGINS` in either compose file if you'd rather remove it and rely on the app-level allowlist too |
 | `KOBOLDCPP_BINARY_DIR` / `KOBOLDCPP_BINARY_NAME` | unset                                     | Point managed KoboldCPP mode at a binary you mounted yourself — see [Managed mode](#koboldcpp--managed-mode) below |
 
 ---
 
-## Changing ports
+## Changing the port
 
-Update both the `ports` mapping **and** the corresponding environment variable:
+Update both the `ports` mapping **and** the environment variable. Real-time
+updates share this port, so there is only one to change:
 
 ```yaml
 ports:
     - "8080:8080" # host:container
-    - "8081:8081"
 environment:
     PORT: 8080
-    SOCKETS_PORT: 8081
 ```
 
 ---
 
 ## Running behind a reverse proxy
 
-Serene Pub runs two servers — the web app (`PORT`, default `3000`) and a
-separate WebSocket server (`SOCKETS_PORT`, default `3001`). Your proxy needs
-to route **both**, and forward WebSocket upgrade requests. The simplest way
-is a path split on the same host — see
+Serene Pub runs one server (`PORT`, default `3000`), which serves the web app
+and real-time updates (`/socket.io/`) together. Your proxy needs a single
+upstream, and must forward WebSocket upgrade requests. See
 [docs/hosting.md](./docs/hosting.md#reverse-proxy-or-tunnel-on-the-same-host) for a full nginx
 example (including Nginx Proxy Manager) and the matching environment
-variables (`SOCKETS_HTTPS_HOSTS`, `HOST_HEADER`), plus a troubleshooting
+variables (`PUBLIC_URL`, `TRUSTED_PROXIES`), plus a troubleshooting
 table for the "mixed content" / CORS / timeout errors this typically shows
 up as when misconfigured.
+
+> **Upgrading?** Serene Pub used to run a second server on `SOCKETS_PORT`
+> (default `3001`). Point any proxy rule that routed `/socket.io/` to `:3001` at
+> `PORT` instead — that rule is the one thing that genuinely breaks. A leftover
+> `-p 3001:3001` mapping and `SOCKETS_PORT` variable are harmless and can be
+> dropped whenever convenient. Full details in
+> [Upgrading from 0.5.2 or earlier](./docs/hosting.md#upgrading-from-052-or-earlier).
 
 ---
 
@@ -194,7 +207,7 @@ Or by hand:
 
 ```bash
 docker build -t serene-pub:local .
-docker run -p 3000:3000 -p 3001:3001 -v serene-pub-data:/data serene-pub:local
+docker run -p 3000:3000 -v serene-pub-data:/data serene-pub:local
 ```
 
 Multi-platform build (requires `docker buildx`):

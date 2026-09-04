@@ -12,6 +12,7 @@ import { vitePreprocess } from "@sveltejs/vite-plugin-svelte"
 // now the primary path — nothing passes them at build time for published
 // artifacts, so the build-time values here are only a convenience for people
 // building their own image.
+/** @param {string} envVar */
 function cspList(envVar) {
 	return (process.env[envVar] || "")
 		.split(",")
@@ -19,24 +20,41 @@ function cspList(envVar) {
 		.filter(Boolean)
 }
 
-// The socket server always runs on a different port than the main app
-// (SOCKETS_PORT vs PORT), so 'self' alone isn't enough for connect-src, and
-// Socket.IO tries polling (plain http(s):// XHR) before upgrading to
-// WebSocket by default, so ws:/wss: alone isn't enough either — that scheme
-// source doesn't match http(s):// requests at all.
+// Socket.IO shares the app's own HTTP server, so its polling transport (plain
+// http(s):// XHR, which it tries before upgrading to WebSocket) is same-origin
+// and already covered by 'self'. Only the WebSocket upgrade still needs naming:
+// 'self' matching ws:/wss: on the same origin is specified, but has been
+// inconsistent across browsers historically, so the schemes stay listed rather
+// than relying on it.
 //
-// This intentionally does NOT try to scope the port: svelte.config.js runs
-// during `npm run build` via plain Node, which never loads .env (only this
-// app's own runtime code does, once the server actually starts) — so
-// process.env.SOCKETS_PORT is unreliable here regardless of what's
-// configured at runtime. More fundamentally, a reverse-proxied/tunneled
-// deployment (see docs/hosting.md) has the browser connect on the public port
-// (443/80) with the proxy routing internally to SOCKETS_PORT — the
-// browser-facing URL never contains that port at all, so a port-scoped
-// source can't cover that mode regardless of the build-time issue. Scheme-
-// only sources (any host, any port) are what actually work across every
-// documented hosting mode without requiring a rebuild when config changes.
-const socketConnectSrc = ["http:", "https:", "ws:", "wss:"]
+// This used to also list "http:" and "https:" — any host, any port. That was
+// not laxness for its own sake: the socket server ran on its own port
+// (SOCKETS_PORT vs PORT), so a legitimate connection was always cross-origin
+// from the page's point of view, and the port could not be named at build time
+// (svelte.config.js runs under plain Node during `npm run build`, which never
+// loads .env) nor even at runtime under a proxy that exposes only 443. With one
+// listener there is no other origin to reach, so those two entries are gone —
+// if a socket bug ever tempts you to add them back, the connection is
+// same-origin now and 'self' is the entry that covers it.
+const socketConnectSrc = ["ws:", "wss:"]
+
+// The community library does NOT load card art with <img src="https://...">.
+// RetryableImage.svelte fetch()es the PNG and hands the <img> a blob: URL
+// (see its fetch -> response.blob() -> URL.createObjectURL chain), so the
+// request is governed by connect-src, NOT img-src. That is why img-src's
+// "https:" entry does not cover it, and why narrowing connect-src to
+// ws:/wss: silently emptied the library: every card was blocked with
+// "Refused to connect because it violates the document's Content Security
+// Policy", the grid rendered zero <img> elements, and no img-src change
+// could have fixed it. Narrow this list if you like, but do not remove the
+// library host without checking RetryableImage first.
+//
+// CharaVault needs no entry here: its card images are proxied same-origin
+// through /library/cardImage/charavault/ (charavault.net sends a
+// Cross-Origin-Resource-Policy header that blocks direct cross-site loads),
+// and the rest of its API is called server-side, where page CSP does not
+// apply.
+const libraryConnectSrc = ["https://raw.githubusercontent.com"]
 
 const config = {
 	preprocess: vitePreprocess(),
@@ -53,6 +71,7 @@ const config = {
 				"connect-src": [
 					"self",
 					...socketConnectSrc,
+					...libraryConnectSrc,
 					...cspList("CSP_EXTRA_CONNECT_SRC")
 				],
 				// "https:" (any host) is needed for inline chat images —

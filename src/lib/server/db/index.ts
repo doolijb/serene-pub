@@ -2,7 +2,10 @@ import * as schema from "./schema"
 import { eq } from "drizzle-orm"
 import { migrate } from "drizzle-orm/pglite/migrator"
 import * as dbConfig from "./drizzle.config"
-import { compareVersions } from "$lib/shared/utils/releaseChannel"
+import {
+	compareVersions,
+	isParseableVersion
+} from "$lib/shared/utils/releaseChannel"
 import type { MigrationConfig } from "drizzle-orm/migrator"
 import fs from "fs"
 import crypto from "crypto"
@@ -277,34 +280,83 @@ if (building) {
 			"App version is not defined. Please set __APP_VERSION__."
 		)
 	}
-	const versionCompare = compareVersions(meta.version, appVersion)
+	// `meta.version` is an unchecked cast over whatever JSON.parse produced, so
+	// a hand-edited meta.json can carry a missing or non-string value. Without
+	// the typeof, isParseableVersion() throws on `.trim()` and startup dies on
+	// a file the reader above accepted as valid JSON.
+	const storedVersionUsable =
+		typeof meta.version === "string" && isParseableVersion(meta.version)
+	const appVersionUsable = isParseableVersion(appVersion)
 
-	switch (versionCompare) {
-		case 0:
-			console.log("No migration needed, versions match.")
-			break
-		case -1:
-			console.log("Running migrations to update database schema...")
-			await runMigrations()
-			meta.version = appVersion
-			fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
-			console.log(`Updated meta.json to version ${appVersion}.`)
-			break
-		case 1:
+	// The rollback guard runs BEFORE any migration, so that refusing leaves the
+	// database exactly as it was found. Ordering matters across divergent
+	// branches: a hotfix line whose migration was authored later than the newer
+	// release's would otherwise apply that migration onto the newer schema and
+	// only then refuse to start.
+	//
+	// It requires BOTH versions to be readable. An unparseable app version used
+	// to arrive here as 0.0.0, which made compareVersions() report "database is
+	// newer" for any healthy install upgrading onto a badly-tagged build, and
+	// hard-failed startup on a database that was perfectly fine.
+	if (storedVersionUsable && appVersionUsable) {
+		if (compareVersions(meta.version, appVersion) === 1) {
 			console.warn(
 				`Warning: Database version (${meta.version}) is newer than app version (${appVersion}).`
 			)
-			// This could happen if the app version is rolled back or if the database was manually updated
-			// Handle this case as needed, e.g., notify the user or log an error
 			throw new Error(
 				`Database version (${meta.version}) is newer than app version (${appVersion}). Please check your database integrity.`
 			)
-		default:
-			console.error(
-				"Unexpected version comparison result:",
-				versionCompare
-			)
-			throw new Error("Unexpected version comparison result")
+		}
+	}
+
+	// KNOWN GAP, deliberately left: a downgrade onto a build whose OWN version
+	// is unparseable slips past that guard, so older code can run against a
+	// newer schema. The version string is simply the wrong signal here — the
+	// exact answer already sits in the database, as max(created_at) in
+	// drizzle.__drizzle_migrations against max(folderMillis) of the bundled
+	// migration set. That is the follow-up. Failing closed on an unreadable app
+	// version instead would block the legitimate upgrade AWAY from the
+	// badly-tagged 0.5.3 release candidate, which is the case real users are in.
+
+	// Migrations run UNCONDITIONALLY here, exactly as they do in dev above and
+	// for the same stated reason: drizzle's migrate() is idempotent and applies
+	// only what is missing, so gating it on a version comparison can never save
+	// meaningful work — it can only ever SKIP a migration that needed to run.
+	//
+	// It did exactly that, in a shipped build. `0.5.3-beta-rc-1` has a compound
+	// suffix that parseVersion() cannot read, so it degraded silently to 0.0.0
+	// — the same sentinel a freshly created meta.json carries. The two compared
+	// equal, the gate logged "No migration needed, versions match", and every
+	// fresh install started with an empty database: no tables, every query
+	// failing 42P01, and no self-healing on restart because meta.json stayed on
+	// the sentinel forever. No test caught it because the dev branch above
+	// bypasses this gate entirely, so the failure existed only in a production
+	// bundle.
+	await runMigrations()
+
+	// Bookkeeping only, now that it can no longer suppress a migration.
+	if (!appVersionUsable) {
+		// Loud, because it means a release was tagged in a shape this project
+		// does not use (`-beta`, `-rc-N`, `-pr-N`, `-dev`, `-alpha`), and the
+		// same string also falls through .github/workflows/release.yml's
+		// classifier to its "Unknown suffix" branch, which turns CI tests OFF.
+		console.warn(
+			`Warning: app version "${appVersion}" is not a recognized version format, so the database version stamp cannot be compared. Migrations were applied regardless. Expected X.Y.Z, X.Y.Z-type, or X.Y.Z-type-N.`
+		)
+	} else if (storedVersionUsable) {
+		if (compareVersions(meta.version, appVersion) === -1) {
+			meta.version = appVersion
+			fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
+			console.log(`Updated meta.json to version ${appVersion}.`)
+		}
+	} else {
+		// Stored stamp missing, non-string, or unreadable — a hand-edited or
+		// corrupted meta.json. (The "0.0.0" bootstrap sentinel a fresh install
+		// carries is a valid version and takes the branch above.) Nothing to
+		// compare against, so just record where we are now.
+		meta.version = appVersion
+		fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
+		console.log(`Updated meta.json to version ${appVersion}.`)
 	}
 }
 

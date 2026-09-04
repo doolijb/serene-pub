@@ -15,6 +15,23 @@ export const CONNECTION_DEFAULTS = {
 			useChat: true
 		}
 	},
+	// llmman (https://github.com/llmmanorg/llmman) serves the Ollama API on
+	// port 17434, so it reuses OllamaAdapter/OllamaForm — only the type and
+	// default base URL differ from OLLAMA above. Kept as a fresh literal (not
+	// a spread of a shared const) so TS's object-literal union normalization
+	// still lets callers access other types' extraJson fields.
+	[CONNECTION_TYPE.LLMMAN]: {
+		type: CONNECTION_TYPE.LLMMAN,
+		baseUrl: "http://localhost:17434/",
+		promptFormat: PromptFormats.VICUNA,
+		tokenCounter: TokenCounterOptions.ESTIMATE,
+		extraJson: {
+			stream: true,
+			think: false,
+			keepAlive: "300ms",
+			useChat: true
+		}
+	},
 	[CONNECTION_TYPE.OPENAI_CHAT]: {
 		type: CONNECTION_TYPE.OPENAI_CHAT,
 		baseUrl: "",

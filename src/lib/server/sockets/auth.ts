@@ -101,16 +101,18 @@ export async function authMiddleware(
 			// No Origin header at all — a non-browser client (CLI tool, the
 			// Android wrapper, server-to-server), not subject to the
 			// browser-mediated attack the check below defends against. Still
-			// scoped to the local network by default: an internet-reachable
-			// instance with accounts disabled (both defaults) would otherwise
-			// auto-attach ANY such connection to the first admin user with no
-			// token at all. See originAllowlist.ts's isLocalThroughProxy() —
+			// scoped to the local network, unconditionally: an
+			// internet-reachable instance with accounts disabled (both
+			// defaults) would otherwise auto-attach ANY such connection to the
+			// first admin user with no token at all, so there is deliberately
+			// no variable that widens this. See originAllowlist.ts's
+			// isLocalThroughProxy() —
 			// depth-independent chain check (not just the raw peer address),
 			// so a reverse proxy in front of this server can't make every
 			// connection look local.
 			if (!isLocalThroughProxy(socket)) {
 				console.log(
-					`Socket connection with no Origin header from "${clientAddress}" — rejecting (not a local-network address; set SOCKETS_ALLOWED_ORIGINS=* to allow non-browser clients from anywhere)`
+					`Socket connection with no Origin header from "${clientAddress}" — rejecting (not a local-network address; non-browser clients are restricted to the local network, with no override — enable user accounts and connect with a token to reach this instance from elsewhere)`
 				)
 				socket.disconnect()
 				return next(new Error("Origin not allowed"))
