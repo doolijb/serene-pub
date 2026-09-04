@@ -17,6 +17,8 @@ export async function getConnectionAdapter(
 			return (await import("../connectionAdapters/LMStudioAdapter"))
 				.default
 		case CONNECTION_TYPE.OLLAMA:
+		// llmman speaks the Ollama API (on port 17434), so it shares the adapter.
+		case CONNECTION_TYPE.LLMMAN:
 			return (await import("../connectionAdapters/OllamaAdapter")).default
 		case CONNECTION_TYPE.OPENAI_CHAT:
 			return (await import("../connectionAdapters/OpenAIChatAdapter"))
