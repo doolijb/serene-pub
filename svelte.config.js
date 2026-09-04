@@ -12,6 +12,7 @@ import { vitePreprocess } from "@sveltejs/vite-plugin-svelte"
 // now the primary path — nothing passes them at build time for published
 // artifacts, so the build-time values here are only a convenience for people
 // building their own image.
+/** @param {string} envVar */
 function cspList(envVar) {
 	return (process.env[envVar] || "")
 		.split(",")
@@ -37,6 +38,24 @@ function cspList(envVar) {
 // same-origin now and 'self' is the entry that covers it.
 const socketConnectSrc = ["ws:", "wss:"]
 
+// The community library does NOT load card art with <img src="https://...">.
+// RetryableImage.svelte fetch()es the PNG and hands the <img> a blob: URL
+// (see its fetch -> response.blob() -> URL.createObjectURL chain), so the
+// request is governed by connect-src, NOT img-src. That is why img-src's
+// "https:" entry does not cover it, and why narrowing connect-src to
+// ws:/wss: silently emptied the library: every card was blocked with
+// "Refused to connect because it violates the document's Content Security
+// Policy", the grid rendered zero <img> elements, and no img-src change
+// could have fixed it. Narrow this list if you like, but do not remove the
+// library host without checking RetryableImage first.
+//
+// CharaVault needs no entry here: its card images are proxied same-origin
+// through /library/cardImage/charavault/ (charavault.net sends a
+// Cross-Origin-Resource-Policy header that blocks direct cross-site loads),
+// and the rest of its API is called server-side, where page CSP does not
+// apply.
+const libraryConnectSrc = ["https://raw.githubusercontent.com"]
+
 const config = {
 	preprocess: vitePreprocess(),
 	kit: {
@@ -52,6 +71,7 @@ const config = {
 				"connect-src": [
 					"self",
 					...socketConnectSrc,
+					...libraryConnectSrc,
 					...cspList("CSP_EXTRA_CONNECT_SRC")
 				],
 				// "https:" (any host) is needed for inline chat images —
