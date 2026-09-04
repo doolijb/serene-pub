@@ -12,8 +12,10 @@ import { eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { writtenMessageId } from "$lib/server/pipelines/runtime/runTurn"
 import * as schema from "$lib/server/db/schema"
+import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 
-class FakeAdapter {
+/** Pinned to the real action, so a rename cannot pass here — fakeTextAdapter.ts. */
+class FakeAdapter implements FakeTextAdapter {
 	injected: any
 	promptBuilder: any = {}
 	constructor(_p: any) {}
@@ -22,7 +24,7 @@ class FakeAdapter {
 		return this
 	}
 	abort() {}
-	async generate() {
+	async generateText() {
 		return {
 			compiledPrompt: this.injected,
 			isAborted: false,

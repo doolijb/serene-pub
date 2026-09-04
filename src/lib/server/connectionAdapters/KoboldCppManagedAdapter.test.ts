@@ -304,7 +304,7 @@ describe("KoboldCppManagedAdapter.preflight() — retry loop", () => {
 	})
 })
 
-describe("KoboldCppManagedAdapter.generate() — TTL reset after completion", () => {
+describe("KoboldCppManagedAdapter.generateText() — TTL reset after completion", () => {
 	const originalFetch = global.fetch
 
 	beforeEach(() => {
@@ -345,7 +345,7 @@ describe("KoboldCppManagedAdapter.generate() — TTL reset after completion", ()
 		})) as any
 
 		const adapter = makeNonStreamingAdapter()
-		const result = await adapter.generate()
+		const result = await adapter.generateText()
 
 		expect(result.completionResult).toBe("hello")
 		expect(resetTtlMock).toHaveBeenCalledTimes(1)
@@ -365,7 +365,7 @@ describe("KoboldCppManagedAdapter.generate() — TTL reset after completion", ()
 		isRunningMock.mockReturnValue(false)
 
 		const adapter = makeNonStreamingAdapter()
-		await expect(adapter.generate()).rejects.toThrow()
+		await expect(adapter.generateText()).rejects.toThrow()
 
 		expect(resetTtlMock).not.toHaveBeenCalled()
 	})
@@ -379,7 +379,7 @@ describe("KoboldCppManagedAdapter.generate() — TTL reset after completion", ()
 		isRunningMock.mockReturnValue(true)
 
 		const adapter = makeNonStreamingAdapter()
-		await expect(adapter.generate()).rejects.toThrow()
+		await expect(adapter.generateText()).rejects.toThrow()
 
 		expect(resetTtlMock).toHaveBeenCalledTimes(1)
 	})
@@ -396,7 +396,7 @@ describe("KoboldCppManagedAdapter.generate() — TTL reset after completion", ()
 		getLoadedSignatureMock.mockReturnValue(null)
 
 		const adapter = makeNonStreamingAdapter()
-		await adapter.generate()
+		await adapter.generateText()
 
 		expect(resetTtlMock).not.toHaveBeenCalled()
 	})

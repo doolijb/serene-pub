@@ -15,6 +15,8 @@
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
+import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
+import type { CompiledPrompt } from "$lib/server/connectionAdapters/types"
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 })
 
@@ -28,7 +30,23 @@ const answers = [
 	"The Sealed Gate"
 ]
 
-class FakeStepAdapter {
+/**
+ * What a step adapter reports it sent.
+ *
+ * `dispatchStep` hands one in through construction rather than
+ * `withCompiledPrompt`, and nothing in this file reads it back — but the action
+ * requires it, so the fake states an empty one honestly instead of returning a
+ * shape the real `generateText` forbids. The `as any` is on `meta` alone: the
+ * fields under it describe a build that did not happen.
+ */
+const NO_PAYLOAD: CompiledPrompt = {
+	prompt: undefined,
+	messages: undefined,
+	meta: {} as any
+}
+
+/** Pinned to the real action, so a rename cannot pass here — fakeTextAdapter.ts. */
+class FakeStepAdapter implements FakeTextAdapter {
 	private system: string
 	private user: string
 	constructor(p: any) {
@@ -37,11 +55,11 @@ class FakeStepAdapter {
 	}
 	abort() {}
 	async preflight() {}
-	async generate() {
+	async generateText() {
 		calls.push({ systemPrompt: this.system, userPrompt: this.user })
 		const text = answers[Math.min(calls.length - 1, answers.length - 1)]!
 		return {
-			compiledPrompt: {},
+			compiledPrompt: NO_PAYLOAD,
 			isAborted: false,
 			completionResult: async (onContent: (c: string) => void) => {
 				onContent(text)
@@ -117,20 +135,18 @@ beforeAll(async () => {
 		.insert(schema.samplingConfigs)
 		.values({ name: "Fake sampling", isImmutable: false })
 		.returning()
-	await db
-		.insert(schema.systemSettings)
-		.values({
-			id: 1,
-			defaultConnectionId: connection.id,
-			defaultSamplingConfigId: sampling.id
-		})
-		.onConflictDoUpdate({
-			target: [schema.systemSettings.id],
-			set: {
-				defaultConnectionId: connection.id,
-				defaultSamplingConfigId: sampling.id
-			}
-		})
+	// The instance default: a `connection_defaults` row keyed by capability since
+	// 0181, where it used to be two `system_settings` columns. Load-bearing —
+	// every step in this run resolves its connection through the chain, and an
+	// unregistered `text->text` means the first one refuses rather than falling
+	// back to whatever happens to be saved.
+	const { setCapabilityDefault } = await import(
+		"$lib/server/connections/capabilityDefaults"
+	)
+	await setCapabilityDefault(db as any, "text->text", {
+		connectionId: connection.id,
+		samplingConfigId: sampling.id
+	})
 }, 120_000)
 
 describe("a summarize run, stopped at the write", () => {

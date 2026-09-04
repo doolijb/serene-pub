@@ -15,7 +15,8 @@ import {
 	timestamp,
 	varchar,
 	uuid,
-	check
+	check,
+	primaryKey
 } from "drizzle-orm/pg-core"
 
 // ─── Enumerated value types ───────────────────────────────────────────────────
@@ -154,6 +155,17 @@ export const userSettings = pgTable(
 		charaVaultIncludeNsfw: boolean("chara_vault_include_nsfw")
 			.notNull()
 			.default(false),
+		/**
+		 * Off means never keep a derived form on disk — re-derive on every
+		 * request (0182).
+		 *
+		 * The display form is NOT a derived form for this purpose. It is the
+		 * default client-side representation of a file and is never culled; only
+		 * `variants.cache` rows answer to this setting.
+		 */
+		derivedMediaCacheEnabled: boolean("derived_media_cache_enabled")
+			.notNull()
+			.default(true),
 		createdAt: date("created_at")
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
@@ -398,7 +410,7 @@ export const connections = pgTable("connections", {
 })
 
 /**
- * The instance default connection per capability.
+ * The instance default connection per capability. The ONLY store for one.
  *
  * A table rather than a pair of columns per capability, because the capability
  * space is open — a plugin may introduce a transform — so columns would mean a
@@ -408,20 +420,98 @@ export const connections = pgTable("connections", {
  * tool-calling connection: a feature qualifies a request, it is not something a
  * node goes looking for a connection to provide.
  *
- * Both references are `set null` rather than cascade: deleting a connection
- * should clear the default, not delete the fact that a default exists.
+ * ## The key is the transform's two SIDES, not its id (0183)
+ *
+ * It was one `capability` column holding the whole id, `text+image->text`. That
+ * makes the output side — the half every grouping on the admin screen and every
+ * sampling-vocabulary lookup actually asks about — reachable only by pattern
+ * matching a string. `input` and `output` hold comma-delimited `IoKind` lists
+ * instead, so the question is an equality on an indexed column.
+ *
+ * The id is still what the rest of the app says out loud; see
+ * `$lib/shared/capabilities/sides.ts` for the correspondence and for why the
+ * order inside a side is not alphabetical.
+ *
+ * ## Why not a JSON column, which is the other shape this could have taken
+ *
+ * A blob keyed by capability would hold exactly the same pairs and lose both
+ * foreign keys, and those keys are load-bearing three times over. `set null`
+ * rather than cascade, deliberately, in each case:
+ *
+ *   1. Deleting a connection CLEARS the defaults pointing at it. In a blob the
+ *      id would simply stay, dangling, and the next run would resolve a default
+ *      to a row that is not there.
+ *   2. It is what makes "the default was cleared" distinguishable from "no
+ *      default was ever set" — a row with a null `connection_id` versus no row.
+ *      Those are two different sentences to a person: one says the connection
+ *      you picked is gone, the other says you never picked one.
+ *   3. Clearing rather than deleting the ROW is why nothing needs an
+ *      auto-fallback on delete. The fact that somebody configured this
+ *      capability survives; only the target is missing, and it is asked for
+ *      by name.
+ *
+ * ⚠ Until 0181 this docblock said `system_settings.default_connection_id` and
+ * `default_sampling_id` were "deliberately still there and still read by the
+ * legacy generation path". They are gone. Every star press used to write both
+ * spellings, and readers checked the table first and the column only when the
+ * row was ABSENT — never when it was merely STALE. Nothing reads a default from
+ * anywhere but here now, legacy path included.
  */
-export const connectionDefaults = pgTable("connection_defaults", {
-	/** A `CapabilityId` — in practice always a transform id, e.g. `text->image`. */
-	capability: text("capability").primaryKey(),
-	connectionId: integer("connection_id").references(() => connections.id, {
-		onDelete: "set null"
-	}),
-	samplingConfigId: integer("sampling_config_id").references(
-		() => samplingConfigs.id,
-		{ onDelete: "set null" }
-	)
-})
+export const connectionDefaults = pgTable(
+	"connection_defaults",
+	{
+		/**
+		 * What goes IN, comma-delimited: `text`, or `text,image` for vision.
+		 *
+		 * ⚠ The order is `IO_KINDS` DECLARATION order — text, image, audio,
+		 * video, document, embedding — and NOT alphabetical. Vision stores
+		 * `"text,image"`, never `"image,text"`. That is the SDK's own rule (see
+		 * `side()` in `capabilities.ts`: "text leads, so vision reads
+		 * `text+image->text`"), and a row sorted the other way is a perfectly
+		 * valid primary key that matches nothing forever.
+		 */
+		input: text("input").notNull(),
+		/** What comes OUT, same rules — `text`, `image`, `embedding`. */
+		output: text("output").notNull(),
+		connectionId: integer("connection_id").references(
+			() => connections.id,
+			{
+				onDelete: "set null"
+			}
+		),
+		samplingConfigId: integer("sampling_config_id").references(
+			() => samplingConfigs.id,
+			{ onDelete: "set null" }
+		)
+	},
+	(t) => [
+		// The pair, which until 0183 was one `capability` column holding the
+		// whole transform id. Splitting it is what makes the output side
+		// QUERYABLE: "which defaults produce images" is `WHERE output = 'image'`
+		// rather than `LIKE '%->image'` against a string no index helps with.
+		//
+		// The id remains the canonical IN-MEMORY form — `capabilityDefaults()`
+		// is still keyed by it, and so is everything downstream. The conversion
+		// lives at the storage boundary in `connections/capabilityDefaults.ts`
+		// and in `$lib/shared/capabilities/sides.ts`, and nowhere else.
+		primaryKey({ columns: [t.input, t.output] }),
+		index("connection_defaults_output_idx").on(t.output),
+		// Neither side may be EMPTY (0184).
+		//
+		// An empty side satisfies the primary key perfectly and matches nothing
+		// forever, because nothing ever asks for a capability with an empty side —
+		// so the row is unmatchable rather than merely wrong, and an unmatchable
+		// row on a lookup table is worse than an absent one: the absent one reads
+		// as "not set up" and says where to set it. 0183 deleted the degenerate
+		// rows it found and `capabilityDefaults.ts` refuses to write one; this is
+		// the same rule at the system of record, so a writer arriving by any other
+		// path cannot create one either.
+		check(
+			"connection_defaults_sides_check",
+			sql`${t.input} <> '' AND ${t.output} <> ''`
+		)
+	]
+)
 
 export const connectionDefaultsRelations = relations(
 	connectionDefaults,
@@ -2095,10 +2185,24 @@ export const messageParts = pgTable(
 )
 
 /**
- * Media — every uploaded or imported blob in the instance (28).
+ * A logical file and its metadata (0182).
+ *
+ * **THE ONLY TABLE READ TO BUILD A CLIENT PAYLOAD.** One row per logical file,
+ * one uuid shared by every representation of it; the bytes live in `variants`.
+ * A render site loads this row, builds a URL, and stops — the HTTP handler
+ * works out which variant that means and derives it if it is missing. Putting a
+ * variant lookup back on that path is the one change this split exists to
+ * prevent.
+ *
+ * **Why the split.** One row per representation could not answer the question a
+ * render site actually asks. A payload needed the original row AND a second
+ * query for its thumbnail; a thumbnail had to leave all four provenance columns
+ * NULL so `mediaFor(character)` would not return it; and `visibility` had to be
+ * written twice to keep a derivative in step. Three symptoms of one table doing
+ * two jobs.
  *
  * **Provenance, not role.** The `userId`/`characterId`/`personaId`/`sessionId`/
- * `messageId` columns say what a blob *belongs to*; they never say what it is
+ * `messageId` columns say what a file *belongs to*; they never say what it is
  * *for*. Roles are read off inbound relations instead — a character's avatar is
  * `characters.avatarMediaId` pointing at a row here, an emotion sprite will be
  * whatever the emotions row points at. That inverse is deliberate: the number
@@ -2106,76 +2210,134 @@ export const messageParts = pgTable(
  * costs a column on the thing that owns it and never a migration here.
  *
  * **No foreign keys, no cascade, no set null** (28 §2, ruled). Deleting a
- * character leaves its media behind, still stamped with that character's id —
+ * character leaves its files behind, still stamped with that character's id —
  * which is the whole point. A stale id keeps an orphan *groupable*, so "these
  * 34 files belonged to a character you deleted" stays an answerable question
  * and deleting them stays a safe operation. Under cascade the rows vanish and
  * the files become an unattributable pile.
  *
  * The cost, stated so it is not a surprise: the database enforces nothing about
- * media references. A dangling `avatarMediaId` is possible and renders as a
- * missing image. Integrity lives in the application and in the (deferred)
- * cleanup tool.
+ * file references. A dangling `avatarMediaId` is possible and renders as a
+ * missing image. Integrity lives in the application and in the cleanup tool.
  *
- * `path` is NEVER serialised to a non-admin client — see
- * `$lib/server/media`'s `toClientMedia`.
+ * A path is NEVER serialised to a non-admin client — and since 0182 a path only
+ * exists on a `variants` row that no payload builder ever loads, so that is now
+ * structural rather than a rule someone has to remember.
  */
-export const media = pgTable(
-	"media",
+export const files = pgTable(
+	"files",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 
 		/**
-		 * The public address of this blob — every URL a client sees is
-		 * `/media/{uuid}`, never `/media/{id}`.
-		 *
-		 * It is a **cache token**, not just an opaque id: it is rotated
-		 * whenever what this row serves could differ from what a browser
-		 * already has (today: a regenerated thumbnail). Because a uuid only
-		 * ever addresses one fixed set of bytes, the response can be
-		 * `immutable` for a year and still never go stale — a changed image is
-		 * a changed URL, so there is nothing to revalidate.
+		 * The public address — `/media/{uuid}`. ONE uuid per logical file now,
+		 * shared across variants, and it no longer rotates: `rev` below carries
+		 * cache invalidation instead. A uuid that rotated per-variant could not
+		 * be shared, and sharing it is what lets a render site address the
+		 * thumbnail of a file it holds without a second query.
 		 */
 		uuid: uuid("uuid")
 			.notNull()
 			.unique()
 			.default(sql`(gen_random_uuid ())`),
 
-		// ---- Provenance. Plain integers by ruling; see the note above.
-		//
-		// A THUMBNAIL LEAVES ALL FOUR ENTITY COLUMNS NULL — its only parent is
-		// the image it represents (`parentMediaId`). That is what keeps
-		// `mediaFor(character)` returning originals only, with no
-		// `variant IS NULL` filter at any call site.
+		/**
+		 * Cache token. `/media/{uuid}?v=…&r={rev}` is immutable for a year, so
+		 * the URL string has to change whenever the bytes behind it do.
+		 *
+		 * Bumped ONLY when an EXISTING variant's bytes change, or when
+		 * `display_variant_id` is re-pointed. Deriving a variant that did not
+		 * exist does not bump (nothing already served changed) and neither does
+		 * culling one (the others' bytes are untouched).
+		 *
+		 * The handler IGNORES the value it is sent. `rev`'s job is to make the
+		 * string differ, not to be validated — rejecting a stale `r` would turn
+		 * a client holding an old URL into a broken image instead of a stale
+		 * one.
+		 */
+		rev: integer("rev").notNull().default(0),
+
+		/**
+		 * Which variant a bare `/media/{uuid}` serves — a STORED POINTER, never
+		 * a request-time comparison.
+		 *
+		 * Smallest-wins among equal-fidelity representations has to be decided
+		 * once and remembered: if the handler compared sizes live, deriving a
+		 * smaller variant would change what an already-cached immutable URL
+		 * serves without changing the URL. Re-pointing this IS such a change,
+		 * so it bumps `rev` — the one deliberate exception to "deriving does not
+		 * bump", and consistent with the rule, because served bytes changed.
+		 *
+		 * MAY POINT AT THE ORIGINAL ROW. When the upload is already web-safe
+		 * (png/jpeg/webp/gif) it IS the display form and no second copy exists;
+		 * the two roles are not mutually exclusive.
+		 *
+		 * Plain integer, not an FK — the same ruling as the provenance columns,
+		 * and here it also avoids a cycle: `variants.file_id` points back, so a
+		 * real FK in both directions would make the first insert of either row
+		 * impossible without a deferred constraint. `cullVariant` is what keeps
+		 * this pointing at something that exists.
+		 */
+		displayVariantId: integer("display_variant_id"),
+
+		/**
+		 * The display variant's mime and byte length, denormalised.
+		 *
+		 * Written in the same statement as `display_variant_id`, never apart.
+		 * They exist ONLY because a payload must be one row: mime and bytes are
+		 * variant-level facts that six client consumers read, and either joining
+		 * for them or dropping them were both worse. Do not "clean up" this
+		 * duplication — doing so puts a query back on the render path.
+		 */
+		displayMime: text("display_mime"),
+		displayBytes: integer("display_bytes"),
+
+		// ---- Provenance. Plain integers by ruling; no FKs, no cascade, so a
+		// stale id keeps an orphan groupable. A VARIANT HAS NONE OF THESE — that
+		// is what makes a variant structurally unreachable by a provenance
+		// query, and it replaces the old trick of leaving a thumbnail's four
+		// columns NULL so `mediaFor(character)` would not match it.
 		userId: integer("user_id").notNull(),
 		characterId: integer("character_id"),
 		personaId: integer("persona_id"),
 		sessionId: integer("session_id"),
 		messageId: integer("message_id"),
 
-		/** scoped | private — see MEDIA_VISIBILITY. */
+		/** scoped | private — see MEDIA_VISIBILITY. Lives here and only here, so
+		 *  there is no per-variant copy to fall out of step. */
 		visibility: text("visibility").notNull().default("scoped"),
 
-		/** sha256 of the content, hex. Identity — not the filename. */
-		hash: text("hash").notNull(),
-		mime: text("mime").notNull(),
-		bytes: integer("bytes").notNull(),
-		/** image | document | audio | video | other. Derived from `mime` at
-		 *  insert and stored, so "every document" is an index scan rather than
-		 *  a string parse. */
+		/** image | document | audio | video | other. Derived from the original's
+		 *  mime at insert and stored, so "every document" is an index scan
+		 *  rather than a string parse. */
 		kind: text("kind").notNull(),
-		/** Relative to the data dir, so the data dir can move. Admin-only. */
-		path: text("path").notNull(),
-		/** The uploader's filename. Display metadata only — never resolved,
-		 *  never any part of `path`. */
+
+		/**
+		 * sha256 of the ORIGINAL bytes, hex. FILE IDENTITY — this is what a
+		 * re-upload matches on. Each variant row carries its own hash for its
+		 * own bytes; the duplication with the original variant's hash is
+		 * deliberate, because identity and an ETag are different questions.
+		 */
+		hash: text("hash").notNull(),
+
+		/** The uploader's filename. Display metadata — never resolved, never any
+		 *  part of a path. */
 		filename: text("filename"),
+
 		width: integer("width"),
 		height: integer("height"),
-
-		/** Set only on a derivative; its one and only parent. */
-		parentMediaId: integer("parent_media_id"),
-		/** NULL for an original, `thumb` for a generated thumbnail. */
-		variant: text("variant"),
+		/**
+		 * Milliseconds, when the source has a time dimension. Integer ms rather
+		 * than float seconds because GIF frame delays are centiseconds and an
+		 * exact comparison is the point; the SDK's `MediaRef.duration` is
+		 * seconds, so the boundary divides.
+		 *
+		 * NON-NULL IS THE SIGNAL THAT TIME EXISTS, and that is what makes a
+		 * silent flatten detectable. Populated for an animated GIF at upload;
+		 * NULL for audio/video, which need a probe this project has no codec
+		 * for.
+		 */
+		durationMs: integer("duration_ms"),
 
 		/** Ordering within its group — replaces the gallery tables' only real
 		 *  function (drag-to-reorder). */
@@ -2184,17 +2346,20 @@ export const media = pgTable(
 		/**
 		 * How this was made, when something made it (0173).
 		 *
-		 * The columns above record provenance as *relationships*, because that is
-		 * what access and cleanup are decided by — and none of them can say
-		 * "SDXL, 25 steps, CFG 5, seed 819442027, this prompt", which is the whole
-		 * question a person asks about a generated image afterwards: they got one
-		 * they liked and want another like it.
+		 * The columns above record provenance as *relationships*, because that
+		 * is what access and cleanup are decided by — and none of them can say
+		 * "SDXL, 25 steps, CFG 5, seed 819442027, this prompt", which is the
+		 * whole question a person asks about a generated image afterwards: they
+		 * got one they liked and want another like it.
 		 *
-		 * Opaque on purpose. The fields worth keeping differ per backend and will
-		 * keep changing, and nothing branches on any of it — written once at
-		 * generation, read back for display. NOT authoritative for anything;
+		 * Opaque on purpose. The fields worth keeping differ per backend and
+		 * will keep changing, and nothing branches on any of it — written once
+		 * at generation, read back for display. NOT authoritative for anything;
 		 * access is decided above, and NULL (an image somebody uploaded) is the
 		 * common case.
+		 *
+		 * On the FILE, not a variant: it describes how the logical image came to
+		 * exist, which no re-encode of it changes.
 		 */
 		meta: json("meta").$type<Record<string, unknown> | null>(),
 		createdAt: timestamp("created_at").notNull().defaultNow()
@@ -2202,25 +2367,120 @@ export const media = pgTable(
 	(t) => [
 		// Dedupe is per-user, not per-instance: instance-wide would make one
 		// user's upload observable to another by hash timing, and would put a
-		// blob's lifetime under an account that no longer references it.
-		// `variant` is in the key so an original and its thumbnail can share a
-		// hash without colliding.
-		uniqueIndex("media_user_hash_variant_unique").on(
-			t.userId,
-			t.hash,
-			t.variant
+		// blob's lifetime under an account that no longer references it. No
+		// `variant` in the key any more — a variant is not a file.
+		uniqueIndex("files_user_hash_unique").on(t.userId, t.hash),
+		index("files_character_idx").on(t.characterId),
+		index("files_persona_idx").on(t.personaId),
+		index("files_session_idx").on(t.sessionId),
+		index("files_message_idx").on(t.messageId),
+		check(
+			"files_visibility_check",
+			sql`${t.visibility} IN ('scoped', 'private')`
+		)
+	]
+)
+
+/**
+ * The bytes actually on disk (0182). Never queried to build a payload.
+ *
+ * `is_original` and `cache` are separate questions and one row can answer both
+ * in the combination that matters: a web-safe upload is the original AND the
+ * display form, so `is_original` true with `cache` false. The display form is
+ * NOT a cache entry — it is the default client-side representation of the file,
+ * and the derived-form cleanup must never touch it.
+ *
+ * ## Culling, which is the one place this can destroy user data
+ *
+ * Three risk classes, and note which of them is not cache:
+ *
+ *   - the DISPLAY form — `cache` FALSE, whether it is a converted WebP or the
+ *     original itself. Never touched by the derived-form sweep.
+ *   - the ORIGINAL (`is_original`, `cache` false) — cullable, but only by the
+ *     explicit destructive action, and IRREPLACEABLE once gone. A request for
+ *     it afterwards falls back to the display form rather than 404ing.
+ *   - derived forms — `cache` TRUE. Freely cullable, always re-derivable.
+ *
+ * **NEVER CULL THE LAST SURVIVING REPRESENTATION OF A FILE, and that is
+ * enforced in `cullVariant` rather than in the UI.** Lazy derivation is what
+ * makes the general form necessary: on a freshly uploaded file that has never
+ * been requested, the original is the ONLY row *and* the display target, so
+ * culling it would leave the file with nothing. A UI-only guard cannot hold
+ * that, because "cull originals" and "cull cache" are two clicks and an admin
+ * may make them in either order — checked per call, in code, the order stops
+ * mattering. Culling the display target additionally requires another
+ * full-fidelity row to re-point at, and re-pointing bumps `files.rev`, because
+ * the bare URL's bytes just changed.
+ */
+export const variants = pgTable(
+	"variants",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+
+		/** Its file. No FK, matching the provenance ruling above — deletion is
+		 *  explicit in `deleteFile`, which is the only thing allowed to leave a
+		 *  file with no variants. */
+		fileId: integer("file_id").notNull(),
+
+		/**
+		 * A CLOSED enum — see `MediaVariant`. It reaches a path builder, so free
+		 * text here is a path-traversal surface; the CHECK below is the backstop
+		 * for the validation the route does at the boundary.
+		 */
+		variant: text("variant").notNull(),
+
+		mime: text("mime").notNull(),
+		bytes: integer("bytes").notNull(),
+		/** Relative to the data dir. THE ONLY PLACE A PATH LIVES — never
+		 *  serialised to a non-admin client. Never spread this row into a
+		 *  response. */
+		path: text("path").notNull(),
+		/** sha256 of THESE bytes. The ETag the route serves. */
+		hash: text("hash").notNull(),
+		width: integer("width"),
+		height: integer("height"),
+
+		/** The bytes the user or the backend actually gave us. Irreplaceable. */
+		isOriginal: boolean("is_original").notNull().default(false),
+		/** Safe to cull, because it can be re-derived. FALSE on an original and
+		 *  FALSE on a converted display form. */
+		cache: boolean("cache").notNull().default(false),
+
+		/**
+		 * full | reduced. Only `full` rows compete for the display pointer.
+		 *
+		 * Everything stored today is lossless or an untouched original, so
+		 * smallest-wins is free — but the moment somebody adds a lossy payload
+		 * transcode, "serve the smallest" would start shipping degraded images
+		 * to every user, and it would read as a caching bug rather than a
+		 * selection bug. This column is what stops that.
+		 */
+		fidelity: text("fidelity").notNull().default("full"),
+
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		// One row per (file, variant): the race backstop for concurrent
+		// derivation, and what makes `onConflictDoNothing` correct.
+		uniqueIndex("variants_file_variant_unique").on(t.fileId, t.variant),
+		index("variants_file_idx").on(t.fileId),
+		// The cleanup sweep's whole query is "every cullable row".
+		index("variants_cache_idx").on(t.cache),
+		check(
+			"variants_variant_check",
+			sql`${t.variant} IN ('original', 'display', 'thumb')`
 		),
-		index("media_character_idx").on(t.characterId),
-		index("media_persona_idx").on(t.personaId),
-		index("media_session_idx").on(t.sessionId),
-		index("media_message_idx").on(t.messageId),
-		index("media_parent_idx").on(t.parentMediaId)
+		check(
+			"variants_fidelity_check",
+			sql`${t.fidelity} IN ('full', 'reduced')`
+		)
 	]
 )
 
 // `session_assets` was folded into `media` by 28 — a session attachment is a
-// media row stamped with a `sessionId`. `$lib/server/messages/assets.ts` keeps
-// the old function names as thin wrappers so message code did not have to move.
+// file stamped with a `sessionId` — and `media` became `files` + `variants` by
+// 0182. `$lib/server/messages/assets.ts` keeps the old function names as thin
+// wrappers so message code did not have to move either time.
 
 export const messagesRelations = relations(messages, ({ one, many }) => ({
 	session: one(sessions, {
@@ -2387,33 +2647,32 @@ export const sessionGuestsRelations = relations(sessionGuests, ({ one }) => ({
  */
 export const systemSettings = pgTable("system_settings", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	defaultConnectionId: integer("default_connection_id").references(
-		() => connections.id,
-		{
-			onDelete: "set null"
-		}
-	),
 	/**
 	 * The one active embedding connection, site-wide (20 §14) — embeddings are
 	 * an instance property, not a per-session choice, because every stored
 	 * vector must come from one model to be comparable. Changing it triggers
 	 * the 13 §8 re-embed (background, resumable), never a refusal or a silent
 	 * orphaning.
+	 *
+	 * ⚠ Not folded into `connection_defaults` alongside the two columns 0181
+	 * dropped, and that is a decision rather than an oversight. It is written
+	 * once by `migrateEmbeddingConnection` and read by nothing at runtime, so it
+	 * is not a second spelling anybody can trip over — while folding it needs a
+	 * setter that carries the re-embed above, and no such setter exists. It
+	 * moves when the embedding path reads a capability default and that setter
+	 * is written; until then, dropping it would silently discard a user's
+	 * embedding model choice mid-upgrade.
 	 */
 	activeEmbeddingConnectionId: integer(
 		"active_embedding_connection_id"
 	).references(() => connections.id, { onDelete: "set null" }),
 	lockConnection: boolean("lock_connection").notNull().default(false),
-	defaultSamplingConfigId: integer("default_sampling_id").references(
-		() => samplingConfigs.id,
-		{
-			onDelete: "set null"
-		}
-	),
-	// The per-modality image defaults that lived here (0172) moved to
-	// `connection_defaults`, keyed by capability: a column pair per capability
-	// does not scale to an open capability space, and every new one would have
-	// been a migration.
+	// The instance default connection and sampling config lived here as
+	// `default_connection_id` / `default_sampling_id`, and the per-modality
+	// image pair joined them in 0172. All of it is in `connection_defaults` now,
+	// keyed by capability (0181): a column pair per capability does not scale to
+	// an open capability space, every new one would have been a migration, and
+	// while both spellings existed every star press had to write both.
 	lockSamplingConfig: boolean("lock_sampling_config")
 		.notNull()
 		.default(false),
@@ -2632,14 +2891,9 @@ export const systemSettings = pgTable("system_settings", {
 })
 
 export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
-	defaultConnection: one(connections, {
-		fields: [systemSettings.defaultConnectionId],
-		references: [connections.id]
-	}),
-	defaultSamplingConfig: one(samplingConfigs, {
-		fields: [systemSettings.defaultSamplingConfigId],
-		references: [samplingConfigs.id]
-	}),
+	// `defaultConnection` and `defaultSamplingConfig` were here. Their columns
+	// are gone (0181); the relation to walk is `connectionDefaults`, whose row
+	// is keyed by capability rather than assumed to be the text one.
 	defaultContextConfig: one(contextConfigs, {
 		fields: [systemSettings.defaultContextConfigId],
 		references: [contextConfigs.id]
@@ -3799,21 +4053,13 @@ export const pipelineConfigValues = pgTable(
 		slot: text("slot").notNull(),
 		/** The field within the slot. Empty string for a whole-slot value. */
 		path: text("path").notNull().default(""),
-		value: json("value").$type<any>(),
-		/**
-		 * For `template` values: which language the source is written in, as a
-		 * registered engine id (`core:template/handlebars@1`).
-		 *
-		 * Text rather than an enum, deliberately. Template engines are an open
-		 * registry (F2, SDK `engines.ts`) so an extension can ship its own
-		 * language and its own renderer; a CHECK constraint here would make that
-		 * a core migration, which is the thing the registry exists to avoid. The
-		 * validation is the lookup — an unregistered id fails at render with a
-		 * message naming the plugin that should have supplied it.
-		 *
-		 * NULL for every slot that is not a template.
-		 */
-		engine: text("engine")
+		value: json("value").$type<any>()
+		// Deliberately NO `engine` column. Which language a template is written
+		// in is a fact about the TEMPLATE ROW, and it lives there — on
+		// `pipeline_context_templates` / `pipeline_variable_templates`, NOT
+		// NULL, and delivered to the renderer from there. A denormalized third
+		// copy here was written by a dead branch and read by nothing but its own
+		// copy-forward; re-adding it just gives a future reader two answers.
 	},
 	(t) => [
 		uniqueIndex("pipeline_config_values_addr_idx").on(
@@ -3844,11 +4090,27 @@ export const pipelineConfigValues = pgTable(
  * (per node, per config), and the connection and sampling config are their own
  * swappable entities selected the same way this one is.
  *
- * ## Namespaced to a pipeline
+ * ## Pooled by the NODE that consumes it, not by the pipeline
  *
- * A prompt written for session replies is not a prompt for scene summarization,
- * and offering it in that picker invites exactly the mistake the split exists
- * to prevent. The namespace is the spec, and selection refuses across it.
+ * A prompt follows the node. When a node is reused from one pipeline in
+ * another it serves the same purpose somewhere else, so everything scoped to
+ * that node travels with it: an action that reuses the reply pipeline's
+ * context node inherits its twelve prompts for free, with no seed, no copy and
+ * no code. A pipeline built from other nodes has a different pool key and is
+ * correctly offered none of them.
+ *
+ * This reverses the earlier rule, which namespaced a prompt to its spec on the
+ * reasoning that a reply's wording has no business in a summarizer's picker.
+ * That conclusion was right and the mechanism was wrong: the separation it
+ * wanted falls out of the node type by construction — `build-template-context`
+ * and `summarize-batch` are different types, so reply wording can never reach a
+ * summarizer — while spec scoping *also* severed the reuse the tier exists for,
+ * and forced a shipped prompt to be a per-pipeline BUNDLE whose fields belonged
+ * to four different node types.
+ *
+ * The pool is `(node_type_id, slot)`. Selection refuses across it, and
+ * `created_for_spec_id` sorts the picker without ever refusing — the same split
+ * `pipeline_context_templates` makes, for the same reason.
  *
  * ## Why `fields` is JSON
  *
@@ -3862,9 +4124,43 @@ export const pipelinePrompts = pgTable(
 	"pipeline_prompts",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		specId: integer("spec_id")
+		/**
+		 * The pool, and the point of this table. Unversioned — which fields the
+		 * slot declares is a property of the version and belongs to the
+		 * fit-check in `assertSelectable`; fragmenting on every @1 → @2 would
+		 * strand every prompt a user wrote. Normalize through `poolKeyFor` on
+		 * every write.
+		 */
+		nodeTypeId: text("node_type_id").notNull(),
+		/**
+		 * In the key because a type may declare more than one prompts slot,
+		 * each with its own field set. One pool for both would offer each the
+		 * other's fields, and a prompt missing a field renders a blank — which
+		 * reads as the model ignoring an instruction, not as a bad selection.
+		 */
+		slot: text("slot").notNull(),
+		/**
+		 * Where it was authored. GROUPING ONLY, never a permission — same
+		 * column, same rule, as `pipeline_context_templates`. `set null` rather
+		 * than cascade: deleting a pipeline must not delete somebody's prompt.
+		 */
+		createdForSpecId: integer("created_for_spec_id").references(
+			() => pipelineSpecs.id,
+			{ onDelete: "set null" }
+		),
+		/**
+		 * Spec slugs whose shipped config starts on this row.
+		 *
+		 * A list, not a boolean, and not `created_for_spec_id`: one pool now
+		 * serves four summarize specs, and the scene/history drafting prompt is
+		 * ONE row (their text is byte-identical) belonging to two of them. A
+		 * single owning column cannot say that; "lowest id in the pool" would
+		 * hand summarize-character the world summarizer's wording.
+		 */
+		defaultForSpecs: json("default_for_specs")
 			.notNull()
-			.references(() => pipelineSpecs.id, { onDelete: "cascade" }),
+			.default([])
+			.$type<string[]>(),
 		/** Stable identity for the prompts core ships; NULL for a user's own. */
 		seedKey: text("seed_key").unique(),
 		name: text("name").notNull(),
@@ -3875,20 +4171,36 @@ export const pipelinePrompts = pgTable(
 			.notNull()
 			.default({})
 			.$type<Record<string, string>>(),
+		/**
+		 * Text for a field the slot no longer declares, moved here by the boot
+		 * sweep. Left in `fields` it is invisible: the panel renders one box per
+		 * DECLARED field, so a prompt someone spent an afternoon on becomes
+		 * unfindable. On the ROW so a duplicate carries it to another pipeline —
+		 * "recover/archive so the user can reference/copy it later", by a person.
+		 */
+		archivedFields: json("archived_fields")
+			.notNull()
+			.default({})
+			.$type<Record<string, string>>(),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
 	(t) => [
-		index("pipeline_prompts_spec_idx").on(t.specId),
-		uniqueIndex("pipeline_prompts_spec_name_idx").on(t.specId, t.name)
+		index("pipeline_prompts_pool_idx").on(t.nodeTypeId, t.slot),
+		index("pipeline_prompts_spec_idx").on(t.createdForSpecId),
+		uniqueIndex("pipeline_prompts_pool_name_idx").on(
+			t.nodeTypeId,
+			t.slot,
+			t.name
+		)
 	]
 )
 
 export const pipelinePromptsRelations = relations(
 	pipelinePrompts,
 	({ one }) => ({
-		spec: one(pipelineSpecs, {
-			fields: [pipelinePrompts.specId],
+		createdForSpec: one(pipelineSpecs, {
+			fields: [pipelinePrompts.createdForSpecId],
 			references: [pipelineSpecs.id]
 		})
 	})
@@ -3959,11 +4271,22 @@ export const pipelineScripts = pgTable(
  * spec-ownership check copied from `prompts.ts` would compile, pass, and quietly
  * remove the reason this table exists.
  *
- * ## Why `engine` is nullable
+ * ## Why `engine` is NOT nullable
  *
- * The same reason `context_configs.engine` is (12 §2a): NULL means core's
- * default, and a stored value keeps whatever it was authored in rather than
- * inheriting whatever core happens to render with later.
+ * It used to be, on the reading that NULL meant "core's default". But the
+ * column's own argument — a stored value keeps whatever it was authored in
+ * rather than inheriting whatever core happens to render with later — is an
+ * argument FOR a concrete value and AGAINST NULL: a NULL is precisely a row
+ * that inherits later. The seed already wrote the id explicitly and said so.
+ *
+ * And here it is load-bearing rather than decorative: this table's engine
+ * genuinely reaches `renderTemplate` (`variableLayouts.ts`), so a NULL was a
+ * live coercion into Handlebars, not a hypothetical one. A default of core's
+ * engine keeps every existing row saying exactly what it already meant.
+ *
+ * The engine is also part of the unique key. "Default" once per language is
+ * what a person expects, and without it a Jinja layout can be selected into a
+ * Handlebars slot: it stores cleanly and renders as raw `{% %}` markup.
  */
 export const pipelineVariableTemplates = pgTable(
 	"pipeline_variable_templates",
@@ -3971,8 +4294,12 @@ export const pipelineVariableTemplates = pgTable(
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 		/** The registered variable this renders, e.g. `core:var/characters@1`. */
 		variableId: text("variable_id").notNull(),
-		/** Registered template engine id; NULL is core's default. */
-		engine: text("engine"),
+		/**
+		 * Registered template engine id — the language `source` is written in.
+		 * Defaults to core's Handlebars; the literal rather than an import
+		 * because this module is the schema and pulls in no pipeline code.
+		 */
+		engine: text("engine").notNull().default("core:template/handlebars@1"),
 		name: text("name").notNull(),
 		/** The template source, in whatever `engine` says it is written in. */
 		source: text("source").notNull().default(""),
@@ -3985,8 +4312,12 @@ export const pipelineVariableTemplates = pgTable(
 	},
 	(t) => [
 		index("pipeline_variable_templates_variable_idx").on(t.variableId),
+		// The engine is in the key: one "Default" per language, and a layout
+		// written in one language can no longer be selected into a slot that
+		// renders another.
 		uniqueIndex("pipeline_variable_templates_variable_name_idx").on(
 			t.variableId,
+			t.engine,
 			t.name
 		)
 	]
@@ -4030,6 +4361,23 @@ export const pipelineVariableTemplates = pgTable(
  * deliberately not a permission: a template written while editing session replies
  * is still one scroll away in the narrator, because the whole reason this is not
  * spec-scoped is that it genuinely works there.
+ *
+ * ## The engine is half the pool key, and NOT NULL
+ *
+ * A node type is not enough to say "this template fits". `core:task/assemble`
+ * has a Handlebars template slot; a plugin's assembler may declare a Jinja one
+ * on the same type. Keyed by node type alone, the picker offers each the
+ * other's rows — the selection stores cleanly and the model receives a prompt
+ * full of raw `{% %}` markup, which reads as a bad model rather than a bad
+ * pick. So the pool is `(node_type_id, engine)` and there is deliberately NO
+ * cross-engine fallback: an empty pool offers nothing, never a source in the
+ * wrong language.
+ *
+ * NULL is gone for the reason `pipeline_variable_templates` gives above: the
+ * column exists so a row keeps what it was authored in, and a NULL is exactly
+ * the row that does not. It was also masking a live bug — the engine never
+ * reached the renderer at all, so every template rendered as Handlebars
+ * whatever it declared.
  */
 export const pipelineContextTemplates = pgTable(
 	"pipeline_context_templates",
@@ -4051,8 +4399,13 @@ export const pipelineContextTemplates = pgTable(
 			() => pipelineSpecs.id,
 			{ onDelete: "set null" }
 		),
-		/** Registered template engine id; NULL is core's default. */
-		engine: text("engine"),
+		/**
+		 * Registered template engine id — half the pool key, and the language
+		 * `source` is written in. Defaults to core's Handlebars; the literal
+		 * rather than an import because this module is the schema and pulls in
+		 * no pipeline code.
+		 */
+		engine: text("engine").notNull().default("core:template/handlebars@1"),
 		name: text("name").notNull(),
 		/** The template source, in whatever `engine` says it is written in. */
 		source: text("source").notNull().default(""),
@@ -4075,8 +4428,11 @@ export const pipelineContextTemplates = pgTable(
 	(t) => [
 		index("pipeline_context_templates_node_type_idx").on(t.nodeTypeId),
 		index("pipeline_context_templates_spec_idx").on(t.createdForSpecId),
+		/** The pool the picker reads: node type AND language. */
+		index("pipeline_context_templates_pool_idx").on(t.nodeTypeId, t.engine),
 		uniqueIndex("pipeline_context_templates_node_type_name_idx").on(
 			t.nodeTypeId,
+			t.engine,
 			t.name
 		),
 		uniqueIndex("pipeline_context_templates_migrated_from_idx").on(

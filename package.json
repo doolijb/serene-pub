@@ -132,6 +132,7 @@
 		"marked": "^15.0.12",
 		"mistral-tokenizer-js": "^1.0.0",
 		"ollama": "^0.6.3",
+		"omggif": "^1.0.10",
 		"open": "^10.1.2",
 		"openai": "^5.3.0",
 		"paseto": "^3.1.4",

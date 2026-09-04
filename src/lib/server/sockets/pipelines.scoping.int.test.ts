@@ -92,6 +92,11 @@ function recordingEmit() {
 	}
 }
 
+/** A prompts option's handle, which is also what the prompt gates are keyed by. */
+async function promptOptionId() {
+	return await firstWritableOptionId(admin.id)
+}
+
 async function firstWritableOptionId(userId: number) {
 	const { namespaceView } = await import("$lib/server/pipelines/config/panel")
 	const view = await namespaceView(
@@ -339,9 +344,11 @@ describe("run receipts belong to the person whose session they describe", () => 
 	})
 })
 
-describe("prompt CRUD stays inside its pipeline", () => {
+describe("prompt CRUD is gated on the option, not on ownership", () => {
 	let specId: number
 	let promptId: number
+	let optionId: string
+	let pool: { nodeTypeId: string; slot: string }
 
 	beforeAll(async () => {
 		const [spec] = await testDb
@@ -349,15 +356,44 @@ describe("prompt CRUD stays inside its pipeline", () => {
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
 		specId = spec.id
+
+		// The pool comes off the declaration, and so does the handle every
+		// mutation is addressed by: a prompt is pooled by the node that
+		// consumes it, so "which pipeline owns this row" has no answer and the
+		// option handle is what proves the caller is operating a control this
+		// pipeline offers them.
+		const { declarations } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		const decl = (
+			await declarations(testDb as any, spec.activeVersionId!)
+		).find((d: any) => d.control === "prompts-ref")!
+		pool = { nodeTypeId: decl.nodeTypeId!, slot: decl.slot }
+		optionId = await promptOptionId()
+
 		const [p] = await testDb
 			.insert(schema.pipelinePrompts)
 			.values({
-				specId,
+				...pool,
 				name: "Socket original",
-				fields: { systemPrompt: "original words" }
+				fields: Object.fromEntries(
+					(decl.promptFields ?? []).map((f: string) => [
+						f,
+						"original words"
+					])
+				)
 			})
 			.returning()
 		promptId = p.id
+	})
+
+	/** The owner edits from inside their own session, which is where a
+	 * non-admin's prompt edits land (the write matrix's `prompts` line). */
+	const asOwner = <T extends object>(extra: T) => ({
+		slug: RESPOND_SPEC_ID,
+		optionId,
+		sessionId: ownersSessionId,
+		...extra
 	})
 
 	test("clone answers with the copy's id and a fresh view", async () => {
@@ -365,7 +401,7 @@ describe("prompt CRUD stays inside its pipeline", () => {
 		const rec = recordingEmit()
 		const res: any = await pipelinesClonePrompt.handler(
 			socketFor(owner.id),
-			{ slug: RESPOND_SPEC_ID, promptId },
+			asOwner({ promptId }),
 			rec.emit
 		)
 		expect(res.error).toBeUndefined()
@@ -381,22 +417,59 @@ describe("prompt CRUD stays inside its pipeline", () => {
 		expect(labels).toContain("Socket original (copy)")
 	})
 
+	test("a copy lands in the option's own pool, or the picker would not offer it", async () => {
+		const { pipelinesClonePrompt } = await import("./pipelines")
+		const cloned: any = await pipelinesClonePrompt.handler(
+			socketFor(owner.id),
+			asOwner({ promptId, name: "Pool check" }),
+			noopEmit
+		)
+		const [row] = await testDb
+			.select()
+			.from(schema.pipelinePrompts)
+			.where(eq(schema.pipelinePrompts.id, cloned.promptId))
+		expect(row.nodeTypeId).toBe(pool.nodeTypeId)
+		expect(row.slot).toBe(pool.slot)
+	})
+
+	test("create writes a prompt into an option's pool from nothing", async () => {
+		// A pool can be legitimately empty — core ships prose for its own nodes
+		// and none for a plugin's — so a picker with no rows needs a way to be
+		// given one.
+		const { pipelinesCreatePrompt } = await import("./pipelines")
+		const res: any = await pipelinesCreatePrompt.handler(
+			socketFor(owner.id),
+			asOwner({ name: "From nothing", fields: { systemPrompt: "x" } }),
+			noopEmit
+		)
+		expect(res.error).toBeUndefined()
+		const [row] = await testDb
+			.select()
+			.from(schema.pipelinePrompts)
+			.where(eq(schema.pipelinePrompts.id, res.promptId))
+		expect(row.nodeTypeId).toBe(pool.nodeTypeId)
+		expect(row.slot).toBe(pool.slot)
+		expect(row.createdForSpecId).toBe(specId)
+	})
+
 	test("update rewords the copy; the original is untouched", async () => {
 		const { pipelinesClonePrompt, pipelinesUpdatePrompt } = await import(
 			"./pipelines"
 		)
 		const cloned: any = await pipelinesClonePrompt.handler(
 			socketFor(owner.id),
-			{ slug: RESPOND_SPEC_ID, promptId, name: "Reworded" },
+			asOwner({ promptId, name: "Reworded" }),
 			noopEmit
 		)
 		const res: any = await pipelinesUpdatePrompt.handler(
 			socketFor(owner.id),
-			{
-				slug: RESPOND_SPEC_ID,
+			asOwner({
 				promptId: cloned.promptId,
-				fields: { systemPrompt: "new words" }
-			},
+				fields: {
+					systemPrompt: "new words",
+					postHistoryInstructions: "new words"
+				}
+			}),
 			noopEmit
 		)
 		expect(res.error).toBeUndefined()
@@ -405,24 +478,39 @@ describe("prompt CRUD stays inside its pipeline", () => {
 			"$lib/server/pipelines/entities/prompts"
 		)
 		expect(
-			await resolvePromptFields(testDb as any, cloned.promptId)
-		).toEqual({ systemPrompt: "new words" })
-		expect(await resolvePromptFields(testDb as any, promptId)).toEqual({
-			systemPrompt: "original words"
-		})
+			(await resolvePromptFields(testDb as any, cloned.promptId))
+				.systemPrompt
+		).toBe("new words")
+		expect(
+			(await resolvePromptFields(testDb as any, promptId)).systemPrompt
+		).toBe("original words")
 	})
 
-	test("a prompt from another pipeline is refused by slug scoping", async () => {
-		const [other] = await testDb
-			.insert(schema.pipelineSpecs)
-			.values({ slug: "core:spec/socket-elsewhere", name: "Elsewhere" })
-			.returning()
+	test("a prompt from another pool is refused, and blames the step", async () => {
+		// The refusal that replaces "does not belong to this pipeline". That
+		// sentence is no longer true of anything — a prompt travels with its
+		// node — and telling somebody it was would send them looking for a
+		// setting that does not exist.
+		const { NARRATE_SPEC_ID } = await import("$lib/server/pipelines/specs")
+		const [narrate] = await testDb
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, NARRATE_SPEC_ID))
+		const { declarations } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		const nDecl = (
+			await declarations(testDb as any, narrate.activeVersionId!)
+		).find((d: any) => d.control === "prompts-ref")!
 		const [foreign] = await testDb
 			.insert(schema.pipelinePrompts)
 			.values({
-				specId: other.id,
-				name: "Foreign",
-				fields: { systemPrompt: "x" }
+				nodeTypeId: nDecl.nodeTypeId!,
+				slot: nDecl.slot,
+				name: "From another kind of step",
+				fields: Object.fromEntries(
+					(nDecl.promptFields ?? []).map((f: string) => [f, "x"])
+				)
 			})
 			.returning()
 
@@ -432,22 +520,70 @@ describe("prompt CRUD stays inside its pipeline", () => {
 		const rec = recordingEmit()
 		const res: any = await pipelinesUpdatePrompt.handler(
 			socketFor(owner.id),
-			{
-				slug: RESPOND_SPEC_ID,
+			asOwner({
 				promptId: foreign.id,
 				fields: { systemPrompt: "hijacked" }
-			},
+			}),
 			rec.emit
 		)
-		expect(res.error).toMatch(/does not belong/)
+		expect(res.error).toMatch(/different kind of step/)
 		expect(rec.last("pipelines:updatePrompt:error")).toBeTruthy()
 
 		const del: any = await pipelinesDeletePrompt.handler(
 			socketFor(owner.id),
-			{ slug: RESPOND_SPEC_ID, promptId: foreign.id },
+			asOwner({ promptId: foreign.id }),
 			noopEmit
 		)
-		expect(del.error).toMatch(/does not belong/)
+		expect(del.error).toMatch(/different kind of step/)
+	})
+
+	test("a non-admin outside every session is told where to edit instead", async () => {
+		// Tighter than `promptInSpec` was, deliberately. That gate checked
+		// ownership and never asked whether the caller could write at all, so
+		// any signed-in person could reword a row from outside every session —
+		// which, pooled, reaches every pipeline reusing the node.
+		const { pipelinesUpdatePrompt } = await import("./pipelines")
+		const res: any = await pipelinesUpdatePrompt.handler(
+			socketFor(owner.id),
+			{
+				slug: RESPOND_SPEC_ID,
+				optionId,
+				promptId,
+				fields: { systemPrompt: "from nowhere" }
+			},
+			noopEmit
+		)
+		expect(res.error).toMatch(/administrator/)
+	})
+
+	test("an option handle for a different kind of setting is refused", async () => {
+		// The handle is the capability here, so it has to be checked for what
+		// it addresses and not merely for being well formed.
+		const { namespaceView } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		const view = await namespaceView(
+			testDb as any,
+			"socket-scoping-test-secret",
+			RESPOND_SPEC_ID,
+			{ userId: admin.id, isAdmin: true }
+		)
+		const other = view!.steps
+			.flatMap((s) => [...s.options, ...s.advanced])
+			.find((o) => o.control === "context-template-ref")!
+		const { pipelinesUpdatePrompt } = await import("./pipelines")
+		const res: any = await pipelinesUpdatePrompt.handler(
+			socketFor(owner.id),
+			{
+				slug: RESPOND_SPEC_ID,
+				optionId: other.id,
+				promptId,
+				sessionId: ownersSessionId,
+				fields: { systemPrompt: "through the wrong door" }
+			},
+			noopEmit
+		)
+		expect(res.error).toMatch(/does not choose a prompt/)
 	})
 
 	test("delete removes an unreferenced copy", async () => {
@@ -456,12 +592,12 @@ describe("prompt CRUD stays inside its pipeline", () => {
 		)
 		const cloned: any = await pipelinesClonePrompt.handler(
 			socketFor(owner.id),
-			{ slug: RESPOND_SPEC_ID, promptId, name: "Disposable copy" },
+			asOwner({ promptId, name: "Disposable copy" }),
 			noopEmit
 		)
 		const res: any = await pipelinesDeletePrompt.handler(
 			socketFor(owner.id),
-			{ slug: RESPOND_SPEC_ID, promptId: cloned.promptId },
+			asOwner({ promptId: cloned.promptId }),
 			noopEmit
 		)
 		expect(res.error).toBeUndefined()
@@ -476,7 +612,7 @@ describe("prompt CRUD stays inside its pipeline", () => {
 		)
 		const cloned: any = await pipelinesClonePrompt.handler(
 			socketFor(owner.id),
-			{ slug: RESPOND_SPEC_ID, promptId, name: "Selected copy" },
+			asOwner({ promptId, name: "Selected copy" }),
 			noopEmit
 		)
 		// Selections are session overrides now (the layers as simplified
@@ -493,7 +629,7 @@ describe("prompt CRUD stays inside its pipeline", () => {
 						eq(schema.pipelineNodeOverrides.specId, specId),
 						eq(schema.pipelineNodeOverrides.scopeKind, "session"),
 						eq(schema.pipelineNodeOverrides.scopeId, sessionId),
-						eq(schema.pipelineNodeOverrides.slot, "prompts")
+						eq(schema.pipelineNodeOverrides.slot, pool.slot)
 					)
 				)
 			await testDb.insert(schema.pipelineNodeOverrides).values({
@@ -501,7 +637,7 @@ describe("prompt CRUD stays inside its pipeline", () => {
 				scopeKind: "session",
 				scopeId: sessionId,
 				nodeKey: "context",
-				slot: "prompts",
+				slot: pool.slot,
 				path: "",
 				value: cloned.promptId,
 				updatedBy: byUserId
@@ -513,11 +649,7 @@ describe("prompt CRUD stays inside its pipeline", () => {
 		await select(strangersSession.id, stranger.id)
 		const refused: any = await pipelinesDeletePrompt.handler(
 			socketFor(owner.id),
-			{
-				slug: RESPOND_SPEC_ID,
-				promptId: cloned.promptId,
-				sessionId: ownersSessionId
-			},
+			asOwner({ promptId: cloned.promptId }),
 			noopEmit
 		)
 		expect(refused.error).toMatch(/still selected/)
@@ -537,11 +669,7 @@ describe("prompt CRUD stays inside its pipeline", () => {
 			)
 		const res: any = await pipelinesDeletePrompt.handler(
 			socketFor(owner.id),
-			{
-				slug: RESPOND_SPEC_ID,
-				promptId: cloned.promptId,
-				sessionId: ownersSessionId
-			},
+			asOwner({ promptId: cloned.promptId }),
 			noopEmit
 		)
 		expect(res.error).toBeUndefined()

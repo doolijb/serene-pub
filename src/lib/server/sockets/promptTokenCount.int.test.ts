@@ -80,13 +80,18 @@ beforeAll(async () => {
 		})
 		.returning()
 	const [sampling] = await db.select().from(schema.samplingConfigs).limit(1)
-	await db
-		.update(schema.systemSettings)
-		.set({
-			defaultConnectionId: connection.id,
-			defaultSamplingConfigId: sampling?.id ?? null
-		})
-		.where(eq(schema.systemSettings.id, 1))
+	// The instance default: a `connection_defaults` row keyed by capability since
+	// 0181, where it used to be two `system_settings` columns. The preview
+	// resolves its connection through the same chain a real turn does, so
+	// without this registration it refuses rather than quietly using the only
+	// connection in the table.
+	const { setCapabilityDefault } = await import(
+		"$lib/server/connections/capabilityDefaults"
+	)
+	await setCapabilityDefault(db as any, "text->text", {
+		connectionId: connection.id,
+		samplingConfigId: sampling?.id ?? null
+	})
 
 	const [character] = await db
 		.insert(schema.characters)

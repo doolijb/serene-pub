@@ -71,23 +71,25 @@ async function makePersona(userId: number, name = "Persona") {
 	return persona
 }
 
-/** Insert a media row directly — enough to be "one of this entity's own
- *  images" without going through an upload. */
+/** Insert a file row directly — enough to be "one of this entity's own
+ *  images" without going through an upload.
+ *
+ *  No variant row goes with it, and that is not a shortcut: the ownership check
+ *  under test reads provenance off the FILE (0182 moved the bytes, the mime and
+ *  the path onto a variant), so a file with no stored representation at all is
+ *  still a legitimate subject for it. */
 async function makeMedia(
 	userId: number,
 	parent: { characterId?: number; personaId?: number }
 ) {
 	const [row] = await testDb
-		.insert(schema.media)
+		.insert(schema.files)
 		.values({
 			userId,
 			characterId: parent.characterId ?? null,
 			personaId: parent.personaId ?? null,
 			hash: `hash-${userId}-${parent.characterId ?? parent.personaId}`,
-			mime: "image/png",
-			bytes: 10,
-			kind: "image",
-			path: "data/users/1/x/deadbeef.png"
+			kind: "image"
 		})
 		.returning()
 	return row
@@ -154,7 +156,6 @@ describe("characters:setAvatar / personas:setAvatar — ownership scoping (PGlit
 
 		expect(res.persona?.avatarMediaId).toBe(media.id)
 	})
-
 })
 
 describe("characters:update / personas:update — lorebookId/uuid stripped (PGlite integration)", () => {

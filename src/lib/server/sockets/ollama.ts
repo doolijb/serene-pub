@@ -5,7 +5,7 @@ import * as schema from "$lib/server/db/schema"
 // `export global {}` block, same pattern as the Sockets namespace) — no
 // import needed/available for it.
 import { user as loadUser } from "./users"
-import { connectionsList, connectionsSetUserActive } from "./connections"
+import { connectionsList, connectionsSetDefault } from "./connections"
 import { Ollama } from "ollama"
 import ollamaAdapter from "$lib/server/connectionAdapters/OllamaAdapter"
 import { OllamaModelSearchSource } from "$lib/shared/constants/OllamaModelSource"
@@ -13,6 +13,7 @@ import { emit } from "process"
 import { isAndroidWrapper } from "$lib/server/utils"
 import type { Handler } from "$lib/shared/events"
 import { loginRateLimit } from "$lib/server/services/loginRateLimit"
+import { resolveConnectionCapabilities } from "$lib/server/connections/resolve"
 
 // --- OLLAMA SPECIFIC FUNCTIONS ---
 
@@ -178,10 +179,20 @@ export const ollamaConnectModelHandler: Handler<
 					.split("/")
 					.pop()! as string
 				// Create a new connection if it doesn't exist
-				const data = {
+				const data: any = {
 					...ollamaAdapter.connectionDefaults,
 					name: connectionName,
 					model: params.modelName
+				}
+				// A raw insert bypasses everything `connections:create` does to a
+				// new row, including this — and the omission fails INVISIBLY. An
+				// empty `capabilities` reads as "not determined yet", so the guard
+				// falls through to its modality test and the connection works by
+				// accident until some unrelated edit resolves the row properly and
+				// the picker changes under the user. `koboldcpp:connectModel` does
+				// the same insert and already sets this; the two had drifted.
+				data.capabilities = {
+					resolved: resolveConnectionCapabilities(data)
 				}
 				console.log("Creating connection", data)
 				const [newConnection] = await db
@@ -191,9 +202,14 @@ export const ollamaConnectModelHandler: Handler<
 				existingConnection = newConnection
 			}
 
-			await connectionsSetUserActive.handler(
+			// Explicitly `text->text`: "Connect model" is somebody choosing, which
+			// is what makes it legitimate under the no-implicit-pickup ruling —
+			// unlike the auto-star deleted from `connections:create`, which
+			// chose on nobody's behalf. The capability is named rather than
+			// derived, because a connection is not one thing.
+			await connectionsSetDefault.handler(
 				socket,
-				{ id: existingConnection.id },
+				{ capability: "text->text", id: existingConnection.id },
 				emitToUser
 			)
 			await connectionsList.handler(socket, {}, emitToUser)

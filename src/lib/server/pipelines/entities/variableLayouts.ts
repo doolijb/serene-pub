@@ -634,10 +634,20 @@ export const seedKeyFor = (t: {
 	variant: VariantKind
 }): string => `pipeline-variable-template:${t.variableId}:${t.variant}`
 
-/** What the `variables` slot resolves to, per key, once dereferenced. */
+/**
+ * What the `variables` slot resolves to, per key, once dereferenced.
+ *
+ * `engine` is required and non-null. It used to be `string | null | undefined`,
+ * which read as "core's default if absent" — and since `renderVariable` passes
+ * it straight to `renderTemplate`, that absence was a layout being rendered in
+ * whatever core ships rather than in what it was written in. The row's column
+ * is NOT NULL now, so every path that builds one of these has a real engine to
+ * hand; requiring it here is what makes a path that *doesn't* fail to compile
+ * rather than fail silently at render time.
+ */
 export type ResolvedLayouts = Record<
 	string,
-	{ engine?: string | null; source?: string } | undefined
+	{ engine: string; source?: string } | undefined
 >
 
 export class VariableLayoutError extends Error {}

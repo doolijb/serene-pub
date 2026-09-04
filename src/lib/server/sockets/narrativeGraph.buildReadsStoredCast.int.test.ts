@@ -57,13 +57,17 @@ vi.mock("$lib/server/db", async () => {
 	return { db }
 })
 
-// The build reaches the scene mapping only after resolving configs, and needs
-// a non-null connection to get that far. What those configs contain is
-// orthogonal to the mapping, so they are canned rather than seeded.
+// The build reaches the scene mapping only after resolving configs. What those
+// configs contain is orthogonal to the mapping, so they are canned rather than
+// seeded.
+//
+// ⚠ The connection and sampling used to be canned HERE too. They are not any
+// more: this function no longer returns them, and the build's connection comes
+// from the resolution chain — which under the no-implicit-pickup ruling means a
+// registered `connection_defaults` row and nothing else. A capable connection
+// merely existing in the table would not do, so `beforeAll` registers one.
 vi.mock("$lib/server/utils/getUserConfigurations", () => ({
 	getUserConfigurations: async () => ({
-		connection: { id: 1, name: "test", type: "openai_session" },
-		sampling: { id: 1 },
 		contextConfig: { id: 1 },
 		promptConfig: { id: 1 },
 		narratorPromptConfig: null
@@ -102,6 +106,26 @@ beforeAll(async () => {
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	const dbModule = await import("$lib/server/db")
 	testDb = dbModule.db as unknown as TestDb
+
+	// The instance's chat default. Both halves: the connection is what the build
+	// runs on, and `buildGraphFromScenes` reads `sampling.name` off the row to
+	// label each queued call, so the graph handler refuses a null one by name
+	// rather than letting it reach a property access.
+	const [connection] = await testDb
+		.insert(schema.connections)
+		.values({ name: "Graph default", type: "ollama" })
+		.returning()
+	const [sampling] = await testDb
+		.insert(schema.samplingConfigs)
+		.values({ name: "Graph sampling", isImmutable: false })
+		.returning()
+	const { setCapabilityDefault } = await import(
+		"$lib/server/connections/capabilityDefaults"
+	)
+	await setCapabilityDefault(testDb as any, "text->text", {
+		connectionId: connection.id,
+		samplingConfigId: sampling.id
+	})
 }, 60_000)
 
 afterAll(async () => {

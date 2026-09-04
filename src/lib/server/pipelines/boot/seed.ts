@@ -28,6 +28,7 @@ import * as schema from "$lib/server/db/schema"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
 import { reconcileConfigs } from "$lib/server/pipelines/config/named"
 import { seedPipelinePrompts } from "$lib/server/pipelines/boot/seedPrompts"
+import { reconcilePromptFields } from "$lib/server/pipelines/boot/reconcilePromptFields"
 
 /** Loose on purpose — the app db and the test db are passed interchangeably. */
 type Db = {
@@ -281,10 +282,15 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 	const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 	const out: SpecSeedReport[] = []
 
-	// Three passes, in the only order where each step's inputs already exist:
-	// a prompt is namespaced to a spec row, and a config references a prompt.
-	// Interleaving them per-spec would seed prompts for a namespace six times
-	// and still get the first one wrong.
+	// Four passes, in the only order where each step's inputs already exist.
+	// The reason for the ordering changed with the pool: a prompt used to be
+	// namespaced to a spec row, so it needed the spec published first. It is
+	// now keyed by a NODE TYPE the registry sync has already published, which
+	// is why publishing comes first for a different reason — the config in pass
+	// 4 reads a spec's declarations, and pass 2 resolves `createdForSpec` into
+	// a grouping id. Interleaving per-spec would still be wrong: one pool
+	// serves several pipelines, so a per-spec loop would visit the summarize
+	// pools four times and seed the first arrival as though it owned them.
 
 	// 1 — publish
 	for (const entry of CORE_SPECS) {
@@ -330,10 +336,18 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 		})
 	}
 
-	// 2 — the prompts each namespace ships
+	// 2 — the prompts each pool ships
 	await seedPipelinePrompts(db)
 
-	// 3 — configs, which reference them
+	// 3 — the archive sweep, between the seed and the configs on purpose.
+	//
+	// After the seed because it sweeps every prompt row including the ones just
+	// written; before the configs because a config's back-fill picks a prompt
+	// per pool, and a pool half-swept would offer a row whose declared fields
+	// are still mixed with fields nothing declares.
+	await reconcilePromptFields(db)
+
+	// 4 — configs, which reference them
 	//
 	// Runs for present specs as well as published ones, and that is the point:
 	// it establishes the shipped-config invariant on an instance upgraded from

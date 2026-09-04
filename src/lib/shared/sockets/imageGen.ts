@@ -33,11 +33,31 @@ export interface ImagesGenerateParams {
 	runId?: string
 }
 
-/** A stored generated image — `id` resolves to `/media/{id}` for display. */
+/**
+ * A stored generated image.
+ *
+ * **No `path`.** It carried one until 0182 — the handler spread the on-disk
+ * location of a freshly written file straight into a socket response, which
+ * disclosed the data-dir layout and the owner's user id to every browser that
+ * could read it. The existing path-leak tests only ever inspected
+ * `toClientMedia`, so nothing caught it; `sockets/images.pathLeak.int.test.ts`
+ * asserts the property over this shape now.
+ *
+ * `url` is the ready-made address, so a consumer never reconstructs one. It
+ * **already carries a query string** (`?r={rev}`) — anything appending a
+ * parameter joins with `&`.
+ */
 export interface GeneratedMedia {
 	id: number
 	uuid: string
-	path: string
+	/** `/media/{uuid}?r={rev}` — the display form, not necessarily the bytes the
+	 *  backend returned. */
+	url: string
+	/** Cache token off the file row. Present so a caller that builds its own
+	 *  variant URL gets an address that changes when the bytes do. */
+	rev: number
+	/** The DISPLAY variant's mime — a hint, not a promise about what a given
+	 *  request is answered with (Accept and `?v=` both move it). */
 	mime: string
 	kind: string
 	width: number | null

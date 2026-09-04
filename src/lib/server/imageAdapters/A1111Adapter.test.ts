@@ -69,7 +69,7 @@ afterEach(() => vi.unstubAllGlobals())
 describe("A1111Adapter — the request", () => {
 	test("maps the neutral request onto the A1111 body", async () => {
 		const calls = stubRoutes({ txt2img: okRender })
-		const out = await new a1111.Adapter(conn()).generate({
+		const out = await new a1111.Adapter(conn()).generateImage({
 			prompt: "a knight",
 			negativePrompt: "blurry",
 			width: 832,
@@ -99,7 +99,7 @@ describe("A1111Adapter — the request", () => {
 
 	test("sizes round to a multiple of 8, which the backend would do anyway", async () => {
 		const calls = stubRoutes({ txt2img: okRender })
-		await new a1111.Adapter(conn()).generate({
+		await new a1111.Adapter(conn()).generateImage({
 			prompt: "x",
 			width: 831,
 			height: 1215
@@ -113,7 +113,7 @@ describe("A1111Adapter — the request", () => {
 		const calls = stubRoutes({ txt2img: okRender })
 		await new a1111.Adapter(
 			conn({ model: "juggernautXL.safetensors" })
-		).generate({ prompt: "x" })
+		).generateImage({ prompt: "x" })
 		expect(bodyOf(calls).override_settings.sd_model_checkpoint).toBe(
 			"juggernautXL.safetensors"
 		)
@@ -126,7 +126,7 @@ describe("A1111Adapter — the request", () => {
 		const calls = stubRoutes({
 			txt2img: { body: { images: [PNG, PNG, PNG], info: "" } }
 		})
-		await new a1111.Adapter(conn()).generate({ prompt: "x", batch: 3 })
+		await new a1111.Adapter(conn()).generateImage({ prompt: "x", batch: 3 })
 		const body = bodyOf(calls)
 		expect(body.n_iter).toBe(3)
 		expect(body.batch_size).toBeUndefined()
@@ -134,7 +134,7 @@ describe("A1111Adapter — the request", () => {
 
 	test("what this endpoint cannot do is reported, not swallowed", async () => {
 		const calls = stubRoutes({ txt2img: okRender })
-		const out = await new a1111.Adapter(conn()).generate({
+		const out = await new a1111.Adapter(conn()).generateImage({
 			prompt: "x",
 			denoise: 0.5,
 			clipSkip: 2,
@@ -157,7 +157,7 @@ describe("A1111Adapter — the request", () => {
 					}
 				}
 			})
-		).generate({ prompt: "x" })
+		).generateImage({ prompt: "x" })
 		const body = bodyOf(calls)
 		expect(body.restore_faces).toBe(true)
 		expect(body.override_settings.CLIP_stop_at_last_layers).toBe(2)
@@ -171,7 +171,7 @@ describe("A1111Adapter — where the backends disagree", () => {
 		// answered — the caller is simply told the truth.
 		const out = await (async () => {
 			stubRoutes({ txt2img: { body: { images: [PNG], info: "" } } })
-			return new a1111.Adapter(conn()).generate({ prompt: "x", batch: 4 })
+			return new a1111.Adapter(conn()).generateImage({ prompt: "x", batch: 4 })
 		})()
 		expect(out.media).toHaveLength(1)
 		expect(out.ignored).toContain("batch")
@@ -179,7 +179,7 @@ describe("A1111Adapter — where the backends disagree", () => {
 
 	test("a batch that arrived in full is NOT reported as ignored", async () => {
 		stubRoutes({ txt2img: { body: { images: [PNG, PNG], info: "" } } })
-		const out = await new a1111.Adapter(conn()).generate({
+		const out = await new a1111.Adapter(conn()).generateImage({
 			prompt: "x",
 			batch: 2
 		})
@@ -192,14 +192,14 @@ describe("A1111Adapter — where the backends disagree", () => {
 				body: { images: [PNG], info: JSON.stringify({ seed: 8675309 }) }
 			}
 		})
-		const out = await new a1111.Adapter(conn()).generate({ prompt: "x" })
+		const out = await new a1111.Adapter(conn()).generateImage({ prompt: "x" })
 		expect(out.media[0].seed).toBe(8675309)
 	})
 
 	test("a missing or malformed `info` costs the seed, never the image", async () => {
 		for (const info of [undefined, "", "not json at all"]) {
 			stubRoutes({ txt2img: { body: { images: [PNG], info } } })
-			const out = await new a1111.Adapter(conn()).generate({
+			const out = await new a1111.Adapter(conn()).generateImage({
 				prompt: "x"
 			})
 			expect(out.media).toHaveLength(1)
@@ -210,7 +210,7 @@ describe("A1111Adapter — where the backends disagree", () => {
 	test("no images back is an error that says what to check", async () => {
 		stubRoutes({ txt2img: { body: { images: [] } } })
 		await expect(
-			new a1111.Adapter(conn()).generate({ prompt: "x" })
+			new a1111.Adapter(conn()).generateImage({ prompt: "x" })
 		).rejects.toThrow(/no image model loaded/i)
 	})
 })
@@ -232,7 +232,7 @@ describe("A1111Adapter — progress and cancel", () => {
 		// The render resolves immediately here, so the first `queued` report is
 		// the one guaranteed to land; the poller is proven by the route existing
 		// and by the abort test below.
-		await new a1111.Adapter(conn()).generate(
+		await new a1111.Adapter(conn()).generateImage(
 			{ prompt: "x" },
 			{ onProgress: (p) => seen.push(p) }
 		)
@@ -246,7 +246,7 @@ describe("A1111Adapter — progress and cancel", () => {
 		const controller = new AbortController()
 		controller.abort()
 		const calls = stubRoutes({ txt2img: okRender })
-		const out = await new a1111.Adapter(conn()).generate(
+		const out = await new a1111.Adapter(conn()).generateImage(
 			{ prompt: "x" },
 			{ signal: controller.signal }
 		)
@@ -273,7 +273,7 @@ describe("A1111Adapter — progress and cancel", () => {
 				} as any
 			})
 		)
-		const out = await new a1111.Adapter(conn()).generate(
+		const out = await new a1111.Adapter(conn()).generateImage(
 			{ prompt: "x" },
 			{ signal: controller.signal }
 		)
@@ -334,5 +334,31 @@ describe("A1111Adapter — test and discovery", () => {
 		expect(a1111.capabilities.freeSize).toBe(true)
 		expect(a1111.capabilities.progress).toBe(true)
 		expect(a1111.capabilities.cancel).toBe(true)
+	})
+})
+
+describe("A1111Adapter — the action surface", () => {
+	/**
+	 * The methods on this class ARE the claim about what the backend accepts and
+	 * returns — the manifest's `text->image` key for all three types routed here
+	 * is derived from `generateImage` existing, and the absence of `editImage` is
+	 * the whole of "txt2img-only".
+	 *
+	 * The conformance test checks that set against the manifest. This checks the
+	 * set itself, and one thing that test cannot see: an `async generate()` added
+	 * back beside the named actions is not an action name, so nothing over there
+	 * would notice — while every caller that reached for it would be back to a
+	 * method whose contract is whatever the class felt like.
+	 */
+	test("implements generateImage, nothing else, and no `generate` at all", async () => {
+		const { actionsOf } = await import("$lib/server/adapters/actions")
+		const { BaseImageAdapter } = await import("./BaseImageAdapter")
+
+		expect([...actionsOf(a1111.Adapter, BaseImageAdapter)]).toEqual([
+			"generateImage"
+		])
+		// `generate` names nothing in either adapter family now. A revived alias
+		// would type-check, work, and quietly undo the reason for the rename.
+		expect(a1111.Adapter.prototype).not.toHaveProperty("generate")
 	})
 })

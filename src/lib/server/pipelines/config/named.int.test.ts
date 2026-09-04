@@ -89,10 +89,21 @@ describe("the shipped default", () => {
 		expect(all.filter((c: any) => c.isImmutable)).toHaveLength(1)
 	})
 
-	it("carries the engine on a template value and nowhere else", async () => {
-		// 12 §2a puts the language on the value. A template row that lost its
-		// engine would render with whatever core defaults to — which is the
-		// failure mode that reads as a template bug rather than a lost field.
+	/**
+	 * The engine is NOT on a value row, and there is nowhere here it could be.
+	 *
+	 * This test used to assert that `pipeline_config_values.engine` was null on
+	 * everything but a template value — which passed for the wrong reason: the
+	 * column was null on EVERY row ever written, because the branch that filled
+	 * it tested a control string the declarations never emit. The column is gone
+	 * now and the language lives on the template row, NOT NULL, delivered to the
+	 * renderer from there.
+	 *
+	 * What is worth asserting instead is the consequence: a template reference
+	 * resolves to a row that states its own engine, so nothing downstream has to
+	 * guess.
+	 */
+	it("points a template slot at a row that knows its own language", async () => {
 		const [config] = await db
 			.select()
 			.from(schema.pipelineConfigs)
@@ -102,8 +113,18 @@ describe("the shipped default", () => {
 					`pipeline-default:${RESPOND_SPEC_ID}`
 				)
 			)
-		for (const v of await valuesOf(config.id))
-			if (v.slot !== "template") expect(v.engine).toBeNull()
+		let checked = 0
+		for (const v of await valuesOf(config.id)) {
+			if (v.slot !== "template") continue
+			const [row] = await db
+				.select()
+				.from(schema.pipelineContextTemplates)
+				.where(eq(schema.pipelineContextTemplates.id, v.value as number))
+			expect(row, "a template slot points at nothing").toBeTruthy()
+			expect(row.engine, "a template row has no engine").toBeTruthy()
+			checked++
+		}
+		expect(checked).toBeGreaterThan(0)
 	})
 })
 

@@ -108,13 +108,36 @@
 	// seeding in onMount), and consumed by the first connections:get for that
 	// id — see handleConnectionsGet. Not $state: nothing renders from it.
 	let deepLinkedConnectionId: number | null = null
-	// The system-wide default connection
+	/**
+	 * Which capability this category's star registers.
+	 *
+	 * The star used to mean "the default connection", full stop — one starred
+	 * row the app used for whatever it happened to need. There is no such
+	 * thing: one KoboldCPP row does chat, vision, image generation, speech and
+	 * transcription from one process, so starring it said nothing about which
+	 * of the five was meant. The category the user is standing in is what says
+	 * it, which is why this is derived from the modality and not from the
+	 * connection.
+	 */
+	let starCapability = $derived(isImageView ? "text->image" : "text->text")
+	// The instance default for THIS category's capability. Read from
+	// `capabilityDefaults` — the only place a default lives since 0181 — never
+	// from a column on the settings row.
 	let defaultConnectionId = $derived(
-		systemSettingsCtx.settings?.defaultConnectionId ?? null
+		systemSettingsCtx.capabilityDefaults?.[starCapability]?.connectionId ??
+			null
 	)
-	// Shown as the "active" badge on the index screen's LLM/Text Generation card
+	// Shown as the "active" badge on the index screen's LLM/Text Generation
+	// card. Always the CHAT default, whichever category is open: the card is
+	// the text one, and reading `defaultConnectionId` here would blank it the
+	// moment somebody browsed the image category.
 	let defaultConnectionName = $derived(
-		connectionsList.find((c) => c.id === defaultConnectionId)?.name ?? null
+		connectionsList.find(
+			(c) =>
+				c.id ===
+				(systemSettingsCtx.capabilityDefaults?.["text->text"]
+					?.connectionId ?? null)
+		)?.name ?? null
 	)
 	// A Managed KoboldCPP connection can't be set default while the manager is
 	// off — the image one no less than the text one. Both name a file in the
@@ -167,13 +190,32 @@
 		socket.emit("connections:get", { id })
 	}
 
+	/**
+	 * Register the selected connection as this category's default.
+	 *
+	 * The compensation for deleting the auto-star, and the reason it is one
+	 * click rather than a trip to Admin → Defaults: nothing picks a connection
+	 * because it exists any more, so the first Send after creating one used to
+	 * work by accident and now fails by design. A button that says "use this
+	 * for chat" on the screen where the connection was just made is what keeps
+	 * that from reading as a regression.
+	 *
+	 * `capability` is a REQUIRED param and is not derivable from the
+	 * connection — see the socket type. The category supplies it.
+	 */
 	function handleSetDefault() {
 		if (!selectedConnectionId) return
-		socket.emit("connections:setUserActive", { id: selectedConnectionId })
+		socket.emit("connections:setDefault", {
+			capability: starCapability,
+			id: selectedConnectionId
+		})
 		const selected = connectionsList.find(
 			(c) => c.id === selectedConnectionId
 		)
-		if (selected) announce(`Default connection set to: ${selected.name}`)
+		if (selected)
+			announce(
+				`${selected.name} will be used for ${isImageView ? "image generation" : "chat"}`
+			)
 	}
 	function handleNew() {
 		newConnectionName = ""
@@ -387,15 +429,27 @@
 			socket.emit("connections:get", { id: msg.connection.id })
 		}
 	}
-	function handleConnectionsSetUserActive(
-		msg: Sockets.Connections.SetUserActive.Response
+	function handleConnectionsSetDefault(
+		msg: Sockets.Connections.SetDefault.Response
 	) {
-		// Update local system settings context so the default indicator updates
-		const s = systemSettingsCtx.settings
-		if (s) {
-			systemSettingsCtx.settings = {
-				...s,
-				defaultConnectionId: msg.id ?? null
+		// Patch the local copy so the star moves on this frame rather than when
+		// the server's systemSettings:get push lands. It patches
+		// `capabilityDefaults` and NOT a settings column — patching the settings
+		// row is what this whole change removes, and a patch of the wrong copy
+		// would look like a working optimistic update that never actually
+		// applies.
+		//
+		// Merged per capability, never replaced wholesale: the response carries
+		// one capability, and writing `{[capability]: …}` alone would drop every
+		// other registration from the client's copy until the next full push.
+		systemSettingsCtx.capabilityDefaults = {
+			...systemSettingsCtx.capabilityDefaults,
+			[msg.capability]: {
+				...(systemSettingsCtx.capabilityDefaults?.[msg.capability] ?? {
+					connectionId: null,
+					samplingConfigId: null
+				}),
+				connectionId: msg.id ?? null
 			}
 		}
 		if (msg.id) toaster.success({ title: "Default connection updated" })
@@ -437,7 +491,7 @@
 		socket.on("connections:update", handleConnectionsUpdate)
 		socket.on("connections:delete", handleConnectionsDelete)
 		socket.on("connections:create", handleConnectionsCreate)
-		socket.on("connections:setUserActive", handleConnectionsSetUserActive)
+		socket.on("connections:setDefault", handleConnectionsSetDefault)
 		socket.emit("connections:list", {})
 		// Seed the view: digest.connectionId (from external nav, e.g. Ollama
 		// Manager's "open connection sidebar") always means "go straight to the
@@ -446,8 +500,16 @@
 		// the onboarding wizard) routes straight to a specific category. If
 		// neither is set, land on the index/category-picker screen.
 		const digestId = panelsCtx.digest.connectionId ?? null
+		// The CHAT default, spelled out rather than read through
+		// `defaultConnectionId`: this runs on mount, before any category has
+		// been opened, so the derived value would be whatever `isImageView`
+		// happens to be at that instant. Landing on the text connection is what
+		// this has always done.
 		const initialId =
-			digestId ?? systemSettingsCtx.settings?.defaultConnectionId ?? null
+			digestId ??
+			systemSettingsCtx.capabilityDefaults?.["text->text"]
+				?.connectionId ??
+			null
 		if (digestId) {
 			panelsCtx.digest.connectionId = undefined
 			deepLinkedConnectionId = digestId
@@ -489,7 +551,7 @@
 		socket.off("connections:update", handleConnectionsUpdate)
 		socket.off("connections:delete", handleConnectionsDelete)
 		socket.off("connections:create", handleConnectionsCreate)
-		socket.off("connections:setUserActive", handleConnectionsSetUserActive)
+		socket.off("connections:setDefault", handleConnectionsSetDefault)
 		onclose = undefined
 	})
 </script>
@@ -749,39 +811,48 @@
 								<Icons.Save size={16} aria-hidden="true" />
 								Update
 							</button>
-							<!-- The system default is the TEXT connection; image
-							     connections are chosen per image node, not here. -->
-							{#if !isImageView}
-								<button
-									type="button"
-									class="btn btn-sm preset-filled-warning-500 shrink-0"
-									onclick={handleSetDefault}
-									disabled={!selectedConnectionId ||
-										selectedConnectionId ===
-											defaultConnectionId ||
-										managedButDisabled}
-									title={managedButDisabled
-										? "KoboldCPP Manager must be enabled to use this connection"
-										: selectedConnectionId ===
-											  defaultConnectionId
-											? "Already the default connection"
-											: "Set as default connection"}
-									aria-label="Set selected connection as default"
-								>
-									<Icons.Star
-										size={14}
-										aria-hidden="true"
-										fill={selectedConnectionId ===
-										defaultConnectionId
-											? "currentColor"
-											: "none"}
-									/>
-									{selectedConnectionId ===
+							<!-- One click to register this connection for the
+							     category's capability — "Use for Chat" here,
+							     "Use for Image generation" in the image list.
+							     Rendered in BOTH categories now: nothing picks a
+							     connection because it exists, so an image
+							     backend that is never registered anywhere is an
+							     image backend no run can reach. The named
+							     capability is what makes this honest — the old
+							     unqualified "Set Default" could only ever mean
+							     text, which is why the image half had no button
+							     at all. Everything else lives on
+							     Admin → Defaults. -->
+							<button
+								type="button"
+								class="btn btn-sm preset-filled-warning-500 shrink-0"
+								onclick={handleSetDefault}
+								disabled={!selectedConnectionId ||
+									selectedConnectionId ===
+										defaultConnectionId ||
+									managedButDisabled}
+								title={managedButDisabled
+									? "KoboldCPP Manager must be enabled to use this connection"
+									: selectedConnectionId ===
+										  defaultConnectionId
+										? `Already used for ${isImageView ? "image generation" : "chat"}`
+										: `Use this connection for ${isImageView ? "image generation" : "chat"}`}
+								aria-label={`Use this connection for ${isImageView ? "image generation" : "chat"}`}
+							>
+								<Icons.Star
+									size={14}
+									aria-hidden="true"
+									fill={selectedConnectionId ===
 									defaultConnectionId
-										? "Default"
-										: "Set Default"}
-								</button>
-							{/if}
+										? "currentColor"
+										: "none"}
+								/>
+								{selectedConnectionId === defaultConnectionId
+									? "In use"
+									: isImageView
+										? "Use for Images"
+										: "Use for Chat"}
+							</button>
 						</div>
 						<div id="save-status" class="sr-only">
 							{unsavedChanges

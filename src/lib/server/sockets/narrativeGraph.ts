@@ -29,6 +29,10 @@ import {
 	type GraphBuilderResumeState
 } from "$lib/server/utils/graphBuilder"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
+import {
+	resolveCapabilityTarget,
+	TEXT_CAPABILITY
+} from "$lib/server/connections/capabilityTarget"
 import { activityStore } from "$lib/server/utils/activityStore"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
 import {
@@ -402,7 +406,7 @@ export const narrativeGraphBuildHandler: Handler<
 			}
 		}
 
-		const { connection, sampling, contextConfig, promptConfig } =
+		const { contextConfig, promptConfig } =
 			await getUserConfigurations(userId)
 
 		/*
@@ -419,7 +423,6 @@ export const narrativeGraphBuildHandler: Handler<
 		// `graph_build_configs` path is retired from this handler; those rows
 		// stay readable (legacy sidebar) until 0.8.0, and their prose seeded the
 		// pipeline's shipped prompts.
-		const systemSettingsRow = await db.query.systemSettings.findFirst()
 		const { resolveGraphStepConfigs } = await import(
 			"$lib/server/pipelines/config/graphSteps"
 		)
@@ -428,17 +431,25 @@ export const narrativeGraphBuildHandler: Handler<
 		// A step whose connection or sampling was never chosen runs on the
 		// instance default — dispatchStep's rule, and what a person expects the
 		// first time they press Build.
-		const defaultConnection = systemSettingsRow?.defaultConnectionId
-			? await db.query.connections.findFirst({
-					where: (c, { eq }) =>
-						eq(c.id, systemSettingsRow.defaultConnectionId!)
-				})
+		//
+		// This IS a real tier here, not a fourth one: graph node keys are
+		// `building.item.*`, which `buildWorld`'s defaults layer (keyed to the
+		// spec's single provider node) does not reach, so an unconfigured graph
+		// step genuinely arrives with nothing set. What changed is only where
+		// the value comes from — `connection_defaults` keyed by capability,
+		// rather than the two `system_settings` columns this read before (0181).
+		//
+		// Resolved once for the whole build rather than per step: five steps
+		// asking the same question five times is five chances for them to
+		// disagree, and the answer cannot change mid-build.
+		const instanceDefault = await resolveCapabilityTarget(db, {
+			capability: TEXT_CAPABILITY
+		})
+		const defaultConnection = instanceDefault.ok
+			? instanceDefault.connection
 			: undefined
-		const defaultSampling = systemSettingsRow?.defaultSamplingConfigId
-			? await db.query.samplingConfigs.findFirst({
-					where: (s, { eq }) =>
-						eq(s.id, systemSettingsRow.defaultSamplingConfigId!)
-				})
+		const defaultSampling = instanceDefault.ok
+			? (instanceDefault.sampling ?? undefined)
 			: undefined
 
 		const graphSteps = Object.fromEntries(
@@ -467,12 +478,35 @@ export const narrativeGraphBuildHandler: Handler<
 		// The perspective step still supplies the build-wide fallback, since it
 		// is the pass that dominates a build and the one whose failure modes the
 		// extraction profile was measured against.
-		const graphConnection = graphSteps.perspective.connection ?? connection
-		const graphSampling = graphSteps.perspective.sampling ?? sampling
+		//
+		// The `?? connection` / `?? sampling` that used to close these two came
+		// from `getUserConfigurations`, which was a second reading of the same
+		// instance default the step already fell back to two dozen lines up — a
+		// fourth tier that could only ever agree with the third, until the day
+		// one of them was repointed.
+		const graphConnection = graphSteps.perspective.connection
+		const graphSampling = graphSteps.perspective.sampling
 
 		if (!graphConnection) {
+			// The resolver's sentence names which way it failed and which screen
+			// fixes it. Reachable only when the perspective step chose nothing
+			// AND no `text->text` default is registered, which under the
+			// no-implicit-pickup ruling is a real state a fresh install is in.
 			throw new Error(
-				"No AI connection configured. Please set up a connection first."
+				(!instanceDefault.ok && instanceDefault.problem.message) ||
+					"No AI connection configured. Please set up a connection first."
+			)
+		}
+		// ⚠ Same asymmetry as `scenes.ts`: a missing sampling config is not fatal
+		// to the chain (`resolveSampling(null)` is "use the backend's own
+		// defaults") but IS fatal to `buildGraphFromScenes`, which takes a row
+		// and reads `sampling.name` off it to label each queued call. Refused
+		// here, where the sentence can name a screen, rather than reaching the
+		// builder as a null.
+		if (!graphSampling) {
+			throw new Error(
+				"No sampling config is set for chat, and building the graph needs one. " +
+					"Choose one in Admin → Defaults."
 			)
 		}
 

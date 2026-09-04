@@ -111,14 +111,31 @@ export async function seedContextTemplates(
  *
  * Falls back to the oldest immutable row for a node type core ships nothing
  * for, which is any plugin's.
+ *
+ * ## Per engine, and there is deliberately NO cross-engine fallback
+ *
+ * `engine` is the language the slot declares, and a pool with no template in
+ * it returns `null`. Handing a jinja2 slot core's Handlebars source is exactly
+ * the accident the engine half of the pool key exists to prevent: it would
+ * store cleanly, render its `{% %}` untouched, and ship that to the model as
+ * prose. `null` instead means the slot resolves to nothing and assemble halts
+ * with "has no template" — loud, and pointing at the missing row.
+ *
+ * Both of core's jinja2 slots are unbound today, so on a core install this
+ * branch is unreachable; it exists for the first plugin that publishes a node
+ * in its own language, which is the case that would otherwise be silent.
  */
 export async function defaultContextTemplateFor(
 	db: Db,
-	nodeTypeId: string
+	nodeTypeId: string,
+	engine: string
 ): Promise<number | null> {
 	const pool = poolKeyFor(nodeTypeId)
 
-	if (pool === poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE)) {
+	if (
+		pool === poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE) &&
+		engine === CORE_TEMPLATE_ENGINE
+	) {
 		const [row] = await db
 			.select()
 			.from(schema.pipelineContextTemplates)
@@ -138,6 +155,7 @@ export async function defaultContextTemplateFor(
 		.where(
 			and(
 				eq(schema.pipelineContextTemplates.nodeTypeId, pool),
+				eq(schema.pipelineContextTemplates.engine, engine),
 				eq(schema.pipelineContextTemplates.isImmutable, true),
 				isNull(schema.pipelineContextTemplates.createdForSpecId)
 			)

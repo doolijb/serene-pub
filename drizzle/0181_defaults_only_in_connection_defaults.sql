@@ -1,0 +1,43 @@
+-- `connection_defaults` becomes the only store for instance defaults.
+--
+-- These two columns were DUAL-WRITTEN beside `connection_defaults` (0175):
+-- every star press landed in both, and readers checked the table first and the
+-- column only when the row was ABSENT — never when it was merely STALE. Two
+-- spellings of one fact, which is the failure this codebase keeps paying for.
+--
+-- The COLUMNS go, not the table, and not in favour of a JSON blob. A blob would
+-- hold the same pairs and lose both foreign keys, so deleting a connection
+-- would strand a dangling id inside JSON instead of being cleared by ON DELETE
+-- SET NULL. That cascade is load-bearing three times over: it is what clears a
+-- default when its connection is deleted, what makes "the default was cleared"
+-- distinguishable from "no default was ever set", and what lets a deleted
+-- connection need no auto-fallback anywhere — the row survives, naming a target
+-- that is missing, and the next run asks for it by name.
+--
+-- `active_embedding_connection_id` is deliberately NOT dropped here. It is
+-- written once by migrateEmbeddingConnection and read by nothing at runtime, so
+-- it is not a second spelling anyone can trip over; folding it needs a setter
+-- carrying the 13 §8 re-embed, which does not exist yet. See the column's
+-- docblock in schema.ts.
+--
+-- ⚠ NO BACKFILL, AND THAT IS THE RULING RATHER THAN AN OVERSIGHT.
+-- ⚠ IT IS ALSO NOT SAFE FOR EVERYONE, WHICH IS WHY IT IS SAID OUT LOUD.
+--
+-- Pre-release instances are fresh, so this DDL exists only so that a new
+-- install has the right shape — there is no row anywhere that needs carrying.
+-- An install that starred a connection BEFORE 0175 and never starred again has
+-- no `connection_defaults` row, and this migration drops its default with no
+-- warning: on first Send it will say no connection is set for Chat and name
+-- where to set one. Fresh test instances will never show this, so nobody will
+-- see it by accident before real installs do.
+--
+-- Prod-to-prod carry-forward is a separate migration somebody still has to
+-- write, against real installs, and nothing downstream should read this file as
+-- having handled it. Do not "fix" that by adding an INSERT ... SELECT here: the
+-- honest version needs to decide what a stale column beside a live row means,
+-- which is a question about a specific install's history and not one this file
+-- can answer.
+--
+-- DROP COLUMN takes the FK constraints with it; no explicit constraint drop.
+ALTER TABLE "system_settings" DROP COLUMN "default_connection_id";--> statement-breakpoint
+ALTER TABLE "system_settings" DROP COLUMN "default_sampling_id";

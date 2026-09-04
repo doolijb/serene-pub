@@ -31,6 +31,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
+import { byCapability } from "$lib/server/connections/capabilityDefaults"
 import * as schema from "$lib/server/db/schema"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import type { TestDb } from "$lib/server/utils/testDb"
@@ -155,7 +156,7 @@ const imageConnections = () =>
 
 const imageDefault = () =>
 	testDb.query.connectionDefaults.findFirst({
-		where: eq(schema.connectionDefaults.capability, "text->image")
+		where: byCapability("text->image")
 	})
 
 const setImageModelsDir = (dir: string | null) =>
@@ -301,7 +302,9 @@ describe("koboldcpp:listModels — one directory holding two kinds of file", () 
 		expect(res.modelsDirSet).toBe(true)
 		// One directory, scanned once — a naive two-directory scan would report
 		// every file twice under two different dirKinds.
-		expect(res.availableModels.every((m) => m.dirKind === "text")).toBe(true)
+		expect(res.availableModels.every((m) => m.dirKind === "text")).toBe(
+			true
+		)
 	})
 })
 
@@ -549,20 +552,24 @@ describe("koboldcpp:connectImageModel — one image model, one connection", () =
 		const [conn] = await imageConnections()
 		expect(conn.model).toBe(filename)
 		expect(conn.modality).toBe("image-gen")
-		expect((conn.capabilities as any).resolved["text->image"]).toBe("native")
+		expect((conn.capabilities as any).resolved["text->image"]).toBe(1)
 	})
 
 	test("it registers the text->image default without claiming the text one", async () => {
-		// setCapabilityDefault, deliberately not connections:setUserActive: that
-		// writes system_settings.default_connection_id as well, which is the
-		// slot the CHAT connection holds.
+		// Both defaults live in `connection_defaults` now (0181) — this used to
+		// assert that the image path did NOT touch
+		// `system_settings.default_connection_id`, which was the column the chat
+		// connection held. With one store the property is the same and sharper:
+		// registering `text->image` must leave `text->text` alone. Nothing
+		// derives a capability from a connection, precisely because this managed
+		// KoboldCPP can serve both.
 		const [conn] = await imageConnections()
-		const before = await testDb.query.systemSettings.findFirst({
-			where: eq(schema.systemSettings.id, 1)
+		const textDefault = await testDb.query.connectionDefaults.findFirst({
+			where: byCapability("text->text")
 		})
 
 		expect((await imageDefault())!.connectionId).toBe(conn.id)
-		expect(before!.defaultConnectionId ?? null).toBeNull()
+		expect(textDefault?.connectionId ?? null).toBeNull()
 	})
 
 	test("connecting the same model twice reuses its connection", async () => {
@@ -738,7 +745,9 @@ describe("koboldcpp:recommendedModels — the maintainer's image catalog", () =>
 	]
 
 	const recommended = async (kind?: "text" | "image") => {
-		const { koboldCppRecommendedModelsHandler } = await import("./koboldcpp")
+		const { koboldCppRecommendedModelsHandler } = await import(
+			"./koboldcpp"
+		)
 		return koboldCppRecommendedModelsHandler.handler(
 			socket,
 			kind ? { kind } : {},
@@ -832,7 +841,9 @@ describe("koboldcpp:searchModels — searching for something that draws", () => 
 			id: "hum-ma/SDXL-models-GGUF",
 			pipeline_tag: "text-to-image",
 			tags: ["diffusers", "gguf"],
-			siblings: [{ rfilename: "RealVisXL_V4.0-Q4_0.gguf", size: 4_000_000 }]
+			siblings: [
+				{ rfilename: "RealVisXL_V4.0-Q4_0.gguf", size: 4_000_000 }
+			]
 		},
 		{
 			id: "OlegSkutte/sdxl-turbo-GGUF",
@@ -916,9 +927,9 @@ describe("koboldcpp:searchModels — searching for something that draws", () => 
 		// dropped because "q8_0" is not the last hyphen-separated segment, and
 		// nothing is re-sorted by a tag. Only the image branch is new.
 		const res = await search()
-		expect(fetchedUrls.every((u) => !u.includes("filter=text-to-image"))).toBe(
-			true
-		)
+		expect(
+			fetchedUrls.every((u) => !u.includes("filter=text-to-image"))
+		).toBe(true)
 		expect(res.models.map((m) => m.name)).toEqual([
 			"Pushpendra817/SDXL-Captioner-GGUF",
 			"hum-ma/SDXL-models-GGUF"

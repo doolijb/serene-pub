@@ -9,11 +9,22 @@
  *
  * ## `usedBy` is the point
  *
- * Prompts are namespaced, but context templates and variable layouts are shared
- * on purpose, which makes "may I delete this" genuinely unanswerable from inside
- * one pipeline's settings — the thing holding a row is routinely somewhere the
- * person looking is not. The delete refusal already says *that* something holds
- * it; this says *what*, before they try.
+ * Every authored row here is shared on purpose — prompts as of the pool change,
+ * context templates and variable layouts all along — which makes "may I delete
+ * this" genuinely unanswerable from inside one pipeline's settings, since the
+ * thing holding a row is routinely somewhere the person looking is not. The
+ * delete refusal already says *that* something holds it; this says *what*,
+ * before they try. Prompts used to be the exception ("namespaced, so it is only
+ * ever yours"); they are not any more, and this page is where that shows.
+ *
+ * ## Every list is grouped by its pool, and a pool names its language
+ *
+ * A prompt's pool is `(node type, slot)`; a template's is `(node type, engine)`
+ * and a layout's `(variable, engine)`. The engine is in the pool for the reason
+ * `contextTemplates.ts` gives, and it has to be in the *heading* for a smaller
+ * one: two pools rendered under one heading would interleave each language's
+ * rows into the other's, and the only way to tell them apart on the page would
+ * be to read the markup.
  *
  * Read-only. Every mutation keeps going through the entity modules, which is
  * where the rules that make a selection meaningful already live.
@@ -26,10 +37,31 @@ import {
 	humanizeTypeId
 } from "$lib/server/pipelines/config/panel"
 import { getVariable } from "@serene-pub/sdk"
-import { poolKeyFor } from "$lib/server/pipelines/entities/contextTemplateDefaults"
-import { knownEngines } from "$lib/server/pipelines/prompt/renderers"
+import {
+	contextPoolKeyFor,
+	poolKeyFor
+} from "$lib/server/pipelines/entities/contextTemplateDefaults"
+import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
+import {
+	CORE_TEMPLATE_ENGINE,
+	knownEngines
+} from "$lib/server/pipelines/prompt/renderers"
 
 type Db = { select: any; insert: any; update: any; delete: any }
+
+/**
+ * An engine id as the name of a language, for a heading.
+ *
+ * `core:template/handlebars@1` is a pinned id nobody chose; "Handlebars" is
+ * what somebody scanning a page of headings can actually use. Falls back to the
+ * raw id when the shape is unfamiliar — a plugin may publish anything, and a
+ * confident wrong guess in a heading is worse than an id.
+ */
+const languageOf = (engineId: string): string => {
+	const name = engineId.split("/")[1]?.split("@")[0]
+	if (!name) return engineId
+	return name.charAt(0).toUpperCase() + name.slice(1)
+}
 
 export interface LibraryPipeline {
 	slug: string
@@ -41,11 +73,33 @@ export interface LibraryPipeline {
 
 export interface LibraryPrompt {
 	id: number
-	specSlug: string
-	specName: string
+	/**
+	 * The pool: `<node type>#<slot>`, via `promptPoolKeyFor`.
+	 *
+	 * Replaces `specSlug`/`specName` as this row's identity, and the change is
+	 * the whole point of the pool refactor seen from the library: "which
+	 * pipeline is this prompt's" no longer has an answer, because a prompt
+	 * follows its node into every pipeline that reuses it. Where it was
+	 * *written* survives as `origin`, which is a fact about its history rather
+	 * than a claim about its scope.
+	 */
+	poolId: string
+	/** That pool, said the way a person would say it: step name plus slot. */
+	poolLabel: string
+	/** The pipeline it was authored in, when it records one. */
+	origin?: string
 	name: string
 	isImmutable: boolean
 	fields: Record<string, string>
+	/**
+	 * Text for fields the slot no longer declares.
+	 *
+	 * Shown apart and read-only. Left folded into `fields` it would be
+	 * invisible — every editor renders one box per *declared* field — so a
+	 * prompt somebody spent an afternoon on would be unfindable rather than
+	 * merely unused. This is the "reference/copy it later" half of the ruling.
+	 */
+	archived: Record<string, string>
 	usedBy: string[]
 }
 
@@ -53,18 +107,34 @@ export interface LibraryTemplate {
 	id: number
 	name: string
 	source: string
-	engine: string | null
+	/** Never null: the column is NOT NULL on both template tables now. */
+	engine: string
 	isImmutable: boolean
-	/** The pool this belongs to — a node type id, or a variable id. */
+	/** The pool's first half — a node type id, or a variable id. */
 	poolId: string
-	/** That pool, said the way a person would say it. */
+	/**
+	 * That pool, said the way a person would say it — and it **names the
+	 * language**. The pool is `(what it renders, which language)`, so a label
+	 * that named only the node would put a Jinja row and a Handlebars row under
+	 * one heading with no way to tell which was which but reading the markup.
+	 */
 	poolLabel: string
 	/** The pipeline it was authored in, when it records one. */
 	origin?: string
 	usedBy: string[]
 }
 
-/** A pool that exists because some node declares it, whether or not it has rows. */
+/**
+ * A pool that exists because some node declares it, whether or not it has rows.
+ *
+ * `id` is the **whole** pool key — `<node type>#<slot>` for a prompt,
+ * `<node type or variable>#<engine>` for a template — because that is what the
+ * page groups on. A row's own `poolId` carries only the first half, with the
+ * second on the row beside it (`slot` is implicit in the prompt's key, `engine`
+ * is a field on a template), so a caller that needs the halves separately —
+ * creating a row in an empty pool — splits this on `#`. Neither half contains
+ * one; both contain colons, which is why the separator is not `:`.
+ */
 export interface LibraryPool {
 	id: string
 	label: string
@@ -87,6 +157,17 @@ export interface LibraryView {
 	 */
 	contextPools: LibraryPool[]
 	variablePools: LibraryPool[]
+	/**
+	 * Every `(node type, slot)` a published node declares a prompts slot for,
+	 * including the pools with nothing in them.
+	 *
+	 * New with the pool refactor, and it exists for the case core does not
+	 * have: a plugin's node that ships no prose of its own has a real,
+	 * selectable prompts slot and zero rows. Grouping the rows alone would
+	 * leave that pool off the page entirely, which is a picker with no options
+	 * and no way to add one — a dead end rather than a default.
+	 */
+	promptPools: LibraryPool[]
 	/**
 	 * Every registered template engine — core's plus whatever enabled
 	 * extensions declare (12 §2a). The editor's picker renders from this; a
@@ -156,10 +237,14 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 	const promptSlots = new Set<string>()
 	const templateSlots = new Set<string>()
 	const variableSlots = new Set<string>()
-	/** node type id → the label its steps show, for the template pool headings. */
+	/**
+	 * Declared pools, keyed by the whole pool key so two languages of one node
+	 * type stay two headings. Filled from the declarations rather than from the
+	 * rows — see `LibraryView.contextPools`.
+	 */
 	const nodeTypeLabels = new Map<string, string>()
-	/** variable id → its registered name, same job for the layout headings. */
 	const variableLabels = new Map<string, string>()
+	const promptLabels = new Map<string, string>()
 
 	for (const spec of specs as any[]) {
 		const [version] = spec.activeVersionId
@@ -182,16 +267,34 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			).length
 
 			for (const d of await declarations(db, version.id)) {
-				if (d.control === "prompts-ref") promptSlots.add(d.slot)
+				// A slot that declares no engine renders in core's — which is
+				// what the column default says, and what every core slot but
+				// the two unbound jinja2 ones does.
+				const engine = d.engine ?? CORE_TEMPLATE_ENGINE
+				if (d.control === "prompts-ref") {
+					promptSlots.add(d.slot)
+					if (d.nodeTypeId)
+						promptLabels.set(
+							promptPoolKeyFor(d.nodeTypeId, d.slot),
+							// The step's own name and the slot's, because a
+							// type may declare more than one prompts slot and
+							// the type name alone would name both headings
+							// identically.
+							`${d.typeLabel || humanizeTypeId(d.nodeTypeId)} · ${d.label}`
+						)
+				}
 				if (d.control === "variable-template-ref" && d.variableId) {
 					variableSlots.add(d.slot)
-					variableLabels.set(d.variableId, d.label ?? d.variableId)
+					variableLabels.set(
+						`${d.variableId}#${engine}`,
+						`${d.label ?? d.variableId} · ${languageOf(engine)}`
+					)
 				}
 				if (d.control === "context-template-ref" && d.nodeTypeId) {
 					templateSlots.add(d.slot)
 					nodeTypeLabels.set(
-						d.nodeTypeId,
-						humanizeTypeId(d.nodeTypeId)
+						contextPoolKeyFor(d.nodeTypeId, engine),
+						`${humanizeTypeId(d.nodeTypeId)} · ${languageOf(engine)}`
 					)
 				}
 			}
@@ -209,9 +312,6 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 	const specName = new Map<number, string>(
 		(specs as any[]).map((s) => [s.id, s.name ?? s.slug])
 	)
-	const specSlug = new Map<number, string>(
-		(specs as any[]).map((s) => [s.id, s.slug])
-	)
 
 	const promptUse = await usageIndex(db, promptSlots)
 	const prompts: LibraryPrompt[] = (
@@ -219,15 +319,28 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			.select()
 			.from(schema.pipelinePrompts)
 			.orderBy(asc(schema.pipelinePrompts.id))
-	).map((p: any) => ({
-		id: p.id,
-		specSlug: specSlug.get(p.specId) ?? "",
-		specName: specName.get(p.specId) ?? "",
-		name: p.name,
-		isImmutable: !!p.isImmutable,
-		fields: (p.fields ?? {}) as Record<string, string>,
-		usedBy: [...(promptUse.get(p.id) ?? [])].sort()
-	}))
+	).map((p: any) => {
+		const poolId = promptPoolKeyFor(p.nodeTypeId, p.slot)
+		return {
+			id: p.id,
+			poolId,
+			// A row whose pool nothing currently declares still gets a heading
+			// — a prompt left behind by a disabled plugin is exactly what an
+			// admin came here to find. The id is a poor heading, so it is
+			// humanized rather than shown raw.
+			poolLabel:
+				promptLabels.get(poolId) ??
+				`${humanizeTypeId(p.nodeTypeId)} · ${p.slot}`,
+			...(p.createdForSpecId != null
+				? { origin: specName.get(p.createdForSpecId) }
+				: {}),
+			name: p.name,
+			isImmutable: !!p.isImmutable,
+			fields: (p.fields ?? {}) as Record<string, string>,
+			archived: (p.archivedFields ?? {}) as Record<string, string>,
+			usedBy: [...(promptUse.get(p.id) ?? [])].sort()
+		}
+	})
 
 	const templateUse = await usageIndex(db, templateSlots)
 	const contextTemplates: LibraryTemplate[] = (
@@ -235,21 +348,24 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			.select()
 			.from(schema.pipelineContextTemplates)
 			.orderBy(asc(schema.pipelineContextTemplates.id))
-	).map((t: any) => ({
-		id: t.id,
-		name: t.name,
-		source: t.source ?? "",
-		engine: t.engine ?? null,
-		isImmutable: !!t.isImmutable,
-		poolId: t.nodeTypeId,
-		poolLabel:
-			nodeTypeLabels.get(poolKeyFor(t.nodeTypeId)) ??
-			humanizeTypeId(t.nodeTypeId),
-		...(t.createdForSpecId != null
-			? { origin: specName.get(t.createdForSpecId) }
-			: {}),
-		usedBy: [...(templateUse.get(t.id) ?? [])].sort()
-	}))
+	).map((t: any) => {
+		const engine = t.engine ?? CORE_TEMPLATE_ENGINE
+		return {
+			id: t.id,
+			name: t.name,
+			source: t.source ?? "",
+			engine,
+			isImmutable: !!t.isImmutable,
+			poolId: t.nodeTypeId,
+			poolLabel:
+				nodeTypeLabels.get(contextPoolKeyFor(t.nodeTypeId, engine)) ??
+				`${humanizeTypeId(t.nodeTypeId)} · ${languageOf(engine)}`,
+			...(t.createdForSpecId != null
+				? { origin: specName.get(t.createdForSpecId) }
+				: {}),
+			usedBy: [...(templateUse.get(t.id) ?? [])].sort()
+		}
+	})
 
 	const variableUse = await usageIndex(db, variableSlots)
 	const variableTemplates: LibraryTemplate[] = (
@@ -267,29 +383,34 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			(typeof v?.i18n?.name === "string"
 				? v.i18n.name
 				: (v?.i18n?.name as any)?.en) ?? t.variableId
+		const engine = t.engine ?? CORE_TEMPLATE_ENGINE
 		return {
 			id: t.id,
 			name: t.name,
 			source: t.source ?? "",
-			engine: t.engine ?? null,
+			engine,
 			isImmutable: !!t.isImmutable,
 			poolId: t.variableId,
-			poolLabel: label,
+			poolLabel:
+				variableLabels.get(`${t.variableId}#${engine}`) ??
+				`${label} · ${languageOf(engine)}`,
 			usedBy: [...(variableUse.get(t.id) ?? [])].sort()
 		}
 	})
+
+	const asPools = (labels: Map<string, string>): LibraryPool[] =>
+		[...labels]
+			.map(([id, label]) => ({ id, label }))
+			.sort((a, b) => a.label.localeCompare(b.label))
 
 	return {
 		pipelines,
 		prompts,
 		contextTemplates,
 		variableTemplates,
-		contextPools: [...nodeTypeLabels]
-			.map(([id, label]) => ({ id, label }))
-			.sort((a, b) => a.label.localeCompare(b.label)),
-		variablePools: [...variableLabels]
-			.map(([id, label]) => ({ id, label }))
-			.sort((a, b) => a.label.localeCompare(b.label)),
+		contextPools: asPools(nodeTypeLabels),
+		variablePools: asPools(variableLabels),
+		promptPools: asPools(promptLabels),
 		engines: knownEngines()
 	}
 }

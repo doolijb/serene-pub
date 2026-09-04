@@ -123,8 +123,26 @@ export interface ConfigOption {
 		 * five texts, and each step declares exactly one — so rendering the row
 		 * put all five editors on all five steps: twenty-five boxes for five
 		 * texts, and every step offering to edit the other four.
+		 *
+		 * Now that a prompt is pooled per `(node type, slot)` the graph steps
+		 * hold five separate rows rather than one shared five-field one, so this
+		 * is usually the whole field set — but it stays the authority, because a
+		 * row written against @1 outlives the slot that dropped a field in @2.
 		 */
 		declared: string[]
+		/**
+		 * Text for fields the slot no longer declares, off `archived_fields`.
+		 *
+		 * Read-only and shown apart from the editors. Left in `fields` it would
+		 * be invisible — the panel renders one box per DECLARED field — so a
+		 * prompt someone spent an afternoon on becomes unfindable rather than
+		 * merely unused. This is the "reference/copy it later" half.
+		 */
+		archived?: Record<string, string>
+		/** Which group it fell into, so the editor can say where it came from. */
+		group?: "usedHere" | "shipped" | "alsoFits"
+		/** The pipeline it was written in, when that is not this one. */
+		origin?: string
 	}
 	/**
 	 * For a `variable-template-ref` option: the selected layout, in full, for
@@ -441,9 +459,17 @@ export interface Decl {
 	 */
 	variableId?: string
 	/**
-	 * For `context-template-ref`: the node type whose context the template
-	 * renders, version stripped. The pool key — a picker offers rows matching
-	 * it, and selection refuses across it.
+	 * The node type this option's row pool is keyed by, version stripped.
+	 *
+	 * For `context-template-ref`: the node whose context the template renders.
+	 * For `prompts-ref`: the node that consumes the prose — with `slot`, which
+	 * every Decl already carries, it IS the prompt pool. Half a key on its own:
+	 * a type may declare more than one prompts slot with different field sets,
+	 * and merging them would offer each the other's fields.
+	 *
+	 * Either way a picker offers rows matching it and selection refuses across
+	 * it. Server-side only — it is a node-shaped string the payload scan reads
+	 * as topology, and the client addresses every write by option handle.
 	 */
 	nodeTypeId?: string
 	/**

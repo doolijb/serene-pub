@@ -11,18 +11,59 @@
  * "the default connection for JSON schema" is not, because a feature qualifies
  * a request rather than being something a node goes shopping for.
  *
- * `default_connection_id` / `default_sampling_id` on `system_settings` are
- * deliberately still there and still read by the legacy generation path. This
- * table was seeded from them and is what the pipeline path uses.
+ * ⚠ Until 0181 this header said `default_connection_id` / `default_sampling_id`
+ * on `system_settings` were "deliberately still there and still read by the
+ * legacy generation path". They were, and both paths wrote both, and readers
+ * checked the table first and the column only when the row was ABSENT — never
+ * when it was merely STALE. Two spellings of one fact, which is how a star press
+ * landed in the column, lost to a seeded row, and left the pipeline running on
+ * yesterday's connection while every legacy screen showed today's. The columns
+ * are gone (0181); this table is the only store.
+ *
+ * **Reading is not choosing.** Nothing here selects a connection — these are
+ * lookups, and a capability with no row is a capability nothing will run. The
+ * chain that decides (`capability default → pipeline config → session override`)
+ * is `capabilityTarget.ts`, and it is the only caller that should be turning an
+ * absent row into a sentence.
+ *
+ * ## This file is the storage boundary, and the only one (0183)
+ *
+ * The table is keyed by the transform's two SIDES — `input` and `output`,
+ * comma-delimited `IoKind` lists — while everything above this file speaks the
+ * transform ID, `text+image->text`. The id is the canonical in-memory form:
+ * `capabilityDefaults()` returns a map keyed by it, node `requires` name it,
+ * `TRANSFORMS` is keyed by it. Nothing outside this file and
+ * `$lib/shared/capabilities/sides.ts` needs to know the column shape, and
+ * nothing should learn it — a second place that spells the pair is a second
+ * place that can spell it differently, which on a PRIMARY KEY means a row
+ * nothing ever matches again.
  */
 
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { S } from "@serene-pub/sdk"
+import { S, type TransformId } from "@serene-pub/sdk"
+import { sidesOf, transformIdOf } from "$lib/shared/capabilities/sides"
 
 export interface CapabilityDefault {
 	connectionId: number | null
 	samplingConfigId: number | null
+}
+
+/**
+ * The `WHERE` that addresses one capability's row.
+ *
+ * Exported because the int tests need it too, and the alternative is each of
+ * them hand-spelling `and(eq(input, …), eq(output, …))` — six copies of the
+ * storage layout in files whose subject is not the storage layout. Built from
+ * `sidesOf` like every write is, so a test cannot assert against a row shape
+ * this file does not actually produce.
+ */
+export const byCapability = (capability: string) => {
+	const { input, output } = sidesOf(capability as TransformId)
+	return and(
+		eq(schema.connectionDefaults.input, input),
+		eq(schema.connectionDefaults.output, output)
+	)
 }
 
 /**
@@ -37,8 +78,12 @@ export async function capabilityDefaults(
 ): Promise<Record<string, CapabilityDefault>> {
 	const rows = await db.select().from(schema.connectionDefaults)
 	const out: Record<string, CapabilityDefault> = {}
+	// Keyed by the transform id, still — the columns are the storage form and
+	// this map is the in-memory one. `transformIdOf` never throws, so one junk
+	// row lands as a junk key nothing matches rather than taking every good
+	// default in this same query down with it.
 	for (const r of rows)
-		out[r.capability] = {
+		out[transformIdOf(r)] = {
 			connectionId: r.connectionId ?? null,
 			samplingConfigId: r.samplingConfigId ?? null
 		}
@@ -52,7 +97,7 @@ export async function capabilityDefault(
 	const [row] = await db
 		.select()
 		.from(schema.connectionDefaults)
-		.where(eq(schema.connectionDefaults.capability, capability))
+		.where(byCapability(capability))
 		.limit(1)
 	return row
 		? {
@@ -77,7 +122,10 @@ export async function setCapabilityDefault(
 	const existing = await capabilityDefault(db, capability)
 	if (!existing) {
 		await db.insert(schema.connectionDefaults).values({
-			capability,
+			// The pair, not the id. `sidesOf` refuses anything that is not a
+			// transform, which is the guard `connections:setDefault` does not
+			// have on the clearing path — see the header of `sides.ts`.
+			...sidesOf(capability as TransformId),
 			connectionId: patch.connectionId ?? null,
 			samplingConfigId: patch.samplingConfigId ?? null
 		})
@@ -93,7 +141,7 @@ export async function setCapabilityDefault(
 				? { samplingConfigId: patch.samplingConfigId }
 				: {})
 		})
-		.where(eq(schema.connectionDefaults.capability, capability))
+		.where(byCapability(capability))
 }
 
 /**

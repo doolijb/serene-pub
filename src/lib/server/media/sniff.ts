@@ -111,6 +111,18 @@ export async function sniffMedia(
 		}
 	}
 
+	// Named before the generic refusal, because "not a recognized image type"
+	// is useless advice for a photo straight off an iPhone. HEIC is a HARD FAIL
+	// by ruling: decoding it needs libheif-js (6.4MB unpacked, more than three
+	// times the entire existing codec stack) and this project has zero native
+	// dependencies on purpose. A userAgent-conditional client-side conversion is
+	// the parked plan; nothing goes in the bundle for it now.
+	if (ext === "heic" || ext === "heif") {
+		throw new Error(
+			"HEIC/HEIF images (the iPhone default) can't be read by this server. Export or convert the photo to JPEG or PNG first — on iOS, Settings › Camera › Formats › Most Compatible saves as JPEG."
+		)
+	}
+
 	throw new Error(
 		opts?.allowDocuments
 			? "Unrecognized file type (png/jpg/webp/gif, pdf/epub/docx/odt/rtf/txt/md)"

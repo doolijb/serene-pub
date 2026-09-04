@@ -300,7 +300,7 @@ async function specForSlug(slug: string) {
  * A config id the caller supplied must belong to the pipeline they are looking
  * at. Ids are small integers somebody can guess; without this, guessing one
  * renames or deletes another pipeline's configuration through this one's
- * screen — the same hole `promptInSpec` closes for prompts.
+ * screen — the same hole `promptForOption` closes for prompts.
  */
 async function configInSpec(slug: string, configId: number) {
 	const spec = await specForSlug(slug)
@@ -380,8 +380,9 @@ const adminOnly = (
  * answer to why the button did nothing.
  *
  * The `/pipeline/` clause carries the scoping refusals thrown by
- * `specForSlug` / `configInSpec`, which are plain Errors for the same reason
- * `promptInSpec`'s are.
+ * `specForSlug` / `configInSpec`, which are plain Errors rather than a typed
+ * class: they are refusals about a *name the caller supplied*, not about the
+ * entity's own rules, so there is nothing for an entity module to own.
  */
 const configRefusal = async (err: unknown): Promise<string> => {
 	const { ConfigNotFoundError, ConfigNotUsableError } = await import(
@@ -593,52 +594,199 @@ export const pipelinesSelectConfig: Handler<
  * ------------------------------------------------------------------ */
 
 /**
- * The scoping gate every prompt mutation passes first: the prompt must belong
- * to the pipeline the panel is showing. The id arrives from the client and is
- * a small integer somebody can guess; without this line, guessing one would
- * edit another pipeline's wording through this one's panel.
+ * The gate every prompt mutation passes first — and it is the same shape as
+ * `layoutForOption` and `contextTemplateForOption` now, which it was not.
+ *
+ * It replaces `promptInSpec`, which asked whether the prompt belonged to the
+ * pipeline whose panel was open. That was the right question while a prompt was
+ * namespaced to a spec and has no answer now: a prompt is pooled by the node
+ * that consumes it, so an action reusing the reply pipeline's context node is
+ * *meant* to reach the same rows, and an ownership check would refuse every one
+ * of them while looking like a security check.
+ *
+ * The hole it closed is still closed. `promptId` arrives from the client as a
+ * small integer somebody can guess, so what is checked instead is what the
+ * other two gates check: the option handle resolves to a prompt setting this
+ * pipeline declares, the viewer may write it, and the row being mutated belongs
+ * to that setting's pool.
  */
-async function promptInSpec(slug: string, promptId: number) {
-	const [spec] = await db
-		.select()
-		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, slug))
-		.limit(1)
-	if (!spec) throw new Error(`There is no pipeline called '${slug}'.`)
-	const [prompt] = await db
-		.select()
-		.from(schema.pipelinePrompts)
-		.where(eq(schema.pipelinePrompts.id, promptId))
-		.limit(1)
-	if (!prompt || prompt.specId !== spec.id)
-		throw new Error("That prompt does not belong to this pipeline.")
-	return { spec, prompt }
+async function promptForOption(
+	socket: any,
+	params: {
+		slug: string
+		optionId: string
+		promptId: number
+		sessionId?: number
+	}
+) {
+	const { promptOptionGate } = await import(
+		"$lib/server/pipelines/config/panel"
+	)
+	const { assertSelectable } = await import(
+		"$lib/server/pipelines/entities/prompts"
+	)
+	const viewer = await viewerFor(socket, params.sessionId)
+	const { nodeTypeId, slot, nodeKey, specId, specVersionId } =
+		await promptOptionGate(
+			db as any,
+			await instanceSecret(),
+			params.slug,
+			viewer,
+			params.optionId
+		)
+	// Through `assertSelectable` rather than a bare pool comparison, so a
+	// mutation and a selection refuse for the same reasons in the same words —
+	// including the fields check, which catches a row that fits the pool but
+	// not this version of the slot.
+	const row = await assertSelectable(
+		db as any,
+		specVersionId,
+		nodeKey,
+		slot,
+		params.promptId
+	)
+	return { viewer, nodeTypeId, slot, specId, row }
 }
 
-/** "Roleplay (copy)", then "(copy 2)" — names are unique per pipeline. */
-async function copyName(specId: number, base: string): Promise<string> {
-	const rows = await db
-		.select({ name: schema.pipelinePrompts.name })
-		.from(schema.pipelinePrompts)
-		.where(eq(schema.pipelinePrompts.specId, specId))
-	const taken = new Set((rows as any[]).map((r) => r.name))
+/**
+ * "Roleplay (copy)", then "(copy 2)" — names are unique per **pool**.
+ *
+ * Per pool, not per pipeline, because that is what the unique index is on now.
+ * Scoped to the spec, two pipelines sharing a pool would both propose
+ * "Roleplay (copy)" — the second insert would hit
+ * `pipeline_prompts_pool_name_idx` as a raw constraint error, surfacing to the
+ * person who pressed Duplicate as the generic "the server log has the details".
+ */
+async function copyName(
+	nodeTypeId: string,
+	slot: string,
+	base: string
+): Promise<string> {
+	const taken = await takenPromptNames(nodeTypeId, slot)
 	let candidate = `${base} (copy)`
 	for (let n = 2; taken.has(candidate); n++) candidate = `${base} (copy ${n})`
 	return candidate
+}
+
+/** "New prompt", then "New prompt (2)" — the same pool, a different suffix. */
+async function freePromptName(
+	nodeTypeId: string,
+	slot: string,
+	base: string
+): Promise<string> {
+	const taken = await takenPromptNames(nodeTypeId, slot)
+	let candidate = base
+	for (let n = 2; taken.has(candidate); n++) candidate = `${base} (${n})`
+	return candidate
+}
+
+async function takenPromptNames(
+	nodeTypeId: string,
+	slot: string
+): Promise<Set<string>> {
+	const rows = await db
+		.select({ name: schema.pipelinePrompts.name })
+		.from(schema.pipelinePrompts)
+		.where(
+			and(
+				eq(schema.pipelinePrompts.nodeTypeId, nodeTypeId),
+				eq(schema.pipelinePrompts.slot, slot)
+			)
+		)
+	return new Set((rows as any[]).map((r) => r.name))
 }
 
 const promptRefusal = async (err: unknown): Promise<string> => {
 	const { PromptNotFoundError, PromptNotUsableError } = await import(
 		"$lib/server/pipelines/entities/prompts"
 	)
+	const { OptionNotFoundError, OptionNotWritableError } = await import(
+		"$lib/server/pipelines/config/panel"
+	)
 	if (
 		err instanceof PromptNotFoundError ||
-		err instanceof PromptNotUsableError
+		err instanceof PromptNotUsableError ||
+		// The gate's refusals reach the person too, as they do for layouts and
+		// templates: "open the session you want to change" is the whole answer
+		// to why the button did nothing.
+		err instanceof OptionNotFoundError ||
+		err instanceof OptionNotWritableError
 	)
 		return err.message
 	if (err instanceof Error && /pipeline/.test(err.message)) return err.message
 	console.error("[pipelines] prompt mutation failed:", err)
 	return "That change could not be saved. The server log has the details."
+}
+
+/**
+ * Write a prompt from nothing.
+ *
+ * Exists for the reason `createContextTemplate` does, and pooling made it
+ * necessary rather than merely tidy: a pool can be legitimately empty. Core
+ * ships prose for its own nodes and none for a plugin's, so a plugin node's
+ * picker offers nothing at all — and a picker with no rows and no way to add
+ * one is a dead end rather than a default. The create names its pool by option
+ * handle, so the pool comes from the declaration and never from the client.
+ */
+export const pipelinesCreatePrompt: Handler<
+	Sockets.Pipelines.CreatePrompt.Params,
+	Sockets.Pipelines.CreatePrompt.Response
+> = {
+	event: "pipelines:createPrompt",
+	handler: async (socket, params, emitToUser) => {
+		let promptId: number
+		try {
+			const { promptOptionGate } = await import(
+				"$lib/server/pipelines/config/panel"
+			)
+			const viewer = await viewerFor(socket, params.sessionId)
+			const { nodeTypeId, slot, specId } = await promptOptionGate(
+				db as any,
+				await instanceSecret(),
+				params.slug,
+				viewer,
+				params.optionId
+			)
+			const { createPrompt } = await import(
+				"$lib/server/pipelines/entities/prompts"
+			)
+			const made = await createPrompt(db as any, {
+				nodeTypeId,
+				slot,
+				// Through the same uniquifier a clone uses: the pool's unique
+				// name index is what a second "New prompt" would hit, and a raw
+				// constraint error is not an answer anyone can act on.
+				name: await freePromptName(
+					nodeTypeId,
+					slot,
+					params.name?.trim() || "New prompt"
+				),
+				fields: params.fields ?? {},
+				// Written here, so it sorts to the top of *this* pipeline's
+				// picker next time. Grouping only — it stays selectable
+				// everywhere the node is reused.
+				createdForSpecId: specId
+			})
+			promptId = made.id
+		} catch (err) {
+			const res = { error: await promptRefusal(err) }
+			emitToUser("pipelines:createPrompt:error", res)
+			return res
+		}
+		const view = await emitView(
+			socket,
+			emitToUser,
+			"pipelines:get",
+			params.slug,
+			params.sessionId
+		)
+		const res = {
+			promptId,
+			...view
+		} as Sockets.Pipelines.CreatePrompt.Response
+		emitToUser("pipelines:createPrompt", res)
+		return res
+	}
 }
 
 export const pipelinesClonePrompt: Handler<
@@ -649,17 +797,22 @@ export const pipelinesClonePrompt: Handler<
 	handler: async (socket, params, emitToUser) => {
 		let promptId: number
 		try {
-			const { spec, prompt } = await promptInSpec(
-				params.slug,
-				params.promptId
+			const { nodeTypeId, slot, specId, row } = await promptForOption(
+				socket,
+				params
 			)
 			const { duplicatePrompt } = await import(
 				"$lib/server/pipelines/entities/prompts"
 			)
 			const copy = await duplicatePrompt(
 				db as any,
-				prompt.id,
-				params.name?.trim() || (await copyName(spec.id, prompt.name))
+				row.id,
+				params.name?.trim() ||
+					(await copyName(nodeTypeId, slot, row.name)),
+				// The copy remembers where it was made, so it leads this
+				// pipeline's picker next time. The original keeps its own
+				// origin — duplicating somebody's prompt does not move theirs.
+				specId
 			)
 			promptId = copy.id
 		} catch (err) {
@@ -692,11 +845,11 @@ export const pipelinesUpdatePrompt: Handler<
 	event: "pipelines:updatePrompt",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			const { prompt } = await promptInSpec(params.slug, params.promptId)
+			const { row } = await promptForOption(socket, params)
 			const { updatePrompt } = await import(
 				"$lib/server/pipelines/entities/prompts"
 			)
-			await updatePrompt(db as any, prompt.id, {
+			await updatePrompt(db as any, row.id, {
 				...(params.name !== undefined ? { name: params.name } : {}),
 				...(params.fields !== undefined
 					? { fields: params.fields }
@@ -724,9 +877,9 @@ export const pipelinesDeletePrompt: Handler<
 	event: "pipelines:deletePrompt",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			const { spec, prompt } = await promptInSpec(
-				params.slug,
-				params.promptId
+			const { viewer, slot, specId, row } = await promptForOption(
+				socket,
+				params
 			)
 			// The caller's *own selection* of this prompt does not hold it
 			// alive — without this, Delete is unreachable from the panel: the
@@ -741,7 +894,6 @@ export const pipelinesDeletePrompt: Handler<
 			// its way to failing: the prompt survived, the choice did not, and
 			// the message said nothing about it. The rows only go once the
 			// delete has actually succeeded.
-			const viewer = await viewerFor(socket, params.sessionId)
 			// `value` is a json column, which Postgres cannot compare with `=`
 			// — so the rows are read and matched in code, the same way the
 			// reference check in `deletePrompt` does.
@@ -760,7 +912,7 @@ export const pipelinesDeletePrompt: Handler<
 					.from(schema.pipelineNodeOverrides)
 					.where(
 						and(
-							eq(schema.pipelineNodeOverrides.specId, spec.id),
+							eq(schema.pipelineNodeOverrides.specId, specId),
 							eq(
 								schema.pipelineNodeOverrides.scopeKind,
 								"session"
@@ -769,19 +921,23 @@ export const pipelinesDeletePrompt: Handler<
 								schema.pipelineNodeOverrides.scopeId,
 								viewer.sessionId
 							),
-							eq(schema.pipelineNodeOverrides.slot, "prompts")
+							// The declaration's own slot, not the literal
+							// "prompts": the pool's second half is whatever the
+							// node called it, and a plugin naming it anything
+							// else would have its selection missed here — the
+							// row would hold the prompt alive and refuse the
+							// caller's own delete.
+							eq(schema.pipelineNodeOverrides.slot, slot)
 						)
 					)
-				mine.push(
-					...(own as any[]).filter((o) => o.value === prompt.id)
-				)
+				mine.push(...(own as any[]).filter((o) => o.value === row.id))
 			} else if (viewer.isAdmin) {
 				const { resolveSelectedConfig } = await import(
 					"$lib/server/pipelines/config/named"
 				)
 				const selected = await resolveSelectedConfig(
 					db as any,
-					spec.id,
+					specId,
 					params.slug,
 					{}
 				)
@@ -803,14 +959,12 @@ export const pipelinesDeletePrompt: Handler<
 									),
 									eq(
 										schema.pipelineConfigValues.slot,
-										"prompts"
+										slot
 									)
 								)
 							)
 						mineValues.push(
-							...(own as any[]).filter(
-								(v) => v.value === prompt.id
-							)
+							...(own as any[]).filter((v) => v.value === row.id)
 						)
 					}
 				}
@@ -818,7 +972,7 @@ export const pipelinesDeletePrompt: Handler<
 			const { deletePrompt } = await import(
 				"$lib/server/pipelines/entities/prompts"
 			)
-			await deletePrompt(db as any, prompt.id, {
+			await deletePrompt(db as any, row.id, {
 				ignoreOverrideIds: new Set(mine.map((o) => o.id)),
 				ignoreConfigValueIds: new Set(mineValues.map((v) => v.id))
 			})
@@ -850,19 +1004,23 @@ export const pipelinesDeletePrompt: Handler<
  * ------------------------------------------------------------------ */
 
 /**
- * The gate, and it is a different shape from `promptInSpec` on purpose.
+ * The gate, and the shape all three of them take now.
  *
- * A prompt is namespaced to a pipeline, so its mutations are gated on
- * ownership. A layout is shared across pipelines *by design* — that is the
- * feature — so the same question has no true answer for one, and copying the
- * check here would quietly remove cross-pipeline reuse while looking like
- * consistency.
+ * A layout is shared across pipelines *by design* — that is the feature — so
+ * "does this row belong to this spec" has no true answer for one, and a gate
+ * asking it would quietly remove cross-pipeline reuse while looking like a
+ * security check.
  *
  * What is checked instead: the option handle resolves to a layout setting this
  * pipeline actually declares, the viewer may write it, and the row being
  * mutated renders the same variable that setting does. So the rule is "you may
  * edit a layout through a setting that uses it", which is the honest version of
  * the ownership question.
+ *
+ * Prompts used to be the exception here, gated on ownership because they were
+ * namespaced to a spec. Pooling them by the node that consumes them made the
+ * ownership question exactly as meaningless for a prompt as it always was for a
+ * layout, so `promptForOption` is now this same shape.
  */
 async function layoutForOption(
 	socket: any,
@@ -1073,15 +1231,20 @@ async function contextTemplateForOption(
 		"$lib/server/pipelines/entities/contextTemplates"
 	)
 	const viewer = await viewerFor(socket, params.sessionId)
-	const { nodeTypeId, specId } = await contextTemplateOptionGate(
+	const { nodeTypeId, engine, specId } = await contextTemplateOptionGate(
 		db as any,
 		await instanceSecret(),
 		params.slug,
 		viewer,
 		params.optionId
 	)
-	const row = await assertSelectable(db as any, nodeTypeId, params.templateId)
-	return { viewer, nodeTypeId, specId, row }
+	const row = await assertSelectable(
+		db as any,
+		nodeTypeId,
+		params.templateId,
+		engine
+	)
+	return { viewer, nodeTypeId, engine, specId, row }
 }
 
 /** "Default (copy)", then "(copy 2)" — names are unique per node type. */
@@ -1470,6 +1633,35 @@ async function libraryCopyName(
 	return candidate
 }
 
+/**
+ * The same, for a prompt's `(node type, slot)` pool.
+ *
+ * Separate from `libraryCopyName` only because the pool is two columns here and
+ * one there. Without it a clone whose name is already taken reached the unique
+ * index and came back as a Postgres constraint string — and a clone is the most
+ * likely way to collide, since its default name is derived from a row that is
+ * by definition already in the pool.
+ */
+async function promptCopyName(
+	nodeTypeId: string,
+	slot: string,
+	base: string
+): Promise<string> {
+	const rows = await db
+		.select({ name: schema.pipelinePrompts.name })
+		.from(schema.pipelinePrompts)
+		.where(
+			and(
+				eq(schema.pipelinePrompts.nodeTypeId, nodeTypeId),
+				eq(schema.pipelinePrompts.slot, slot)
+			)
+		)
+	const taken = new Set((rows as any[]).map((r) => r.name))
+	let candidate = base
+	for (let n = 2; taken.has(candidate); n++) candidate = `${base} (${n})`
+	return candidate
+}
+
 export const pipelinesLibraryCreateTemplate: Handler<
 	Sockets.Pipelines.LibraryTemplateWrite.CreateParams,
 	Sockets.Pipelines.LibraryTemplateWrite.Response
@@ -1692,7 +1884,11 @@ export const pipelinesLibraryClonePrompt: Handler<
 			await duplicatePrompt(
 				db as any,
 				params.id,
-				params.name?.trim() || `${row.name} (copy)`
+				await promptCopyName(
+					row.nodeTypeId,
+					row.slot,
+					params.name?.trim() || `${row.name} (copy)`
+				)
 			)
 		} catch (err) {
 			const res = { error: await libraryRefusal(err) }
@@ -2539,6 +2735,7 @@ export function registerPipelineHandlers(
 	register(socket, pipelinesSetPresetActions, emitToUser)
 	register(socket, pipelinesRenameConfig, emitToUser)
 	register(socket, pipelinesDeleteConfig, emitToUser)
+	register(socket, pipelinesCreatePrompt, emitToUser)
 	register(socket, pipelinesClonePrompt, emitToUser)
 	register(socket, pipelinesUpdatePrompt, emitToUser)
 	register(socket, pipelinesDeletePrompt, emitToUser)

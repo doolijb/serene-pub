@@ -49,7 +49,70 @@ export const MediaKind = {
 
 export type MediaKindType = (typeof MediaKind)[keyof typeof MediaKind]
 
-/** The one and only derivative kind today. NULL means "an original". */
+/**
+ * Which stored representation of a file (0182). A CLOSED enum.
+ *
+ * Before 0182 this had one member and NULL meant "an original", because an
+ * original and its derivative were two rows in one table. Now every row in
+ * `variants` names one of these, and the file it belongs to is a row of its
+ * own — so "original" is a value here rather than the absence of one.
+ *
+ * **Closed because the value reaches a path builder.** `variantRelPath` puts it
+ * in a filename, and it arrives from `?v=` on a URL, so free text here is a
+ * path-traversal surface. Validated at the route with `parseMediaVariant` and
+ * again by `variants_variant_check` in the database, which is the backstop for
+ * a bug that skips the first.
+ */
 export const MediaVariant = {
+	/** The bytes the user or the backend actually gave us. Irreplaceable. */
+	ORIGINAL: "original",
+	/** Full-size, lossless, web-safe — what a bare `/media/{uuid}` serves.
+	 *  Often IS the original row: a png/jpeg/webp/gif upload needs no second
+	 *  copy, and the two roles are not mutually exclusive. */
+	DISPLAY: "display",
+	/** Long edge capped, for a list or a card. Reduced fidelity, freely
+	 *  cullable, re-derived on the next request. */
 	THUMB: "thumb"
 } as const
+
+export type MediaVariantName = (typeof MediaVariant)[keyof typeof MediaVariant]
+
+export const MediaVariantOptions = [
+	MediaVariant.ORIGINAL,
+	MediaVariant.DISPLAY,
+	MediaVariant.THUMB
+] as MediaVariantName[]
+
+/**
+ * Validate a `?v=` parameter. Null for anything not in the enum — including
+ * the empty string, so `?v=` reads as "no variant asked for" only where the
+ * caller checks for a *missing* parameter rather than a failed parse.
+ *
+ * Returns null instead of throwing because the one caller is an HTTP handler
+ * whose answer to junk input is 404, and a thrown error there would be a 500.
+ */
+export function parseMediaVariant(
+	raw: string | null | undefined
+): MediaVariantName | null {
+	if (!raw) return null
+	return MediaVariantOptions.includes(raw as MediaVariantName)
+		? (raw as MediaVariantName)
+		: null
+}
+
+/**
+ * Whether a variant is a full-fidelity representation of the file.
+ *
+ * Only `full` rows compete for the display pointer. Everything stored today is
+ * lossless or an untouched original, so "serve the smaller of two" costs
+ * nothing — but the moment somebody adds a lossy payload transcode, an
+ * unscoped smallest-wins would start shipping degraded images to every user,
+ * and it would read as a caching bug rather than a selection bug.
+ */
+export const MediaFidelity = {
+	FULL: "full",
+	REDUCED: "reduced"
+} as const
+
+export type MediaFidelityType =
+	(typeof MediaFidelity)[keyof typeof MediaFidelity]

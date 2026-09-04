@@ -89,8 +89,12 @@ describe("allocation", () => {
 })
 
 describe("rendering", () => {
+	// The engine rides on `base` because it is required now: `render` takes a
+	// concrete engine and `renderTemplate` throws on an absent one. These
+	// templates are Handlebars, so they say so.
 	const base = {
 		allocation: allocate([decision()], { budgetTotal: 100 }),
+		engine: CORE_TEMPLATE_ENGINE,
 		messages: [{ id: 1, role: "user", content: "hello" }]
 	}
 
@@ -136,6 +140,7 @@ describe("rendering", () => {
 			allocation: allocate([decision({ included: false })], {
 				budgetTotal: 100
 			}),
+			engine: CORE_TEMPLATE_ENGINE,
 			messages: [],
 			template: "[{{#each worldLore}}{{this}}{{/each}}]"
 		})
@@ -197,18 +202,33 @@ describe("the engine is data, not an assumption", () => {
 
 	const base = {
 		allocation: allocate([decision()], { budgetTotal: 100 }),
+		engine: CORE_TEMPLATE_ENGINE,
 		messages: [] as any[]
 	}
 
-	it("a null engine means core's default", async () => {
-		// The column is nullable for exactly this reason: an untouched config is
-		// distinguishable from one a user deliberately set to core's engine.
-		const r = await render({
-			...base,
-			engine: null,
-			template: "{{budget.total}}"
-		})
-		expect(r.rendered).toBe("100")
+	it("refuses to render when no engine arrives, rather than assuming core's", async () => {
+		// ⚠ This test used to assert the OPPOSITE — "a null engine means core's
+		// default" — on the reading that the column was nullable so an
+		// untouched config stayed distinguishable from a deliberate choice.
+		//
+		// That default is what let the delivery bug survive a release.
+		// `world.ts` dereferenced a template row for its `source` and dropped
+		// the `engine` beside it, so this branch was taken on EVERY run on
+		// every install: every context template rendered in Handlebars whatever
+		// it declared, silently, and a plugin's template would have reached the
+		// model as raw markup. Both template tables store `engine` NOT NULL
+		// now, so an absent one can only mean a caller lost it — a fault, and
+		// raised as one.
+		//
+		// If this test ever goes red because somebody restored the fallback to
+		// make it pass: that is the bug, not the fix.
+		await expect(
+			render({
+				...base,
+				engine: undefined as any,
+				template: "{{budget.total}}"
+			})
+		).rejects.toThrow(/no template engine/i)
 	})
 
 	it("an extension can register its own engine and render its own templates", async () => {
@@ -236,7 +256,11 @@ describe("the engine is data, not an assumption", () => {
 
 	it("the refusal names what is registered, so the fix is visible", async () => {
 		try {
-			await render({ ...base, engine: "nobody.owns:this@1", template: "x" })
+			await render({
+				...base,
+				engine: "nobody.owns:this@1",
+				template: "x"
+			})
 		} catch (e) {
 			expect((e as Error).message).toMatch(
 				/core:template\/handlebars@1 \(core\)/

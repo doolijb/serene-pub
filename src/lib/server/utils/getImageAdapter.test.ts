@@ -8,9 +8,15 @@
  * text GGUF, and handing it to the A1111 adapter would send an LLM's filename
  * to a backend as a checkpoint.
  *
- * Silent if it regresses: adding the type back to the switch produces a render
- * path that looks entirely functional right up to the point koboldcpp is asked
- * to draw with no image model resident.
+ * The two halves are no longer independent. `ADAPTER_REGISTRY` is the one map,
+ * and the manifest is checked against it, so declaring `text->image` for a type
+ * with no `image` thunk is a CI failure rather than a bind that resolves and
+ * then throws from inside the loader. What is left to test here is the routing
+ * itself: which entry a type lands on, and which types deliberately have none.
+ *
+ * Silent if it regresses: an `image` thunk added back to an entry produces a
+ * render path that looks entirely functional right up to the point koboldcpp is
+ * asked to draw with no image model resident.
  */
 import { describe, expect, it, vi } from "vitest"
 import { getImageAdapter } from "./getImageAdapter"
@@ -49,5 +55,21 @@ describe("getImageAdapter", () => {
 		const a1111 = (await import("../imageAdapters/A1111Adapter")).default
 		expect(await getImageAdapter(CONNECTION_TYPE.KOBOLDCPP)).toBe(a1111)
 		expect(await getImageAdapter(CONNECTION_TYPE.A1111)).toBe(a1111)
+	})
+
+	it("refuses OpenAI chat, which has no image code of any kind", async () => {
+		// The live bug this pairs with. `PRESET_CAPABILITIES["openai-official"]`
+		// asserted `text->image`, the OPENAI_CHAT declaration was `probed`, so it
+		// resolved `native`, the bind guard passed — and then THIS threw, minutes
+		// into a session, from a file whose name tells the user nothing. The
+		// manifest no longer grants the key; this is the second half saying the
+		// same thing, and the two can no longer disagree.
+		//
+		// Not a statement about the vendor: the API has an images endpoint. It is a
+		// statement about this repo, which has no adapter for it — and that is
+		// exactly what the derivation is meant to report.
+		await expect(
+			getImageAdapter(CONNECTION_TYPE.OPENAI_CHAT)
+		).rejects.toThrow(/No image adapter/)
 	})
 })

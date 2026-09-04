@@ -41,6 +41,7 @@ import { and, asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { declarations } from "$lib/server/pipelines/config/panel"
 import { createPrompt } from "$lib/server/pipelines/entities/prompts"
+import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 import {
 	GRAPH_BUILD_SPEC_ID,
 	NARRATE_SPEC_ID,
@@ -55,10 +56,23 @@ type Db = { select: any; insert: any; update: any; delete: any }
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "")
 
-/** One legacy table, and how its rows become a namespace's prompts. */
+/** One legacy table, and how its rows become a pipeline's prompts. */
 interface LegacySource {
 	specSlug: string
 	table: any
+	/**
+	 * The legacy table's own name, and half the identity of a migrated prompt.
+	 *
+	 * Needed because two SOURCES entries read the SAME table:
+	 * `sceneSummarizeConfigs` migrates into both the scene and the history
+	 * pipeline. Under pooling those two pipelines share every summarize pool,
+	 * so a legacy row must become ONE prompt that both configs point at — the
+	 * same dedupe the shipped catalog makes for exactly the same pair. Keying
+	 * the marker on the table rather than the spec is what makes the second
+	 * pass find the first pass's row instead of colliding with it on the pool's
+	 * unique name index.
+	 */
+	legacyTable: string
 	fields: (row: any) => Record<string, string>
 }
 
@@ -91,26 +105,31 @@ const SOURCES: LegacySource[] = [
 	{
 		specSlug: RESPOND_SPEC_ID,
 		table: schema.promptConfigs,
+		legacyTable: "prompt_configs",
 		fields: (r) => sessionFields(r)
 	},
 	{
 		specSlug: NARRATE_SPEC_ID,
 		table: schema.narratorPromptConfigs,
+		legacyTable: "narrator_prompt_configs",
 		fields: (r) => sessionFields(r, str(r.narratorName) || "Narrator")
 	},
 	{
 		specSlug: SUMMARIZE_WORLD_SPEC_ID,
 		table: schema.worldSummarizeConfigs,
+		legacyTable: "world_summarize_configs",
 		fields: summarizeFields
 	},
 	{
 		specSlug: SUMMARIZE_CHARACTER_SPEC_ID,
 		table: schema.characterSummarizeConfigs,
+		legacyTable: "character_summarize_configs",
 		fields: summarizeFields
 	},
 	{
 		specSlug: SUMMARIZE_SCENE_SPEC_ID,
 		table: schema.sceneSummarizeConfigs,
+		legacyTable: "scene_summarize_configs",
 		fields: (r) => ({
 			...summarizeFields(r),
 			characterExtraction: str(r.characterExtractionSystemPrompt)
@@ -119,11 +138,13 @@ const SOURCES: LegacySource[] = [
 	{
 		specSlug: SUMMARIZE_HISTORY_SPEC_ID,
 		table: schema.sceneSummarizeConfigs,
+		legacyTable: "scene_summarize_configs",
 		fields: summarizeFields
 	},
 	{
 		specSlug: GRAPH_BUILD_SPEC_ID,
 		table: schema.graphBuildConfigs,
+		legacyTable: "graph_build_configs",
 		fields: (r) => ({
 			nodeResolution: str(r.nodeResolutionSystemPrompt),
 			preFilter: str(r.preFilterSystemPrompt),
@@ -154,6 +175,57 @@ export interface MigrationReport {
  */
 const migratedKey = (specSlug: string, legacyId: number) =>
 	`migrated:${specSlug}:${legacyId}`
+
+/**
+ * The same idea, for one migrated prompt: the pool, plus the row it came from.
+ *
+ * Keyed on the legacy TABLE rather than the spec, deliberately. Scene and
+ * history summarization migrate the same `scene_summarize_configs` rows into
+ * pools they now share, so the second pass has to find the row the first pass
+ * wrote rather than insert a twin — which the pool's unique
+ * `(node type, slot, name)` index would refuse anyway, as a raw constraint
+ * error in the middle of boot.
+ *
+ * A non-null `seed_key` on a row a user owns is not a contradiction:
+ * `is_immutable` is what says "core ships this and you may not edit it", and
+ * these are false. The key is identity, not provenance.
+ */
+const migratedPromptKey = (
+	pool: string,
+	legacyTable: string,
+	legacyId: number
+) => `migrated-prompt:${pool}:${legacyTable}:${legacyId}`
+
+/**
+ * A name free in this pool, because the pool is what enforces uniqueness now.
+ *
+ * Two legacy configs a person happened to give the same name land in one pool —
+ * they did not before, when a pool was a pipeline — and an unqualified insert
+ * would fail the unique index in the middle of boot. Suffixed rather than
+ * refused: losing somebody's migrated wording to a name clash would be the
+ * worst possible outcome of a migration whose entire purpose is not to lose it.
+ */
+async function freePromptName(
+	db: Db,
+	nodeTypeId: string,
+	slot: string,
+	base: string
+): Promise<string> {
+	const rows = await db
+		.select({ name: schema.pipelinePrompts.name })
+		.from(schema.pipelinePrompts)
+		.where(
+			and(
+				eq(schema.pipelinePrompts.nodeTypeId, nodeTypeId),
+				eq(schema.pipelinePrompts.slot, slot)
+			)
+		)
+	const taken = new Set((rows as any[]).map((r) => r.name))
+	if (!taken.has(base)) return base
+	let n = 2
+	while (taken.has(`${base} (${n})`)) n++
+	return `${base} (${n})`
+}
 
 /**
  * Copy the user's own configs into their namespaces.
@@ -203,13 +275,71 @@ export async function migrateLegacyConfigs(db: Db): Promise<MigrationReport[]> {
 				continue
 			}
 
-			// The user's wording becomes a prompt they own — editable, unlike the
+			// The user's wording becomes prompts they own — editable, unlike the
 			// shipped ones, because it was always theirs.
-			const prompt = await createPrompt(db, {
-				specId: spec.id,
-				name: row.name,
-				fields: source.fields(row)
-			})
+			//
+			// **One row per pool**, carrying only that pool's declared fields.
+			// A legacy row is a bundle: a scene summarize config holds `batch`,
+			// `synth`, `name` and `characterExtraction`, four texts belonging
+			// to four different node types that only ever travelled together
+			// because the spec was the namespace. Written whole into one pool
+			// it would be a prompt the other three steps refuse — the panel
+			// would show a config it will not let them select — so the split is
+			// not a nicety here, it is what keeps the migrated config usable.
+			//
+			// "No data migration" does not exempt this: it is a boot path, and
+			// leaving it whole writes config rows the panel then rejects.
+			const authored = source.fields(row)
+			// Pool key → the prompt id every decl in that pool points at. Two
+			// decls sharing a pool share one row: they read the same fields
+			// from the same node type, so a second row would be a duplicate the
+			// unique index refuses and the picker could not tell apart.
+			const promptIdByPool = new Map<string, number>()
+			for (const d of promptNodes) {
+				if (!d.nodeTypeId) continue
+				const pool = promptPoolKeyFor(d.nodeTypeId, d.slot)
+				if (promptIdByPool.has(pool)) continue
+
+				const promptKey = migratedPromptKey(
+					pool,
+					source.legacyTable,
+					row.id
+				)
+				const [existing] = await db
+					.select()
+					.from(schema.pipelinePrompts)
+					.where(eq(schema.pipelinePrompts.seedKey, promptKey))
+					.limit(1)
+				if (existing) {
+					promptIdByPool.set(pool, existing.id)
+					continue
+				}
+
+				// Only what this pool's slot declares. A field the legacy row
+				// carried that no node here reads is left out rather than
+				// copied into every pool: it would render nowhere, and the boot
+				// sweep would archive it on the next pass anyway.
+				const fields: Record<string, string> = {}
+				for (const field of d.promptFields ?? [])
+					if (field in authored) fields[field] = authored[field]!
+				const made = await createPrompt(db, {
+					nodeTypeId: d.nodeTypeId,
+					slot: d.slot,
+					name: await freePromptName(
+						db,
+						d.nodeTypeId,
+						d.slot,
+						row.name
+					),
+					fields,
+					seedKey: promptKey,
+					// Written while migrating this pipeline, so it sorts to the
+					// top of that pipeline's picker. Grouping only — it stays
+					// selectable wherever the node is reused.
+					createdForSpecId: spec.id
+				})
+				promptIdByPool.set(pool, made.id)
+			}
 
 			const [config] = await db
 				.insert(schema.pipelineConfigs)
@@ -222,20 +352,25 @@ export async function migrateLegacyConfigs(db: Db): Promise<MigrationReport[]> {
 				})
 				.returning()
 
-			// Every prompts slot in the namespace points at it. The reply
-			// pipeline has three, which is the spec defect noted in seedPrompts —
-			// pointing all three at one prompt is what `world.ts` does today by
-			// writing the same text to two slots.
-			if (promptNodes.length)
-				await db.insert(schema.pipelineConfigValues).values(
-					promptNodes.map((d) => ({
-						configId: config.id,
-						nodeKey: d.nodeKey,
-						slot: d.slot,
-						path: "",
-						value: prompt.id
-					}))
-				)
+			// Each prompts slot points at its OWN pool's prompt. It used to
+			// point every one of them at a single row, which was the only thing
+			// a per-pipeline bundle could mean — and which the panel now
+			// refuses, because a summarizer's synth step will not accept a row
+			// carrying only the drafting text.
+			const values = promptNodes
+				.filter((d) => d.nodeTypeId)
+				.map((d) => ({
+					configId: config.id,
+					nodeKey: d.nodeKey,
+					slot: d.slot,
+					path: "",
+					value: promptIdByPool.get(
+						promptPoolKeyFor(d.nodeTypeId!, d.slot)
+					)
+				}))
+				.filter((v) => v.value != null)
+			if (values.length)
+				await db.insert(schema.pipelineConfigValues).values(values)
 
 			report.configs.push(row.name)
 		}

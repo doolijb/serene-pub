@@ -24,9 +24,10 @@
  * that could read a connection could exfiltrate one.
  */
 
-import { eq } from "drizzle-orm"
-import * as schema from "$lib/server/db/schema"
-import { capabilityRefusal } from "./capabilityGuard"
+import {
+	resolveCapabilityTarget,
+	TEXT_CAPABILITY
+} from "$lib/server/connections/capabilityTarget"
 import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { runQueuedLLMCall } from "$lib/server/utils/runQueuedLLMCall"
@@ -91,43 +92,6 @@ function minimalSession(userPrompt: string): any {
 	}
 }
 
-/**
- * Resolve a step's connection and sampling config.
- *
- * The slot value where the config selected one, and the instance default
- * otherwise. Falling back rather than failing is deliberate: a namespace whose
- * connection has never been chosen should run on whatever the instance runs on,
- * which is what every user expects the first time they press Summarize.
- */
-async function resolveTarget(
-	db: any,
-	connectionId?: number | null,
-	samplingId?: number | null
-) {
-	const [system] = await db.select().from(schema.systemSettings).limit(1)
-
-	const connId = connectionId ?? system?.defaultConnectionId
-	const sampId = samplingId ?? system?.defaultSamplingConfigId
-
-	const [connection] = connId
-		? await db
-				.select()
-				.from(schema.connections)
-				.where(eq(schema.connections.id, connId))
-				.limit(1)
-		: []
-
-	const [sampling] = sampId
-		? await db
-				.select()
-				.from(schema.samplingConfigs)
-				.where(eq(schema.samplingConfigs.id, sampId))
-				.limit(1)
-		: []
-
-	return { connection, sampling }
-}
-
 export class StepDispatchError extends Error {}
 
 /** Run one step. Throws with a sentence a person can act on. */
@@ -137,24 +101,29 @@ export async function dispatchStep(
 ): Promise<{ text: string; via?: string }> {
 	call.signal?.throwIfAborted()
 
-	const { connection, sampling } = await resolveTarget(
-		db,
-		call.connectionId,
-		call.samplingId
-	)
-
-	if (!connection)
-		throw new StepDispatchError(
-			"no connection is set for this step and the instance has no default " +
-				"connection either. Choose one in the pipeline's configuration, or " +
-				"set an instance default in system settings."
-		)
-
-	// Asked before the adapter is loaded, so an image-only connection is refused
-	// with a sentence naming the capability rather than by `getConnectionAdapter`
-	// failing to find a text adapter for its type.
-	const refusal = capabilityRefusal(connection, "text->text")
-	if (refusal) throw new StepDispatchError(refusal)
+	// The one chain, not a fourth one of this file's own.
+	//
+	// This used to resolve its own fallback — `connectionId ?? system
+	// .defaultConnectionId`, the column that no longer exists — and then ask
+	// `capabilityRefusal` separately. Both moved into `resolveCapabilityTarget`,
+	// which walks `capability default → pipeline config → session override` and
+	// hands back either a row or the sentence. The slot value arrives here
+	// already collapsed by the executor's scope chain, so it enters as the
+	// pipelineConfig tier; the capability default underneath it is read from
+	// `connection_defaults` in there, never here.
+	//
+	// A step whose connection was never chosen therefore no longer silently
+	// borrows whatever the instance happens to hold: the instance default IS a
+	// tier, and where nobody registered one the step refuses by name.
+	const target = await resolveCapabilityTarget(db, {
+		capability: TEXT_CAPABILITY,
+		pipelineConfig: {
+			connectionId: call.connectionId,
+			samplingConfigId: call.samplingId
+		}
+	})
+	if (!target.ok) throw new StepDispatchError(target.problem.message)
+	const { connection, sampling } = target
 
 	const AdapterClass = await getConnectionAdapter(connection.type)
 

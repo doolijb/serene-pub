@@ -25,6 +25,7 @@ import {
 } from "$lib/server/pipelines/parity/harness"
 import { renderParity, parityGate, checkParity } from "@serene-pub/sdk"
 import { wrapFor } from "$lib/server/pipelines/entities/variableLayouts"
+import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 
@@ -383,11 +384,25 @@ describe("the semantic parity corpus", () => {
 			const world = await buildWorld(db as any, {
 				sessionId: scope.sessionId
 			})
+			// `source` and `engine` together, never one alone — the rule
+			// `world.ts`'s `pushTemplate` enforces on the real path. A source
+			// with no engine used to render anyway, because `renderTemplate`
+			// filled the gap with core's; it refuses now, since that fallback
+			// is what made every template on every install render as
+			// Handlebars whatever it declared. This corpus is Handlebars, and
+			// here it says so rather than being assumed.
 			world.overrides.push({
 				nodeKey: "prompt",
 				slot: "template",
 				path: "source",
 				value: TEMPLATE,
+				scopeKind: "defaults"
+			} as any)
+			world.overrides.push({
+				nodeKey: "prompt",
+				slot: "template",
+				path: "engine",
+				value: CORE_TEMPLATE_ENGINE,
 				scopeKind: "defaults"
 			} as any)
 			const preview: any = await run(ragParityPipeline(), {

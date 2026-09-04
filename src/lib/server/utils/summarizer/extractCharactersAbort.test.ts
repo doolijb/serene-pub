@@ -18,15 +18,19 @@
  * the rethrown error's shape doesn't matter to either of them.
  */
 import { beforeEach, describe, expect, test, vi } from "vitest"
+import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 
 const mockGenerate = vi.fn()
 
 vi.mock("../getConnectionAdapter", () => ({
 	getConnectionAdapter: vi.fn(async () => ({
-		Adapter: class {
+		// `implements` and not a bare method: it is what makes this fake fail to
+		// compile if it ever drifts from the real `text->text` action — see
+		// fakeTextAdapter.ts for why `implements AdapterActions` would not.
+		Adapter: class implements FakeTextAdapter {
 			constructor(_args: any) {}
 			async preflight() {}
-			async generate() {
+			async generateText() {
 				return mockGenerate()
 			}
 			abort() {}

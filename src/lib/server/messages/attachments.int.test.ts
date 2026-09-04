@@ -47,21 +47,28 @@ describe("the asset store", () => {
 			bytes: PNG,
 			mime: "image/png"
 		})
-		expect(b.id).toBe(a.id) // same bytes, same session → one row
-		expect(a.bytes).toBe(PNG.byteLength)
+		// Same bytes, same user → one FILE row. Dedupe is on the hash of the
+		// original bytes, which is what a re-upload matches on (0182).
+		expect(b.file.id).toBe(a.file.id)
+		expect(a.original.bytes).toBe(PNG.byteLength)
 		// Since 28 a session asset is a media row and lives in the shared
 		// layout — under the session it belongs to (28 §8 rule 1), not in a
-		// separate session_assets/ tree.
-		expect(a.path).toMatch(
+		// separate session_assets/ tree. The path is on the VARIANT: it is the
+		// one fact about a stored representation, and no payload builder loads
+		// one.
+		expect(a.original.path).toMatch(
 			new RegExp(`^data/users/\\d+/sessions/${sessionId}/`)
 		)
 
-		const read = await readSessionAsset(db, a.id)
+		// Reads the DISPLAY form, which for a web-safe upload IS the original
+		// row — the two roles are not mutually exclusive, and nothing here had
+		// to derive a second copy to be readable.
+		const read = await readSessionAsset(db, a.file.id)
 		expect(read).toBeTruthy()
 		expect(Buffer.compare(read!.bytes, PNG)).toBe(0)
 
 		// The file really is jailed under the data dir.
-		const abs = path.resolve(getAppDataDir(), a.path)
+		const abs = path.resolve(getAppDataDir(), a.original.path)
 		await fs.access(abs)
 	})
 })

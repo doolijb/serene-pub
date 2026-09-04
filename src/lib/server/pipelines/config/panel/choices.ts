@@ -4,8 +4,9 @@
  * A slot whose value is a *reference* to an authored row — a prompt, a context
  * template, a variable layout, a sampling preset, a connection — needs the set
  * of rows that reference could name. That set is narrowed differently per kind
- * (a prompt by spec, a variable layout by the variable it renders), which is
- * why this is one place rather than a branch inside the read model.
+ * (a prompt by the node that consumes it, a variable layout by the variable it
+ * renders), which is why this is one place rather than a branch inside the read
+ * model.
  */
 
 import { asc, eq } from "drizzle-orm"
@@ -18,9 +19,16 @@ import {
 } from "@serene-pub/sdk"
 import { shapeOfModality } from "$lib/shared/constants/ConnectionTypes"
 import * as schema from "$lib/server/db/schema"
+import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
+import { storedCapabilities } from "$lib/server/pipelines/runtime/capabilityGuard"
+import {
+	CORE_TEMPLATE_ENGINE,
+	contextPoolKeyFor
+} from "$lib/shared/pipelines/poolKey"
 import { type Db, type Decl } from "$lib/server/pipelines/config/panel/types"
 
-type ChoiceList = Array<{
+/** Exported for `judgeAgainst`'s callers — see the ⚠ on it. */
+export type ChoiceList = Array<{
 	id: number
 	label: string
 	description?: string
@@ -39,10 +47,16 @@ type ChoiceList = Array<{
  * applied below.
  */
 export async function choiceSets(db: Db, specId: number) {
-	const prompts = await db
+	// Every prompt on the instance, pooled by `(node type, slot)` rather than
+	// by spec — the same rule context templates and layouts follow, and now for
+	// the same reason: a prompt belongs to the NODE that consumes it, so an
+	// action reusing the reply pipeline's context node is offered its twelve
+	// prompts without anything being seeded or copied. Narrowed per option by
+	// `nodeTypeId` + `slot` below, and grouped so the pipeline being configured
+	// comes first.
+	const promptRows = await db
 		.select()
 		.from(schema.pipelinePrompts)
-		.where(eq(schema.pipelinePrompts.specId, specId))
 		.orderBy(asc(schema.pipelinePrompts.id))
 
 	const connections = await db
@@ -73,36 +87,82 @@ export async function choiceSets(db: Db, specId: number) {
 		(specRows as any[]).map((r) => [r.id, r.name ?? r.slug])
 	)
 
-	const contextTemplatesBy = new Map<string, ChoiceList>()
-	const CT_ORDER = { usedHere: 0, shipped: 1, alsoFits: 2 } as const
-	for (const t of contextTemplateRows as any[]) {
-		const group: keyof typeof CT_ORDER =
-			t.createdForSpecId === specId
-				? "usedHere"
-				: t.isImmutable
-					? "shipped"
-					: "alsoFits"
-		const list = contextTemplatesBy.get(t.nodeTypeId) ?? []
-		list.push({
-			id: t.id,
-			label: t.name,
-			// The subtitle answers the question the grouping raises — "then
-			// where is this one from" — for exactly the rows where it is not
-			// already obvious.
-			...(group === "alsoFits" && t.createdForSpecId != null
-				? { description: `from ${nameById.get(t.createdForSpecId)}` }
-				: {}),
-			group
-		} as any)
-		contextTemplatesBy.set(t.nodeTypeId, list)
+	const POOL_ORDER = { usedHere: 0, shipped: 1, alsoFits: 2 } as const
+
+	/**
+	 * Group and order one pool's rows, for any entity keyed by a pool.
+	 *
+	 * Written once and used by both context templates and prompts, because
+	 * since prompts became node-scoped the two answer the *same* question about
+	 * the *same* kind of row: which of these was written here, which does core
+	 * ship, and which merely also fits. Two copies would be two orderings for
+	 * one rule, and the day they disagreed the editor's caption and the
+	 * dropdown would be the halves disagreeing.
+	 *
+	 * **The grouping never refuses.** A row written while configuring replies
+	 * stays selectable in the narrator, one group down — that is the entire
+	 * point of pooling rather than namespacing.
+	 */
+	const pooled = (
+		rows: Array<{
+			id: number
+			name: string
+			isImmutable: boolean
+			createdForSpecId: number | null
+		}>,
+		keyOf: (r: any) => string
+	): Map<string, ChoiceList> => {
+		const by = new Map<string, ChoiceList>()
+		for (const r of rows as any[]) {
+			const group: keyof typeof POOL_ORDER =
+				r.createdForSpecId === specId
+					? "usedHere"
+					: r.isImmutable
+						? "shipped"
+						: "alsoFits"
+			const key = keyOf(r)
+			const list = by.get(key) ?? []
+			list.push({
+				id: r.id,
+				label: r.name,
+				// The subtitle answers the question the grouping raises — "then
+				// where is this one from" — for exactly the rows where it is not
+				// already obvious.
+				...(group === "alsoFits" && r.createdForSpecId != null
+					? {
+							description: `from ${nameById.get(r.createdForSpecId)}`
+						}
+					: {}),
+				group
+			} as any)
+			by.set(key, list)
+		}
+		for (const [, list] of by)
+			list.sort(
+				(a: any, b: any) =>
+					POOL_ORDER[a.group as keyof typeof POOL_ORDER] -
+						POOL_ORDER[b.group as keyof typeof POOL_ORDER] ||
+					a.label.localeCompare(b.label)
+			)
+		return by
 	}
-	for (const [, list] of contextTemplatesBy)
-		list.sort(
-			(a: any, b: any) =>
-				CT_ORDER[a.group as keyof typeof CT_ORDER] -
-					CT_ORDER[b.group as keyof typeof CT_ORDER] ||
-				a.label.localeCompare(b.label)
-		)
+
+	// Keyed on `(node type, engine)`, which is the pool EVERYWHERE else — the
+	// unique index, `assertSelectable`, `defaultContextTemplateFor`,
+	// `contextTemplateOptionGate` and `refDefaults` all use both halves. Keying
+	// on the node type alone here offered a Jinja template into a Handlebars
+	// slot: it stored cleanly and then rendered its own markup as prose, which
+	// is the exact failure the engine half of the pool exists to prevent.
+	const contextTemplatesBy = pooled(contextTemplateRows as any[], (t: any) =>
+		contextPoolKeyFor(t.nodeTypeId, t.engine)
+	)
+
+	// Keyed on the composite, which is an in-memory Map key and never leaves
+	// this process — the rows carry two columns and `choicesFor` rebuilds the
+	// key from the declaration's two halves. See `promptPool.ts`.
+	const promptsBy = pooled(promptRows as any[], (p: any) =>
+		promptPoolKeyFor(p.nodeTypeId, p.slot)
+	)
 
 	// Every layout on the instance, not this spec's — a layout is keyed by the
 	// variable it renders, so one written while configuring replies belongs in
@@ -175,14 +235,11 @@ export async function choiceSets(db: Db, specId: number) {
 	}
 
 	return {
-		prompts: (prompts as any[]).map((p) => ({
-			id: p.id,
-			label: p.name
-		})) as ChoiceList,
+		promptsBy,
 		// The full rows, for the inline editor: a prompts-ref option carries
 		// the selected row's text so editing does not need a second fetch.
 		promptRows: new Map<number, any>(
-			(prompts as any[]).map((p) => [p.id, p])
+			(promptRows as any[]).map((p) => [p.id, p])
 		),
 		// The model is the thing a person actually recognises a connection by —
 		// two rows both called "Ollama" are otherwise indistinguishable in a
@@ -201,7 +258,14 @@ export async function choiceSets(db: Db, specId: number) {
 			// for every connection against every slot in the panel — the one
 			// place the lazy loading costs most. `{}` means nobody has tested
 			// this connection, which is undetermined and not incapable.
-			capabilities: (c.capabilities?.resolved ?? {}) as CapabilitySet,
+			//
+			// Read through `storedCapabilities`, which intersects the cache with
+			// what the manifest still declares. The bind guard reads it that way,
+			// and a picker reading RAW would offer a connection for a transform
+			// the adapter has since stopped declaring — the row is selectable,
+			// the run then refuses it, and nothing on screen explains why the
+			// two disagreed. One reader, one answer.
+			capabilities: storedCapabilities(c),
 			...(c.model ? { description: c.model } : {})
 		})) as ChoiceList,
 		sampling: (sampling as any[]).map((s) => ({
@@ -264,8 +328,17 @@ const nameCapabilities = (ids: readonly string[]): string => {
  * That is *undetermined*, not incapable, and marking it unusable would empty
  * the picker on every install that upgraded into the capability model — so it
  * is offered, with the uncertainty said out loud rather than resolved either way.
+ *
+ * ⚠ EXPORTED, and that is load-bearing rather than tidiness. Admin → Defaults
+ * asks the identical question — "may this connection be pointed at this
+ * capability, and if not, what do I put beside the greyed row" — and the second
+ * copy of it would be the one that forgets the untested case and empties the
+ * picker on an upgraded install. `choicesFor` is a caller of this, not its
+ * owner. Each entry must carry a `capabilities` field read through
+ * `storedCapabilities`; passing raw `capabilities.resolved` offers a connection
+ * for a transform its adapter has since stopped declaring.
  */
-const ofCapabilities = (
+export const judgeAgainst = (
 	list: ChoiceList,
 	requires: readonly string[]
 ): ChoiceList =>
@@ -299,7 +372,14 @@ export const choicesFor = (
 	d: Decl,
 	sets: Awaited<ReturnType<typeof choiceSets>>
 ): ChoiceList | undefined => {
-	if (d.control === "prompts-ref") return sets.prompts
+	// Narrowed by the pool, exactly as a context template is — the difference
+	// is that a prompt's pool takes both halves. A slot's declared field set is
+	// a property of the type's VERSION, so it is checked at selection
+	// (`assertSelectable`) rather than fragmenting the pool on every bump.
+	if (d.control === "prompts-ref")
+		return d.nodeTypeId
+			? (sets.promptsBy.get(promptPoolKeyFor(d.nodeTypeId, d.slot)) ?? [])
+			: []
 	// Judged against what the slot declared it requires, and only narrowed by
 	// shape when it declared none — the fallback for every slot authored before
 	// a connection could say what it can do. The two rules differ in kind, not
@@ -307,7 +387,7 @@ export const choicesFor = (
 	// and says why it cannot be used.
 	if (d.control === "connection-ref")
 		return d.requires?.length
-			? ofCapabilities(sets.connections, d.requires)
+			? judgeAgainst(sets.connections, d.requires)
 			: ofShape(sets.connections, d.shape)
 	// Sampling stays on shape. A sampling config is not a backend and has no
 	// capabilities to test; its shape is the vocabulary its values speak (F17),
@@ -319,7 +399,12 @@ export const choicesFor = (
 			: []
 	if (d.control === "context-template-ref")
 		return d.nodeTypeId
-			? (sets.contextTemplatesBy.get(d.nodeTypeId) ?? [])
+			? (sets.contextTemplatesBy.get(
+					contextPoolKeyFor(
+						d.nodeTypeId,
+						d.engine ?? CORE_TEMPLATE_ENGINE
+					)
+				) ?? [])
 			: []
 	// The union of the hook's accepted types, in declaration order — which is
 	// the attachment rule made visible: nothing outside `accepts` is offered,

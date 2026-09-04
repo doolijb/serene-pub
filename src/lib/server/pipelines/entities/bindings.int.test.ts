@@ -27,7 +27,10 @@ class FakeAdapter {
 		return this
 	}
 	abort() {}
-	async generate() {
+	// The TEXT action, by its name. `generate` named both this and a render
+	// until the actions were split; a fake that kept the old name would go on
+	// passing while `dispatch` called something no adapter has.
+	async generateText() {
 		return {
 			compiledPrompt: this.injected,
 			isAborted: false,

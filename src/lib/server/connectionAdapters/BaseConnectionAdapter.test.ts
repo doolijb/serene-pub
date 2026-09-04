@@ -1,4 +1,5 @@
 import { expect, test, vi, describe, beforeEach } from "vitest"
+import type { TextGenResult } from "$lib/server/adapters/actions"
 
 // BaseConnectionAdapter pulls in the full promptBuilder module graph
 // (KeywordInfillEngine/RagInfillEngine/NarrativeGraphContext), which touches
@@ -21,11 +22,20 @@ vi.mock("$lib/server/embedding", () => ({
 
 const { BaseConnectionAdapter } = await import("./BaseConnectionAdapter")
 
-/** Minimal concrete subclass — generate() is abstract and irrelevant here;
- * compilePrompt()'s dispatch and compileNarratorResponsePrompt()'s pass-through
- * are what's under test. */
+/**
+ * Minimal concrete subclass — `generateText()` is abstract and irrelevant here;
+ * compilePrompt()'s dispatch is what's under test.
+ *
+ * The return type is the real `TextGenResult` and not `any`, even though the
+ * body only throws. A fake free to widen an action's return is the same defect
+ * the named actions exist to remove: the derivation reads capabilities off
+ * method presence, which says nothing about in and out unless the signature is
+ * the action's rather than the class's. That a *test* adapter is the one
+ * widening it makes no difference — it is still a class claiming to implement
+ * the action.
+ */
 class TestAdapter extends BaseConnectionAdapter {
-	async generate(): Promise<any> {
+	async generateText(): Promise<TextGenResult> {
 		throw new Error("not used in these tests")
 	}
 }

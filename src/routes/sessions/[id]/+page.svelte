@@ -819,9 +819,18 @@
 	})
 
 	$effect(() => {
-		const _connection = systemSettingsCtx.settings?.defaultConnectionId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
+		// REPOINTED, not deleted: these two reads exist only to make the effect
+		// depend on the instance defaults, so the token count is recomputed when
+		// an admin changes which connection or sampling config a reply will use.
+		// They now read `connection_defaults`, the only place a default lives
+		// (0181) — reading the dropped columns would have made the effect depend
+		// on `undefined`, which never changes, and the count would have gone
+		// quietly stale on every default change.
+		const _connection =
+			systemSettingsCtx.capabilityDefaults?.["text->text"]?.connectionId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
 		const _samplingConfig =
-			systemSettingsCtx.settings?.defaultSamplingConfigId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
+			systemSettingsCtx.capabilityDefaults?.["text->text"]
+				?.samplingConfigId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
 		const _contextConfig = userSettingsCtx.settings?.activeContextConfigId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
 		const _promptConfig = userSettingsCtx.settings?.activePromptConfigId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
 		const _newMessage = newMessage // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER

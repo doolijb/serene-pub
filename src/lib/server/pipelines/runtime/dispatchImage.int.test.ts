@@ -17,6 +17,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest"
+import { transformIdOf } from "$lib/shared/capabilities/sides"
 
 const SECRET_KEY = "sk-do-not-leak-9f8e7d"
 const SECRET_URL = "http://192.168.1.50:8888"
@@ -50,7 +51,7 @@ const imageSampling = {
 
 /** What the fake adapter saw, so a test can assert on it afterwards. */
 let seen: { req?: any; constructedWith?: any } = {}
-/** Renders currently inside `generate`, to prove they do not overlap. */
+/** Renders currently inside `generateImage`, to prove they do not overlap. */
 let concurrent = 0
 let maxConcurrent = 0
 let mode: "ok" | "abort" | "empty" | "slow" = "ok"
@@ -61,7 +62,11 @@ class FakeAdapter {
 		this.connection = connection
 		seen.constructedWith = connection
 	}
-	async generate(req: any, opts: any = {}) {
+	// Named as the ACTION, not as "the thing an adapter does". A fake still
+	// spelling this `generate` would keep passing here while the real dispatch
+	// called a method nothing implements — the rename is only checkable end to
+	// end if the fakes move with it.
+	async generateImage(req: any, opts: any = {}) {
 		seen.req = req
 		preflightLog.push("render")
 		concurrent++
@@ -105,27 +110,52 @@ vi.mock("$lib/server/utils/getImageAdapter", () => ({
 	getImageAdapter: async () => ({ Adapter: FakeAdapter })
 }))
 
-/** Rows written by `createMedia`, so the test can read provenance back. */
+/** File rows written by `createMedia`, so the test can read provenance back. */
 let created: any[] = []
+/** Set by a test that wants the stored file to carry a time dimension. */
+let nextDurationMs: number | null = null
 vi.mock("$lib/server/media", () => ({
 	createMedia: async (_db: any, input: any) => {
-		const row = {
+		const file = {
 			id: 100 + created.length,
 			uuid: `uuid-${created.length}`,
+			rev: 0,
 			userId: input.userId,
 			sessionId: input.sessionId ?? null,
-			mime: "image/png",
 			kind: "image",
-			bytes: input.bytes.length,
+			// The display projection deliberately DISAGREES with the original
+			// variant below. That is a real state — a PNG whose lossless WebP
+			// came out smaller re-points the display pointer — and it is the
+			// only fixture in which "reads the projection" and "reads the
+			// stored row" give different answers.
+			displayMime: "image/webp",
+			displayBytes: 111,
 			width: 1,
 			height: 1,
+			durationMs: nextDurationMs,
 			filename: input.filename,
-			meta: input.meta,
-			path: "generated/x.png"
+			meta: input.meta
 		}
-		created.push(row)
-		return row
-	}
+		const original = {
+			id: 900 + created.length,
+			fileId: file.id,
+			variant: "original",
+			mime: "image/png",
+			bytes: input.bytes.length,
+			// The only place a path exists, and it is in this mock ON PURPOSE:
+			// the leak assertion below can only mean something if there was a
+			// path available to leak.
+			path: "generated/x.png",
+			hash: "deadbeef",
+			isOriginal: true,
+			cache: false,
+			fidelity: "full"
+		}
+		created.push(file)
+		return { file, original }
+	},
+	mediaUrl: (uuid: string, rev: number, variant?: string) =>
+		`/media/${uuid}?${variant ? `v=${variant}&r=${rev}` : `r=${rev}`}`
 }))
 
 vi.mock("$lib/server/utils/tokenCrypto", () => ({
@@ -164,20 +194,14 @@ vi.mock("$lib/server/koboldcpp/managedPreflight", () => ({
 vi.mock("$lib/server/db", () => ({ db: { query: {} } }))
 
 /**
- * What `resolveTarget` finds. Set per test.
+ * The instance's defaults, keyed by capability. Set per test.
  *
- * The text defaults are deliberately still here and deliberately point somewhere
- * else: the property they prove — that an image step never reaches for the text
- * default — did not change when the image half moved out of this table, so the
- * decoys stay.
- */
-let systemSettings: any = {
-	defaultConnectionId: 2,
-	defaultSamplingConfigId: 99
-}
-/**
- * The instance's image default, which is now a `connection_defaults` row keyed
- * by capability rather than a pair of `system_settings` columns (0175).
+ * The `text->text` entry is a DECOY and points at a connection that cannot draw:
+ * the property it proves — that an image step never reaches for the text default
+ * — survived both the move out of `system_settings` (0175) and the deletion of
+ * those columns (0181), so it stays. It used to sit in a `systemSettings` object
+ * beside this one; with one store there is nowhere else for it to live, which is
+ * a better test than the two-table version was.
  */
 let capabilityDefaults: Record<string, any> = {}
 /** The KoboldCPP Manager's settings — where a MANAGED instance's address lives. */
@@ -211,18 +235,24 @@ const fakeDb = {
 						return Object.values(samplingById).filter(
 							(s) => s.id === lastWhereId
 						)
-					// Keyed by capability, so `lastWhereId` is a string here.
+					// Keyed by the transform's two SIDES since 0183, so this
+					// lookup builds TWO equalities where every other read here
+					// builds one. The fixture map is still keyed by the id.
 					if (name === "connection_defaults") {
-						const row = capabilityDefaults[lastWhereId as any]
+						const [input, output] = lastWherePair as [
+							string,
+							string
+						]
+						const row =
+							capabilityDefaults[transformIdOf({ input, output })]
 						return row ? [row] : []
 					}
 					return []
 				}
-			}),
-			limit: async () => {
-				const name = tableName(table)
-				return name === "system_settings" ? [systemSettings] : []
-			}
+			})
+			// No bare `.from(x).limit()` path any more. It existed to serve
+			// `select().from(systemSettings).limit(1)`, and the resolver reads
+			// no such row: every lookup it makes is by key, through `.where()`.
 		})
 	})
 }
@@ -232,12 +262,15 @@ const fakeDb = {
  * predicate is built. Crude, and enough: this file only ever looks rows up by id.
  */
 let lastWhereId: number | undefined
+/** The last two, as a sliding window — see the `connection_defaults` branch. */
+let lastWherePair: [unknown, unknown] = [undefined, undefined]
 vi.mock("drizzle-orm", async (orig) => {
 	const actual = (await orig()) as any
 	return {
 		...actual,
 		eq: (col: any, value: any) => {
 			lastWhereId = value
+			lastWherePair = [lastWherePair[1], value]
 			return actual.eq(col, value)
 		}
 	}
@@ -259,10 +292,12 @@ beforeEach(() => {
 	vi.resetModules()
 	seen = {}
 	created = []
+	nextDurationMs = null
 	concurrent = 0
 	maxConcurrent = 0
 	mode = "ok"
 	lastWhereId = undefined
+	lastWherePair = [undefined, undefined]
 	preflightLog = []
 	preflightFails = false
 	koboldCppSettings = { koboldCppManagerBaseUrl: SECRET_URL }
@@ -274,10 +309,6 @@ beforeEach(() => {
 			connectionId: 1,
 			samplingConfigId: 10
 		}
-	}
-	systemSettings = {
-		defaultConnectionId: 2,
-		defaultSamplingConfigId: 99
 	}
 })
 
@@ -295,6 +326,31 @@ describe("dispatchImage — what comes back", () => {
 		const serialized = JSON.stringify(out)
 		expect(serialized).not.toContain(PNG_1x1)
 		expect(serialized).not.toContain("base64")
+		// Nor the on-disk location. A MediaRef is built from the FILE row and a
+		// path only exists on a variant, so this is structural now — asserted
+		// because "structural" lasts exactly until someone spreads a row.
+		expect(serialized).not.toContain("generated/x.png")
+	})
+
+	it("takes mime and bytes off the display projection, not the stored original", async () => {
+		const out = await dispatch()
+
+		// A MediaRef's `mime`/`bytes` describe what a bare `/media/{uuid}` will
+		// actually answer with, which is the display variant — not the bytes
+		// that were handed to `createMedia`. Reading the variant row here would
+		// label WebP bytes as `image/png`, and adapters branch on `mime`.
+		expect(out.media[0].mime).toBe("image/webp")
+		expect(out.media[0].bytes).toBe(111)
+	})
+
+	it("reports a time dimension in seconds, and omits it when there is none", async () => {
+		expect((await dispatch()).media[0].duration).toBeUndefined()
+
+		nextDurationMs = 2500
+		// Milliseconds in the column, seconds in a MediaRef. PRESENCE is the
+		// signal that converting to a still format would lose something, so an
+		// absent time dimension has to be absent rather than zero.
+		expect((await dispatch()).media[0].duration).toBe(2.5)
 	})
 
 	it("leaks no connection material", async () => {
@@ -424,19 +480,25 @@ describe("dispatchImage — resolving the target", () => {
 		// do is the set on the row, not the label on the type.
 		connectionsById[2] = {
 			...textConnection,
-			capabilities: { resolved: { "text->image": "native" } }
+			capabilities: { resolved: { "text->image": 1 } }
 		}
 		await dispatch({ connectionId: 2 })
 		expect(seen.constructedWith.id).toBe(2)
 	})
 
-	it("says what to do when nothing is configured", async () => {
-		// No registered default for the capability — the text defaults in
-		// `systemSettings` stay set, because reaching for one of those instead of
+	it("says what to do when nothing is registered", async () => {
+		// The text default stays registered and stays pointed at a connection
+		// that cannot draw, because reaching for one of those instead of
 		// reporting the gap is the failure this asserts against.
-		capabilityDefaults = {}
+		capabilityDefaults = {
+			"text->text": {
+				capability: "text->text",
+				connectionId: 2,
+				samplingConfigId: 99
+			}
+		}
 		await expect(dispatch()).rejects.toThrow(
-			/no image connection is set.*default/s
+			/Nothing is set to handle .*Admin → Defaults/s
 		)
 	})
 
@@ -530,7 +592,7 @@ describe("dispatchImage — one render at a time per connection", () => {
 			// this the guard refuses it first and the preflight never runs,
 			// which is correct: an unprobed managed instance has not shown it
 			// can render.
-			capabilities: { resolved: { "text->image": "native" } }
+			capabilities: { resolved: { "text->image": 1 } }
 		}
 		await dispatch({ connectionId: 5 })
 		expect(preflightLog).toEqual([
@@ -557,7 +619,7 @@ describe("dispatchImage — one render at a time per connection", () => {
 			// this the guard refuses it first and the preflight never runs,
 			// which is correct: an unprobed managed instance has not shown it
 			// can render.
-			capabilities: { resolved: { "text->image": "native" } }
+			capabilities: { resolved: { "text->image": 1 } }
 		}
 		preflightFails = true
 		await expect(dispatch({ connectionId: 5 })).rejects.toThrow(

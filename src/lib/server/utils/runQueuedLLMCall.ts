@@ -53,7 +53,7 @@ export async function runQueuedLLMCall({
 		preflight: (signal) => adapter.preflight(signal),
 		execute: async (signal) => {
 			const { completionResult, isAborted, thinkingContent } =
-				await adapter.generate()
+				await adapter.generateText()
 
 			if (typeof completionResult === "string") {
 				return {

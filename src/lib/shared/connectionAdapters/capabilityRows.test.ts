@@ -45,12 +45,12 @@ describe("the three states", () => {
 		expect(find(view, "text->image").state).toBe("off")
 	})
 
-	test("a tier is ON", () => {
+	test("a grade is ON", () => {
 		const view = buildCapabilityRows({
 			type: CONNECTION_TYPE.KOBOLDCPP,
 			capabilities: {
-				overrides: { "text->image": "native" },
-				resolved: { "text->image": "native" }
+				overrides: { "text->image": 1 },
+				resolved: { "text->image": 1 }
 			}
 		})
 		expect(find(view, "text->image").state).toBe("on")
@@ -77,8 +77,8 @@ describe("the adapter gates the key space", () => {
 		const view = buildCapabilityRows({
 			type: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
 			capabilities: {
-				resolved: { "text->image": "native" },
-				overrides: { "text->image": "native" }
+				resolved: { "text->image": 1 },
+				overrides: { "text->image": 1 }
 			}
 		})
 		expect(has(view, "text->image")).toBe(false)
@@ -112,8 +112,8 @@ describe("provenance — the answer to 'why is my LLM offering image generation'
 		const view = buildCapabilityRows({
 			type: CONNECTION_TYPE.KOBOLDCPP,
 			capabilities: {
-				resolved: { "text->image": "native" },
-				probe: { found: { "text->image": "native" }, at }
+				resolved: { "text->image": 1 },
+				probe: { found: { "text->image": 1 }, at }
 			},
 			now: new Date("2026-08-31T00:00:00.000Z").getTime()
 		})
@@ -130,9 +130,9 @@ describe("provenance — the answer to 'why is my LLM offering image generation'
 		const view = buildCapabilityRows({
 			type: CONNECTION_TYPE.KOBOLDCPP,
 			capabilities: {
-				resolved: { streaming: "native" },
+				resolved: { streaming: 1 },
 				probe: {
-					found: { streaming: "native" },
+					found: { streaming: 1 },
 					at: "2026-08-30T00:00:00.000Z"
 				}
 			}
@@ -140,13 +140,19 @@ describe("provenance — the answer to 'why is my LLM offering image generation'
 		expect(find(view, "streaming").decidedBy).toBe("default")
 	})
 
+	// `json_schema` rather than `text->image`, which this used to assert: the
+	// OPENAI_CHAT entry no longer declares image generation for anyone (nothing
+	// implements `generateImage` for that type, so the key cannot be derived) and
+	// the `openai-official` preset no longer asserts it. `json_schema` is the
+	// same shape of fact — declared `{unproven:true}` by the adapter, asserted
+	// `true` by this preset — so the row is still decided by the preset layer.
 	test("a preset is named by its display name, not its slug", () => {
 		const view = buildCapabilityRows({
 			type: CONNECTION_TYPE.OPENAI_CHAT,
 			preset: "openai-official",
-			capabilities: { resolved: { "text->image": "native" } }
+			capabilities: { resolved: { json_schema: 2 } }
 		})
-		const row = find(view, "text->image")
+		const row = find(view, "json_schema")
 		expect(row.decidedBy).toBe("preset")
 		expect(row.provenance).toContain("OpenAI (Official)")
 	})
@@ -154,7 +160,7 @@ describe("provenance — the answer to 'why is my LLM offering image generation'
 	test("an untested connection says so rather than looking authoritative", () => {
 		const view = buildCapabilityRows({
 			type: CONNECTION_TYPE.KOBOLDCPP,
-			capabilities: { resolved: { "text->text": "native" } }
+			capabilities: { resolved: { "text->text": 1 } }
 		})
 		expect(view.tested).toBe(false)
 		expect(view.testedText).toMatch(/nothing has tested/i)
@@ -168,17 +174,17 @@ describe("provenance — the answer to 'why is my LLM offering image generation'
 		const view = buildCapabilityRows({
 			type: CONNECTION_TYPE.OPENAI_CHAT,
 			preset: "openai-official",
-			capabilities: { resolved: { "text->image": "native" } }
+			capabilities: { resolved: { json_schema: 2 } }
 		})
-		expect(find(view, "text->image").assumed).toBe(false)
+		expect(find(view, "json_schema").assumed).toBe(false)
 	})
 })
 
-describe("the state chip reports the tier the SERVER resolved", () => {
+describe("the state chip reports the grade the SERVER resolved", () => {
 	test("emulated is named as ours rather than shown as plain On", () => {
 		const view = buildCapabilityRows({
 			type: CONNECTION_TYPE.KOBOLDCPP,
-			capabilities: { resolved: { tools: "emulated", grammar: "native" } }
+			capabilities: { resolved: { tools: 1, grammar: 1 } }
 		})
 		expect(find(view, "tools").stateLabel).toBe("On · by Serene Pub")
 		expect(find(view, "grammar").stateLabel).toBe("On")
@@ -187,12 +193,33 @@ describe("the state chip reports the tier the SERVER resolved", () => {
 	test("a capability missing from `resolved` is Off, not blank", () => {
 		const view = buildCapabilityRows({
 			type: CONNECTION_TYPE.KOBOLDCPP,
-			capabilities: { resolved: { "text->text": "native" } }
+			capabilities: { resolved: { "text->text": 1 } }
 		})
 		const row = find(view, "text->image")
-		expect(row.tier).toBe("none")
+		expect(row.grade).toBe(0)
 		expect(row.on).toBe(false)
 		expect(row.stateLabel).toBe("Off")
+		expect(row.letter).toBeUndefined()
+	})
+
+	test("a grade is read against the capability's OWN top, never a shared one", () => {
+		// The reason grades replaced the flat enum. Image generation at 1 is the
+		// best image generation there is, and tool calling at 1 is Serene Pub
+		// doing the work — the same number, two different readings, and the row
+		// carries the scale so neither presentation has to know the difference.
+		const view = buildCapabilityRows({
+			type: CONNECTION_TYPE.KOBOLDCPP,
+			capabilities: { resolved: { "text->image": 1, tools: 1 } }
+		})
+		const image = find(view, "text->image")
+		expect(image.grade).toBe(image.top)
+		expect(image.letter).toBe("A")
+		expect(image.stateLabel).toBe("On")
+
+		const tools = find(view, "tools")
+		expect(tools.top).toBe(2)
+		expect(tools.letter).toBe("B")
+		expect(tools.stateLabel).toBe("On · by Serene Pub")
 	})
 })
 
@@ -206,7 +233,7 @@ describe("contested rows — an explicit off that did not stick", () => {
 			type: CONNECTION_TYPE.KOBOLDCPP,
 			capabilities: {
 				overrides: { tools: false },
-				resolved: { tools: "emulated", grammar: "native" }
+				resolved: { tools: 1, grammar: 1 }
 			}
 		})
 		const row = find(view, "tools")
@@ -220,7 +247,7 @@ describe("contested rows — an explicit off that did not stick", () => {
 			type: CONNECTION_TYPE.KOBOLDCPP,
 			capabilities: {
 				overrides: { "text->image": false },
-				resolved: { "text->text": "native" }
+				resolved: { "text->text": 1 }
 			}
 		})
 		const row = find(view, "text->image")
@@ -231,7 +258,7 @@ describe("contested rows — an explicit off that did not stick", () => {
 	test("a transform is in neither closure table, so nothing claims to derive it", () => {
 		const view = buildCapabilityRows({
 			type: CONNECTION_TYPE.KOBOLDCPP,
-			capabilities: { resolved: { "text->image": "emulated" } }
+			capabilities: { resolved: { "text->image": 1 } }
 		})
 		expect(find(view, "text->image").derivedVia).toEqual([])
 	})
@@ -242,7 +269,7 @@ describe("disclosure", () => {
 		const view = buildCapabilityRows({
 			type: CONNECTION_TYPE.KOBOLDCPP,
 			capabilities: {
-				resolved: { "text->text": "native", tools: "emulated" }
+				resolved: { "text->text": 1, tools: 1 }
 			}
 		})
 		expect(view.transforms.every((r) => r.kind === "transform")).toBe(true)
@@ -265,13 +292,13 @@ describe("disclosure", () => {
 		// panel — the reason `isBasicCapability` pins rather than filters.
 		const view = buildCapabilityRows({
 			type: CONNECTION_TYPE.A1111,
-			capabilities: { resolved: { "text->image": "native" } }
+			capabilities: { resolved: { "text->image": 1 } }
 		})
-		expect(view.transforms.map((r) => r.id)).toEqual([
-			"text->image",
-			"text+image->image",
-			"image->image"
-		])
+		// One row, and one only. This used to expect `text+image->image` and
+		// `image->image` beside it, which A1111Adapter could not do and said so in
+		// its own profile — the manifest's key space is now derived from the
+		// actions a module implements, and nothing implements `editImage`.
+		expect(view.transforms.map((r) => r.id)).toEqual(["text->image"])
 		expect(view.transforms.every((r) => r.basic)).toBe(false)
 	})
 

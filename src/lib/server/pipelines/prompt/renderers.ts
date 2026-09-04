@@ -37,9 +37,7 @@ export interface RenderContext {
  * (`renderTemplate`) is async either way so a caller cannot tell — which is
  * the same "never learns which ran" posture the script fold takes.
  */
-export type TemplateRenderer = (
-	ctx: RenderContext
-) => string | Promise<string>
+export type TemplateRenderer = (ctx: RenderContext) => string | Promise<string>
 
 const renderers = new Map<string, { render: TemplateRenderer; owner: string }>()
 
@@ -111,16 +109,39 @@ export const knownEngines = () =>
  * mostly produces something — the text with its unrecognised syntax intact —
  * and that reaches a model as a prompt full of markup nobody meant to send. A
  * refusal names the engine and who could supply it.
+ *
+ * ## `engineId` is required, and an absent one throws
+ *
+ * It used to be `string | null | undefined`, defaulting to core's engine. That
+ * default is how the delivery bug survived a release: `derefTemplate` returned
+ * a bare source string, so `input.template.engine` was `undefined` on every
+ * run on every install, and this function silently answered "then it must be
+ * Handlebars". Every context template rendered in core's language no matter
+ * what it declared, and there was nothing anywhere to see — a Jinja template
+ * would have shipped its raw `{% %}` markup to the model as prose.
+ *
+ * Both template tables now store `engine` NOT NULL, so a null arriving here
+ * can no longer mean "the row did not say". It can only mean a caller dropped
+ * it between the row and this call, which is precisely the defect above. It is
+ * therefore a fault, and it is raised as one.
  */
 export async function renderTemplate(
-	engineId: string | null | undefined,
+	engineId: string,
 	ctx: RenderContext
 ): Promise<string> {
-	const id = engineId ?? CORE_TEMPLATE_ENGINE
-	const renderer = renderers.get(id)
+	if (!engineId)
+		throw new TemplateEngineError(
+			`renderTemplate was called with no template engine. A template carries its ` +
+				`engine on the row (both template tables store it NOT NULL), so an absent ` +
+				`one means the value was dropped on the way here rather than never chosen. ` +
+				`Pass the engine the row declares — defaulting to ${CORE_TEMPLATE_ENGINE} ` +
+				`here is what previously rendered every template in core's language whatever ` +
+				`it was written in.`
+		)
+	const renderer = renderers.get(engineId)
 	if (!renderer)
 		throw new TemplateEngineError(
-			`no renderer for template engine '${id}'. Core renders ${CORE_TEMPLATE_ENGINE}; ` +
+			`no renderer for template engine '${engineId}'. Core renders ${CORE_TEMPLATE_ENGINE}; ` +
 				`others come from an extension that registers one. Known: ` +
 				`${knownEngines()
 					.map((e) => `${e.id} (${e.owner})`)

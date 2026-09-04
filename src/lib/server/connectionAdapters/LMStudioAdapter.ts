@@ -11,6 +11,7 @@ import {
 	type BasePromptSession
 } from "./BaseConnectionAdapter"
 import { type CompiledPrompt } from "./types"
+import type { TextGenResult } from "$lib/server/adapters/actions"
 import {
 	type BaseLoadModelOpts,
 	type LLM,
@@ -151,17 +152,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		return this._modelClient
 	}
 
-	async generate(): Promise<{
-		completionResult:
-			| string
-			| ((
-					contentCb: (chunk: string) => void,
-					thinkingCb?: (chunk: string) => void
-			  ) => Promise<void>)
-		compiledPrompt: CompiledPrompt
-		isAborted: boolean
-		thinkingContent?: string
-	}> {
+	async generateText(): Promise<TextGenResult> {
 		if (!this.sampling || typeof this.sampling !== "object") {
 			throw new Error(
 				"LMStudioAdapter: sampling config is missing or invalid"
@@ -468,9 +459,7 @@ const exports: AdapterExports = {
 	testConnection,
 	listModels,
 	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.LM_STUDIO],
-	samplingKeyMap: lmStudioSamplingKeyMap,
-	// 20 §9: SP formats and parses; the grammar path works everywhere.
-	capabilities: { toolUse: "emulated" }
+	samplingKeyMap: lmStudioSamplingKeyMap
 }
 
 export default exports

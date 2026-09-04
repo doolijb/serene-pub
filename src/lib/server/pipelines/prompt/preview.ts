@@ -33,7 +33,10 @@
 import { getVariable, allVariables, sampleValues } from "@serene-pub/sdk"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import { parseSplitChatPrompt } from "$lib/shared/utils/parseSplitChatPrompt"
-import { renderTemplate } from "$lib/server/pipelines/prompt/renderers"
+import {
+	CORE_TEMPLATE_ENGINE,
+	renderTemplate
+} from "$lib/server/pipelines/prompt/renderers"
 import {
 	renderVariable,
 	shippedRowsByKey,
@@ -125,13 +128,23 @@ export function bareLayouts(): ResolvedLayouts {
 	const out: ResolvedLayouts = {}
 	for (const [key, rows] of shippedRowsByKey)
 		for (const row of rows)
-			if (!row.isDefault) out[key] = { source: row.source }
+			if (!row.isDefault)
+				// These are core's own shipped sources, held in code rather than
+				// read from a row — so the engine is core's by construction, and
+				// naming it is what lets `ResolvedLayouts.engine` be required.
+				out[key] = { engine: CORE_TEMPLATE_ENGINE, source: row.source }
 	return out
 }
 
 export interface ContextPreviewInput {
 	source: string
-	engine?: string | null
+	/**
+	 * Required. An optional engine here previewed the draft in core's language
+	 * whatever it was written in — so the template rendered on this screen and
+	 * shipped raw markup in the real prompt, which is precisely the failure a
+	 * preview exists to catch.
+	 */
+	engine: string
 	/** The layouts a run would resolve. Absent means every shipped default. */
 	layouts?: ResolvedLayouts
 }
@@ -143,7 +156,9 @@ export interface ContextPreviewInput {
  * sections rather than one wall of text — the same reason the editor it feeds
  * has always used it.
  */
-export async function previewContextTemplate(input: ContextPreviewInput): Promise<{
+export async function previewContextTemplate(
+	input: ContextPreviewInput
+): Promise<{
 	messages?: PreviewMessage[]
 	error?: string
 }> {
@@ -165,7 +180,8 @@ export async function previewContextTemplate(input: ContextPreviewInput): Promis
 
 export interface VariablePreviewInput {
 	source: string
-	engine?: string | null
+	/** Required, for the reason `ContextPreviewInput.engine` is. */
+	engine: string
 	variableId: string
 }
 

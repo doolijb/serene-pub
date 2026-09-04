@@ -12,10 +12,14 @@
  * update/re-fetch that follows is always keyed by userId, not by
  * anything the insert returned).
  */
-import { describe, expect, test } from "vitest"
+import { describe, expect, test, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "./schema"
 import { createTestDb, createTestUser, type TestDb } from "../utils/testDb"
+
+// Each test builds a fresh DB — real work, not a statement about how fast
+// that should be — so the 5s default fails under load, not on merit.
+vi.setConfig({ testTimeout: 60_000 })
 
 async function makeTestDb(): Promise<TestDb> {
 	return createTestDb()

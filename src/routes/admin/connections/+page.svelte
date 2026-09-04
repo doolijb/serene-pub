@@ -7,6 +7,7 @@
 	import { getContext, onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
+	import { capabilityLabel } from "@serene-pub/sdk"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import AdminList, {
 		type AdminColumn
@@ -32,7 +33,28 @@
 		socket.off("connections:list", handleList)
 	})
 
-	let defaultId = $derived(systemSettingsCtx.settings?.defaultConnectionId)
+	/**
+	 * Which capabilities this connection is registered for, as a badge.
+	 *
+	 * There is no single "the default" any more, and pretending otherwise is
+	 * what the old `defaultConnectionId` badge did: one KoboldCPP row can be the
+	 * chat default AND the image default, and a lone "default" pill said neither
+	 * which nor how many. `connection_defaults` is keyed by capability, so the
+	 * changelist reads it that way and names them.
+	 */
+	let defaultsFor = $derived.by(() => {
+		const by = new Map<number, string[]>()
+		for (const [capability, row] of Object.entries(
+			systemSettingsCtx.capabilityDefaults ?? {}
+		)) {
+			if (row?.connectionId == null) continue
+			by.set(row.connectionId, [
+				...(by.get(row.connectionId) ?? []),
+				capabilityLabel(capability as any)
+			])
+		}
+		return by
+	})
 
 	const columns: AdminColumn<Row>[] = [
 		{ key: "name", label: "Name", value: (r) => r.name },
@@ -51,7 +73,9 @@
 		</h2>
 		<p class="text-surface-600-400 text-sm">
 			Adapters that link Serene Pub to model backends and services, across
-			every modality.
+			every modality. A connection is not used by anything until it is
+			registered on
+			<a class="underline" href="/admin/defaults">Defaults</a>.
 		</p>
 	</div>
 	<a class="btn btn-sm preset-filled-primary-500" href="/admin/connections/new">
@@ -74,12 +98,13 @@
 	{#snippet cell(row, col)}
 		{#if col.key === "name"}
 			<span class="font-semibold">{row.name}</span>
-			{#if row.id != null && row.id === defaultId}
+			{#each (row.id != null && defaultsFor.get(row.id)) || [] as capability (capability)}
 				<span
 					class="preset-tonal-primary ml-1.5 rounded-full px-1.5 py-0.5 text-[0.68rem] font-semibold"
-					>default</span
+					title="Registered on Admin → Defaults"
+					>{capability}</span
 				>
-			{/if}
+			{/each}
 		{:else if col.key === "type"}
 			<span
 				class="preset-tonal-secondary rounded-full px-2 py-0.5 text-xs font-medium"

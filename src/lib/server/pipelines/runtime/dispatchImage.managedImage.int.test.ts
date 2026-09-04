@@ -22,6 +22,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest"
+import { transformIdOf } from "$lib/shared/capabilities/sides"
 
 const PNG_1x1 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
@@ -41,7 +42,7 @@ class FakeAdapter {
 	constructor(connection: any) {
 		this.connection = connection
 	}
-	async generate() {
+	async generateImage() {
 		log.push("render")
 		return {
 			media: [{ kind: "image", mime: "image/png", base64: PNG_1x1 }],
@@ -57,16 +58,37 @@ vi.mock("$lib/server/utils/getImageAdapter", () => ({
 }))
 
 vi.mock("$lib/server/media", () => ({
+	// `{ file, original }` since 0182 — mime and bytes come off the file's
+	// display projection, so a mock that only sets them on the variant would
+	// pass while the ref it produced carried `undefined`.
 	createMedia: async (_db: any, input: any) => ({
-		id: 1,
-		uuid: "uuid-1",
-		kind: "image",
-		mime: "image/png",
-		bytes: input.bytes.length,
-		width: 1,
-		height: 1,
-		filename: input.filename
-	})
+		file: {
+			id: 1,
+			uuid: "uuid-1",
+			rev: 0,
+			kind: "image",
+			displayMime: "image/png",
+			displayBytes: input.bytes.length,
+			width: 1,
+			height: 1,
+			durationMs: null,
+			filename: input.filename
+		},
+		original: {
+			id: 9,
+			fileId: 1,
+			variant: "original",
+			mime: "image/png",
+			bytes: input.bytes.length,
+			path: "generated/x.png",
+			hash: "deadbeef",
+			isOriginal: true,
+			cache: false,
+			fidelity: "full"
+		}
+	}),
+	mediaUrl: (uuid: string, rev: number, variant?: string) =>
+		`/media/${uuid}?${variant ? `v=${variant}&r=${rev}` : `r=${rev}`}`
 }))
 
 vi.mock("$lib/server/utils/tokenCrypto", () => ({
@@ -118,7 +140,7 @@ const imageConnection = {
 	baseUrl: "http://localhost:5001",
 	model: "sdxl-turbo-q8.gguf",
 	extraJson: {},
-	capabilities: { resolved: { "text->image": "native" } }
+	capabilities: { resolved: { "text->image": 1 } }
 }
 
 const imageSampling = {
@@ -134,12 +156,15 @@ let capabilityDefaults: Record<string, any> = {}
 let koboldCppSettings: any = {}
 
 let lastWhereId: any
+/** The last two, as a sliding window — see the `connection_defaults` branch. */
+let lastWherePair: [unknown, unknown] = [undefined, undefined]
 vi.mock("drizzle-orm", async (orig) => {
 	const actual = (await orig()) as any
 	return {
 		...actual,
 		eq: (col: any, value: any) => {
 			lastWhereId = value
+			lastWherePair = [lastWherePair[1], value]
 			return actual.eq(col, value)
 		}
 	}
@@ -165,8 +190,16 @@ const fakeDb = {
 						return [imageSampling].filter(
 							(s) => s.id === lastWhereId
 						)
+					// Keyed by the transform's two SIDES since 0183, so this
+					// lookup builds TWO equalities where every other read here
+					// builds one. The fixture map is still keyed by the id.
 					if (name === "connection_defaults") {
-						const row = capabilityDefaults[lastWhereId]
+						const [input, output] = lastWherePair as [
+							string,
+							string
+						]
+						const row =
+							capabilityDefaults[transformIdOf({ input, output })]
 						return row ? [row] : []
 					}
 					return []
@@ -192,6 +225,7 @@ beforeEach(() => {
 	request = null
 	preflightFails = false
 	lastWhereId = undefined
+	lastWherePair = [undefined, undefined]
 	onDisk = ["sdxl-turbo-q8.gguf"]
 	koboldCppSettings = {
 		koboldCppManagerBaseUrl: MANAGER_URL,
@@ -313,12 +347,14 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 		// key is derived from this too — a stale value would split one process
 		// into two queues and let two renders overlap on it.
 		let sawBaseUrl: string | undefined
-		const spy = { Adapter: class extends FakeAdapter {
-			constructor(connection: any) {
-				super(connection)
-				sawBaseUrl = connection.baseUrl
+		const spy = {
+			Adapter: class extends FakeAdapter {
+				constructor(connection: any) {
+					super(connection)
+					sawBaseUrl = connection.baseUrl
+				}
 			}
-		} }
+		}
 		const mod = await import("$lib/server/utils/getImageAdapter")
 		vi.spyOn(mod, "getImageAdapter").mockResolvedValue(spy as any)
 		await dispatch({ connectionId: 5 })
@@ -363,31 +399,44 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 			id: 6,
 			type: "koboldcpp",
 			name: "Someone else's Kobold",
-			capabilities: { resolved: { "text->image": "native" } }
+			capabilities: { resolved: { "text->image": 1 } }
 		}
 		capabilityDefaults["text->image"].connectionId = 6
 		await dispatch({ connectionId: 6 })
 		expect(log).toEqual(["render"])
 	})
 
-	it("does not load an image model for a managed TEXT connection", async () => {
-		// The reported bug, at the far end of the pipe. Such a row names a text
-		// GGUF, so an image load built from `connection.model` would hand the
-		// image loader an LLM. It should never reach here at all — the manifest
-		// no longer lets it advertise text->image — and if it somehow does,
-		// nothing about it says "load an image model".
+	it("refuses a managed TEXT connection whose resolved cache went stale", async () => {
+		// The reported bug, and the row that used to get past everything. Such a
+		// row names a text GGUF, so an image load built from `connection.model`
+		// would hand the image loader an LLM.
+		//
+		// This test used to force the row PAST the guard and assert the deeper
+		// defence — that nothing downstream said "load an image model" — because
+		// a stale `resolved` cache genuinely could do that: the manifest stopped
+		// GRANTING `text->image` for this type, and the guard read the cache, so
+		// a set written before the declaration changed sailed through.
+		//
+		// `storedCapabilities` now intersects that cache with what the type still
+		// declares, so the stale half is inert at the point it is read and the
+		// refusal happens at the guard — with a sentence naming the capability,
+		// rather than as a mystery three layers down. The deeper defence is no
+		// longer reachable for this type at all, which is the improvement; the
+		// external-KoboldCPP case above still exercises the render path for a row
+		// whose `text->image` is real.
 		connectionsById[7] = {
 			...imageConnection,
 			id: 7,
 			type: "koboldcpp_managed",
 			name: "Managed Kobold (text)",
 			model: "MN-12B-Lyra-v4.gguf",
-			// Forced past the guard, the way a stale `resolved` cache would.
-			capabilities: { resolved: { "text->image": "native" } }
+			capabilities: { resolved: { "text->image": 1 } }
 		}
 		capabilityDefaults["text->image"].connectionId = 7
-		await dispatch({ connectionId: 7 })
+		await expect(dispatch({ connectionId: 7 })).rejects.toThrow(
+			/cannot do Image generation/i
+		)
 		expect(request).toBeNull()
-		expect(log).toEqual(["render"])
+		expect(log).toEqual([])
 	})
 })

@@ -95,13 +95,18 @@ beforeAll(async () => {
 
 	const [sampling] = await db.select().from(schema.samplingConfigs).limit(1)
 
-	await db
-		.update(schema.systemSettings)
-		.set({
-			defaultConnectionId: connection.id,
-			defaultSamplingConfigId: sampling?.id ?? null
-		})
-		.where(eq(schema.systemSettings.id, 1))
+	// The instance default, which since 0181 is a `connection_defaults` row keyed
+	// by capability rather than two `system_settings` columns. Load-bearing here
+	// rather than incidental setup: nothing selects a connection because it is
+	// saved, so without this registration the live generation has nothing to run
+	// against and fails before it reaches Ollama.
+	const { setCapabilityDefault } = await import(
+		"$lib/server/connections/capabilityDefaults"
+	)
+	await setCapabilityDefault(db as any, "text->text", {
+		connectionId: connection.id,
+		samplingConfigId: sampling?.id ?? null
+	})
 
 	const [character] = await db
 		.insert(schema.characters)

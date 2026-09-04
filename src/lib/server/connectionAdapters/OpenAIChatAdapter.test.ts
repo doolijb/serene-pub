@@ -80,7 +80,7 @@ function makeAdapter(connectionOverrides: Record<string, any> = {}) {
 }
 
 describe("OpenAIChatAdapter — base URL trailing-slash normalization", () => {
-	test("generate() constructs the OpenAI client with a normalized baseURL", async () => {
+	test("generateText() constructs the OpenAI client with a normalized baseURL", async () => {
 		openAIConstructorMock.mockClear()
 		createMock.mockResolvedValue({
 			choices: [{ message: { content: "hi" } }]
@@ -91,7 +91,7 @@ describe("OpenAIChatAdapter — base URL trailing-slash normalization", () => {
 			messages: [{ role: "user", content: "hello" }],
 			meta: {} as any
 		} as any)
-		await adapter.generate()
+		await adapter.generateText()
 		expect(openAIConstructorMock).toHaveBeenCalledWith(
 			expect.objectContaining({ baseURL: "https://api.example.com/v1" })
 		)

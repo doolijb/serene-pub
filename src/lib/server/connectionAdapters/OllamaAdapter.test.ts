@@ -77,7 +77,7 @@ function makeAdapter(connectionOverrides: Record<string, any> = {}) {
 }
 
 describe("OllamaAdapter — base URL trailing-slash normalization", () => {
-	test("getClient() (used by generate()) constructs Ollama with a normalized host", async () => {
+	test("getClient() (used by generateText()) constructs Ollama with a normalized host", async () => {
 		ollamaConstructorMock.mockClear()
 		const adapter = makeAdapter({ baseUrl: "http://localhost:11434/" })
 		adapter.getClient()

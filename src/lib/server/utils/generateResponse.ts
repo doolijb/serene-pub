@@ -4,6 +4,7 @@ import { updateLegacyWhere } from "$lib/server/messages/store"
 import { and, eq } from "drizzle-orm"
 import { v4 as uuidv4 } from "uuid"
 import { getConnectionAdapter } from "./getConnectionAdapter"
+import type { BaseConnectionAdapter } from "$lib/server/connectionAdapters/BaseConnectionAdapter"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { getUserConfigurations } from "./getUserConfigurations"
@@ -275,13 +276,12 @@ export async function generateResponse({
 		;(session as any)._continuationPrefill = preservedContent
 	}
 
-	// Get context/prompt config from user settings; resolve connection+sampling via
-	// resolveTaskConfig (session override → prompt config override → system default)
-	const {
-		sampling: defaultSampling,
-		contextConfig,
-		promptConfig
-	} = await getUserConfigurations(userId)
+	// Context/prompt config from user settings. Connection and sampling come from
+	// resolveTaskConfig alone (session override → prompt config override → the
+	// instance's text->text default) — this used to also take a `defaultSampling`
+	// off the same instance row and `??` it in below, which was a fourth tier
+	// that agreed with the third only because both read one column.
+	const { contextConfig, promptConfig } = await getUserConfigurations(userId)
 
 	// Narrator response: a manually-triggered, non-character narration/environment
 	// message — uses its own "Session Prompts: Narrator" config instead of the
@@ -322,15 +322,21 @@ export async function generateResponse({
 	// hands over a flat object — so a key being present is the switch being on.
 	// The row stays behind in `resolved`, which is where the queue's
 	// samplingName label comes from.
-	const sampling = resolveSampling(resolved.sampling ?? defaultSampling)
+	const sampling = resolveSampling(resolved.sampling)
 
 	if (!connection) {
+		// The resolver's own sentence, which names WHICH way it failed —
+		// nothing registered, a default cleared by a deleted connection, a
+		// dangling id, or a connection that cannot do chat — and which screen
+		// fixes it. The old line said "Please set up a connection first" for all
+		// four, including to people who plainly had one set up.
 		await persistGenerationErrorRow(
 			socket.io,
 			generatingMessage.sessionId,
 			generatingMessage.id,
 			new Error(
-				"No AI connection configured. Please set up a connection first."
+				resolved.problem?.message ??
+					"No AI connection configured. Please set up a connection first."
 			)
 		)
 		return false
@@ -503,7 +509,7 @@ export async function generateResponse({
 	// This used to append directly to adapter.promptBuilder.instructions,
 	// but that field is only ever set inside PromptBuilder.buildContextData(),
 	// which runs later — inside compilePrompt(), called from within
-	// adapter.generate() — so it was always undefined here and this
+	// adapter.generateText() — so it was always undefined here and this
 	// injection silently never reached the model. Setting
 	// graphContextInstructions on the adapter instead lets
 	// BaseConnectionAdapter.compilePrompt() merge it into extraInstructions
@@ -642,7 +648,7 @@ export async function generateResponse({
 }
 
 /**
- * Runs adapter.generate(), consumes streaming or non-streaming output, and
+ * Runs adapter.generateText(), consumes streaming or non-streaming output, and
  * persists it to the message row — this is the LLM queue item's execute()
  * body. Errors thrown here are caught by llmQueue and surfaced to the
  * caller's `done` promise.
@@ -660,7 +666,17 @@ async function runGenerateAndPersist({
 	queueItemId
 }: {
 	signal: AbortSignal
-	adapter: any
+	/**
+	 * Typed, not `any`.
+	 *
+	 * It was `any`, which is how `adapter.generate()` below survived the rename
+	 * to `generateText()` without a single compile error — the one call site in
+	 * the app that would have failed at runtime, in the middle of a user's turn,
+	 * with "adapter.generate is not a function". Every other caller was caught by
+	 * the compiler. The class is abstract and the action is abstract on it, so
+	 * this costs nothing and closes that hole permanently.
+	 */
+	adapter: BaseConnectionAdapter
 	socket: any
 	sessionId: number
 	generatingMessage: SelectSessionMessage
@@ -684,7 +700,7 @@ async function runGenerateAndPersist({
 		compiledPrompt,
 		isAborted,
 		thinkingContent: adapterThinking
-	} = await adapter.generate() // TODO: save compiledPrompt to sessionMessages
+	} = await adapter.generateText() // TODO: save compiledPrompt to sessionMessages
 	let content = ""
 	let thinking = "" // accumulated thinking from streaming thinkingCb
 

@@ -103,14 +103,71 @@
 	let wizardImportingCharacterCard = $state(false)
 	let wizardImportingPersonaCard = $state(false)
 
-	// Derived setup state
-	let hasConnection = $derived(
-		!!systemSettingsCtx.settings?.defaultConnectionId
+	// Derived setup state.
+	//
+	// "Has a connection" is now "a CHAT default is registered", not "a
+	// connection row exists". That is the ruling, not a shortcut: nothing picks
+	// a connection because it exists, so a saved-but-unregistered connection
+	// genuinely cannot answer a message, and a wizard step that ticked itself
+	// off for one would send the user to a chat that refuses to run.
+	let chatConnectionId = $derived(
+		systemSettingsCtx.capabilityDefaults?.["text->text"]?.connectionId ??
+			null
 	)
+	let hasConnection = $derived(chatConnectionId != null)
+
+	/**
+	 * The connection the wizard just created, awaiting its defaults.
+	 *
+	 * Not `$state`: nothing renders from it. It exists because the eligibility
+	 * judgement belongs to the SERVER — `storedCapabilities` intersects a row's
+	 * cached capabilities with what its adapter still declares, and re-deriving
+	 * that here would be the second copy that eventually offers a connection for
+	 * a transform its adapter stopped supporting. So the flow is: create → ask
+	 * `connectionDefaults:list` → register what the answer says fits.
+	 */
+	let pendingDefaultConnectionId: number | null = null
+
+	/**
+	 * Register the newly created connection for everything it can do that
+	 * nothing is registered for yet.
+	 *
+	 * Two gates, and both are load-bearing:
+	 *
+	 *   - **Never clobber.** A capability with a connection already registered
+	 *     is skipped. Adding a second backend must not silently re-point chat at
+	 *     it; that is the implicit pickup this change exists to delete, wearing
+	 *     a wizard's clothes.
+	 *   - **Determined-capable only.** `eligible` is true for an UNTESTED
+	 *     connection as well, because untested is *undetermined* rather than
+	 *     incapable and a picker a human is reading must still offer it. An
+	 *     automatic write is the one place that distinction bites: it would
+	 *     register an untested endpoint as the default for image generation,
+	 *     speech and embeddings alike. `judgeAgainst` marks exactly that case
+	 *     with a `reason` and no `disabled`, so requiring both is how this asks
+	 *     for "known to fit" rather than "not known to be wrong".
+	 */
+	function handleDefaultsForNewConnection(
+		res: Sockets.ConnectionDefaults.List.Response
+	) {
+		const id = pendingDefaultConnectionId
+		pendingDefaultConnectionId = null
+		if (id == null) return
+		for (const combo of res.combos) {
+			if (res.defaults[combo.id]?.connectionId != null) continue
+			const option = (res.connectionOptions[combo.id] ?? []).find(
+				(o) => o.id === id
+			)
+			if (!option?.eligible || option.reason) continue
+			socket.emit("connectionDefaults:set", {
+				capability: combo.id,
+				half: "connection",
+				id
+			})
+		}
+	}
 	let activeConnectionName = $derived(
-		connections.find(
-			(c) => c.id === systemSettingsCtx.settings?.defaultConnectionId
-		)?.name ?? null
+		connections.find((c) => c.id === chatConnectionId)?.name ?? null
 	)
 	let hasCharacter = $derived(characters.length > 0)
 	let hasPersona = $derived(personas.length > 0)
@@ -220,9 +277,16 @@
 	$effect(() => {
 		if (dataReady && !allStepsComplete && !_wizardInitialized) {
 			_wizardInitialized = true
-			// Set default user configs on first wizard show
-			if (!systemSettingsCtx.settings?.defaultSamplingConfigId)
-				socket.emit("samplingConfigs:setUserActive", { id: 1 })
+			// The sampling default is NOT set here any more. This used to emit
+			// `samplingConfigs:setUserActive {id: 1}` — a hardcoded seed row id,
+			// which is the rule this codebase has already been bitten by (it
+			// overwrote a user's sampling config on upgrade once), pointed at a
+			// pick nobody made. It also cannot be right: row 1 is whatever the
+			// seeder happened to insert first, and a sampling default is not
+			// required for anything — `resolveSampling(null)` means "let the
+			// backend use its own defaults", which is a perfectly good answer
+			// for a fresh install and better than a guess.
+			//
 			// The context and prompt config pointers are deliberately not set
 			// here any more. They address the 0.5 tables, which are an archive
 			// — nothing in 0.6 reads them, so pointing a new user's at row 1
@@ -449,11 +513,26 @@
 				description: message.error ?? "Could not connect to the model"
 			})
 		})
+		socket.on("connectionDefaults:list", handleDefaultsForNewConnection)
 		socket.on("connections:create", (res) => {
 			if (res.connection) {
-				socket.emit("connections:setUserActive", {
-					id: res.connection.id
-				})
+				// The wizard registers defaults EXPLICITLY — it does not rely on
+				// anything picking this connection up. It used to emit
+				// `connections:setUserActive`, which starred one row as "the
+				// default" and said nothing about which of the five things a
+				// KoboldCPP connection does was meant; and the server used to
+				// auto-star the first connection created, which is the implicit
+				// pickup the whole change deletes.
+				//
+				// Explicit is not the same as implicit-with-extra-steps. This
+				// fires for any connection created while the home screen is
+				// mounted — the wizard's connection step, or the Connections
+				// sidebar opened from it — and it only ever FILLS EMPTY slots,
+				// never re-points one somebody already chose. See the handler:
+				// that gate is what keeps "the second backend you add" from
+				// quietly taking over chat.
+				pendingDefaultConnectionId = res.connection.id!
+				socket.emit("connectionDefaults:list", {})
 				toaster.success({
 					title: "Connection Created",
 					description: `Connected to ${res.connection.name}`
@@ -576,6 +655,10 @@
 		socket.off("sessions:list")
 		socket.off("connections:list")
 		socket.off("connections:create")
+		// By NAMED reference — this page is not the only listener on
+		// `connectionDefaults:list` (Admin → Defaults renders from it), and a
+		// bare `socket.off(event)` would tear that one down too.
+		socket.off("connectionDefaults:list", handleDefaultsForNewConnection)
 		socket.off("characters:create")
 		socket.off("personas:create")
 		socket.off("sessions:create")

@@ -16,8 +16,13 @@
 	const systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
 	let isAdmin = $derived(!!userCtx.user?.isAdmin)
+	// A CHAT default being registered, not a connection row existing. Nothing
+	// picks a connection because it exists, so a saved-but-unregistered one
+	// cannot answer a message — and this checklist's whole job is to say
+	// whether the instance is ready to.
 	let hasConnection = $derived(
-		!!systemSettingsCtx.settings?.defaultConnectionId
+		systemSettingsCtx.capabilityDefaults?.["text->text"]?.connectionId !=
+			null
 	)
 
 	let characters: Sockets.Characters.List.Response["characterList"] = $state(

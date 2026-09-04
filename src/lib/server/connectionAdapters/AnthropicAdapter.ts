@@ -7,6 +7,7 @@ import {
 	type BasePromptSession
 } from "./BaseConnectionAdapter"
 import type { CompiledPrompt } from "./types"
+import type { TextGenResult } from "$lib/server/adapters/actions"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { anthropicSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
@@ -157,17 +158,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		return { system, messages }
 	}
 
-	async generate(): Promise<{
-		completionResult:
-			| string
-			| ((
-					contentCb: (chunk: string) => void,
-					thinkingCb?: (chunk: string) => void
-			  ) => Promise<void>)
-		compiledPrompt: CompiledPrompt
-		isAborted: boolean
-		thinkingContent?: string
-	}> {
+	async generateText(): Promise<TextGenResult> {
 		const model = this.connection.model || "claude-sonnet-4-5"
 		const stream = this.connection.extraJson?.stream ?? true
 		const useThinking = this.connection.extraJson?.thinking ?? false
@@ -365,9 +356,7 @@ const exports: AdapterExports = {
 	listModels,
 	testConnection,
 	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.ANTHROPIC],
-	samplingKeyMap: anthropicSamplingKeyMap,
-	// 20 §9: the Messages API speaks tool_use blocks natively.
-	capabilities: { toolUse: "native" }
+	samplingKeyMap: anthropicSamplingKeyMap
 }
 
 export default exports

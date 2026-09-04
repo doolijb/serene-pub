@@ -21,7 +21,12 @@
  * already has in hand costs nothing.
  */
 
-import type { CapabilitySet } from "@serene-pub/sdk"
+import {
+	topGrade,
+	type CapabilityId,
+	type CapabilitySet,
+	type Grade
+} from "@serene-pub/sdk"
 
 /** The flags the version endpoint reports, as the settings tab renders them. */
 export interface KoboldCppFlags {
@@ -73,14 +78,37 @@ export function flagsFrom(data: unknown): KoboldCppFlags {
  * answering at all is a KoboldCPP that generates text. `multiplayer`,
  * `websearch` and `admin` are deliberately absent — they are server features,
  * not things a model turns one kind of data into.
+ *
+ * ## ⚠ Three of these answers are currently DISCARDED, and that is correct
+ *
+ * `text->audio`, `audio->text` and `text->embedding` are no longer declared in
+ * `ADAPTER_MANIFEST` for either KoboldCPP type, because no adapter implements
+ * `synthesizeSpeech`, `transcribeAudio` or `embedText` — the manifest's key
+ * space is derived from which actions exist, so a capability nothing can call
+ * cannot be declared. `resolveCapabilities` iterates `supports` only, so it
+ * ignores an answer to a question that was never asked.
+ *
+ * They are still fetched and still written to the durable `probe.found` on
+ * purpose. The probe records what the SERVER said, which outlives what this app
+ * can currently do with it: the day one of those actions lands, the manifest key
+ * returns and every already-tested connection resolves it immediately, with no
+ * re-test. Do not "clean up" this mapping to match what resolution consumes —
+ * that would trade a fact for a derived detail, and would have to be undone.
  */
 export function capabilitiesFromFlags(flags: KoboldCppFlags): CapabilitySet {
+	// `topGrade(id)` rather than a literal, because "as good as this gets" is a
+	// different NUMBER per capability — 1 for a transform, 2 for a feature the app
+	// can emulate. A flag is a yes/no about the backend, so the two ends of that
+	// capability's own scale are the only honest readings of one.
+	const graded = (id: CapabilityId, on: boolean): Grade =>
+		on ? topGrade(id) : 0
 	return {
-		"text->text": "native",
-		"text->image": flags.txt2img ? "native" : "none",
-		"text+image->text": flags.vision ? "native" : "none",
-		"text->audio": flags.tts ? "native" : "none",
-		"audio->text": flags.transcribe ? "native" : "none",
-		"text->embedding": flags.embeddings ? "native" : "none"
+		"text->text": graded("text->text", true),
+		"text->image": graded("text->image", flags.txt2img),
+		"text+image->text": graded("text+image->text", flags.vision),
+		// Recorded, not currently resolved — see the note above.
+		"text->audio": graded("text->audio", flags.tts),
+		"audio->text": graded("audio->text", flags.transcribe),
+		"text->embedding": graded("text->embedding", flags.embeddings)
 	}
 }

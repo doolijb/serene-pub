@@ -111,12 +111,12 @@
 		const registered = capability
 			? byCapability?.[capability]?.samplingConfigId
 			: null
-		if (registered != null) return registered
-		// The text default is still mirrored onto system_settings for the legacy
-		// generation path, so it remains a valid fallback for that one capability.
-		return s === S.imageGen
-			? null
-			: (systemSettingsCtx.settings?.defaultSamplingConfigId ?? null)
+		// No fallback to a settings column: since 0181 there is no second place
+		// a default lives, and there was never a second answer — the column and
+		// the table were dual-written, so the fallback only ever fired for a row
+		// that was ABSENT, never one that was merely stale. `null` here is a
+		// real answer, and it means the backend uses its own defaults.
+		return registered ?? null
 	}
 
 	const firstOfShape = (s: string) =>
@@ -124,15 +124,15 @@
 
 	let activeSamplingConfigId = $derived(defaultIdFor(shape))
 
-	// Sampling config has no per-user override — it's the system-wide default
-	// (systemSettingsCtx.settings.defaultSamplingConfigId), same value every
-	// admin sees. Seed the initial selection from it; the samplingConfigs:get
-	// effect below fetches the full editable config once this is set.
+	// Sampling config has no per-user override — it's the instance default for
+	// this category's capability, the same value every admin sees. Seed the
+	// initial selection from it; the samplingConfigs:get effect below fetches
+	// the full editable config once this is set. Through `defaultIdFor` rather
+	// than a second read of the map: this is the one place the two could
+	// disagree about which capability the current category means.
 	// svelte-ignore state_referenced_locally — deliberate initial seed.
 	let selectedSamplingId: number | null = $state(
-		initialSelectedId ??
-			systemSettingsCtx.settings?.defaultSamplingConfigId ??
-			null
+		initialSelectedId ?? defaultIdFor(initialShape ?? S.textGen)
 	)
 
 	let sampling: SelectSamplingConfig | undefined = $state()

@@ -4,6 +4,7 @@ import {
 	type BasePromptSession
 } from "./BaseConnectionAdapter"
 import { type CompiledPrompt } from "./types"
+import type { TextGenResult } from "$lib/server/adapters/actions"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { TokenCounters } from "../utils/TokenCounterManager"
 import { OpenAI } from "openai"
@@ -75,17 +76,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		return super.compilePrompt({ useSessionFormat, ...args })
 	}
 
-	async generate(): Promise<{
-		completionResult:
-			| string
-			| ((
-					contentCb: (chunk: string) => void,
-					thinkingCb?: (chunk: string) => void
-			  ) => Promise<void>)
-		compiledPrompt: CompiledPrompt
-		isAborted: boolean
-		thinkingContent?: string
-	}> {
+	async generateText(): Promise<TextGenResult> {
 		const apiKey = decryptApiKeyField(this.connection.extraJson?.apiKey)
 		const baseURL =
 			normalizeBaseUrl(this.connection.baseUrl) ||
@@ -330,9 +321,7 @@ const exports: AdapterExports = {
 	listModels,
 	testConnection,
 	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT],
-	samplingKeyMap: openAISamplingKeyMap,
-	// 20 §9: chat-completions tool calls.
-	capabilities: { toolUse: "native" }
+	samplingKeyMap: openAISamplingKeyMap
 }
 
 export default exports

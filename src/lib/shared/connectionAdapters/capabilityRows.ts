@@ -33,23 +33,36 @@
  * `resolved` or in `overrides` that the adapter does not declare gets no row —
  * the protocol has no field for it, so offering the switch would be a lie. That
  * is the structural half of "why is my LLM connection offering image generation".
+ *
+ * And the gate is now CI-CHECKED against the implementations rather than
+ * hand-maintained: the transform half of `supports` is derived from which named
+ * actions a type's adapter modules define, and
+ * `server/connectionAdapters/manifest.conformance.test.ts` fails the build when
+ * the two disagree. Nothing in this file changed to gain that — which is the
+ * point. An adapter that grows an action gets its override row for free, and one
+ * that loses an action stops offering a switch that could not have worked.
  */
 
 import {
+	BAND,
+	bandOf,
 	capabilityLabel,
 	capabilityTagline,
+	gradeLetter,
 	isBasicCapability,
 	isTransformId,
+	topGrade,
 	EMULATABLE_VIA,
 	FEATURES,
 	IMPLIES,
 	TRANSFORMS,
+	type Band,
 	type CapabilityId,
 	type CapabilityOverrides,
 	type CapabilitySet,
 	type Declared,
 	type FeatureId,
-	type ResolvedTier
+	type Grade
 } from "@serene-pub/sdk"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 import { presetLabel } from "$lib/shared/utils/connectionDefaults"
@@ -66,15 +79,21 @@ export type OverrideState = "auto" | "on" | "off"
  * identical on screen and quietly mean "off forever", because an explicit off
  * outranks every later probe.
  *
- * On sends `native` and never a tier the user chose: resolution clamps an
+ * On sends `native` and never a grade the user chose: resolution clamps an
  * override down to what the adapter can actually express, so offering
  * `emulated` on write would be a promise the key space is free to refuse. The
- * tier is surfaced on READ, in the state chip, where it is an observation.
+ * grade is surfaced on READ, in the state chip, where it is an observation.
+ *
+ * ⚠ A BAND NAME on the wire, while the column stores a grade NUMBER. That is
+ * what keeps this table static: "on" means the capability's TOP band, and the
+ * top is 2 for `tools` and 1 for `text->image`, so there is no one number this
+ * column could hold. The handler turns the name into that capability's own
+ * number at the point of write, which is also where the key-space gate is.
  */
 export const OVERRIDE_STATES: readonly {
 	value: OverrideState
 	label: string
-	wire: ResolvedTier | false | null
+	wire: Band | false | null
 	hint: string
 }[] = [
 	{
@@ -116,7 +135,24 @@ export interface CapabilityRow {
 	/** Where the control sits. From `overrides` alone, never from `resolved`. */
 	state: OverrideState
 	/** What the SERVER resolved. Read-only here; the control does not predict it. */
-	tier: ResolvedTier
+	grade: Grade
+	/**
+	 * The best THIS capability can be, so a renderer can read `grade` at all.
+	 *
+	 * Carried rather than looked up by the two presentations, for the same reason
+	 * everything else here is: a grade is meaningless without the scale, and two
+	 * surfaces deriving the scale separately is two chances to disagree about
+	 * whether a full-strength `text->image` is full strength.
+	 */
+	top: Grade
+	/**
+	 * The grade as a letter, `A` being this capability's own best.
+	 *
+	 * Derived here and never stored, sent or compared — a two-band capability's
+	 * grade 1 is an `A`, not a `B`. Absent at grade 0, where there is no quality
+	 * to letter and the chip says "Off".
+	 */
+	letter?: string
 	on: boolean
 	/** "On", "On · by Serene Pub", "Off" — the chip, worded once for both surfaces. */
 	stateLabel: string
@@ -187,8 +223,17 @@ export function relativeAge(iso: string, now: number = Date.now()): string {
 	return `${Math.floor(h / 24)}d ago`
 }
 
-/** `probed` declarations carry what to assume; plain ones state it outright. */
-const isProbedDeclaration = (d: Declared): boolean => typeof d !== "string"
+/**
+ * Unproven declarations carry what to assume; plain ones state it outright.
+ *
+ * ⚠ `typeof d === "object"` and not `!== "string"`. A `Declared` is a band name,
+ * a grade NUMBER, or the unproven object — so the negative test that was correct
+ * against the old string-only vocabulary would now call every numeric
+ * declaration unproven, crediting a probe for an outright one and printing
+ * "Assumed" over a fact.
+ */
+const isUnprovenDeclaration = (d: Declared): boolean =>
+	typeof d === "object" && d !== null
 
 const TRANSFORM_ORDER = Object.keys(TRANSFORMS)
 
@@ -225,12 +270,14 @@ function ordered(ids: CapabilityId[], canonical: string[]): CapabilityId[] {
 function leversFor(id: CapabilityId, resolved: CapabilitySet): CapabilityId[] {
 	if (isTransformId(id)) return []
 	const out: CapabilityId[] = []
+	// "Native" is each provider's OWN top band, not a shared number: `grammar`
+	// tops out at 1 and `json_schema` at 2, and comparing either against a
+	// literal would credit the wrong lever — or none at all.
 	for (const via of EMULATABLE_VIA[id as FeatureId] ?? [])
-		if (resolved[via] === "native") out.push(via)
+		if (resolved[via] === topGrade(via)) out.push(via)
 	for (const [source, implied] of Object.entries(IMPLIES)) {
 		if (!implied.includes(id as FeatureId)) continue
-		const tier = resolved[source as FeatureId]
-		if (tier && tier !== "none") out.push(source as FeatureId)
+		if (resolved[source as FeatureId]) out.push(source as FeatureId)
 	}
 	return [...new Set(out)]
 }
@@ -285,15 +332,16 @@ export function buildCapabilityRows(
 	const row = (id: CapabilityId): CapabilityRow => {
 		const declared = adapter.supports[id]!
 		const { state, stated } = stateOf(overrides, id)
-		const tier = resolved[id] ?? "none"
-		const on = tier !== "none"
+		const top = topGrade(id)
+		const grade = resolved[id] ?? 0
+		const on = grade > 0
 
 		// The four layers, read backwards: whoever spoke LAST is who decided.
 		// A probe only counts where the adapter declared `probed` — resolution
 		// ignores an answer to a question it never asked, and crediting one here
 		// would explain the row by a layer that had no effect on it.
 		const probeSpoke =
-			isProbedDeclaration(declared) &&
+			isUnprovenDeclaration(declared) &&
 			!!probeFound &&
 			probeFound[id] !== undefined
 		const presetSpoke = !!presetCaps && presetCaps[id] !== undefined
@@ -311,7 +359,7 @@ export function buildCapabilityRows(
 		// nothing has answered — a preset asserting something is a claim, not an
 		// assumption, and an override is a decision.
 		const assumed =
-			isProbedDeclaration(declared) &&
+			isUnprovenDeclaration(declared) &&
 			(decidedBy === "default" || decidedBy === "adapter")
 
 		const provenance =
@@ -336,6 +384,10 @@ export function buildCapabilityRows(
 		const derivedVia = leversFor(id, resolved)
 		const contested = (state === "off" && on) || (state === "on" && !on)
 		const viaNames = joinWithAnd(derivedVia.map((v) => capabilityLabel(v)))
+		// The BAND rather than "below top": only the emulated band is a claim that
+		// Serene Pub is the one supplying this, and a capability with no such band
+		// has nothing to say here however many grades it grows.
+		const emulated = bandOf(id, grade) === BAND.emulated
 		const derived =
 			contested && state === "off"
 				? viaNames
@@ -343,7 +395,7 @@ export function buildCapabilityRows(
 					: "Still on: something else on this connection supplies it."
 				: contested && state === "on"
 					? "Off anyway: this connection type has no way to express it."
-					: tier === "emulated" && viaNames
+					: emulated && viaNames
 						? `Serene Pub supplies this through ${viaNames}.`
 						: undefined
 
@@ -354,14 +406,13 @@ export function buildCapabilityRows(
 			kind: isTransformId(id) ? "transform" : "feature",
 			basic: isBasicCapability(id),
 			state,
-			tier,
+			grade,
+			top,
+			...(gradeLetter(id, grade)
+				? { letter: gradeLetter(id, grade) }
+				: {}),
 			on,
-			stateLabel:
-				tier === "emulated"
-					? "On · by Serene Pub"
-					: tier === "native"
-						? "On"
-						: "Off",
+			stateLabel: !on ? "Off" : emulated ? "On · by Serene Pub" : "On",
 			assumed,
 			decidedBy,
 			provenance,

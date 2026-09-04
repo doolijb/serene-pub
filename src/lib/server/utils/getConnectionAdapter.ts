@@ -1,40 +1,29 @@
 import type { AdapterExports } from "../connectionAdapters/BaseConnectionAdapter"
-import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import { ADAPTER_REGISTRY } from "../adapters/registry"
 
-// Dynamic imports, not static ones: each adapter module is only parsed the
-// first time a connection of that type is actually used. Some third-party
-// SDKs (e.g. @lmstudio/sdk, which uses \p{Lu} Unicode regex property
-// escapes) fail to even parse under nodejs-mobile's Android build of V8,
-// which lacks full ICU support — a static import here would pull every
-// adapter (used or not) into the server's startup module graph and crash
-// Node before it could even boot on Android, regardless of whether the user
-// configured that connection type.
+/**
+ * The text-family module for a connection type.
+ *
+ * A lookup over `ADAPTER_REGISTRY` rather than a `switch` of its own: the
+ * registry is the single type → module map, and the conformance test that keeps
+ * `ADAPTER_MANIFEST` honest walks the same one. Two hand-written copies of the
+ * mapping is how a type acquires a capability nothing can deliver.
+ *
+ * The thunk is still what defers the `import()`, for the reason the registry's
+ * header spells out: `@lmstudio/sdk` cannot be parsed at all under
+ * nodejs-mobile's V8, so pulling every adapter into the startup module graph
+ * crashes server boot on Android whether or not that type is configured.
+ *
+ * TODO (conformance lane): once every adapter is renamed to its named actions,
+ * add the dev-only assertion here that this module's implemented actions match
+ * what the manifest declares for `connectionType`. This is the one path where
+ * the module is already loaded, so it is the only place a future OUT-OF-TREE
+ * adapter can be checked at all — CI can only see the ones in the repo.
+ */
 export async function getConnectionAdapter(
 	connectionType: string
 ): Promise<AdapterExports> {
-	switch (connectionType) {
-		case CONNECTION_TYPE.LM_STUDIO:
-			return (await import("../connectionAdapters/LMStudioAdapter"))
-				.default
-		case CONNECTION_TYPE.OLLAMA:
-			return (await import("../connectionAdapters/OllamaAdapter")).default
-		case CONNECTION_TYPE.OPENAI_CHAT:
-			return (await import("../connectionAdapters/OpenAIChatAdapter"))
-				.default
-		case CONNECTION_TYPE.LLAMACPP_COMPLETION:
-			return (await import("../connectionAdapters/LlamaCppAdapter"))
-				.default
-		case CONNECTION_TYPE.KOBOLDCPP:
-			return (await import("../connectionAdapters/KoboldCppAdapter"))
-				.default
-		case CONNECTION_TYPE.KOBOLDCPP_MANAGED:
-			return (
-				await import("../connectionAdapters/KoboldCppManagedAdapter")
-			).default
-		case CONNECTION_TYPE.ANTHROPIC:
-			return (await import("../connectionAdapters/AnthropicAdapter"))
-				.default
-		default:
-			throw new Error(`Unsupported connection type: ${connectionType}`)
-	}
+	const load = ADAPTER_REGISTRY[connectionType]?.text
+	if (!load) throw new Error(`Unsupported connection type: ${connectionType}`)
+	return await load()
 }

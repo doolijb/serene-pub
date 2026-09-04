@@ -17,6 +17,7 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { saveDocument, loadDocument } from "$lib/server/pipelines/boot/store"
 import { createHost, HostScopeError } from "$lib/server/pipelines/runtime/host"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
+import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { spec, compile, run, slot } from "@serene-pub/sdk"
 import * as C from "@serene-pub/contracts"
 import * as schema from "$lib/server/db/schema"
@@ -210,8 +211,14 @@ describe("running a pipeline in core", () => {
 		)
 		const result: any = await bindings()["core:task/assemble@2"]!(
 			{
+				// Source AND engine. A resolved template row carries both —
+				// `world.ts`'s `pushTemplate` emits the pair or neither — and
+				// the binding halts on a source with no engine rather than
+				// rendering it as Handlebars on a guess, which is what used to
+				// happen to every template on every install.
 				template: {
-					source: "{{#each sessionMessages}}{{this.content}}{{/each}}"
+					source: "{{#each sessionMessages}}{{this.content}}{{/each}}",
+					engine: CORE_TEMPLATE_ENGINE
 				},
 				decisions: [],
 				messages: [{ id: 1, role: "user", content: "hello" }],

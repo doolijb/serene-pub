@@ -142,9 +142,9 @@ describe("connections:setCapability — the three states", () => {
 			name: "explicit-off",
 			type: CONNECTION_TYPE.KOBOLDCPP,
 			capabilities: {
-				resolved: { "text->text": "native", "text->image": "native" },
+				resolved: { "text->text": 1, "text->image": 1 },
 				probe: {
-					found: { "text->image": "native" },
+					found: { "text->image": 1 },
 					at: "2026-08-30T00:00:00.000Z"
 				}
 			}
@@ -160,18 +160,18 @@ describe("connections:setCapability — the three states", () => {
 		// The cache is REBUILT, not patched — a stale `resolved` reads fine on
 		// the panel and wrongly everywhere a pipeline binds against it.
 		expect(res.capabilities?.resolved?.["text->image"]).toBeUndefined()
-		expect(res.capabilities?.resolved?.["text->text"]).toBe("native")
+		expect(res.capabilities?.resolved?.["text->text"]).toBe(1)
 	})
 
-	test("a tier switches it on over a probe that said otherwise", async () => {
+	test("a grade switches it on over a probe that said otherwise", async () => {
 		const { connectionsSetCapability } = await import("./connections")
 		const conn = await makeConnection({
 			name: "override-beats-probe",
 			type: CONNECTION_TYPE.KOBOLDCPP,
 			capabilities: {
-				resolved: { "text->text": "native" },
+				resolved: { "text->text": 1 },
 				probe: {
-					found: { "text->image": "none" },
+					found: { "text->image": 0 },
 					at: "2026-08-30T00:00:00.000Z"
 				}
 			}
@@ -183,8 +183,10 @@ describe("connections:setCapability — the three states", () => {
 			() => {}
 		)
 
-		expect(res.capabilities?.overrides).toEqual({ "text->image": "native" })
-		expect(res.capabilities?.resolved?.["text->image"]).toBe("native")
+		// The wire said a BAND and the column stores a GRADE — 1 is the top of
+		// `text->image`'s two bands, and the conversion is the handler's.
+		expect(res.capabilities?.overrides).toEqual({ "text->image": 1 })
+		expect(res.capabilities?.resolved?.["text->image"]).toBe(1)
 	})
 })
 
@@ -195,13 +197,13 @@ describe("connections:setCapability — what it must not touch", () => {
 		// on a connection that was tested a minute ago.
 		const { connectionsSetCapability } = await import("./connections")
 		const probe = {
-			found: { "text->image": "native", "text->text": "native" },
+			found: { "text->image": 1, "text->text": 1 },
 			at: "2026-08-28T09:00:00.000Z"
 		}
 		const conn = await makeConnection({
 			name: "probe-survives",
 			type: CONNECTION_TYPE.KOBOLDCPP,
-			capabilities: { resolved: { "text->text": "native" }, probe }
+			capabilities: { resolved: { "text->text": 1 }, probe }
 		})
 
 		await connectionsSetCapability.handler(
@@ -322,7 +324,7 @@ describe("connections:capabilities — the read", () => {
 			type: CONNECTION_TYPE.OPENAI_CHAT,
 			preset: "openai-official",
 			capabilities: {
-				resolved: { "text->text": "native" },
+				resolved: { "text->text": 1 },
 				overrides: { "text->image": false }
 			}
 		})
@@ -357,7 +359,7 @@ describe("connections:capabilities — the read", () => {
 			type: CONNECTION_TYPE.KOBOLDCPP,
 			capabilities: {
 				probe: {
-					found: { "text->image": "native" },
+					found: { "text->image": 1 },
 					at: "2026-08-29T00:00:00.000Z"
 				}
 			}
@@ -425,7 +427,7 @@ describe("connections:setCapability — a type that declares only one thing", ()
 			const conn = await makeConnection({
 				name: `single-cap-${type}`,
 				type,
-				capabilities: { resolved: { "text->image": "native" } }
+				capabilities: { resolved: { "text->image": 1 } }
 			})
 
 			await connectionsSetCapability.handler(
@@ -448,7 +450,7 @@ describe("connections:setCapability — a type that declares only one thing", ()
 		const conn = await makeConnection({
 			name: "undeclared-type",
 			type: "openai-embeddings",
-			capabilities: { resolved: { "text->embedding": "native" } }
+			capabilities: { resolved: { "text->embedding": 1 } }
 		})
 
 		await connectionsCapabilities.handler(
@@ -458,6 +460,6 @@ describe("connections:setCapability — a type that declares only one thing", ()
 		)
 
 		const stored = await columnOf(conn.id)
-		expect(stored.resolved).toEqual({ "text->embedding": "native" })
+		expect(stored.resolved).toEqual({ "text->embedding": 1 })
 	})
 })

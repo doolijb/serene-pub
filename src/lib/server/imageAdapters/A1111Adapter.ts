@@ -77,7 +77,11 @@ const CAPABILITIES: ImageCapabilities = {
 	// Asked for; whether it arrives depends on the backend, and the result says
 	// which happened rather than this claiming to know in advance.
 	batch: true,
-	img2img: false,
+	// No `img2img` key any more, and its absence is not an oversight: this class
+	// implements `generateImage` and NOT `editImage`, and that is now the single
+	// statement of "txt2img-only". The flag used to say it a second time and the
+	// manifest a third — where it said the opposite (`text+image->image: native`)
+	// for a release, because nothing checks a boolean against a table.
 	video: false,
 	// Free pixels, unlike the fixed-list backends — so the size fields in the
 	// sampling config mean what they say.
@@ -117,11 +121,22 @@ interface ProgressResponse {
 	} | null
 }
 
+/**
+ * `generateImage`, and deliberately nothing else.
+ *
+ * The set of methods here IS this backend's declared in-and-out: the manifest's
+ * `text->image` key for every type routed at this module is derived from the one
+ * below, and the absence of `editImage` is what makes "txt2img-only" a checkable
+ * fact rather than a sentence in a comment. Adding img2img means adding
+ * `editImage` — a different route (`/sdapi/v1/img2img`) with a different request
+ * — not widening this one, and the capability key follows from the method rather
+ * than being declared alongside it.
+ */
 class A1111Adapter extends BaseImageAdapter {
 	/** Whether THIS adapter has a render in flight, so interrupt only stops ours. */
 	private inFlight = false
 
-	async generate(
+	async generateImage(
 		req: ImageGenRequest,
 		opts: ImageGenOptions = {}
 	): Promise<ImageGenResult> {
@@ -205,10 +220,19 @@ class A1111Adapter extends BaseImageAdapter {
 
 		// Declared unsupported rather than silently absorbed: this endpoint is
 		// txt2img, and clipSkip belongs to `override_settings` on the builds that
-		// have it at all.
+		// have it at all. `denoise` still arrives because the image sampling config
+		// carries it for whichever action ends up running — here there is nothing
+		// to denoise from, so it is reported rather than sent.
+		//
+		// There is no `init` line any more. It was `t.take("init", req.init, false)`
+		// — declining, at the HTTP call, a field this request can no longer carry:
+		// an init belongs to `ImageEditRequest`, which is `editImage`'s input, and
+		// this class has no `editImage`. Declining per render was the only answer
+		// available while one request type served both actions, and it could only
+		// ever be given after someone had already asked. The same answer now comes
+		// from the shape of the request, before anything is sent.
 		t.take("clipSkip", req.clipSkip, false)
 		t.take("denoise", req.denoise, false)
-		t.take("init", req.init, false)
 		t.take("video", req.video, false)
 
 		const root = base(this.connection)

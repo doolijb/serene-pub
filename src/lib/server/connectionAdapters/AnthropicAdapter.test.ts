@@ -77,7 +77,7 @@ function makeAdapter(connectionOverrides: Record<string, any> = {}) {
 }
 
 describe("AnthropicAdapter — base URL trailing-slash normalization", () => {
-	test("getClient() (used by generate()) omits baseURL when unset (SDK default)", async () => {
+	test("getClient() (used by generateText()) omits baseURL when unset (SDK default)", async () => {
 		anthropicConstructorMock.mockClear()
 		messagesCreateMock.mockResolvedValue({
 			content: [{ type: "text", text: "hi" }]
@@ -88,13 +88,13 @@ describe("AnthropicAdapter — base URL trailing-slash normalization", () => {
 			messages: [{ role: "user", content: "hello" }],
 			meta: {} as any
 		} as any)
-		await adapter.generate()
+		await adapter.generateText()
 		expect(anthropicConstructorMock).toHaveBeenCalledWith(
 			expect.not.objectContaining({ baseURL: expect.anything() })
 		)
 	})
 
-	test("generate() normalizes a custom baseURL with a trailing slash", async () => {
+	test("generateText() normalizes a custom baseURL with a trailing slash", async () => {
 		anthropicConstructorMock.mockClear()
 		messagesCreateMock.mockResolvedValue({
 			content: [{ type: "text", text: "hi" }]
@@ -107,7 +107,7 @@ describe("AnthropicAdapter — base URL trailing-slash normalization", () => {
 			messages: [{ role: "user", content: "hello" }],
 			meta: {} as any
 		} as any)
-		await adapter.generate()
+		await adapter.generateText()
 		expect(anthropicConstructorMock).toHaveBeenCalledWith(
 			expect.objectContaining({
 				baseURL: "https://my-anthropic-proxy.example.com"

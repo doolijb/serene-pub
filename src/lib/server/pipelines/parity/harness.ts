@@ -37,6 +37,7 @@ import * as C from "@serene-pub/contracts"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
+import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 
 export interface FixtureScope {
 	sessionId: number
@@ -255,7 +256,14 @@ export async function pipelinePreview(db: any, scope: FixtureScope) {
 	// `pipeline_context_templates` reference resolved through the config layer,
 	// and this ad-hoc spec has no config layer to resolve it through. At
 	// `defaults`, so a fixture that writes its own override still wins.
-	if (scope.pipelineTemplate !== undefined)
+	//
+	// **`source` and `engine` together, never one alone** — the same rule
+	// `world.ts`'s `pushTemplate` enforces on the real path. A source with no
+	// engine used to be renderable because `renderTemplate` filled the gap with
+	// core's engine; it refuses now, because that fallback is what let every
+	// template on every install render as Handlebars whatever it declared. The
+	// corpus is Handlebars, and here it says so.
+	if (scope.pipelineTemplate !== undefined) {
 		world.overrides.push({
 			nodeKey: "prompt",
 			slot: "template",
@@ -263,6 +271,14 @@ export async function pipelinePreview(db: any, scope: FixtureScope) {
 			value: scope.pipelineTemplate,
 			scopeKind: "defaults"
 		} as any)
+		world.overrides.push({
+			nodeKey: "prompt",
+			slot: "template",
+			path: "engine",
+			value: CORE_TEMPLATE_ENGINE,
+			scopeKind: "defaults"
+		} as any)
+	}
 
 	return await run(parityPipeline(), {
 		world,

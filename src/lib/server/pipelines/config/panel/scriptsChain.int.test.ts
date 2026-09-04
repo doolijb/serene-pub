@@ -176,13 +176,22 @@ describe("the hook in the panel", () => {
 			.insert(schema.connections)
 			.values({ name: "Panel Kobold", type: "koboldcpp" })
 			.returning()
-		await (db as any)
-			.insert(schema.systemSettings)
-			.values({ id: 1, defaultConnectionId: conn.id })
-			.onConflictDoUpdate({
-				target: [schema.systemSettings.id],
-				set: { defaultConnectionId: conn.id }
-			})
+		// The instance's chat default, which since 0181 is a
+		// `connection_defaults` row keyed by capability rather than
+		// `system_settings.default_connection_id`. `connectionStopsFor` reads it
+		// through the same resolver dispatch uses, so the guards shown here are
+		// the guards the run will apply.
+		//
+		// ⚠ This block was `(db as any).insert(systemSettings).values({
+		// defaultConnectionId })` and the cast is why svelte-check did not
+		// enumerate it with the other 69 sites — it would have compiled cleanly
+		// and failed at runtime on a column that no longer exists.
+		const { setCapabilityDefault } = await import(
+			"$lib/server/connections/capabilityDefaults"
+		)
+		await setCapabilityDefault(db as any, "text->text", {
+			connectionId: conn.id
+		})
 		const guard = await createScript(db as any, {
 			typeId: "core:script:text/stop@1",
 			name: "Panel guard"

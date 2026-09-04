@@ -130,12 +130,16 @@ declare global {
 		/**
 		 * The instance default connection and sampling config, per capability
 		 * (0175) — its own table now rather than a column pair per modality, so
-		 * it arrives beside `settings` rather than inside it.
+		 * it arrives beside `settings` rather than inside it. Since 0181 it is
+		 * the only place a default comes from; `settings` carries none.
+		 *
+		 * ⚠ NOT optional, deliberately, and for the same reason as its twin on
+		 * `SystemSettings.Get.Response`: an optional field forces every reader
+		 * to handle `undefined`, and the handling that gets written is
+		 * `?? settings.defaultConnectionId` — growing back the second spelling
+		 * this change exists to remove. No defaults registered is `{}`.
 		 */
-		capabilityDefaults?: Record<
-			string,
-			{ connectionId: number | null; samplingConfigId: number | null }
-		>
+		capabilityDefaults: Record<string, Sockets.CapabilityDefault>
 	}
 
 	interface OllamaSettingsCtx {

@@ -108,7 +108,7 @@ describe("KoboldCppAdapter streaming — idle timeout (real HTTP server)", () =>
 		const port = await listen(server)
 		const adapter = makeAdapter(`http://127.0.0.1:${port}`)
 
-		const result = await adapter.generate()
+		const result = await adapter.generateText()
 		expect(typeof result.completionResult).toBe("function")
 
 		let caught: any
@@ -143,7 +143,7 @@ describe("KoboldCppAdapter streaming — idle timeout (real HTTP server)", () =>
 		const port = await listen(server)
 		const adapter = makeAdapter(`http://127.0.0.1:${port}`)
 
-		const result = await adapter.generate()
+		const result = await adapter.generateText()
 		let content = ""
 		await (result.completionResult as any)((chunk: string) => {
 			content += chunk

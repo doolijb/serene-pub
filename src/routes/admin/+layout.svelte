@@ -53,6 +53,16 @@
 					label: "Sampling",
 					icon: "SlidersHorizontal"
 				},
+				// Between Sampling and Connections because it is the thing
+				// that JOINS them: a connection and a sampling config are the
+				// two halves of one capability's default. It reads in the
+				// order the work happens — configure the parts, then say what
+				// the instance uses them for.
+				{
+					href: "/admin/defaults",
+					label: "Defaults",
+					icon: "Target"
+				},
 				{
 					href: "/admin/connections",
 					label: "Connections",

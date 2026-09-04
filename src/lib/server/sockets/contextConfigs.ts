@@ -8,6 +8,7 @@ import {
 	bareLayouts,
 	previewContextTemplate
 } from "$lib/server/pipelines/prompt/preview"
+import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 
 export const contextConfigsListHandler: Handler<
 	Sockets.ContextConfigs.List.Params,
@@ -99,7 +100,11 @@ export const contextConfigsCreate: Handler<
 		// overwrite an existing row. Done here rather than in the sidebar
 		// because a handler must not trust its payload — the sidebar already
 		// deletes `id` and still missed this one.
-		const { id: _id, seedKey: _seedKey, ...contextConfigValues } = (params.contextConfig ?? {}) as any
+		const {
+			id: _id,
+			seedKey: _seedKey,
+			...contextConfigValues
+		} = (params.contextConfig ?? {}) as any
 
 		const [contextConfig] = await db
 			.insert(schema.contextConfigs)
@@ -305,6 +310,13 @@ export const contextConfigsPreview: Handler<
 		const res: Sockets.ContextConfigs.Preview.Response =
 			await previewContextTemplate({
 				source: params.template,
+				// Named rather than left to a default, and it is a fact rather
+				// than a guess: `context_configs` is the 0.5 table, 0.5 had one
+				// template language, and the column that would have said
+				// otherwise did not exist. Every other caller reads the engine
+				// off the row; this one is the archive, and the archive is
+				// Handlebars by definition.
+				engine: CORE_TEMPLATE_ENGINE,
 				layouts: bareLayouts()
 			})
 		emitToUser("contextConfigs:preview", res)

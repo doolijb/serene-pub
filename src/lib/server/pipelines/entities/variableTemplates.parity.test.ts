@@ -336,7 +336,9 @@ describe("the floor", () => {
 		"\n```"
 
 	it("is used when no layout resolved at all", async () => {
-		expect(await renderVariable(undefined, "characters", value)).toBe(AS_0_5)
+		expect(await renderVariable(undefined, "characters", value)).toBe(
+			AS_0_5
+		)
 	})
 
 	it("is used when the slot resolved but this key did not", async () => {
@@ -348,8 +350,16 @@ describe("the floor", () => {
 	})
 
 	it("is used when the selected row has an empty source", async () => {
+		// The engine is named even though the source is empty: `ResolvedLayouts`
+		// requires it now, because a resolved layout always came off a row whose
+		// engine column is NOT NULL. An optional one was how a layout could be
+		// rendered in core's language rather than its own.
 		expect(
-			await renderVariable({ characters: { source: "" } }, "characters", value)
+			await renderVariable(
+				{ characters: { engine: CORE_TEMPLATE_ENGINE, source: "" } },
+				"characters",
+				value
+			)
 		).toBe(AS_0_5)
 	})
 
@@ -359,7 +369,12 @@ describe("the floor", () => {
 		// output, or the panel shows one thing and the prompt contains another.
 		await expect(
 			renderVariable(
-				{ characters: { source: "{{#each characters}}" } },
+				{
+					characters: {
+						engine: CORE_TEMPLATE_ENGINE,
+						source: "{{#each characters}}"
+					}
+				},
 				"characters",
 				value
 			)
@@ -510,12 +525,18 @@ describe("a heading never appears above nothing", () => {
 			for (const [label, value] of absentFor(t.key))
 				it(`renders nothing for ${label}`, async () => {
 					expect(
-						await renderVariable(layoutFor(t.source, t.key), t.key, value)
+						await renderVariable(
+							layoutFor(t.source, t.key),
+							t.key,
+							value
+						)
 					).toBe("")
 				})
 
 			it("renders nothing when no layout resolved either", async () => {
-				expect(await renderVariable(undefined, t.key, undefined)).toBe("")
+				expect(await renderVariable(undefined, t.key, undefined)).toBe(
+					""
+				)
 			})
 
 			it("renders nothing through a layout of someone's own", async () => {
@@ -671,7 +692,9 @@ describe("jsonValue reproduces a nested position", () => {
 		// argument is that addition, so a record nested two levels deep uses 4.
 		const inner = { "The Ashguard brand": "Carries a brand." }
 		const value = [{ name: "Ash", "extra lore": inner }]
-		expect(await render(shippedByKey.get("characters")!.source, value)).toBe(
+		expect(
+			await render(shippedByKey.get("characters")!.source, value)
+		).toBe(
 			"Assistant Characters (AI-controlled):\n```json\n" +
 				JSON.stringify(value, null, 2) +
 				"\n```"

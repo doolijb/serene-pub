@@ -17,6 +17,11 @@
 	import TemplateEditor from "$lib/client/components/templates/TemplateEditor.svelte"
 	import { getVariable } from "@serene-pub/sdk"
 	import { contextTemplateScope } from "$lib/shared/utils/contextConfigCards"
+	import {
+		CORE_TEMPLATE_ENGINE,
+		splitPoolKey
+	} from "$lib/shared/pipelines/poolKey"
+	
 	import { toaster } from "$lib/client/utils/toaster"
 
 	type Template = Sockets.Pipelines.Library.LibraryTemplate
@@ -37,7 +42,16 @@
 	/** Draft fields; seeded from the row once (or blank in create mode). */
 	let name = $state("")
 	let source = $state("")
-	let engine = $state<string | null>(null)
+	/**
+	 * The pool a template belongs to, as the composite `(node type)#(engine)`
+	 * key the library builds.
+	 *
+	 * The ENGINE is not separate state and must not be: it is half of this key,
+	 * so a template's language is decided by choosing its pool. Holding it apart
+	 * meant create mode started with `engine = null`, which the renderer used to
+	 * silently coerce to Handlebars — the exact bug this sprint removed — and
+	 * which the event now rejects outright.
+	 */
 	let poolId = $state("")
 	let seeded = $state(false)
 
@@ -52,7 +66,6 @@
 			? (view.contextPools ?? [])
 			: (view.variablePools ?? [])) as Array<{ id: string; label: string }>
 	)
-	let engines = $derived(view.engines ?? [])
 	let readonly = $derived(!!row?.isImmutable)
 
 	// Seed drafts exactly once, when the row first arrives.
@@ -62,7 +75,6 @@
 			if (!row) return
 			name = row.name
 			source = row.source
-			engine = row.engine
 			poolId = row.poolId
 			seeded = true
 		} else {
@@ -77,7 +89,7 @@
 				(row &&
 					(name !== row.name ||
 						source !== row.source ||
-						(engine ?? null) !== (row.engine ?? null))))
+						poolId !== row.poolId)))
 	)
 
 	/**
@@ -110,11 +122,16 @@
 		preview = res
 	}
 	function runPreview() {
+		// Split, because the server indexes the pool as two columns and the
+		// composite is an in-memory key only. Sending the composite as `poolId`
+		// would look up a pool that no row is stored under.
+		if (!poolId) return
+		const split = splitPoolKey(poolId, CORE_TEMPLATE_ENGINE)
 		socket.emit("pipelines:previewTemplate", {
 			kind,
 			source,
-			engine,
-			poolId
+			engine: split.engine,
+			poolId: split.poolId
 		})
 	}
 
@@ -144,23 +161,27 @@
 	})
 
 	function save() {
+		// The engine travels as half of the pool key — see `poolId` above.
+		const split = poolId
+			? splitPoolKey(poolId, CORE_TEMPLATE_ENGINE)
+			: { poolId: "", engine: CORE_TEMPLATE_ENGINE }
 		if (id != null) {
 			socket.emit("pipelines:libraryUpdateTemplate", {
 				kind,
 				id,
 				name,
 				source,
-				engine
+				engine: split.engine
 			})
 			toaster.success({ title: "Template saved" })
 		} else {
 			if (!poolId) return
 			socket.emit("pipelines:libraryCreateTemplate", {
 				kind,
-				poolId,
+				poolId: split.poolId,
 				name: name || undefined,
 				source: source || undefined,
-				engine
+				engine: split.engine
 			})
 			toaster.success({ title: "Template created" })
 			goto(basePath)
@@ -261,21 +282,11 @@
 						/>
 					{/if}
 				</label>
-				{#if engines.length > 1}
-					<label class="flex flex-col gap-1 text-sm">
-						<span class="font-medium">Engine</span>
-						<select
-							class="select"
-							bind:value={engine}
-							disabled={readonly}
-						>
-							<option value={null}>default</option>
-							{#each engines as e (e.id)}
-								<option value={e.id}>{e.id}</option>
-							{/each}
-						</select>
-					</label>
-				{/if}
+				<!-- No Engine select: the engine is half of the pool key, so the
+				     Pool control above already chooses it — its labels read
+				     "Assemble · Handlebars". A second control for the same fact
+				     could disagree with the pool, and its "default" option was
+				     literally `value={null}`, the null this sprint removed. -->
 			</div>
 
 			<label class="flex flex-col gap-1 text-sm">

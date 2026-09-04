@@ -25,6 +25,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
+import { byCapability } from "$lib/server/connections/capabilityDefaults"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -191,7 +192,7 @@ describe("image sampling presets", () => {
 		const [registered] = await testDb
 			.select()
 			.from(schema.connectionDefaults)
-			.where(eq(schema.connectionDefaults.capability, "text->image"))
+			.where(byCapability("text->image"))
 		expect(registered).toBeDefined()
 		expect(registered.samplingConfigId).toBe(sd15.id)
 	}, 60_000)

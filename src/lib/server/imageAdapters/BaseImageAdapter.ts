@@ -28,9 +28,23 @@
  * hidden in the profile. A knob in the wrong scope is either a control that does
  * nothing on three backends out of four, or a setting nobody can reach from the
  * node that needs it.
+ *
+ * ## The families stay parallel; the ACTIONS are shared
+ *
+ * Everything above still holds — this is not a subclass of
+ * `BaseConnectionAdapter` and should not become one. What changed is that the
+ * two families no longer each define a method called `generate` with a different
+ * contract behind it. The signatures now come from ONE place,
+ * `$lib/server/adapters/actions`, because what a connection type can express is
+ * DERIVED from which of those named actions its modules implement — and that
+ * inference is sound only while a method's name pins its in and out kinds. So
+ * `generateImage` here and `generateText` there mean the same things they mean
+ * everywhere, and the two classes can implement different actions without
+ * colliding, which is precisely why they never had to be merged.
  */
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import type { SettingsSchema } from "@serene-pub/sdk"
+import type { AdapterActions } from "$lib/server/adapters/actions"
 import type {
 	ImageCapabilities,
 	ImageGenOptions,
@@ -50,6 +64,22 @@ export type {
 } from "$lib/shared/imageGen/types"
 
 /** What a concrete image-adapter module default-exports (mirrors AdapterExports). */
+/**
+ * The actions this family does not require, merged on as an INTERFACE.
+ *
+ * Same reason as `BaseConnectionAdapter`: `declare x?: …` on the class body
+ * declares a PROPERTY, and a subclass implementing it as a method is TS2425 —
+ * a surface that compiles but cannot be fulfilled.
+ *
+ * The TEXT actions are included deliberately, and their absence is just as
+ * meaningful as their presence: an image module implementing `generateText`
+ * would be how a connection type derived `text->text` from the wrong family, so
+ * the possibility is typed rather than left to a convention. `generateImage` is
+ * omitted because the class declares it `abstract`.
+ */
+export interface BaseImageAdapter
+	extends Partial<Omit<AdapterActions, "generateImage">> {}
+
 export interface ImageAdapterExports {
 	Adapter: new (connection: SelectConnection) => BaseImageAdapter
 	listModels: (
@@ -61,7 +91,24 @@ export interface ImageAdapterExports {
 		/** Anything else the test learned that a form can use — a sampler list, say. */
 		extra?: Record<string, unknown>
 	}>
-	/** What this backend can actually do, so a form can stop offering what it cannot. */
+	/**
+	 * The `generateImage` ACTION PROFILE — how one render behaves here, so a form
+	 * can stop offering a control that would quietly do nothing.
+	 *
+	 * ⚠ NOT a `CapabilitySet`, and the two must never be merged. `progress`,
+	 * `preview`, `cancel`, `freeSize`, `sizePresets` and `samplers` describe the
+	 * ergonomics of a single call; a capability set describes what kind of data
+	 * turns into what other kind. Folding these in would put "Can be cancelled"
+	 * beside "Chat" on the connection screen, and would give the four-layer
+	 * resolution a set of keys no preset, probe or person has any opinion about.
+	 *
+	 * The one field that DID belong on the other side has moved: `img2img` is now
+	 * the presence of an `editImage` method, from which the `text+image->image`
+	 * capability key is derived. It had been a boolean saying the same thing as a
+	 * manifest entry, and the two disagreed — `A1111Adapter` reported
+	 * `img2img: false` while the manifest declared the transform `native` for the
+	 * same type.
+	 */
 	capabilities: ImageCapabilities
 	/**
 	 * The backend-specific settings this adapter understands, in the SDK's field
@@ -72,17 +119,26 @@ export interface ImageAdapterExports {
 	profileDefaults?: Record<string, unknown>
 }
 
-export abstract class BaseImageAdapter {
+export abstract class BaseImageAdapter implements AdapterActions {
 	connection: SelectConnection
-	/** Aborts the in-flight request; `generate` wires this to fetch. */
+	/** Aborts the in-flight request; `generateImage` wires this to fetch. */
 	protected controller: AbortController | null = null
 
 	constructor(connection: SelectConnection) {
 		this.connection = connection
 	}
 
+	// ── Actions ─────────────────────────────────────────────────────────────
+	//
+	// Named and individually typed, from the shared `AdapterActions`. The
+	// identifier `generate` names nothing in either adapter family any more: one
+	// generically-named method meant `KoboldCppAdapter.generate` and
+	// `A1111Adapter.generate` returned different kinds under one name, which is
+	// exactly the thing that made "what does this API accept and return"
+	// underivable from the code.
+
 	/**
-	 * Render `req`.
+	 * Render `req`. `text->image`, and the one action an image adapter must have.
 	 *
 	 * Implementations must report `applied` and `ignored` honestly, including for
 	 * a value they had to *change* rather than drop — a size snapped to the
@@ -90,18 +146,45 @@ export abstract class BaseImageAdapter {
 	 * returning a differently-shaped image is the version of this that wastes an
 	 * afternoon.
 	 */
-	abstract generate(
+	abstract generateImage(
 		req: ImageGenRequest,
 		opts?: ImageGenOptions
 	): Promise<ImageGenResult>
+
+	/**
+	 * The actions an image adapter MAY grow, declared and never defined.
+	 *
+	 * `editImage` is the one that matters here: img2img is a DIFFERENT ROUTE
+	 * (`/sdapi/v1/img2img`), which is the rule separating an action from a
+	 * declared extension, so it is a method rather than a flag. Nothing
+	 * implements it today and the manifest therefore declares neither
+	 * `text+image->image` nor `image->image` for any type — the derivation and
+	 * the declaration agree by construction rather than by anyone remembering.
+	 *
+	 * ⚠ `declare` emits nothing, which is required here:
+	 * `useDefineForClassFields` defaults to TRUE under `target:"esnext"`, so a
+	 * plain optional property would emit an OWN field of `undefined` shadowing
+	 * every subclass's prototype method. And never give one a body — see the
+	 * matching note on `BaseConnectionAdapter`.
+	 *
+	 * The text actions are declared too, and their absence is just as meaningful:
+	 * an image module implementing `generateText` would be how a type derived
+	 * `text->text` from the wrong family, so the possibility is typed rather than
+	 * left to a convention.
+	 */
+	// Merged in as an INTERFACE below the class rather than declared here as
+	// properties — see the note on that declaration.
+
+	// ── Lifecycle (not actions) ─────────────────────────────────────────────
 
 	abort() {
 		this.controller?.abort()
 	}
 
 	/**
-	 * Optional pre-generate hook (a managed backend ensures its server is up and
-	 * the image model is loaded here — mirrors the text adapters' preflight).
+	 * Optional hook run before `generateImage()` (a managed backend ensures its
+	 * server is up and the image model is loaded here — mirrors the text
+	 * adapters' preflight).
 	 */
 	async preflight(_signal?: AbortSignal): Promise<void> {}
 

@@ -251,22 +251,42 @@ describe("the option payload", () => {
 	it("carries the selected prompt row on a prompts-ref option", async () => {
 		// The panel edits the prompt inline, so the row rides along — id,
 		// name, fields, and whether it is a shipped (read-only) prompt.
+		const before = await view({ sessionId })
+		const ref = allOptions(before).find((o) => o.control === "prompts-ref")!
+		expect(ref).toBeTruthy()
+
+		// Into the option's OWN pool, read off the declaration. A row written
+		// into any other pool is refused by `writeOption` now, which is the
+		// point — but it would also make this test about the refusal rather
+		// than about the ride-along.
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		const { declarations } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		const decl = (
+			await declarations(db as any, spec.activeVersionId!)
+		).find(
+			(d: any) =>
+				d.control === "prompts-ref" &&
+				optionId(SECRET, d.nodeKey, d.slot, d.path) === ref.id
+		)!
 		const [prompt] = await db
 			.insert(schema.pipelinePrompts)
 			.values({
-				specId: spec.id,
+				nodeTypeId: decl.nodeTypeId!,
+				slot: decl.slot,
 				name: "Rides along",
-				fields: { systemPrompt: "inline text" }
+				fields: Object.fromEntries(
+					(decl.promptFields ?? []).map((f: string) => [
+						f,
+						"inline text"
+					])
+				)
 			})
 			.returning()
-
-		const before = await view({ sessionId })
-		const ref = allOptions(before).find((o) => o.control === "prompts-ref")!
-		expect(ref).toBeTruthy()
 		// The shipped default selects a catalog prompt (24 T6b: prompts seed
 		// from @serene-pub/core-catalog with no legacy dependency), so the
 		// row rides along from the start — shipped, hence read-only.
@@ -287,7 +307,7 @@ describe("the option payload", () => {
 		expect(after.prompt).toBeTruthy()
 		expect(after.prompt!.id).toBe(prompt.id)
 		expect(after.prompt!.name).toBe("Rides along")
-		expect(after.prompt!.fields).toEqual({ systemPrompt: "inline text" })
+		expect(after.prompt!.fields.systemPrompt).toBe("inline text")
 		expect(after.prompt!.readOnly).toBe(false)
 
 		// Leave the option as found for the provenance tests below.

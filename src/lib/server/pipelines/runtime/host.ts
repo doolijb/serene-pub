@@ -210,10 +210,14 @@ async function mediaParts(
 				: ((ref as Record<string, any>)?.uuid as string | undefined)
 		if (!uuid) continue
 
+		// The FILE row, and only the file row (0182). Provenance for the
+		// ownership check and the display variant's mime for the part both live
+		// here, so one query answers both — putting a `variants` lookup on this
+		// path is the one thing the split exists to prevent.
 		const [row] = await db
 			.select()
-			.from(schema.media)
-			.where(eq(schema.media.uuid, uuid))
+			.from(schema.files)
+			.where(eq(schema.files.uuid, uuid))
 			.limit(1)
 		if (!row) continue
 
@@ -240,7 +244,12 @@ async function mediaParts(
 						type: "core:file",
 						data: {
 							assetId: row.id,
-							mime: row.mime,
+							// The display variant's mime,
+							// denormalised onto the file so this
+							// stays one query. Null would mean a
+							// file with no display pointer, which
+							// `createMedia` never leaves behind.
+							mime: row.displayMime ?? "application/octet-stream",
 							...(row.filename ? { name: row.filename } : {})
 						}
 					}
@@ -957,6 +966,12 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							null,
 						generatingMessageMetadata:
 							p.generatingMessageMetadata ?? {},
+						// Tier 2 — this node's own slots, exactly as the
+						// `generate-image` sibling below already forwards them.
+						// Omitting them was why the panel's Connection and
+						// Sampling pickers on the reply step did nothing.
+						connectionId: refId(p.connection),
+						samplingId: refId(p.sampling),
 						onChunk: scope.sink?.onChunk,
 						onThinking: scope.sink?.onThinking,
 						signal: scope.signal
@@ -1206,7 +1221,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					const { createSessionAsset } = await import(
 						"$lib/server/messages/assets"
 					)
-					asset = await createSessionAsset(db as any, {
+					const stored = await createSessionAsset(db as any, {
 						sessionId: target.sessionId,
 						bytes: Buffer.from(b64!, "base64"),
 						mime:
@@ -1217,6 +1232,17 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 									: "application/octet-stream",
 						createdBy: scope.userId ?? null
 					})
+					// A part addresses the FILE and records the display variant's
+					// mime — same rule as `mediaParts` above, and for the same
+					// reason: what a part stores must not be a fact about one
+					// stored representation, because that representation can be
+					// culled or re-pointed under it.
+					asset = {
+						id: stored.file.id,
+						// The projection is always written; the fallback is the
+						// row it was projected from, already in hand here.
+						mime: stored.file.displayMime ?? stored.original.mime
+					}
 					await appendParts(db as any, messageId, [
 						isImage
 							? {

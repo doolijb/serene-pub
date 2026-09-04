@@ -82,13 +82,21 @@ describe("resolveTaskConfig — character_extraction", () => {
 		expect(result.sampling?.id).toBe(extractionSamp.id)
 	})
 
-	test("falls back to the system default when no override is set on the scene config", async () => {
+	test("falls back to the registered capability default when the scene config sets no override", async () => {
 		const { resolveTaskConfig } = await import("./resolveTaskConfig")
 		const defaultConn = await makeConnection("system-default-conn")
 		const defaultSamp = await makeSampling("system-default-samp")
-		await testDb.insert(schema.systemSettings).values({
-			defaultConnectionId: defaultConn.id,
-			defaultSamplingConfigId: defaultSamp.id
+		// The instance default is a `connection_defaults` row keyed by
+		// capability since 0181, not `system_settings.default_connection_id`.
+		// Registering it is what makes the fallback exist at all — the two
+		// connections created above are saved and capable and would still not be
+		// chosen, which is the ruling this test now also stands for.
+		const { setCapabilityDefault } = await import(
+			"$lib/server/connections/capabilityDefaults"
+		)
+		await setCapabilityDefault(testDb as any, "text->text", {
+			connectionId: defaultConn.id,
+			samplingConfigId: defaultSamp.id
 		})
 		const [config] = await testDb
 			.insert(schema.sceneSummarizeConfigs)

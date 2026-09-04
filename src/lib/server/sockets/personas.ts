@@ -1,5 +1,6 @@
 import { db } from "$lib/server/db"
 import { readMedia, toClientMedia } from "$lib/server/media"
+import { MediaVariant } from "$lib/shared/constants/MediaVisibility"
 import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import * as fsPromises from "fs/promises"
@@ -844,15 +845,31 @@ export const personasExportCard: Handler<
 				return res
 			} else {
 				// The card's primary image (28 §10): read straight from the
-				// media row the avatar points at, rather than reconstructing a
-				// filename from a path column that no longer exists.
+				// row the avatar points at, rather than reconstructing a
+				// filename from a path column that no longer exists — and
+				// specifically the ORIGINAL, for the reason charactersExportCard
+				// spells out: the display variant of a PNG upload may be a
+				// re-derived WebP, and this container has to hold real PNG.
 				const avatar = persona.avatarMediaId
-					? await readMedia(db, persona.avatarMediaId)
+					? await readMedia(
+							db,
+							persona.avatarMediaId,
+							MediaVariant.ORIGINAL
+						)
 					: null
 				if (!avatar) {
 					throw new Error("Persona has no avatar to embed data into")
 				}
-				if (avatar.row.mime !== "image/png") {
+				if (!avatar.row.isOriginal) {
+					// Still has an avatar; no longer has its original bytes, so
+					// `readMedia` fell back to the display form. Rendering
+					// survives that, a card export cannot, and the two causes get
+					// two messages.
+					throw new Error(
+						"This persona's avatar is no longer stored in its original form (originals were culled to reclaim space), so it can't be used for PNG card export — try JSON export instead, or upload the avatar again."
+					)
+				}
+				if (avatar.mime !== "image/png") {
 					throw new Error(
 						"This persona's avatar isn't a PNG, so it can't be used for PNG card export — try JSON export instead, or update the avatar to a PNG image first."
 					)
@@ -982,7 +999,7 @@ export const personasUploadGalleryImage: Handler<
 
 			const res: Sockets.Personas.UploadGalleryImage.Response = {
 				success: true,
-				media: toClientMedia(uploaded),
+				media: toClientMedia(uploaded.file),
 				personaId: params.personaId
 			}
 			emitToUser("personas:uploadGalleryImage", res)
@@ -1098,13 +1115,12 @@ export const personasSetAvatar: Handler<
 		// per-viewer authorization that route exists to enforce.
 		// Ownership check — see the equivalent in characters.ts for why the
 		// old external-URL guard is no longer a concern.
-		const owned = await db.query.media.findFirst({
-			where: (m, { and, eq, isNull }) =>
-				and(
-					eq(m.id, params.mediaId),
-					eq(m.personaId, params.personaId),
-					isNull(m.variant)
-				)
+		// The `variant IS NULL` filter is gone with 0182: a stored
+		// representation has no id in this space and no provenance at all, so
+		// a `personaId` match can only ever be a file.
+		const owned = await db.query.files.findFirst({
+			where: (f, { and, eq }) =>
+				and(eq(f.id, params.mediaId), eq(f.personaId, params.personaId))
 		})
 		if (!owned) throw new Error("Invalid avatar image.")
 

@@ -16,8 +16,10 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { eq } from "drizzle-orm"
 import { PNG } from "pngjs"
 import * as schema from "$lib/server/db/schema"
+import { MediaVariant } from "$lib/shared/constants/MediaVisibility"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -59,7 +61,7 @@ function makeTestPngBuffer(seed = 255): Buffer {
 	return PNG.sync.write(png)
 }
 
-/** Every file under a character's media directory, thumbnails included. */
+/** Every file under a character's media directory, derived variants included. */
 async function filesFor(characterId: number, userId: number) {
 	const dir = path.join(
 		dataDir,
@@ -70,6 +72,13 @@ async function filesFor(characterId: number, userId: number) {
 		String(characterId)
 	)
 	return fs.readdir(dir).catch(() => [] as string[])
+}
+
+async function variantsOf(fileId: number) {
+	return testDb
+		.select()
+		.from(schema.variants)
+		.where(eq(schema.variants.fileId, fileId))
 }
 
 describe("avatar upload via media (28)", () => {
@@ -120,7 +129,7 @@ describe("avatar upload via media (28)", () => {
 		expect(await filesFor(character.id, user.id)).toHaveLength(0)
 	})
 
-	test("sets avatarMediaId and writes the file plus a thumbnail", async () => {
+	test("sets avatarMediaId and writes the original, and only the original", async () => {
 		const { handleCharacterAvatarUpload } = await import(
 			"$lib/server/utils"
 		)
@@ -138,33 +147,28 @@ describe("avatar upload via media (28)", () => {
 		const after = await testDb.query.characters.findFirst({
 			where: (c, { eq }) => eq(c.id, character.id)
 		})
-		expect(after?.avatarMediaId).toBe(row.id)
+		// The pointer names the FILE, never a stored representation — which is
+		// what lets the original be culled later without stranding it.
+		expect(after?.avatarMediaId).toBe(row.file.id)
 
 		// The file is named after its own hash — never after the uploader's
 		// filename, and never with a uuid that has to be tracked separately.
 		const files = await filesFor(character.id, user.id)
-		expect(files).toContain(`${row.hash}.png`)
+		expect(files).toEqual([`${row.file.hash}.png`])
 
-		// A derivative is produced even for a tiny PNG: the source is not
-		// webp, so re-encoding is still a saving. Only an already-webp image
-		// that needs no downscaling is left alone.
-		const thumbs = await testDb.query.media.findMany({
-			where: (m, { eq }) => eq(m.parentMediaId, row.id)
-		})
-		expect(thumbs).toHaveLength(1)
-		expect(thumbs[0].variant).toBe("thumb")
-		expect(thumbs[0].mime).toBe("image/webp")
-		expect(files).toContain(`${row.hash}.thumb.webp`)
+		// ONE variant, and no `.thumb.webp` beside it. The predecessor of this
+		// test asserted a thumbnail existed by now, because an upload encoded
+		// one inline; 0182 made derivation lazy precisely so a codec problem
+		// cannot stall or fail an upload, so a lone original is the healthy
+		// state and asserting otherwise would re-assert the eager encode.
+		const variants = await variantsOf(row.file.id)
+		expect(variants.map((v) => v.variant)).toEqual([MediaVariant.ORIGINAL])
 
-		// The thumbnail's ONLY parent is the image it represents (28 §5) —
-		// no entity provenance of its own. That is what keeps it out of the
-		// character's gallery, out of export, and out of every mediaFor()
-		// result with no `variant IS NULL` filter at the call site.
-		expect(thumbs[0].characterId).toBeNull()
-		expect(thumbs[0].personaId).toBeNull()
-		expect(thumbs[0].sessionId).toBeNull()
-		expect(thumbs[0].messageId).toBeNull()
-		expect(thumbs[0].parentMediaId).toBe(row.id)
+		// A web-safe PNG IS its own display form, so the pointer names the
+		// original rather than a second copy of the same pixels — and the
+		// denormalised mime agrees with what it points at.
+		expect(row.file.displayVariantId).toBe(row.original.id)
+		expect(row.file.displayMime).toBe("image/png")
 	})
 
 	test("re-uploading identical bytes dedupes to the same row and file", async () => {
@@ -186,10 +190,10 @@ describe("avatar upload via media (28)", () => {
 			avatarFile: makeTestPngBuffer()
 		})
 
-		expect(second.id).toBe(first.id)
-		// One original plus its one thumbnail — the second upload wrote
-		// neither a new row nor a new file.
-		expect(await filesFor(character.id, user.id)).toHaveLength(2)
+		expect(second.file.id).toBe(first.file.id)
+		// The one original — the second upload wrote neither a new row nor a
+		// new file.
+		expect(await filesFor(character.id, user.id)).toHaveLength(1)
 	})
 
 	test("re-uploading different bytes repoints the avatar and leaves the old blob for cleanup", async () => {
@@ -211,19 +215,19 @@ describe("avatar upload via media (28)", () => {
 			avatarFile: makeTestPngBuffer(7)
 		})
 
-		expect(second.id).not.toBe(first.id)
+		expect(second.file.id).not.toBe(first.file.id)
 
 		const after = await testDb.query.characters.findFirst({
 			where: (c, { eq }) => eq(c.id, character.id)
 		})
-		expect(after?.avatarMediaId).toBe(second.id)
+		expect(after?.avatarMediaId).toBe(second.file.id)
 
-		// Both blobs remain: the old one is still a media row grouped under
-		// this character (it shows in the gallery), and deleting it is an
-		// explicit action, not a side effect of setting a new avatar.
+		// Both blobs remain: the old one is still a file grouped under this
+		// character (it shows in the gallery), and deleting it is an explicit
+		// action, not a side effect of setting a new avatar.
 		const files = await filesFor(character.id, user.id)
-		expect(files).toContain(`${first.hash}.png`)
-		expect(files).toContain(`${second.hash}.png`)
+		expect(files).toContain(`${first.file.hash}.png`)
+		expect(files).toContain(`${second.file.hash}.png`)
 	})
 
 	test("persona avatars follow the same path", async () => {
@@ -246,8 +250,10 @@ describe("avatar upload via media (28)", () => {
 		const after = await testDb.query.personas.findFirst({
 			where: (p, { eq }) => eq(p.id, persona.id)
 		})
-		expect(after?.avatarMediaId).toBe(row.id)
-		expect(row.personaId).toBe(persona.id)
-		expect(row.variant).toBeNull()
+		expect(after?.avatarMediaId).toBe(row.file.id)
+		expect(row.file.personaId).toBe(persona.id)
+		// Provenance is on the file and the bytes we just wrote are its
+		// original — the two halves `CreatedMedia` exists to keep apart.
+		expect(row.original.isOriginal).toBe(true)
 	})
 })

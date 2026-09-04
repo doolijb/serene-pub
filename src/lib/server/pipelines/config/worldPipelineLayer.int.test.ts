@@ -88,6 +88,61 @@ const resolvedAt = async (nodeKey: string, slot: string, path: string) => {
 	return sourced[nodeKey]?.[slot]?.[path]
 }
 
+const declarationsFor = async (specVersionId: number) => {
+	const { declarations } = await import("$lib/server/pipelines/config/panel")
+	return await declarations(db as any, specVersionId)
+}
+
+/**
+ * The reply pipeline's prompts declaration for one node.
+ *
+ * Read rather than hardcoded: the pool is `(node type, slot)` and both halves
+ * are the spec's to choose, so a test naming `core:task/build-template-context`
+ * in a string would go green against the wrong pool the day that node was
+ * replaced — which is precisely the kind of reuse this refactor exists to make
+ * cheap.
+ */
+const promptDeclFor = async (nodeKey: string) => {
+	const [spec] = await db
+		.select()
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.id, specId))
+	const decl = (await declarationsFor(spec.activeVersionId!)).find(
+		(d) => d.nodeKey === nodeKey && d.control === "prompts-ref"
+	)
+	expect(decl, `${nodeKey} declares no prompts slot`).toBeTruthy()
+	expect(
+		decl!.nodeTypeId,
+		"a prompts declaration must carry its node type — it is half the pool key"
+	).toBeTruthy()
+	return decl!
+}
+
+/**
+ * A prompt row in the same pool as `nodeKey`'s prompts slot.
+ *
+ * `pipeline_prompts` no longer has a `spec_id`; inserting one means naming the
+ * pool it lands in, and a row in the wrong pool is simply never offered.
+ */
+const promptInPoolOf = async (
+	nodeKey: string,
+	name: string,
+	fields: Record<string, string>
+) => {
+	const decl = await promptDeclFor(nodeKey)
+	const [row] = await db
+		.insert(schema.pipelinePrompts)
+		.values({
+			nodeTypeId: decl.nodeTypeId!,
+			slot: decl.slot,
+			createdForSpecId: specId,
+			name,
+			fields
+		})
+		.returning()
+	return row
+}
+
 describe("the shipped configuration reaches a run", () => {
 	it("puts the selected config's prompt text where the node reads it", async () => {
 		// The prompt is stored as an *id* on the config and the node needs the
@@ -128,18 +183,103 @@ describe("the shipped configuration reaches a run", () => {
 		expect(resolved).toBeTruthy()
 		expect(String(resolved!.value).length).toBeGreaterThan(0)
 
-		// It is the pipeline's own shipped prompt — the first it ships with —
-		// and it sits at `defaults`, under anything anyone actually chose.
+		// It is the prompt this pipeline ships for *that step's pool* — the
+		// floor is resolved per pool now, not once per pipeline — and it sits
+		// at `defaults`, under anything anyone actually chose.
 		const { defaultPromptFor } = await import(
 			"$lib/server/pipelines/boot/seedPrompts"
 		)
-		const id = await defaultPromptFor(db as any, specId)
+		const decl = await promptDeclFor("context")
+		const id = await defaultPromptFor(
+			db as any,
+			decl.nodeTypeId!,
+			decl.slot,
+			{
+				id: specId,
+				slug: RESPOND_SPEC_ID
+			}
+		)
 		const { resolvePromptFields } = await import(
 			"$lib/server/pipelines/entities/prompts"
 		)
 		const fields = await resolvePromptFields(db as any, id!)
 		expect(resolved!.value).toBe(fields.systemPrompt)
 		expect(resolved!.scopeKind).toBe("defaults")
+	})
+})
+
+/**
+ * The floor resolves per POOL, and this is the test that says so.
+ *
+ * It used to resolve one `defaultPromptFor(db, spec.id)` and push its fields
+ * onto every prompts node in the spec. A summarize pipeline has several prompts
+ * nodes of *different types*, so pool-blind that puts one step's wording on all
+ * of them — the world summarizer's drafting instructions arriving on the
+ * name-entry step. That text renders. It reads as plausible English. Nothing
+ * anywhere says the step is following instructions written for another step,
+ * which is why this is asserted rather than eyeballed.
+ */
+describe("the prompts floor follows each node's own pool", () => {
+	it("gives each step the prompt written for that step, not one row's for all", async () => {
+		const { SUMMARIZE_WORLD_SPEC_ID } = await import(
+			"$lib/server/pipelines/specs"
+		)
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, SUMMARIZE_WORLD_SPEC_ID))
+		const decls = (await declarationsFor(spec.activeVersionId!)).filter(
+			(d) => d.control === "prompts-ref"
+		)
+
+		// The premise: this pipeline really does have prompts nodes of more
+		// than one type. Without it the test would pass on a pipeline where
+		// pool-blind and pool-aware are the same answer, and prove nothing.
+		const pools = new Set(decls.map((d) => `${d.nodeTypeId}#${d.slot}`))
+		expect(
+			pools.size,
+			"the summarize pipeline should declare prompts on more than one kind of step"
+		).toBeGreaterThan(1)
+
+		const { buildWorld } = await import(
+			"$lib/server/pipelines/config/world"
+		)
+		const world: any = await buildWorld(db as any, {
+			sessionId,
+			specId: SUMMARIZE_WORLD_SPEC_ID
+		})
+		const { defaultPromptFor } = await import(
+			"$lib/server/pipelines/boot/seedPrompts"
+		)
+		const { resolvePromptFields } = await import(
+			"$lib/server/pipelines/entities/prompts"
+		)
+
+		for (const d of decls) {
+			const id = await defaultPromptFor(
+				db as any,
+				d.nodeTypeId!,
+				d.slot,
+				{ id: spec.id, slug: SUMMARIZE_WORLD_SPEC_ID }
+			)
+			if (id == null) continue
+			const fields = await resolvePromptFields(db as any, id)
+			const floor = world.overrides.filter(
+				(o: any) =>
+					o.scopeKind === "defaults" &&
+					o.nodeKey === d.nodeKey &&
+					o.slot === "prompts"
+			)
+			expect(
+				floor.length,
+				`${d.nodeKey} got no prompts floor at all`
+			).toBeGreaterThan(0)
+			for (const o of floor)
+				expect(
+					o.value,
+					`${d.nodeKey} was floored with text from another step's pool`
+				).toBe(fields[o.path])
+		}
 	})
 })
 
@@ -196,17 +336,10 @@ describe("a prompt edited in the panel", () => {
 		// The failure this catches is specific and silent: a config stores the
 		// reference, so a world that forwarded it unchanged would hand the node
 		// the number 7 where its system prompt should be.
-		const [prompt] = await db
-			.insert(schema.pipelinePrompts)
-			.values({
-				specId,
-				name: "Panel-edited prompt",
-				fields: {
-					systemPrompt: "SPEAK ONLY IN RIDDLES",
-					system: "SPEAK ONLY IN RIDDLES"
-				}
-			})
-			.returning()
+		const prompt = await promptInPoolOf("context", "Panel-edited prompt", {
+			systemPrompt: "SPEAK ONLY IN RIDDLES",
+			system: "SPEAK ONLY IN RIDDLES"
+		})
 
 		const [config] = await db
 			.insert(schema.pipelineConfigs)
@@ -252,17 +385,14 @@ describe("a prompt edited in the panel", () => {
 		// `pipeline_node_overrides`. That row travels a different loop in
 		// `applyPipelineLayer`, so it can be broken while the config path is
 		// green: the node gets a number where its system prompt should be.
-		const [prompt] = await db
-			.insert(schema.pipelinePrompts)
-			.values({
-				specId,
-				name: "Override-picked prompt",
-				fields: {
-					systemPrompt: "ANSWER ONLY IN HAIKU",
-					system: "ANSWER ONLY IN HAIKU"
-				}
-			})
-			.returning()
+		const prompt = await promptInPoolOf(
+			"context",
+			"Override-picked prompt",
+			{
+				systemPrompt: "ANSWER ONLY IN HAIKU",
+				system: "ANSWER ONLY IN HAIKU"
+			}
+		)
 
 		await db.insert(schema.pipelineNodeOverrides).values({
 			specId,

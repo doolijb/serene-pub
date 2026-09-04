@@ -1,5 +1,6 @@
 import { db } from "$lib/server/db"
 import { readMedia, toClientMedia } from "$lib/server/media"
+import { MediaVariant } from "$lib/shared/constants/MediaVisibility"
 import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import * as fsPromises from "fs/promises"
@@ -1066,19 +1067,40 @@ export const charactersExportCard: Handler<
 				emitToUser("characters:exportCard", res)
 				return res
 			} else {
-				// Export as PNG with embedded data
-				// The card's primary image (28 §10). The media row carries
-				// the sniffed mime, so the "is it actually a PNG?" check no
-				// longer has to infer the type from a filename extension.
+				// Export as PNG with embedded data.
+				//
+				// The card's primary image (28 §10), asked for as the ORIGINAL
+				// rather than as "the file's bytes" (0182). The display form of
+				// a PNG upload can legitimately be a re-derived lossless WebP
+				// that came out smaller, and handing that to the embedder would
+				// refuse the export of a PNG-original avatar — or, if the mime
+				// check below were ever loosened, put WebP bytes inside a file
+				// named .png. The variant carries the sniffed mime, so the check
+				// still never infers a type from a filename extension.
 				const avatar = character.avatarMediaId
-					? await readMedia(db, character.avatarMediaId)
+					? await readMedia(
+							db,
+							character.avatarMediaId,
+							MediaVariant.ORIGINAL
+						)
 					: null
 				if (!avatar) {
 					throw new Error(
 						"Character has no avatar to embed data into"
 					)
 				}
-				if (avatar.row.mime !== "image/png") {
+				if (!avatar.row.isOriginal) {
+					// `readMedia` falls back to the display form when the
+					// original is gone. That is right for rendering and wrong
+					// here: culling originals is an explicit, irreversible admin
+					// action and a card export has nothing to fall back to.
+					// Naming that cause matters — reporting "isn't a PNG" would
+					// send someone to re-upload a PNG they already uploaded.
+					throw new Error(
+						"This character's avatar is no longer stored in its original form (originals were culled to reclaim space), so it can't be used for PNG card export — try JSON export instead, or upload the avatar again."
+					)
+				}
+				if (avatar.mime !== "image/png") {
 					throw new Error(
 						"This character's avatar isn't a PNG, so it can't be used for PNG card export — try JSON export instead, or update the avatar to a PNG image first."
 					)
@@ -1154,7 +1176,7 @@ export const charactersUploadGalleryImage: Handler<
 
 			const res: Sockets.Characters.UploadGalleryImage.Response = {
 				success: true,
-				media: toClientMedia(uploaded),
+				media: toClientMedia(uploaded.file),
 				characterId: params.characterId
 			}
 			emitToUser("characters:uploadGalleryImage", res)
@@ -1263,19 +1285,22 @@ export const charactersSetAvatar: Handler<
 		})
 		if (!character) throw new Error("Character not found or access denied")
 
-		// params.mediaId must be one of this character's own media rows.
+		// params.mediaId must be one of this character's own files.
 		// The old version guarded against the client pointing `avatar` at an
 		// arbitrary external URL — every viewer's browser would fetch it
 		// directly, bypassing the authenticated proxy. That whole class is
-		// gone now (an avatar is an id into `media`, and there is nowhere to
+		// gone now (an avatar is an id into `files`, and there is nowhere to
 		// put a URL), but the ownership check still matters: without it a
 		// client could name someone else's media id.
-		const owned = await db.query.media.findFirst({
-			where: (m, { and, eq, isNull }) =>
+		//
+		// The `variant IS NULL` filter this used to carry is gone with 0182:
+		// a stored representation has no id in this space and no provenance
+		// at all, so a `characterId` match can only ever be a file.
+		const owned = await db.query.files.findFirst({
+			where: (f, { and, eq }) =>
 				and(
-					eq(m.id, params.mediaId),
-					eq(m.characterId, params.characterId),
-					isNull(m.variant)
+					eq(f.id, params.mediaId),
+					eq(f.characterId, params.characterId)
 				)
 		})
 		if (!owned) throw new Error("Invalid avatar image.")

@@ -25,11 +25,14 @@
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
+	BAND_ORDER,
+	gradeOf,
 	resolveCapabilities,
+	topGrade,
+	type Band,
 	type CapabilityId,
 	type CapabilityOverrides,
-	type CapabilitySet,
-	type ResolvedTier
+	type CapabilitySet
 } from "@serene-pub/sdk"
 import {
 	adapterCapabilities,
@@ -63,21 +66,24 @@ const column = (
 ): StoredCapabilities =>
 	(row?.capabilities as StoredCapabilities | null | undefined) ?? {}
 
-/** The cached set, for a reader that must not pay to recompute it. */
-export function storedCapabilities(
-	row: CapabilityRow | null | undefined
-): CapabilitySet {
-	return column(row).resolved ?? {}
-}
-
 /**
  * The WHOLE column, defaulted — both durable halves and the cache.
  *
- * Distinct from `storedCapabilities` above, which answers the only question a
- * generation-time reader has ("what can this do"). The capability panel and the
- * toggle handler need the other two halves as well: the overrides ARE the
- * control's position, and `probe.at` is what stops an untested connection from
- * looking authoritative.
+ * ⚠ This is NOT the function that answers "what can this connection do". That is
+ * `storedCapabilities` in `pipelines/runtime/capabilityGuard.ts`, and the
+ * difference is load-bearing: it INTERSECTS the cached `resolved` set with the
+ * live manifest key space, because the cache outlives the declaration it was
+ * built from — a row that resolved `text->image` before OPENAI_CHAT lost the key
+ * still carries it. There used to be a second `storedCapabilities` HERE that
+ * returned `.resolved` straight, exported and imported by nothing; the two names
+ * were identical, so the first person to reach for "the effective set" had even
+ * odds of picking the one that reopens that hole. One fact, one spelling: the
+ * un-intersected read is gone and this returns the raw column, which is a
+ * different question with a different name.
+ *
+ * The capability panel and the toggle handler are what need all three halves:
+ * the overrides ARE the control's position, and `probe.at` is what stops an
+ * untested connection from looking authoritative.
  */
 export function capabilityColumn(
 	row: CapabilityRow | null | undefined
@@ -110,7 +116,7 @@ export function resolveConnectionCapabilities(
 	})
 }
 
-const RESOLVED_TIERS = new Set<string>(["native", "emulated", "none"])
+const BAND_NAMES = new Set<string>(BAND_ORDER)
 
 /**
  * An adapter's `extra.capabilities` read as a probe, or `undefined` if it said
@@ -118,22 +124,35 @@ const RESOLVED_TIERS = new Set<string>(["native", "emulated", "none"])
  *
  * Adapters answer over the untyped `extra` passthrough, so the values arrive as
  * whatever the backend's own endpoint made convenient — KoboldCPP's version
- * response is a bag of booleans. Normalizing here, once, keeps the DURABLE half
- * of the column free of anything `resolveCapabilities` cannot read: a probe
- * outlives by months the test that produced it.
+ * response is a bag of booleans, and the image adapters state a band by name.
+ * Normalizing here, once, keeps the DURABLE half of the column free of anything
+ * `resolveCapabilities` cannot read: a probe outlives by months the test that
+ * produced it.
+ *
+ * All three spellings land on a GRADE, on that capability's own scale. `true`
+ * means the capability's top band, which is 1 for `text->image` and 2 for
+ * `tools` — so a boolean answer cannot accidentally claim a middling grade, and
+ * cannot accidentally claim a grade the capability does not have either.
+ *
+ * ⚠ Band NAMES stay readable here on purpose. `extra` is the adapter's untyped
+ * bag; `A1111Adapter` and `KoboldCppManagedImageAdapter` both write
+ * `{"text->image": "native"}` into it, and normalizing that spelling is this
+ * function's stated job rather than something for each adapter to remember.
  */
 export function probedCapabilities(extra: unknown): CapabilitySet | undefined {
 	const found = (extra as { capabilities?: unknown } | null | undefined)
 		?.capabilities
 	if (!found || typeof found !== "object") return undefined
 	const out: CapabilitySet = {}
-	for (const [id, value] of Object.entries(
+	for (const [key, value] of Object.entries(
 		found as Record<string, unknown>
 	)) {
-		if (typeof value === "boolean")
-			out[id as CapabilityId] = value ? "native" : "none"
-		else if (typeof value === "string" && RESOLVED_TIERS.has(value))
-			out[id as CapabilityId] = value as ResolvedTier
+		const id = key as CapabilityId
+		if (typeof value === "boolean") out[id] = value ? topGrade(id) : 0
+		else if (typeof value === "number" && Number.isFinite(value))
+			out[id] = gradeOf(id, value)
+		else if (typeof value === "string" && BAND_NAMES.has(value))
+			out[id] = gradeOf(id, value as Band)
 	}
 	return Object.keys(out).length ? out : undefined
 }
@@ -193,15 +212,15 @@ export async function persistCapabilities(
 	//
 	// The case this protects is real: `resolveConnectionCapabilities` returns `{}`
 	// for a type no manifest entry declares, and `openai-embeddings` and
-	// `local-onnx` are exactly that. 0175 determined `{"text->embedding":"native"}`
-	// for those rows from their old modality column, and without the guard the
+	// `local-onnx` are exactly that. 0175 determined `text->embedding` for those
+	// rows from their old modality column, and without the guard the
 	// first unrelated edit would write `{}` back, which the bind guard reads as
 	// "not determined yet" and falls through to the modality test — quietly making
 	// an embeddings connection acceptable for chat again.
 	//
 	// ⚠ But keying on EMPTINESS made a deliberate answer indistinguishable from an
 	// unknown type, and on an image-only connection those are the same rebuild.
-	// KOBOLDCPP_MANAGED_IMAGE declares exactly `{"text->image":"native"}` and A1111
+	// KOBOLDCPP_MANAGED_IMAGE declares exactly `{"text->image": "native"}` and A1111
 	// has only `text->image` in its defaults, so switching Image generation OFF
 	// resolves to `{}` — and the old guard wrote the PRE-toggle cache straight back.
 	// The override was stored correctly and the cache everything actually reads

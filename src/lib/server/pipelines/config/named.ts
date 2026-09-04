@@ -41,8 +41,10 @@ import { and, asc, eq, inArray, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { declarations, type Decl } from "$lib/server/pipelines/config/panel"
 import { defaultPromptFor } from "$lib/server/pipelines/boot/seedPrompts"
+import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 import { defaultVariableTemplateFor } from "$lib/server/pipelines/boot/seedVariableTemplates"
 import { defaultContextTemplateFor } from "$lib/server/pipelines/boot/seedContextTemplates"
+import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 
 type Db = {
 	select: any
@@ -63,15 +65,13 @@ const addr = (nodeKey: string, slot: string, path: string) =>
 const addrOf = (r: { nodeKey: string; slot: string; path?: string | null }) =>
 	addr(r.nodeKey, r.slot, r.path ?? "")
 
-/**
- * The engine id a template value carries, if this declaration is one.
- *
- * Read off the slot declaration rather than assumed, because 12 §2a puts the
- * language on the value — two template slots in one spec may legitimately use
- * different engines, and a plugin's may use neither of core's.
- */
-const engineFor = (decl: Decl): string | null =>
-	decl.control === "template" ? (decl.engine ?? null) : null
+// There is deliberately no `engineFor` here any more, and no `engine` on a
+// value row. It tested `decl.control === "template"` — a control string
+// `declsForSlot` never emits — so the column it fed was NULL on every row ever
+// written, and its only reader was this file's own copy-forward. The language a
+// template is written in lives on the TEMPLATE ROW, NOT NULL, and reaches the
+// renderer from there; a second copy on the value row could only ever disagree
+// with it.
 
 /* ------------------------------------------------------------------ *
  * The shipped default
@@ -101,10 +101,19 @@ export interface EnsureDefaultResult {
 async function refDefaults(
 	db: Db,
 	specId: number,
+	specSlug: string,
 	decls: Decl[]
 ): Promise<Map<string, unknown>> {
 	const out = new Map<string, unknown>()
-	let promptId: number | null | undefined
+	// Per *pool*, not per spec — the correction pooling forced. This used to
+	// resolve ONE prompt id for the whole pipeline and assign it to every
+	// prompts-ref, which was defensible only while a spec's prompts were a
+	// single per-pipeline bundle: the summarize specs' four steps all pointed
+	// at the one row carrying `batch`, `synth`, `name` and
+	// `characterExtraction`. Split along the declarations those are four rows
+	// in four pools, and one id for all of them would hand three of the four
+	// steps a prompt with none of the fields they read.
+	const prompts = new Map<string, number | null>()
 	// Per *variable*, not per spec: a layout row is keyed by what it renders,
 	// so the shipped characters layout is the same row in every pipeline.
 	const layouts = new Map<string, number | null>()
@@ -114,19 +123,35 @@ async function refDefaults(
 
 	for (const d of decls) {
 		const key = addr(d.nodeKey, d.slot, d.path)
-		if (d.control === "prompts-ref") {
-			if (promptId === undefined)
-				promptId = await defaultPromptFor(db, specId)
-			if (promptId != null) out.set(key, promptId)
+		if (d.control === "prompts-ref" && d.nodeTypeId) {
+			const pool = promptPoolKeyFor(d.nodeTypeId, d.slot)
+			if (!prompts.has(pool))
+				prompts.set(
+					pool,
+					await defaultPromptFor(db, d.nodeTypeId, d.slot, {
+						id: specId,
+						slug: specSlug
+					})
+				)
+			const id = prompts.get(pool)
+			if (id != null) out.set(key, id)
 			continue
 		}
 		if (d.control === "context-template-ref" && d.nodeTypeId) {
-			if (!templates.has(d.nodeTypeId))
+			// The engine is half the template pool now, so it is half this
+			// cache key too. Keyed on the node type alone, a node declaring a
+			// jinja2 template slot would be handed whichever engine's row the
+			// first node of that type happened to resolve — the shipped config
+			// would then point a jinja2 slot at Handlebars source, and it would
+			// render as raw markup rather than fail.
+			const engine = d.engine ?? CORE_TEMPLATE_ENGINE
+			const pool = `${d.nodeTypeId}#${engine}`
+			if (!templates.has(pool))
 				templates.set(
-					d.nodeTypeId,
-					await defaultContextTemplateFor(db, d.nodeTypeId)
+					pool,
+					await defaultContextTemplateFor(db, d.nodeTypeId, engine)
 				)
-			const id = templates.get(d.nodeTypeId)
+			const id = templates.get(pool)
 			if (id != null) out.set(key, id)
 			continue
 		}
@@ -240,7 +265,7 @@ export async function ensureDefaultConfig(
 		})
 		.returning()
 
-	const refs = await refDefaults(db, specId, decls)
+	const refs = await refDefaults(db, specId, specSlug, decls)
 
 	const values = decls
 		.map((d) => {
@@ -259,8 +284,7 @@ export async function ensureDefaultConfig(
 			nodeKey: d.nodeKey,
 			slot: d.slot,
 			path: d.path,
-			value,
-			engine: engineFor(d)
+			value
 		}))
 
 	if (values.length)
@@ -299,7 +323,7 @@ export async function reconcileConfigs(
 	const declByAddr = new Map(
 		decls.map((d) => [addr(d.nodeKey, d.slot, d.path), d])
 	)
-	const refs = await refDefaults(db, specId, decls)
+	const refs = await refDefaults(db, specId, specSlug, decls)
 
 	const configs = await db
 		.select()
@@ -312,10 +336,7 @@ export async function reconcileConfigs(
 		(a, b) => Number(!!b.isImmutable) - Number(!!a.isImmutable)
 	)
 
-	const defaults = new Map<
-		string,
-		{ value: unknown; engine: string | null }
-	>()
+	const defaults = new Map<string, { value: unknown }>()
 	const reports: ReconcileReport[] = []
 
 	for (const config of ordered) {
@@ -384,8 +405,7 @@ export async function reconcileConfigs(
 				nodeKey: d.nodeKey,
 				slot: d.slot,
 				path: d.path,
-				value,
-				engine: fromDefault?.engine ?? engineFor(d)
+				value
 			})
 		}
 
@@ -418,7 +438,7 @@ export async function reconcileConfigs(
 				.from(schema.pipelineConfigValues)
 				.where(eq(schema.pipelineConfigValues.configId, config.id))
 			for (const r of fresh as any[])
-				defaults.set(addrOf(r), { value: r.value, engine: r.engine })
+				defaults.set(addrOf(r), { value: r.value })
 		}
 
 		if (report.culled.length || report.backfilled.length)

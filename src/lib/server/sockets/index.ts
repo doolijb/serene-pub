@@ -18,6 +18,7 @@
 
 import type { Handler } from "$lib/shared/events"
 import { registerConnectionHandlers } from "./connections"
+import { registerConnectionDefaultsHandlers } from "./connectionDefaults"
 import { registerImageHandlers } from "./images"
 import { registerPluginHandlers } from "./plugins"
 import { registerSamplingConfigHandlers } from "./samplingConfigs"
@@ -93,6 +94,7 @@ export function connectSockets(io: {
 		registerUserSettingsHandlers(socket, emitToUser, register)
 		registerSamplingConfigHandlers(socket, emitToUser, register)
 		registerConnectionHandlers(socket, emitToUser, register)
+		registerConnectionDefaultsHandlers(socket, emitToUser, register)
 		registerImageHandlers(socket, emitToUser, register)
 		registerPluginHandlers(socket, emitToUser, register)
 		registerOllamaHandlers(socket, emitToUser, register)

@@ -9,6 +9,7 @@ import type {
 	CardSourceId,
 	CardSourceSort
 } from "$lib/shared/library/types"
+import type { ComboRow } from "$lib/shared/capabilities/combos"
 
 declare global {
 	namespace Sockets {
@@ -25,6 +26,25 @@ declare global {
 			rateLimited?: boolean
 			retryAfterMs?: number
 			requestId?: string
+		}
+
+		/**
+		 * One row of `connection_defaults`, on the wire.
+		 *
+		 * Named once here rather than spelled inline at each of the three places
+		 * that send it — `systemSettings:get`, `connectionDefaults:list`, and
+		 * `SystemSettingsCtx`. It was inline in all three, which is how one of
+		 * them ends up nullable and the other two not.
+		 *
+		 * Both halves are independently nullable and that asymmetry is the
+		 * contract: a null `connectionId` is fatal to a run, a null
+		 * `samplingConfigId` is not — `resolveSampling(null)` means "send
+		 * nothing and let the backend use its own defaults", which is a
+		 * perfectly good answer.
+		 */
+		interface CapabilityDefault {
+			connectionId: number | null
+			samplingConfigId: number | null
 		}
 
 		// Authentication namespace
@@ -277,41 +297,79 @@ declare global {
 		}
 
 		/**
-		 * A media row as a client is allowed to see it (28 §7).
+		 * A file as a client is allowed to see it (28 §7, resplit by 0182).
 		 *
-		 * Note what is NOT here: `path`. The server's `toClientMedia` is the
-		 * only thing that builds one of these, and its return type has no path
-		 * field, so leaking the on-disk location is a type error rather than a
-		 * review catch. `url` is a proxy (`/media/{id}`), never a location.
+		 * Note what is NOT here: `path`. `toClientMedia` is the only thing that
+		 * builds one, its return type has no path field, and since 0182 a path
+		 * only exists on a `variants` row that no payload builder ever loads —
+		 * so leaking the on-disk location stays a type error rather than a
+		 * review catch.
+		 *
+		 * `mime`/`bytes` describe the DISPLAY variant. They come off the file
+		 * row (denormalised there on purpose) so that building this needs one
+		 * query and no variant lookup.
 		 */
 		interface Media {
+			/** `files.id`. What `avatarMediaId` and friends point at. */
 			id: number
-			/** The public address — every URL here is built from it. Rotates
-			 *  when the served content could have changed, which is what lets
-			 *  those URLs be cached immutably. */
+			/** The public address, shared by every variant of this file. */
 			uuid: string
+			/** Cache token. Every URL below carries it; it changes when the
+			 *  bytes behind that URL do, which is what lets the response be
+			 *  immutable for a year. */
+			rev: number
 			kind: string
+			/** The display variant's mime. */
 			mime: string
+			/** The display variant's byte length. */
 			bytes: number
 			width: number | null
 			height: number | null
+			/** Milliseconds, when the source has a time dimension. */
+			durationMs: number | null
 			filename: string | null
 			visibility: string
 			position: number
+			/** `/media/{uuid}?r={rev}` — the display form. ALREADY HAS A QUERY
+			 *  STRING: anything appending to it must use `&`. */
 			url: string
+			/** `/media/{uuid}?v=thumb&r={rev}`. Derived on first request, so the
+			 *  first fetch of a fresh upload pays for the encode. */
 			thumbUrl: string
-			thumbMediaId: number | null
+			/** `/media/{uuid}?v=original&r={rev}`. The bytes as uploaded — for a
+			 *  download or a card export, never for routine rendering. */
+			originalUrl: string
 			characterId: number | null
 			personaId: number | null
 			sessionId: number | null
 			messageId: number | null
 		}
 
-	/** A media row plus the extras the management panel needs. */
+		/** One stored representation, for the management panel only. */
+		interface MediaVariantRow {
+			variant: string
+			mime: string
+			bytes: number
+			isOriginal: boolean
+			cache: boolean
+			fidelity: string
+			/** True when `files.display_variant_id` names this row — i.e. this
+			 *  is what a bare `/media/{uuid}` serves. */
+			isDisplay: boolean
+		}
+
+		/** A file plus the extras the management panel needs. */
 		interface ManagedMedia extends Media {
 			createdAt: string
-			hasThumbnail: boolean
-			/** What the blob is grouped under. `name` is null when the parent
+			/** Bytes on disk across EVERY representation. `bytes` above is only
+			 *  what showing this file costs; this is what storing it costs, and
+			 *  they are different questions once one file has three rows. */
+			storedBytes: number
+			/** What is held right now. A freshly uploaded file that has never
+			 *  been viewed has exactly one entry — that is healthy, not a
+			 *  missing thumbnail. */
+			variants: MediaVariantRow[]
+			/** What the file is grouped under. `name` is null when the parent
 			 *  no longer exists — which is exactly how an orphan becomes
 			 *  visible, since 28 keeps the id rather than nulling it. */
 			attachedTo: {
@@ -357,6 +415,60 @@ declare global {
 				}
 				interface Response {
 					mediaId: number
+				}
+			}
+			/** What the cleanup actions would do, priced before anyone commits. */
+			namespace CleanupPreview {
+				interface Params {}
+				interface Response {
+					/** Freely re-derivable rows (`cache: true`). The safe
+					 *  action. */
+					derived: { files: number; variants: number; bytes: number }
+					/**
+					 * Originals that can be culled because a full-fidelity
+					 * representation already exists that is NOT LARGER.
+					 *
+					 * A JPEG photograph never qualifies, and that is correct:
+					 * its lossless WebP would be bigger, so culling would free
+					 * the small file and keep the big one — the opposite of what
+					 * an admin means by "reclaim space".
+					 */
+					originals: { files: number; bytes: number }
+					/** Counted, not culled, with the reason — so "why did it
+					 *  skip 400 of my photos" is answerable. */
+					skipped: { files: number; reason: string }[]
+					derivedCacheEnabled: boolean
+				}
+			}
+			namespace CullDerived {
+				interface Params {}
+				interface Response {
+					variants: number
+					bytes: number
+				}
+			}
+			namespace CullOriginals {
+				/** `confirm` must be the exact string the UI showed. Typing it
+				 *  is the gate; this is irreversible. */
+				interface Params {
+					confirm: string
+				}
+				interface Response {
+					files: number
+					freedBytes: number
+					/** Bytes written to derive a display form first, where one
+					 *  did not exist. Reported because "reclaimed 4GB" is a lie
+					 *  if 1GB went straight back. */
+					addedBytes: number
+					skipped: { files: number; reason: string }[]
+				}
+			}
+			namespace SetCachePolicy {
+				interface Params {
+					derivedCacheEnabled: boolean
+				}
+				interface Response {
+					derivedCacheEnabled: boolean
 				}
 			}
 		}
@@ -657,12 +769,33 @@ declare global {
 					id: number
 				}
 			}
-			namespace SetUserActive {
+			/**
+			 * Register this connection as the instance default for ONE
+			 * capability. Formerly `SetUserActive`, and the rename is the point.
+			 *
+			 * "Active" described a single starred connection the app then used
+			 * for whatever it happened to need. There is no such thing: a
+			 * default belongs to a capability, and one KoboldCPP row does chat,
+			 * vision, image generation, speech and transcription from one
+			 * process — so starring it says nothing about which of the five was
+			 * meant.
+			 *
+			 * ⚠ `capability` is a REQUIRED param and cannot be derived from the
+			 * connection. Deriving it would have to guess among everything the
+			 * row can do, and the guess most likely to be written is "the first
+			 * one", which is how an image-capable connection ends up as the chat
+			 * default. `id: null` clears that one capability's default and
+			 * leaves the others alone.
+			 */
+			namespace SetDefault {
 				interface Params {
+					/** A `CapabilityId` — in practice always a transform id. */
+					capability: string
 					id: number | null
 				}
 				interface Response {
 					ok: boolean
+					capability: string
 					id?: number | null
 				}
 			}
@@ -818,7 +951,7 @@ declare global {
 					 *   back.
 					 * - `"native"` — on. The only value the UI sends for on, because
 					 *   resolution clamps an override down to what the adapter can
-					 *   actually do; offering a tier on write would be a promise the
+					 *   actually do; offering a grade on write would be a promise the
 					 *   key space may refuse.
 					 * - `"emulated"` — accepted, reserved for a future
 					 *   force-emulated control.
@@ -828,8 +961,15 @@ declare global {
 					 * JSON, so "clear" would arrive as an absent key —
 					 * indistinguishable from a malformed payload. The wire has to be
 					 * able to SAY it.
+					 *
+					 * ⚠ A BAND NAME, while the column stores a GRADE. `"native"` means
+					 * "this capability's top band", which is a different number per
+					 * capability — 2 for `tools`, 1 for `text->image` — so a numeric
+					 * wire would force the client to know every capability's scale
+					 * just to say "on". The handler converts, at the same place it
+					 * gates the key space.
 					 */
-					value: import("@serene-pub/sdk").ResolvedTier | false | null
+					value: import("@serene-pub/sdk").Band | false | null
 				}
 				/**
 				 * Identical to the read's, so one client handler serves both and the
@@ -837,6 +977,78 @@ declare global {
 				 * Scripts.Response.
 				 */
 				type Response = Capabilities.Response
+			}
+		}
+
+		/**
+		 * The admin Defaults screen (Admin → Defaults): which connection and
+		 * sampling config this instance uses for each capability.
+		 *
+		 * Its own namespace rather than more events on `Connections`, because
+		 * the subject is the CAPABILITY, not a connection — the screen is a list
+		 * of capabilities that happens to name connections, and it is now the
+		 * definition of "does this instance have this capability at all".
+		 *
+		 * Registering a default here is the ONLY way a connection becomes usable
+		 * by a run. Nothing picks one because it exists, because it is the only
+		 * one, or because it is capable: the resolution chain is
+		 * `capability default → pipeline config → session override`, and if no
+		 * tier set one the run fails with a sentence naming this screen.
+		 */
+		namespace ConnectionDefaults {
+			namespace List {
+				interface Params {}
+				interface Response {
+					/**
+					 * Every capability this build can serve or core demands.
+					 * Aggregated, never a hardcoded list — see `combos.ts`.
+					 */
+					combos: ComboRow[]
+					/** What is registered today, keyed by capability. `{}` if nothing is. */
+					defaults: Record<string, CapabilityDefault>
+					/**
+					 * The connections offerable per capability, already judged.
+					 *
+					 * Sent rather than derived client-side, and never filtered
+					 * down to the eligible ones: a row the user cannot pick is
+					 * DISABLED with a reason, because "why isn't mine in the
+					 * list" has no answer anywhere if the row is simply absent.
+					 * A connection with no capabilities recorded at all is
+					 * undetermined, not incapable.
+					 */
+					connectionOptions: Record<string, ConnectionOption[]>
+					samplingOptions: Record<string, SamplingOption[]>
+				}
+				interface ConnectionOption {
+					id: number
+					name: string
+					/** False disables the row; `reason` says why, in words. */
+					eligible: boolean
+					reason?: string
+				}
+				interface SamplingOption {
+					id: number
+					name: string
+				}
+			}
+			/**
+			 * Write one half of one capability's default.
+			 *
+			 * `half` rather than a whole row, because the two are independently
+			 * meaningful and independently clearable: clearing the sampling
+			 * config means "let the backend use its own defaults" and must not
+			 * disturb the connection beside it.
+			 */
+			namespace Set {
+				interface Params {
+					capability: string
+					half: "connection" | "sampling"
+					id: number | null
+				}
+				interface Response {
+					capability: string
+					defaults: Record<string, CapabilityDefault>
+				}
 			}
 		}
 
@@ -2785,6 +2997,16 @@ declare global {
 					reason?: string
 				}>
 				/**
+				 * For a `prompts-ref` option: the field names the SLOT declares,
+				 * independent of whether a prompt is selected.
+				 *
+				 * Distinct from `prompt.declared`, which says the same thing but
+				 * only exists once a row is chosen — so the one moment it was
+				 * needed, creating the first prompt for an empty slot, it was
+				 * absent and the new prompt came out with no boxes at all.
+				 */
+				promptFields?: string[]
+				/**
 				 * For a `prompts-ref` option: the selected prompt row in
 				 * full, so the panel can show and edit its text inline.
 				 * `readOnly` = a shipped prompt — clone it, never edit it.
@@ -2796,6 +3018,17 @@ declare global {
 					readOnly: boolean
 					/** The field names this node declares — not always all of them. */
 					declared: string[]
+					/**
+					 * Text for fields this slot no longer declares, kept so the
+					 * panel can offer it back. Not editable and not sent: it is
+					 * there to be read and copied, which is the whole of what
+					 * "recover/archive it for later" asks for.
+					 */
+					archived?: Record<string, string>
+					/** usedHere | shipped | alsoFits — which group it sorted into. */
+					group?: "usedHere" | "shipped" | "alsoFits"
+					/** The pipeline it was written in, when that is not this one. */
+					origin?: string
 				}
 				/**
 				 * For a `variable-template-ref` option: the selected layout
@@ -3177,14 +3410,26 @@ declare global {
 				}
 			}
 			/**
-			 * Prompt CRUD from the panel. A prompt is namespaced to its
-			 * pipeline, and every mutation checks that before touching the
-			 * row. Clone answers with the new id so the panel can select the
-			 * copy in the same gesture.
+			 * Prompt CRUD from the panel.
+			 *
+			 * A prompt belongs to a `(node type, slot)` POOL, not to a
+			 * pipeline: a node reused elsewhere brings its prompts with it, so
+			 * "does this row belong to this spec" has no true answer for a
+			 * shared one — the same situation `contextTemplateOptionGate`
+			 * already describes for templates.
+			 *
+			 * So every mutation carries `optionId`, and the gate resolves the
+			 * pool from the control the caller is operating. `slug` stays
+			 * because it is what resolves that option handle and the viewer's
+			 * write permission — not what scopes the row.
+			 *
+			 * Clone and Create answer with the new id so the panel can select
+			 * the row in the same gesture.
 			 */
 			namespace ClonePrompt {
 				interface Params {
 					slug: string
+					optionId: string
 					promptId: number
 					name?: string
 					sessionId?: number
@@ -3198,6 +3443,7 @@ declare global {
 			namespace UpdatePrompt {
 				interface Params {
 					slug: string
+					optionId: string
 					promptId: number
 					name?: string
 					fields?: Record<string, string>
@@ -3211,10 +3457,36 @@ declare global {
 			namespace DeletePrompt {
 				interface Params {
 					slug: string
+					optionId: string
 					promptId: number
 					sessionId?: number
 				}
 				interface Response {
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			/**
+			 * A prompt written from scratch rather than cloned.
+			 *
+			 * Exists for the reason `CreateContextTemplate` does: a pool can be
+			 * legitimately empty — a plugin's node ships no prose of its own —
+			 * and a picker with no rows and no way to add one is a dead end
+			 * rather than a default. A create must NAME a pool, and the option
+			 * handle is how it does: the row is created from the control that
+			 * will hold it, so the pool comes from the declaration rather than
+			 * from the client.
+			 */
+			namespace CreatePrompt {
+				interface Params {
+					slug: string
+					optionId: string
+					name: string
+					fields: Record<string, string>
+					sessionId?: number
+				}
+				interface Response {
+					promptId?: number
 					pipeline?: NamespaceDetail
 					error?: string
 				}
@@ -3241,7 +3513,14 @@ declare global {
 					/** "context" renders a whole template; "variable" one layout. */
 					kind: "context" | "variable"
 					source: string
-					engine?: string | null
+					/**
+					 * Required, and no longer nullable. A preview whose engine
+					 * was optional silently previewed in core's language: the
+					 * draft rendered here and shipped raw markup in the real
+					 * prompt, which is the one failure a preview exists to
+					 * catch.
+					 */
+					engine: string
 					/** The pool the draft belongs to — a node type or a variable id. */
 					poolId: string
 				}
@@ -3381,11 +3660,17 @@ declare global {
 				}
 				interface LibraryPrompt {
 					id: number
-					specSlug: string
-					specName: string
+					/** The pool: `<nodeTypeId>#<slot>`. */
+					poolId: string
+					/** Step name plus slot — what the page groups on. */
+					poolLabel: string
+					/** The pipeline it was authored in, when it records one. */
+					origin?: string
 					name: string
 					isImmutable: boolean
 					fields: Record<string, string>
+					/** Text for fields the slot no longer declares. */
+					archived: Record<string, string>
 					/** Pipelines currently pointing at it, by display name. */
 					usedBy: string[]
 				}
@@ -3393,10 +3678,16 @@ declare global {
 					id: number
 					name: string
 					source: string
-					engine: string | null
+					engine: string
 					isImmutable: boolean
 					/** The pool: a node type id, or a variable id. */
 					poolId: string
+					/**
+					 * Must name the ENGINE as well as the node or variable — the
+					 * pool is `(what it renders, which language)`, so two pools
+					 * for one node type would otherwise render as one heading
+					 * with each language's rows mixed into the other's.
+					 */
 					poolLabel: string
 					/** The pipeline it was authored in, when it records one. */
 					origin?: string
@@ -3414,6 +3705,12 @@ declare global {
 					/** Every declared pool, including the empty ones. */
 					contextPools?: LibraryPool[]
 					variablePools?: LibraryPool[]
+					/**
+					 * Every `(node type, slot)` pool a registered node declares,
+					 * including the empty ones — a plugin's node that ships no
+					 * prose still needs a heading to create the first row under.
+					 */
+					promptPools?: LibraryPool[]
 					/**
 					 * Every registered template engine — core's plus whatever
 					 * enabled extensions declare. The editor's picker renders
@@ -4388,10 +4685,14 @@ declare global {
 			/**
 			 * The image counterpart of ConnectModel, and a separate event rather
 			 * than a `kind` param on it: the two branches share almost nothing.
-			 * Different type predicate, different "make this the default" writer —
-			 * text stars via connections:setUserActive, which writes
-			 * system_settings.default_connection_id, a slot an image connection has
-			 * no business claiming — and different response.
+			 * Different type predicate, different response.
+			 *
+			 * They no longer differ in how the default is registered, which used
+			 * to be the third reason: text starred
+			 * `system_settings.default_connection_id` — a slot an image
+			 * connection had no business claiming — while image wrote
+			 * `connection_defaults`. Both write `connection_defaults` now, under
+			 * the capability each one actually means.
 			 */
 			namespace ConnectImageModel {
 				interface Params {
@@ -4966,18 +5267,23 @@ declare global {
 					// future platform gap). See embedding/index.ts's
 					// getLocalEmbeddingUnsupportedReason().
 					localEmbeddingsSupported: boolean
-				/**
-				 * The instance default connection and sampling config, per
-				 * capability (0175). Keyed by `CapabilityId`.
-				 *
-				 * Sent explicitly rather than riding on the settings row, because
-				 * it is its own table now — a column pair per capability does not
-				 * scale to an open capability space.
-				 */
-				capabilityDefaults?: Record<
-					string,
-					{ connectionId: number | null; samplingConfigId: number | null }
-				>
+					/**
+					 * The instance default connection and sampling config, per
+					 * capability (0175). Keyed by `CapabilityId`. The ONLY place a
+					 * default arrives from — `system_settings` no longer carries
+					 * one (0181).
+					 *
+					 * Sent explicitly rather than riding on the settings row, because
+					 * it is its own table now — a column pair per capability does not
+					 * scale to an open capability space.
+					 *
+					 * ⚠ NOT optional, deliberately. It was, and an optional field is
+					 * an open invitation for `?? settings.defaultConnectionId` to
+					 * grow back beside it the moment a reader has to handle
+					 * `undefined`. An instance with no defaults registered sends
+					 * `{}`, which says the same thing without a second branch.
+					 */
+					capabilityDefaults: Record<string, CapabilityDefault>
 				}
 			}
 			namespace UpdateOllamaManagerEnabled {

@@ -230,7 +230,15 @@
 			return [...orderedEntries, ...remainingEntries]
 		}
 	})
-	let systemSettingsCtx: SystemSettingsCtx = $state({ settings: undefined })
+	// `capabilityDefaults` starts as `{}`, not undefined — the field is
+	// deliberately non-optional (app.d.ts), because an optional one makes every
+	// reader handle `undefined` and the handling that gets written is
+	// `?? settings.defaultConnectionId`, which is the second spelling this
+	// change exists to remove. `{}` says "nothing registered" without a branch.
+	let systemSettingsCtx: SystemSettingsCtx = $state({
+		settings: undefined,
+		capabilityDefaults: {}
+	})
 
 	// Persist the width toggle (see wideContent's init above).
 	$effect(() => {

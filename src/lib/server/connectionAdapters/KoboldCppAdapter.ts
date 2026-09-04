@@ -15,6 +15,7 @@ import {
 import { JSON_OBJECT_GBNF } from "./jsonGrammar"
 import { jsonSchemaToGbnf } from "./jsonSchemaToGbnf"
 import { type CompiledPrompt } from "./types"
+import type { TextGenResult } from "$lib/server/adapters/actions"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
@@ -28,7 +29,7 @@ import {
 
 // Plain/"dumb" KoboldCPP connection: the user runs and configures their own
 // koboldcpp instance entirely themselves. No admin API is assumed, so there's
-// no preflight — generate() just sends the request. For a connection that
+// no preflight — generateText() just sends the request. For a connection that
 // works with Serene Pub's KoboldCPP Manager (subprocess lifecycle, model
 // swapping via the admin API), see KoboldCppManagedAdapter, which subclasses
 // this and only adds a preflight() step.
@@ -144,17 +145,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		})
 	}
 
-	async generate(): Promise<{
-		completionResult:
-			| string
-			| ((
-					contentCb: (chunk: string) => void,
-					thinkingCb?: (chunk: string) => void
-			  ) => Promise<void>)
-		compiledPrompt: CompiledPrompt
-		isAborted: boolean
-		thinkingContent?: string
-	}> {
+	async generateText(): Promise<TextGenResult> {
 		const baseUrl =
 			normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:5001"
 		// Default true — matches CONNECTION_DEFAULTS[KOBOLDCPP].extraJson.stream
@@ -565,7 +556,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
  *
  * Reports `extra.capabilities` because this endpoint already carries them and
  * this call already fetches it. Without that, KoboldCPP's `text->image` would
- * sit at the manifest's `{tier: "probed", until: "none"}` forever: nothing else
+ * sit at the manifest's `{unproven: true, until: "none"}` forever: nothing else
  * probes a text-typed connection, so the one backend that writes replies and
  * draws pictures from the same process could never be shown to do the second.
  */
@@ -653,9 +644,7 @@ const exports: AdapterExports = {
 	testConnection,
 	listModels,
 	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.KOBOLDCPP],
-	samplingKeyMap: koboldCppSamplingKeyMap,
-	// 20 §9: SP formats and grammar-constrains via jsonSchemaToGbnf.
-	capabilities: { toolUse: "emulated" }
+	samplingKeyMap: koboldCppSamplingKeyMap
 }
 
 export default exports

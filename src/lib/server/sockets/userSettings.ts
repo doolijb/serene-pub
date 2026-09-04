@@ -15,12 +15,22 @@ import { dev } from "$app/environment"
 
 const DEFAULT_BACKGROUNDS_MANIFEST = "/backgrounds/defaults/manifest.json"
 
-/** `/media/{uuid}` -> the uuid. Null for anything else, including a shipped
- *  default background (a static path, which is the other thing this column can
- *  hold). */
+/**
+ * `/media/{uuid}` -> the uuid. Null for anything else, including a shipped
+ * default background (a static path, which is the other thing this column can
+ * hold).
+ *
+ * **The trailing `[?#]|$` is load-bearing.** A media URL carries a query string
+ * since 0182 (`?r={rev}`, and `?v=` where a variant is named), and the strings
+ * this parses are exactly the ones `userSettings:listBackgrounds` handed the
+ * client — `ClientMedia.url`, rev and all. Anchored at `$` this returned null
+ * for every uploaded background, so selecting one failed as "Invalid background
+ * image." and deleting one silently did nothing. Same rule as `MEDIA_URL_ID` in
+ * `client/utils/media.ts`.
+ */
 function mediaUuidFromUrl(value: string | null | undefined): string | null {
 	const match =
-		/^\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(
+		/^\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[?#]|$)/i.exec(
 			value ?? ""
 		)
 	return match ? match[1] : null
@@ -500,7 +510,11 @@ export const userSettingsUploadBackground: Handler<
 		})
 		const res: Sockets.UserSettings.UploadBackground.Response = {
 			success: true,
-			path: mediaUrl(uploaded.uuid)
+			// The same string `listBackgrounds` will hand back for this file,
+			// rev included. They have to match: the client compares this value
+			// against the list to mark the current selection, and posts it back
+			// verbatim to set it.
+			path: mediaUrl(uploaded.file.uuid, uploaded.file.rev)
 		}
 		emitToUser("userSettings:uploadBackground", res)
 		// Refresh list so client gets updated uploads

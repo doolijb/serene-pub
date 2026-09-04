@@ -51,7 +51,12 @@
  * needs it and `contextTemplates.ts` imports `config.ts` — a cycle this module,
  * which imports nothing, cannot be part of.
  */
-export const poolKeyFor = (typeId: string): string => typeId.split("@")[0]!
+export { poolKeyFor, contextPoolKeyFor } from "$lib/shared/pipelines/poolKey"
+
+// `contextPoolKeyFor` is re-exported above — it lives in $lib/shared/pipelines/
+// poolKey.ts beside its INVERSE, which the client needs and cannot import from
+// $lib/server. One home for the pair.
+
 
 /** The node type whose context this renders. Unversioned — see the schema. */
 export const CONTEXT_TEMPLATE_NODE_TYPE = "core:task/assemble"

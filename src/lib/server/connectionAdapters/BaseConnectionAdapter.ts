@@ -1,6 +1,10 @@
 import type { CompiledPrompt as PromptBuilderCompiledPrompt } from "./types"
 import type { TokenCounters } from "../utils/TokenCounterManager"
 import type { JsonSchemaNode } from "./jsonSchemaToGbnf"
+import type {
+	AdapterActions,
+	TextGenResult
+} from "$lib/server/adapters/actions"
 import { SessionTypes } from "$lib/shared/constants/SessionTypes"
 import { PromptBlockFormatter } from "$lib/shared/utils/PromptBlockFormatter"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
@@ -78,7 +82,7 @@ export type TestConnectionFn = (
 	connection: SelectConnection
 ) => Promise<{ ok: boolean; error?: string }>
 
-export abstract class BaseConnectionAdapter {
+export abstract class BaseConnectionAdapter implements AdapterActions {
 	connection: SelectConnection
 	sampling: ResolvedSampling
 	contextConfig: SelectContextConfig
@@ -200,7 +204,7 @@ export abstract class BaseConnectionAdapter {
 	 * point all seven adapters funnel through rather than edited into each of
 	 * them. When it is set, `compilePrompt()` returns it instead of building —
 	 * so the legacy path is unchanged by construction, and the pipeline path
-	 * reaches exactly the same `generate()`.
+	 * reaches exactly the same `generateText()`.
 	 */
 	private injectedPrompt?: PromptBuilderCompiledPrompt
 
@@ -251,25 +255,76 @@ export abstract class BaseConnectionAdapter {
 		)
 	}
 
-	abstract generate(): Promise<{
-		completionResult:
-			| string
-			| ((
-					contentCb: (chunk: string) => void,
-					thinkingCb?: (chunk: string) => void
-			  ) => Promise<void>)
-		compiledPrompt: PromptBuilderCompiledPrompt
-		isAborted: boolean
-		/** Native thinking/reasoning content returned by the model, if any. Only populated for non-streaming responses. Streaming adapters deliver thinking via thinkingCb. */
-		thinkingContent?: string
-	}>
+	// ── Actions ─────────────────────────────────────────────────────────────
+	//
+	// The named, individually-typed things an adapter can be asked to do. Every
+	// signature comes from `AdapterActions` and none is written twice, because
+	// what a backend accepts in and returns out is DERIVED from which of these a
+	// class implements (`$lib/shared/connectionAdapters/actions`) — an inference
+	// that is only sound while a method's name pins its in and out kinds.
+	//
+	// This replaced one `abstract generate()`: a single generically-named method
+	// whose contract was whatever the subclass made of it, sitting beside a
+	// hand-written manifest that was free to disagree with it. The identifier
+	// `generate` now names nothing in either adapter family, and a shim
+	// delegating to `generateText` must never be added — a surviving `generate`
+	// is precisely the one-name-two-contracts state this removed.
+
+	/**
+	 * Write a reply. `text->text`, and the one action a text adapter must have.
+	 *
+	 * ⚠ Its inputs still arrive through the CONSTRUCTOR (session, sampling,
+	 * promptConfig, the injected prompt) rather than as a parameter, so this
+	 * satisfies "expected in, expected out" formally — the signature is fixed by
+	 * the action, which is what the derivation needs — but not literally the way
+	 * `generateImage(req, opts)` does. Collapsing the ten-param constructor into
+	 * a request object is the real fix and is deliberately a separate change: it
+	 * touches every subclass's construction, five per-generation fields, eight
+	 * integration-test fakes and some forty test sites, and doing it inside a
+	 * rename would swamp the rename.
+	 */
+	abstract generateText(): Promise<TextGenResult>
+
+	/**
+	 * The other five actions, DECLARED and never defined.
+	 *
+	 * Declaring them here is what fixes their signatures: a subclass that grows
+	 * one must match the type, so no adapter can repurpose `embedText` to return
+	 * something else. Their absence from a concrete class is a STATEMENT — the
+	 * capability panel renders no row, the picker never offers the connection for
+	 * a slot that needs it, and a bind is refused with a sentence naming the
+	 * capability.
+	 *
+	 * ⚠ `declare` is load-bearing, twice over.
+	 *
+	 * It emits nothing. `useDefineForClassFields` is unset with `target:"esnext"`
+	 * in `.svelte-kit/tsconfig.json`, so it DEFAULTS TO TRUE — a plain optional
+	 * property here would emit a class field initialized to `undefined`, an OWN
+	 * property SHADOWING every subclass's prototype method. Every action would
+	 * read as unimplemented at runtime while type-checking perfectly clean, and
+	 * the conformance test would go green on a lie.
+	 *
+	 * And there must never be a BODY, not even a throwing `NotImplemented` stub.
+	 * A stub puts the method on every prototype, makes `"embedText" in adapter`
+	 * useless, and forces a `Ctor.prototype.x !== Base.prototype.x` comparison
+	 * TypeScript cannot see. With no base bodies the inherited-versus-overridden
+	 * question does not arise at all.
+	 */
+	// The optional actions are merged in as an INTERFACE below the class, not
+	// declared here as properties — see the note on that declaration.
+
+	// ── Lifecycle (not actions) ─────────────────────────────────────────────
+	//
+	// `abort` and `preflight` are how a run is managed, not what it produces, so
+	// they derive no capability and belong to neither `AdapterActions` nor the
+	// manifest's key space.
 
 	abort() {
 		this.isAborting = true
 	}
 
 	/**
-	 * Optional hook run by the LLM queue before generate() is invoked, e.g.
+	 * Optional hook run by the LLM queue before generateText() is invoked, e.g.
 	 * koboldcpp's managed-mode subprocess start + model load. No-op by default.
 	 */
 	async preflight(_signal?: AbortSignal): Promise<void> {}
@@ -400,22 +455,49 @@ export abstract class BaseConnectionAdapter {
 }
 
 /**
- * What an endpoint can do beyond "complete text" (20 §9) — resolved per
- * adapter, refined per model where the backend can be asked.
+ * What a concrete text-adapter module default-exports.
  *
- *  - `native`: the API speaks tool calls itself.
- *  - `emulated`: SP formats the advertisement into the prompt and
- *    grammar-constrains/parses the reply (`jsonSchemaToGbnf` lineage) — tool
- *    calling *provided by SP* to models that never heard of it.
- *  - `probed`: per-model; ask the backend at health-check time and cache on
- *    the connection. Until a probe answers, treat as `emulated` — the tier
- *    that works everywhere.
- *  - `none`: and it says so, at bind time, as `needs-capability` — never as a
- *    garbage parse presented as a reply.
+ * ## `capabilities` is gone, and must not come back
+ *
+ * There used to be a `capabilities?: ConnectionCapabilities` field here, holding
+ * a single `toolUse: "native" | "emulated" | "probed" | "none"`. It had no
+ * consumer anywhere outside this directory: every adapter dutifully set it and
+ * nothing ever read it. Its job was taken by
+ * `$lib/shared/connectionAdapters/manifest`, which declares `tools` as a GRADE
+ * on its own three-band scale — plus the separate unproven flag that old
+ * `"probed"` member was conflating — alongside every other capability, and
+ * which, unlike this field, is reachable from the client and from the picker
+ * without loading an adapter module.
+ *
+ * Reintroducing a capability declaration on the module export would recreate the
+ * exact problem the manifest exists to solve: a declaration that lives inside a
+ * module `@lmstudio/sdk` makes unloadable on Android, and that the capability
+ * panel therefore cannot read. What a module says about itself is now said by
+ * WHICH ACTIONS IT IMPLEMENTS; the grades are the manifest's to state.
  */
-export interface ConnectionCapabilities {
-	toolUse: "native" | "emulated" | "probed" | "none"
-}
+/**
+ * The optional actions, merged onto the class as an INTERFACE.
+ *
+ * ⚠ Not `declare x?: AdapterActions["x"]` on the class body, which is what this
+ * replaced. That form declares a PROPERTY, and TypeScript then refuses to let a
+ * subclass implement it as a method:
+ *
+ *     Class 'BaseConnectionAdapter' defines instance member property
+ *     'embedText', but extended class 'OllamaAdapter' defines it as instance
+ *     member function. (TS2425)
+ *
+ * Nothing implemented one yet, so the surface compiled while being impossible to
+ * fulfil — the first adapter to add embeddings or audio would have hit it, which
+ * is precisely what these declarations exist to invite.
+ *
+ * Interface/class declaration merging adds the members to the class TYPE without
+ * emitting fields, so a subclass may implement any of them as an ordinary method
+ * and `"embedText" in adapter` still answers honestly. `generateText` is omitted
+ * because the class declares it `abstract` — every text adapter must have it, so
+ * it is not optional and must not be re-declared here.
+ */
+export interface BaseConnectionAdapter
+	extends Partial<Omit<AdapterActions, "generateText">> {}
 
 export interface AdapterExports {
 	Adapter: new (args: BaseConnectionAdapterParams) => BaseConnectionAdapter
@@ -423,6 +505,4 @@ export interface AdapterExports {
 	testConnection: TestConnectionFn
 	connectionDefaults: Record<string, any>
 	samplingKeyMap: Record<string, string>
-	/** Absent means `{ toolUse: 'emulated' }` — the everywhere tier. */
-	capabilities?: ConnectionCapabilities
 }

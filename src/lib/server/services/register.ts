@@ -38,17 +38,13 @@ export async function registerCoreServices() {
 		}
 	})
 
-	const mediaBackfill = await import("$lib/server/media/backfill")
-	registerService({
-		id: "media",
-		label: "Media",
-		// Thumbnails missing after an upgrade (the 0166 data upgrade
-		// deliberately generates none inline) or after a failed inline encode.
-		// Originals serve until this finishes, so it is never on a critical
-		// path.
-		reconcileOnBoot: () => mediaBackfill.backfillOnBoot(),
-		shutdown: async () => {}
-	})
+	// No media service any more, and its absence is the point (0182). Boot used
+	// to drain a thumbnail backfill here, because uploads encoded inline and
+	// anything that failed inline needed retrying. Derivation is lazy now — the
+	// first request that wants a thumbnail makes it — so encoding at boot is
+	// exactly what the ruling forbids. The one job left, re-cutting thumbnails
+	// that a raised THUMB_MAX_EDGE made stale, is `sweepThumbnails()` in
+	// media/backfill.ts and is invoked deliberately.
 
 	const koboldcpp = await import("$lib/server/koboldcpp/subprocessManager")
 	registerService({

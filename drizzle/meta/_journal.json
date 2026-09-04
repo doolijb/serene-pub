@@ -1261,6 +1261,41 @@
       "when": 1787276896242,
       "tag": "0179_sampling_name_unique_per_modality",
       "breakpoints": true
+    },
+    {
+      "idx": 180,
+      "version": "7",
+      "when": 1787276896243,
+      "tag": "0180_prompts_scoped_to_node",
+      "breakpoints": true
+    },
+    {
+      "idx": 181,
+      "version": "7",
+      "when": 1787276896244,
+      "tag": "0181_defaults_only_in_connection_defaults",
+      "breakpoints": true
+    },
+    {
+      "idx": 182,
+      "version": "7",
+      "when": 1787276896245,
+      "tag": "0182_media_files_and_variants",
+      "breakpoints": true
+    },
+    {
+      "idx": 183,
+      "version": "7",
+      "when": 1787276896246,
+      "tag": "0183_connection_defaults_input_output",
+      "breakpoints": true
+    },
+    {
+      "idx": 184,
+      "version": "7",
+      "when": 1787276896247,
+      "tag": "0184_capability_grades",
+      "breakpoints": true
     }
   ]
 }

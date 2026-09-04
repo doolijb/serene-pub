@@ -12,6 +12,7 @@ import path from "node:path"
 // already lost a production-only startup to a cycle around a top-level await
 // (see db/index.ts), and drizzle.config depends on nothing of ours.
 import { getAppDataDir } from "$lib/server/db/drizzle.config"
+import type { MediaVariantName } from "$lib/shared/constants/MediaVisibility"
 
 export interface MediaProvenance {
 	userId: number
@@ -55,7 +56,7 @@ function relDir(p: MediaProvenance, bucket?: string): string {
  * Rule 5 — nothing user-controlled is ever in here. `filename` is display
  * metadata and is not sanitised into a path, because it never reaches one.
  *
- * Rule 2 — the caller stores the result once, at insert; `media.path` is
+ * Rule 2 — the caller stores the result once, at insert; `variants.path` is
  * authoritative from then on. Re-parenting a row does NOT move the file, which
  * is what keeps stale-id grouping (28 §2) from breaking file resolution.
  */
@@ -69,20 +70,37 @@ export function mediaRelPath(
 }
 
 /**
- * Rule 4 — a derivative sits beside its original, resolved from the parent's
- * stored path. That is the only way it could work: a thumbnail has no entity
- * provenance of its own (28 §5), so it has nothing else to derive a location
- * from. It also means deleting an entity's directory takes its derivatives with
- * it, with no second sweep.
+ * Rule 4 — a derived variant sits beside the file's other bytes, named
+ * `{file hash}.{variant}.{ext}` so a directory listing groups them.
+ *
+ * It used to string-parse the parent row's stored path, because a thumbnail
+ * carried no provenance of its own and so had nothing else to derive a
+ * location from. 0182 made that false: provenance is on the FILE, and every
+ * variant of a file shares it, so the directory comes from the same `relDir`
+ * rule as the original and there is no path surgery left to get wrong.
+ *
+ * The stem is the FILE's hash (the original's bytes), not the variant's own —
+ * the point is that `abcd.png`, `abcd.thumb.webp` and `abcd.display.webp` sort
+ * next to each other, and that deleting an entity's directory takes its
+ * derivatives with it in one sweep.
+ *
+ * ⚠ `variant` reaches a filename, and it arrives from `?v=` on a URL. Pass
+ * only a value that has been through `parseMediaVariant` — the type says so,
+ * and `variants_variant_check` refuses a bad one at the database as well.
+ *
+ * The one case where a variant does NOT land beside its original: a file in a
+ * user-level bucket (a background). The bucket is not a column, so provenance
+ * cannot reproduce it and the variant lands in the default `uploads` dir
+ * instead. Harmless — a variant is resolved through its own stored path, never
+ * by re-deriving one — and preferable to re-introducing the string parse for
+ * the sake of tidiness.
  */
-export function derivativeRelPath(
-	parentPath: string,
-	variant: string,
+export function variantRelPath(
+	file: MediaProvenance & { hash: string },
+	variant: MediaVariantName,
 	ext: string
 ): string {
-	const dir = path.dirname(parentPath)
-	const base = path.basename(parentPath).replace(/\.[^.]+$/, "")
-	return path.join(dir, `${base}.${variant}.${ext}`)
+	return path.join(relDir(file), `${file.hash}.${variant}.${ext}`)
 }
 
 /**

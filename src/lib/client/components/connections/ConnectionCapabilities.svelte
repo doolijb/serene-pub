@@ -182,13 +182,23 @@
 		</legend>
 		<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
 			<span class="text-xs {row.on ? '' : 'opacity-60'}">
+				<!-- Full, partial, empty — read against THIS capability's own top
+				     grade, never a shared number. A full-strength text->image is
+				     full, and drawing it half-filled because some other capability
+				     has three bands is the misreading grades exist to remove. -->
 				<span aria-hidden="true">
-					{row.tier === "native"
-						? "●"
-						: row.tier === "emulated"
-							? "◐"
-							: "○"}
+					{row.grade >= row.top ? "●" : row.grade > 0 ? "◐" : "○"}
 				</span>
+				{#if row.letter}
+					<!-- Derived at render and nowhere else: no letter is stored, sent
+					     or compared. `A` is this capability's own best. -->
+					<span
+						class="font-semibold"
+						title={`Grade ${row.letter} — ${row.grade} of ${row.top} for this capability.`}
+					>
+						{row.letter}
+					</span>
+				{/if}
 				{row.stateLabel}
 			</span>
 			{#if row.assumed}

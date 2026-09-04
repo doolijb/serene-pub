@@ -1,6 +1,7 @@
 import { KoboldCppAdapter } from "./KoboldCppAdapter"
 import { fetchCurrentModelName } from "$lib/server/koboldcpp/kcppHttp"
 import type { AdapterExports } from "./BaseConnectionAdapter"
+import type { TextGenResult } from "$lib/server/adapters/actions"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
@@ -18,15 +19,21 @@ import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
  * A KoboldCPP connection that works with Serene Pub's built-in KoboldCPP
  * Manager: model loading/swapping via the admin API, optionally with a
  * subprocess Serene Pub itself spawns and owns. Everything about sending a
- * generation request (generate(), mapSamplingConfig(), etc.) is identical to
+ * generation request (generateText(), mapSamplingConfig(), etc.) is identical to
  * the plain KoboldCppAdapter — this subclass only adds the preflight step
- * that ensures the right model is loaded before generate() runs, and points
+ * that ensures the right model is loaded before generateText() runs, and points
  * requests at the manager's configured address rather than anything stored
  * on the connection itself.
+ *
+ * ⚠ The override below is a REAL implementation of the `text->text` action, not
+ * a shim: this type generates text, and `actionsOf()` walks the prototype chain
+ * precisely so an inherited-and-wrapped implementation counts the same as one
+ * written out here. Deleting the override would not change what this type can
+ * do — it would only lose the TTL reset.
  */
 class KoboldCppManagedAdapter extends KoboldCppAdapter {
 	/**
-	 * Overrides KoboldCppAdapter.generate() only to reset the managed
+	 * Overrides KoboldCppAdapter.generateText() only to reset the managed
 	 * subprocess's TTL unload timer once generation actually completes —
 	 * resetTtl() otherwise only ever runs during preflight (before
 	 * generation starts), so a response slower than ttlSecs (default 300s)
@@ -40,7 +47,7 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 	 * next preflight() reload cleanly. Success always resets; failure only
 	 * resets when the model is confirmed still there.
 	 */
-	async generate() {
+	async generateText(): Promise<TextGenResult> {
 		const resetIfStillAlive = async () => {
 			const settings = await db.query.koboldCppSettings.findFirst()
 			if (!settings) return
@@ -64,9 +71,9 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 			)
 		}
 
-		let result: Awaited<ReturnType<KoboldCppAdapter["generate"]>>
+		let result: TextGenResult
 		try {
-			result = await super.generate()
+			result = await super.generateText()
 		} catch (err) {
 			// A non-streaming failure (or a setup error before the streaming
 			// closure was even returned) throws here directly, per B1's fix —
@@ -96,7 +103,7 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 		}
 
 		// Non-streaming success: generation is already fully complete by the
-		// time generate() returns.
+		// time generateText() returns.
 		await resetIfStillAlive()
 		return result
 	}
@@ -134,7 +141,7 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 
 		// This connection type doesn't store/use its own base URL — always talk
 		// to whatever address the manager is configured for. Mutating the
-		// in-memory connection here means generate()/getContextTokenLimit()
+		// in-memory connection here means generateText()/getContextTokenLimit()
 		// (inherited unchanged from KoboldCppAdapter) automatically pick this up.
 		this.connection = { ...this.connection, baseUrl }
 	}
@@ -247,9 +254,7 @@ const exports: AdapterExports = {
 	testConnection,
 	listModels,
 	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.KOBOLDCPP_MANAGED],
-	samplingKeyMap: koboldCppSamplingKeyMap,
-	// 20 §9: SP formats and grammar-constrains via jsonSchemaToGbnf.
-	capabilities: { toolUse: "emulated" }
+	samplingKeyMap: koboldCppSamplingKeyMap
 }
 
 export default exports

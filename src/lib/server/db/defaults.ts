@@ -976,28 +976,18 @@ export async function sync() {
 				where: (c, { eq }) => eq(c.seedKey, "graph-build-default")
 			})
 
-		// By seedKey for the same reason, and more sharply: this row is new, so
-		// it is never at a predictable id on an install that already has user
-		// configs of its own.
-		//
-		// It is also why the image family presets cost this block nothing.
-		// `sampling-image-default` is now the SD 1.5 preset — RETARGETED in place
-		// rather than replaced — so the shipped image default follows the seedKey
-		// with not a line changing here. Had that row been deleted and a
-		// `sampling-image-sd15` added beside the others, this lookup would have
-		// come back undefined and taken the instance's image default with it.
-		const seededImageSampling = await db.query.samplingConfigs.findFirst({
-			where: (c, { eq }) => eq(c.seedKey, "sampling-image-default")
-		})
-
 		const res = await db.query.systemSettings.findFirst({
 			where: (s, { eq }) => eq(s.id, 1)
 		})
 		if (!res) {
 			await db.insert(schema.systemSettings).values({
 				id: 1,
-				defaultConnectionId: null,
-				defaultSamplingConfigId: 1,
+				// ⚠ `defaultConnectionId: null` and `defaultSamplingConfigId: 1`
+				// used to sit here. The columns are gone (0181), and the second
+				// was a hardcoded id besides — the exact violation the header of
+				// this file forbids, three lines above a comment explaining why.
+				// Instance defaults are `connection_defaults` rows now, seeded
+				// by seedKey at the bottom of this block.
 				defaultContextConfigId: 1,
 				defaultPromptConfigId: firstPromptConfig?.id,
 				defaultNarratorPromptConfigId: firstNarratorPromptConfig?.id,
@@ -1027,22 +1017,61 @@ export async function sync() {
 					.where(eq(schema.systemSettings.id, 1))
 			}
 		}
-		// The image sampling default lives in `connection_defaults` now (0175),
-		// keyed by capability rather than as a column pair. Registered on every
-		// boot while unset, so an install that arrives after the migration — or
-		// one whose default was cleared by its row being deleted — picks the
-		// seeded config back up. No image CONNECTION default is registered:
-		// there is nothing to point at until somebody adds one, and a capability
-		// with no connection should read as "not set up" rather than as a
-		// pointer to nothing.
-		if (seededImageSampling) {
-			const { capabilityDefault, setCapabilityDefault } = await import(
-				"$lib/server/connections/capabilityDefaults"
-			)
-			const existing = await capabilityDefault(db as any, "text->image")
-			if (!existing?.samplingConfigId)
-				await setCapabilityDefault(db as any, "text->image", {
-					samplingConfigId: seededImageSampling.id
+		// ── the instance's seeded sampling defaults ──────────────────────
+		//
+		// **Sampling defaults may be seeded; connection defaults NEVER.** That is
+		// the general rule, and the image block this generalises already argued
+		// it for one capability: a sampling config is a shipped row this app
+		// wrote and can point at safely, while a connection is a thing only a
+		// person can add — so a capability with no connection must read as "not
+		// set up" rather than as a pointer to nothing. Seeding one would also
+		// re-create the auto-star by the back door, which is the behaviour the
+		// no-implicit-pickup ruling exists to delete.
+		//
+		// By seedKey, never by id, for the reason the whole file is: nothing
+		// guarantees a seeded row is at a predictable id on an install that
+		// already has user configs of its own. It is also why the image family
+		// presets cost this nothing — `sampling-image-default` is now the SD 1.5
+		// preset, RETARGETED in place rather than replaced, so the shipped image
+		// default follows the seedKey with not a line changing here. Had that row
+		// been deleted and a `sampling-image-sd15` added beside the others, the
+		// lookup would come back undefined and take the instance's image default
+		// with it.
+		//
+		// Registered on every boot while unset, so an install that arrives after
+		// the migration — or one whose default was cleared by its row being
+		// deleted (`connection_defaults.sampling_config_id` is ON DELETE SET
+		// NULL) — picks the seeded config back up.
+		const SEEDED_SAMPLING_DEFAULTS: Record<string, string> = {
+			"text->text": "sampling-default",
+			"text->image": "sampling-image-default"
+		}
+		const { capabilityDefault, setCapabilityDefault } = await import(
+			"$lib/server/connections/capabilityDefaults"
+		)
+		for (const [capability, seedKey] of Object.entries(
+			SEEDED_SAMPLING_DEFAULTS
+		)) {
+			const seeded = await db.query.samplingConfigs.findFirst({
+				where: (c, { eq }) => eq(c.seedKey, seedKey)
+			})
+			if (!seeded) continue
+			// Only on a TRUE first run — no row for this capability at all.
+			//
+			// This used to seed whenever the sampling half was null, which cannot
+			// tell "the user cleared this deliberately" from "the row it pointed
+			// at was deleted and cascaded to NULL". So every boot put the shipped
+			// config back, and a person who had deliberately cleared it watched it
+			// return each restart with nothing on screen to explain why.
+			//
+			// Not resurrecting is also what the no-implicit-pickup ruling asks
+			// for: nothing is selected unless somebody set it, and a null sampling
+			// is not a failure — `resolveSampling(null)` means "let the backend
+			// use its own defaults", which is a legitimate thing to want.
+			const existing = await capabilityDefault(db as any, capability)
+			if (existing === undefined)
+				await setCapabilityDefault(db as any, capability, {
+					samplingConfigId: seeded.id
 				})
 		}
 	} catch (error) {

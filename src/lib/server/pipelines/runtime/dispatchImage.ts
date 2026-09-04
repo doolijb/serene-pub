@@ -41,10 +41,7 @@
  * interleaved-progress and stray-cancel state this queue exists to prevent.
  */
 
-import { eq } from "drizzle-orm"
-import * as schema from "$lib/server/db/schema"
-import { capabilityDefault } from "$lib/server/connections/capabilityDefaults"
-import { capabilityRefusal } from "./capabilityGuard"
+import { resolveCapabilityTarget } from "$lib/server/connections/capabilityTarget"
 import { getImageAdapter } from "$lib/server/utils/getImageAdapter"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -277,40 +274,6 @@ function serialize<T>(key: string, work: () => Promise<T>): Promise<T> {
 	return next
 }
 
-async function resolveTarget(
-	db: any,
-	connectionId?: number | null,
-	samplingId?: number | null
-) {
-	// The default registered for THIS capability, never the text one: a text
-	// connection here would be handed to `getImageAdapter`, and a text sampling
-	// config would have every key dropped by the resolver and render at backend
-	// defaults with no error. One row per capability rather than a column pair on
-	// `system_settings`, which is where these two used to live (0175).
-	const fallback = await capabilityDefault(db, "text->image")
-
-	const connId = connectionId ?? fallback?.connectionId
-	const sampId = samplingId ?? fallback?.samplingConfigId
-
-	const [connection] = connId
-		? await db
-				.select()
-				.from(schema.connections)
-				.where(eq(schema.connections.id, connId))
-				.limit(1)
-		: []
-
-	const [sampling] = sampId
-		? await db
-				.select()
-				.from(schema.samplingConfigs)
-				.where(eq(schema.samplingConfigs.id, sampId))
-				.limit(1)
-		: []
-
-	return { connection, sampling }
-}
-
 /** Render one image request. Throws with a sentence a person can act on. */
 export async function dispatchImage(
 	db: any,
@@ -318,25 +281,25 @@ export async function dispatchImage(
 ): Promise<ImageCallResult> {
 	call.signal?.throwIfAborted()
 
-	const { connection, sampling } = await resolveTarget(
-		db,
-		call.connectionId,
-		call.samplingId
-	)
-
-	if (!connection)
-		throw new ImageDispatchError(
-			"no image connection is set for this step and the instance has no " +
-				"default image connection either. Choose one in the pipeline's " +
-				"configuration, or set an instance default in Connections → Image."
-		)
-	// What the connection can do, not what kind of connection it is. A plain
-	// `koboldcpp` row is tagged text-gen and draws perfectly well when the
-	// instance behind it was started with --sdmodel — this app neither started
-	// it nor manages what it holds, so its probe is the authority and the type
-	// alone would put it in the wrong family.
-	const refusal = capabilityRefusal(connection, "text->image")
-	if (refusal) throw new ImageDispatchError(refusal)
+	// The capability is `text->image` and nothing else, which is what keeps the
+	// text default out of here: a text connection would be handed to
+	// `getImageAdapter`, and a text sampling config would have every key dropped
+	// by the resolver and render at backend defaults with no error.
+	//
+	// The refusal that used to sit below this — "what the connection can do, not
+	// what kind of connection it is", since a plain `koboldcpp` row is tagged
+	// text-gen and draws perfectly well when the instance behind it was started
+	// with --sdmodel — is inside `resolveCapabilityTarget` now, so the same guard
+	// runs for every capability rather than once per dispatcher.
+	const resolved = await resolveCapabilityTarget(db, {
+		capability: "text->image",
+		pipelineConfig: {
+			connectionId: call.connectionId,
+			samplingConfigId: call.samplingId
+		}
+	})
+	if (!resolved.ok) throw new ImageDispatchError(resolved.problem.message)
+	const { connection, sampling } = resolved
 
 	// The prompts slot is a pair of templates over the incoming text. An
 	// unconfigured node passes the text straight through — rendering nothing at
@@ -404,13 +367,13 @@ export async function dispatchImage(
 		const { Adapter } = await getImageAdapter(connection.type)
 		const adapter = new Adapter(target as any)
 		try {
-			return await adapter.generate(req, {
+			return await adapter.generateImage(req, {
 				signal: call.signal,
 				onProgress: call.onProgress
 			})
 		} finally {
 			// Push the unload timer back, exactly as the TEXT path does after a
-			// generation (KoboldCppManagedAdapter.generate).
+			// generation (KoboldCppManagedAdapter.generateText).
 			//
 			// The timer is armed at LOAD time and the default is 300s, but a
 			// render is routinely longer than that — SDXL on CPU, or any batch.
@@ -443,7 +406,7 @@ export async function dispatchImage(
 	const refs: MediaRef[] = []
 	for (const item of result.media) {
 		const bytes = Buffer.from(item.base64, "base64")
-		const row = await createMedia(db, {
+		const { file, original } = await createMedia(db, {
 			userId: call.userId ?? 0,
 			bytes,
 			filename: `generated.${extFor(item.mime)}`,
@@ -466,14 +429,30 @@ export async function dispatchImage(
 				...(item.meta ?? {})
 			}
 		})
+		// Everything here comes off the FILE row (0182). `uuid`, `kind`,
+		// dimensions and `filename` are file-level and exact; `mime` and
+		// `bytes` describe the file's DISPLAY variant and are a HINT, which is
+		// why they read the denormalised projection rather than a variant row —
+		// a request naming `?v=` or negotiated by Accept can legitimately be
+		// answered with different bytes and a different type, and a receipt is
+		// what records which one was actually sent. `createMedia` always writes
+		// the projection, so the fallback is the row it was projected from and
+		// never a fabricated type or a zero length.
 		refs.push({
-			uuid: row.uuid,
-			kind: row.kind as MediaRef["kind"],
-			mime: row.mime,
-			bytes: row.bytes,
-			...(row.width != null ? { width: row.width } : {}),
-			...(row.height != null ? { height: row.height } : {}),
-			...(row.filename ? { filename: row.filename } : {}),
+			uuid: file.uuid,
+			kind: file.kind as MediaRef["kind"],
+			mime: file.displayMime ?? original.mime,
+			bytes: file.displayBytes ?? original.bytes,
+			...(file.width != null ? { width: file.width } : {}),
+			...(file.height != null ? { height: file.height } : {}),
+			// Seconds here, milliseconds in the column. Its PRESENCE is the
+			// signal that a time dimension exists, which is what lets a
+			// consumer notice that converting to a still format would be a
+			// downgrade rather than performing one silently.
+			...(file.durationMs != null
+				? { duration: file.durationMs / 1000 }
+				: {}),
+			...(file.filename ? { filename: file.filename } : {}),
 			// Alt text, so a downgrade to a text-only consumer has something to
 			// say instead of nothing (media.ts) — and so the posted message's
 			// image is described rather than announced as an untitled attachment.

@@ -64,7 +64,7 @@ describe("A1111Adapter — the checkpoint override against KoboldCPP", () => {
 	]) {
 		test(`sends no checkpoint for a ${type} connection, whose model field is a text gguf`, async () => {
 			const req = stubTxt2Img()
-			await new a1111.Adapter(conn({ type })).generate({ prompt: "x" })
+			await new a1111.Adapter(conn({ type })).generateImage({ prompt: "x" })
 			// Not "the checkpoint is right" but "nothing was said about it" —
 			// KoboldCPP picks the image model itself, so any value here is a
 			// claim the adapter has no business making.
@@ -87,7 +87,7 @@ describe("A1111Adapter — the checkpoint override against KoboldCPP", () => {
 				modality: "image-gen",
 				model: "sdxl-turbo-q8.gguf"
 			})
-		).generate({ prompt: "x" })
+		).generateImage({ prompt: "x" })
 		expect(
 			req.body().override_settings?.sd_model_checkpoint
 		).toBeUndefined()
@@ -100,7 +100,7 @@ describe("A1111Adapter — the checkpoint override against KoboldCPP", () => {
 		const req = stubTxt2Img()
 		await new a1111.Adapter(
 			conn({ type: CONNECTION_TYPE.A1111, model: "juggernautXL.safetensors" })
-		).generate({ prompt: "x" })
+		).generateImage({ prompt: "x" })
 		expect(req.body().override_settings.sd_model_checkpoint).toBe(
 			"juggernautXL.safetensors"
 		)
@@ -111,13 +111,13 @@ describe("A1111Adapter — the checkpoint override against KoboldCPP", () => {
 		// result's `ignored` list is how that reaches the receipt. The fallback to
 		// connection.model isn't reported, because nobody asked for it.
 		stubTxt2Img()
-		const asked = await new a1111.Adapter(conn()).generate({
+		const asked = await new a1111.Adapter(conn()).generateImage({
 			prompt: "x",
 			model: "dreamshaperXL.safetensors"
 		})
 		expect(asked.ignored).toContain("model")
 
-		const unasked = await new a1111.Adapter(conn()).generate({ prompt: "x" })
+		const unasked = await new a1111.Adapter(conn()).generateImage({ prompt: "x" })
 		expect(unasked.ignored).not.toContain("model")
 		expect(unasked.applied).not.toContain("model")
 	})
@@ -134,7 +134,7 @@ describe("A1111Adapter — the checkpoint override against KoboldCPP", () => {
 					}
 				}
 			})
-		).generate({ prompt: "x" })
+		).generateImage({ prompt: "x" })
 		expect(req.body().override_settings.CLIP_stop_at_last_layers).toBe(2)
 		expect(req.body().override_settings.sd_model_checkpoint).toBeUndefined()
 	})

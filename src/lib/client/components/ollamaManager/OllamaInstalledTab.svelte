@@ -72,8 +72,14 @@
 	)
 
 	let currentConnectionModelName: string | null = $derived.by(() => {
+		// The instance's CHAT default, from connection_defaults — the only place
+		// a default lives since 0181. This tab labels a model "in use", which is
+		// a claim about what a reply would actually run on.
 		const activeConnection = connectionsList.find(
-			(c) => c.id === systemSettingsCtx.settings?.defaultConnectionId
+			(c) =>
+				c.id ===
+				(systemSettingsCtx.capabilityDefaults?.["text->text"]
+					?.connectionId ?? null)
 		)
 		if (activeConnection?.type === CONNECTION_TYPE.OLLAMA) {
 			return activeConnection.model ?? null

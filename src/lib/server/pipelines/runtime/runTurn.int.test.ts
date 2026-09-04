@@ -14,6 +14,7 @@ import { eq } from "drizzle-orm"
 import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
+import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 
 // Whichever test runs a turn first pays the cold dynamic import of the entire
 // dispatch chain — the SDK, the contracts, the host bindings, the legacy adapter
@@ -25,7 +26,8 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 })
 
 let streamed: string[] = []
 
-class FakeAdapter {
+/** Pinned to the real action, so a rename cannot pass here — fakeTextAdapter.ts. */
+class FakeAdapter implements FakeTextAdapter {
 	injected: any
 	promptBuilder: any = {}
 	constructor(_p: any) {}
@@ -34,7 +36,7 @@ class FakeAdapter {
 		return this
 	}
 	abort() {}
-	async generate() {
+	async generateText() {
 		return {
 			compiledPrompt: this.injected,
 			isAborted: false,
@@ -647,10 +649,17 @@ describe("script chains on a turn", () => {
 			.insert(schema.connections)
 			.values({ name: "Turn Kobold", type: "koboldcpp" })
 			.returning()
-		await db
-			.update(schema.systemSettings)
-			.set({ defaultConnectionId: conn.id })
-			.where(eq(schema.systemSettings.id, 1))
+		// "The instance default connection carries it" is the whole point of this
+		// test, and since 0181 that means a registered `connection_defaults` row
+		// rather than `system_settings.default_connection_id`. `connectionStopsFor`
+		// reads it through the same resolver dispatch does, which is what keeps
+		// the guard attached to the connection the run actually uses.
+		const { setCapabilityDefault } = await import(
+			"$lib/server/connections/capabilityDefaults"
+		)
+		await setCapabilityDefault(db as any, "text->text", {
+			connectionId: conn.id
+		})
 
 		const { createScript, updateScript, attachConnectionScript } =
 			await import("$lib/server/pipelines/entities/scripts")

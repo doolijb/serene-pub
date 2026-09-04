@@ -30,6 +30,7 @@
 import { asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { declarations } from "$lib/server/pipelines/config/panel"
+import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 
 type Db = { select: any; insert: any; update: any; delete: any }
 
@@ -42,8 +43,18 @@ export class VariableTemplateNotUsableError extends Error {}
 export interface VariableTemplateRecord {
 	id: number
 	variableId: string
-	/** NULL means core's default engine — see `renderers.ts`. */
-	engine: string | null
+	/**
+	 * The language it is written in. Never null.
+	 *
+	 * It used to be nullable, meaning "core's default". That reading was the
+	 * live coercion this table had and context templates only threatened:
+	 * `renderVariable` passes this straight to `renderTemplate`, so a NULL was
+	 * a layout rendered in whatever core happens to ship rather than in what it
+	 * was written in. The column is NOT NULL now and a caller passing nothing
+	 * is normalized on the way in, which is what the nullable column was always
+	 * trying and failing to say.
+	 */
+	engine: string
 	name: string
 	source: string
 	isImmutable: boolean
@@ -52,7 +63,7 @@ export interface VariableTemplateRecord {
 const toRecord = (r: any): VariableTemplateRecord => ({
 	id: r.id,
 	variableId: r.variableId,
-	engine: r.engine ?? null,
+	engine: r.engine ?? CORE_TEMPLATE_ENGINE,
 	name: r.name,
 	source: r.source ?? "",
 	isImmutable: !!r.isImmutable
@@ -128,14 +139,17 @@ export async function assertSelectable(
 export async function resolveVariableTemplate(
 	db: Db,
 	templateId: number
-): Promise<{ engine: string | null; source: string } | null> {
+): Promise<{ engine: string; source: string } | null> {
 	const [row] = await db
 		.select()
 		.from(schema.pipelineVariableTemplates)
 		.where(eq(schema.pipelineVariableTemplates.id, templateId))
 		.limit(1)
 	if (!row) return null
-	return { engine: row.engine ?? null, source: row.source ?? "" }
+	return {
+		engine: row.engine ?? CORE_TEMPLATE_ENGINE,
+		source: row.source ?? ""
+	}
 }
 
 export interface CreateVariableTemplateInput {
@@ -157,7 +171,11 @@ export async function createVariableTemplate(
 			variableId: input.variableId,
 			name: input.name,
 			source: input.source,
-			engine: input.engine ?? null,
+			// `null` from a caller means "core's", which is what the nullable
+			// column meant. Resolved before the insert so the stored row keeps
+			// what it was authored in even if core's default moves later —
+			// which is the argument the column's own note has always made.
+			engine: input.engine ?? CORE_TEMPLATE_ENGINE,
 			seedKey: input.seedKey ?? null,
 			isImmutable: input.isImmutable ?? false
 		})
@@ -189,7 +207,7 @@ export async function duplicateVariableTemplate(
 		variableId: row.variableId,
 		name,
 		source: row.source ?? "",
-		engine: row.engine ?? null
+		engine: row.engine ?? CORE_TEMPLATE_ENGINE
 	})
 }
 
@@ -217,7 +235,11 @@ export async function updateVariableTemplate(
 		.set({
 			...(patch.name !== undefined ? { name: patch.name } : {}),
 			...(patch.source !== undefined ? { source: patch.source } : {}),
-			...(patch.engine !== undefined ? { engine: patch.engine } : {}),
+			// Same normalization as create: the picker sends `null` for "core's
+			// default", and the column no longer has a way to hold that.
+			...(patch.engine !== undefined
+				? { engine: patch.engine ?? CORE_TEMPLATE_ENGINE }
+				: {}),
 			updatedAt: new Date()
 		})
 		.where(eq(schema.pipelineVariableTemplates.id, templateId))

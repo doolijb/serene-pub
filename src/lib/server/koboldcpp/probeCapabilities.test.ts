@@ -9,7 +9,7 @@ import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
  *
  * KoboldCPP writes replies and draws pictures from one process, so what it can
  * do is a property of which models are loaded, not of which software is running.
- * Its manifest entry says `text->image` is `probed`, which means nothing but a
+ * Its manifest entry says `text->image` is unproven, which means nothing but a
  * probe can ever switch it on.
  */
 
@@ -26,9 +26,9 @@ describe("reading the version endpoint's flags", () => {
 			})
 		)
 		expect(caps).toMatchObject({
-			"text->image": "native",
-			"text+image->text": "native",
-			"text->embedding": "native"
+			"text->image": 1,
+			"text+image->text": 1,
+			"text->embedding": 1
 		})
 	})
 
@@ -37,7 +37,7 @@ describe("reading the version endpoint's flags", () => {
 		// to switch OFF something an optimistic preset turned on, and a key left
 		// out would let the older layer stand instead.
 		const caps = capabilitiesFromFlags(NO_FLAGS)
-		expect(caps["text->image"]).toBe("none")
+		expect(caps["text->image"]).toBe(0)
 		expect("text->image" in caps).toBe(true)
 	})
 
@@ -45,7 +45,7 @@ describe("reading the version endpoint's flags", () => {
 		// This endpoint answering at all is a KoboldCPP that generates text —
 		// there is no `txt2txt` flag to consult, and treating its absence as
 		// "cannot chat" would refuse every KoboldCPP connection in existence.
-		expect(capabilitiesFromFlags(NO_FLAGS)["text->text"]).toBe("native")
+		expect(capabilitiesFromFlags(NO_FLAGS)["text->text"]).toBe(1)
 	})
 
 	test("server features are not capabilities", () => {
@@ -93,6 +93,44 @@ describe("the probe against the manifest — the Phase 4 gate", () => {
 			adapter: adapterCapabilities(CONNECTION_TYPE.KOBOLDCPP)!
 		})
 		expect(satisfies({ requires: ["text->image"] }, caps).ok).toBe(false)
+	})
+
+	test("the flags this app cannot yet act on are still recorded, and still discarded", () => {
+		// ⚠ Two assertions that look contradictory and are not, which is why they
+		// share a test: the probe MUST keep answering for speech, transcription and
+		// embeddings, and resolution MUST ignore all three.
+		//
+		// The manifest declares none of them for either KoboldCPP type, because
+		// nothing implements `synthesizeSpeech`, `transcribeAudio` or `embedText`
+		// and the key space is derived from which actions exist. `resolveCapabilities`
+		// iterates `supports` only, so an answer to a question nobody asked cannot
+		// grant anything — which is correct, and is what stops a capability being
+		// switchable and uncallable.
+		//
+		// The mapping stays anyway, because the probe records what the SERVER said
+		// and that outlives what this app can do with it: the day one of those
+		// actions lands, the key returns and every already-tested connection
+		// resolves it with no re-test. If somebody "cleans up" the three lines in
+		// `capabilitiesFromFlags` to match what resolution consumes, the first half
+		// of this test is what stops them.
+		const found = capabilitiesFromFlags(
+			flagsFrom({ tts: true, transcribe: true, embeddings: true })
+		)
+		expect(found).toMatchObject({
+			"text->audio": 1,
+			"audio->text": 1,
+			"text->embedding": 1
+		})
+
+		const resolved = resolveFor(
+			flagsFrom({ tts: true, transcribe: true, embeddings: true })
+		)
+		for (const id of [
+			"text->audio",
+			"audio->text",
+			"text->embedding"
+		] as const)
+			expect(satisfies({ requires: [id] }, resolved).ok).toBe(false)
 	})
 
 	test("the type still says text — which is exactly why the probe exists", () => {

@@ -42,6 +42,7 @@ import {
 	type SourceKind
 } from "$lib/server/pipelines/ranking/weights"
 import { allocate, render } from "$lib/server/pipelines/prompt/assemble"
+import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { resolveContextInput } from "$lib/server/pipelines/prompt/promptFields"
 import { processMessages } from "$lib/server/pipelines/prompt/messages"
 import { resolvePostHistoryContext } from "$lib/server/pipelines/prompt/postHistory"
@@ -124,9 +125,7 @@ function signalsFrom(
 	)
 	if (!carried.length) return null
 	const signals: Partial<Record<SourceKind, SignalWeights>> = {}
-	for (const source of Object.keys(
-		DEFAULT_SIGNAL_WEIGHTS
-	) as SourceKind[]) {
+	for (const source of Object.keys(DEFAULT_SIGNAL_WEIGHTS) as SourceKind[]) {
 		const set = { ...DEFAULT_SIGNAL_WEIGHTS[source] }
 		for (const [param, signal] of carried) {
 			const v = params[param][source]
@@ -408,8 +407,7 @@ export function coreBindings(): Bindings {
 				// log and today's exact behaviour; another value is a mode's
 				// declared channel, read on purpose by the pipeline that wants
 				// it.
-				channel:
-					input?.params?.channel ?? input?.channel ?? "main"
+				channel: input?.params?.channel ?? input?.channel ?? "main"
 			})
 			// `main` and `messages` carry the same value on purpose: `main` is what
 			// an unrefined `$.history` resolves to, and having it be the useful
@@ -969,13 +967,65 @@ export function coreBindings(): Bindings {
 		 * render the same bytes; rendering itself is no longer the gap.
 		 */
 		"core:task/assemble@2": async (input: any) => {
-			const template = String(
-				input?.template?.source ?? input?.template ?? ""
-			)
+			const slot = input?.template
+			/**
+			 * The story string, and **only** a real string.
+			 *
+			 * ⚠ This was `String(slot?.source ?? slot ?? "")`, and that
+			 * `String(...)` was quietly load-bearing in the worst way. A slot
+			 * that resolved to nothing arrives as `{}` — an empty object, not
+			 * undefined — so `slot?.source ?? slot` fell through to the object
+			 * itself and `String({})` produced the literal text
+			 * `"[object Object]"`. Truthy, so the halt below never fired; a
+			 * valid Handlebars template, so the renderer accepted it; and the
+			 * whole prompt for that run was the seven characters of a
+			 * stringified empty object, sent to the model as prose.
+			 *
+			 * It is reachable on a real install: `bootstrapPipelines` returns
+			 * early on a `TypeRegistryConflictError` without writing config
+			 * values, and this slot then resolves to `{}` on every run. The
+			 * halt is the correct outcome, and it names the missing thing.
+			 */
+			const template =
+				typeof slot === "string"
+					? slot
+					: typeof slot?.source === "string"
+						? slot.source
+						: ""
 			if (!template)
 				return halt(
-					"assemble has no template — the context config did not resolve, " +
-						"so there is nothing to render into"
+					"assemble has no template — the template slot did not resolve to a " +
+						"story string, so there is nothing to render into. Check that " +
+						"this pipeline's configuration selects a context template."
+				)
+
+			/**
+			 * The language the template is written in.
+			 *
+			 * A resolved row arrives as an object carrying `source` and
+			 * `engine` together — `world.ts`'s `pushTemplate` emits both paths
+			 * or neither, so an object with a source and no engine cannot be
+			 * produced by the config layer. A bare **string** is the other
+			 * case: an in-code author default, which has nowhere to record a
+			 * language and is core's by construction.
+			 *
+			 * Anything else is a delivery fault and halts here rather than
+			 * being guessed at. Guessing is what this whole change removes:
+			 * `renderTemplate` used to answer "then it must be Handlebars", and
+			 * that answer was wrong on every non-core template ever written,
+			 * silently, for a whole release.
+			 */
+			const engine =
+				typeof slot === "object" && slot !== null
+					? slot.engine
+					: CORE_TEMPLATE_ENGINE
+			if (!engine)
+				return halt(
+					"assemble's template resolved to a row but carried no engine, so " +
+						"there is no way to know what language it is written in. The " +
+						"template slot must deliver `source` and `engine` together — " +
+						"rendering it as Handlebars on a guess is how a foreign template " +
+						"reaches the model as raw markup."
 				)
 
 			const decisions = input?.decisions ?? []
@@ -1021,7 +1071,7 @@ export function coreBindings(): Bindings {
 				// Resolved from the template slot, so a config written in a
 				// plugin's engine renders with the plugin's assembler rather
 				// than being run through core's (12 §2a).
-				engine: input?.template?.engine ?? null,
+				engine,
 				prompts: input?.prompts,
 				templateContext: input?.templateContext,
 				// This node's own `variables` slot: how the lore and history
@@ -1086,7 +1136,17 @@ export function coreBindings(): Bindings {
 				compiledPrompt:
 					input?.compiledPrompt ?? input?.context ?? input?.main,
 				currentCharacterId: input?.currentCharacterId ?? null,
-				generatingMessageMetadata: input?.generatingMessageMetadata
+				generatingMessageMetadata: input?.generatingMessageMetadata,
+				// The node's own slots — tier 2 of
+				// `capability default → pipeline config → session override`.
+				//
+				// Forwarded here for the same reason the `generate-image` binding
+				// below forwards them, and their absence was the reason the
+				// panel's Connection and Sampling pickers on the reply step were
+				// decoration: the values stored, and no reader ever saw them. The
+				// host resolves them; this binding only has to stop dropping them.
+				connection: input?.connection ?? null,
+				sampling: input?.sampling ?? null
 			})
 
 			if (result?.isAborted)
@@ -1223,7 +1283,8 @@ export function coreBindings(): Bindings {
 						)
 					].join("\n")
 				: ""
-			const style = input?.params?.style === "native" ? "native" : "prompt"
+			const style =
+				input?.params?.style === "native" ? "native" : "prompt"
 			return ok({
 				main: style === "native" ? native : prompt,
 				native,

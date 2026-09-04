@@ -55,5 +55,6 @@ export {
 	clearOption,
 	selectNamedConfig,
 	variableOptionGate,
-	contextTemplateOptionGate
+	contextTemplateOptionGate,
+	promptOptionGate
 } from "$lib/server/pipelines/config/panel/write"

@@ -6,7 +6,7 @@
  * preview, and also the reason a review gate has nothing to show. The pipeline
  * splits them: a Task assembles, this dispatches.
  *
- * It reaches the **same seven adapters** through the same `generate()`. There is
+ * It reaches the **same seven adapters** through the same `generateText()`. There is
  * no second HTTP client here and no second request shape; `withCompiledPrompt`
  * makes `compilePrompt()` return the supplied payload instead of building one,
  * and everything after that is untouched legacy code. That is what makes parity
@@ -26,7 +26,6 @@
  */
 
 import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
-import { capabilityRefusal } from "./capabilityGuard"
 import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
@@ -60,6 +59,19 @@ export interface DispatchRequest {
 	currentCharacterId?: number | null
 	/** Forwarded verbatim; carries `isNarratorResponse` among other things. */
 	generatingMessageMetadata?: Record<string, unknown>
+	/**
+	 * Tier 2 — what the pipeline's configuration selected for THIS node.
+	 *
+	 * Forwarded from the `connection` and `sampling` slots on the calling
+	 * provider node, exactly as `generate-image` already forwards them. Without
+	 * these the chat path resolved from the capability default alone, so the
+	 * panel's own Connection and Sampling pickers on the reply node changed
+	 * nothing an admin could observe — the middle tier of
+	 * `capability default → pipeline config → session override` simply was not
+	 * there for the primary path.
+	 */
+	connectionId?: number | null
+	samplingId?: number | null
 	/** Called with each chunk when the adapter streams. */
 	onChunk?: (chunk: string) => void
 	onThinking?: (chunk: string) => void
@@ -239,11 +251,14 @@ export async function dispatchGeneration(
 	)
 
 	const session = await loadAdapterSession(request.db, request.sessionId)
-	const {
-		sampling: defaultSampling,
-		contextConfig,
-		promptConfig
-	} = await getUserConfigurations(request.userId as number)
+	// Context and prompt only. This used to also take `sampling` and pass it
+	// below as `resolved.sampling ?? defaultSampling` — an undeclared FOURTH
+	// tier, and a no-op only for as long as both sides read
+	// `system_settings.default_sampling_id`. `resolveTaskConfig` walks the whole
+	// chain now, so a second opinion here could only ever disagree with it.
+	const { contextConfig, promptConfig } = await getUserConfigurations(
+		request.userId as number
+	)
 
 	// The same resolver the legacy path uses, so a session-level connection
 	// override or a per-config one applies identically on both paths. Resolving
@@ -252,21 +267,30 @@ export async function dispatchGeneration(
 	const resolved = await resolveTaskConfig({
 		taskType: isNarrator ? "narratorPrompt" : "session",
 		promptConfigId: promptConfig?.id,
-		sessionId: request.sessionId
+		sessionId: request.sessionId,
+		// Tier 2, forwarded from the calling node's own slots. `resolveTaskConfig`
+		// hands these to `resolveCapabilityTarget` so all three tiers are walked
+		// by the one resolver rather than two of them here and one elsewhere.
+		pipelineConnectionId: request.connectionId ?? null,
+		pipelineSamplingId: request.samplingId ?? null
 	})
 
 	const connection = resolved.connection
+	// The sentence comes from the resolver, which knows which tier failed and
+	// what to do about it. The one that used to be here — "Set one up under
+	// Connections" — was the same words for four different situations: nothing
+	// registered, a default cleared by a deleted connection, a dangling id, and
+	// a connection that cannot do chat. `resolveTaskConfig` carries the right
+	// one forward; the fallback is only for a caller that never set `problem`.
+	//
+	// The `capabilityRefusal` that used to sit under this is inside the resolver
+	// too, so a session override pointing at an image connection is refused by
+	// name rather than by `getConnectionAdapter` saying the type has no adapter.
 	if (!connection)
 		throw new DispatchError(
-			"no AI connection is configured, so there is nothing to send this prompt to. " +
-				"Set one up under Connections."
+			resolved.problem?.message ??
+				"no AI connection is configured, so there is nothing to send this prompt to."
 		)
-
-	// A session override or a config can point this at any connection the user
-	// owns, image ones included; refusing here names the capability, where
-	// `getConnectionAdapter` would only say the type has no adapter.
-	const refusal = capabilityRefusal(connection, "text->text")
-	if (refusal) throw new DispatchError(refusal)
 
 	const { Adapter } = await getConnectionAdapter(connection.type)
 	const adapter = new Adapter({
@@ -275,7 +299,7 @@ export async function dispatchGeneration(
 		// Both of these are rows. An adapter takes the parameters, not the row —
 		// only the keys switched on, with the shape's defaults filled in — and
 		// `resolveSampling` is the one path between the two.
-		sampling: resolveSampling(resolved.sampling ?? defaultSampling),
+		sampling: resolveSampling(resolved.sampling),
 		contextConfig,
 		promptConfig,
 		currentCharacterId: request.currentCharacterId ?? null,
@@ -301,7 +325,7 @@ export async function dispatchGeneration(
 	request.signal?.addEventListener("abort", onAbort, { once: true })
 
 	try {
-		const result = await adapter.generate()
+		const result = await adapter.generateText()
 		let text = ""
 		let thinking = ""
 

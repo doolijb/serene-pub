@@ -15,6 +15,7 @@
 
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import {
 	type Published,
 	declarations,
@@ -65,10 +66,9 @@ async function locate(
 /**
  * The gate every variable-layout mutation passes first.
  *
- * Deliberately **not** the shape `promptInSpec` takes. A prompt mutation is
- * gated on the prompt belonging to the pipeline whose panel is open, and the
- * same check here would undo the feature: a layout is shared across pipelines
- * on purpose, so "does this row belong to this spec" has no true answer.
+ * A layout is shared across pipelines on purpose, so "does this row belong to
+ * this spec" has no true answer for one — a gate asking it would quietly remove
+ * cross-pipeline reuse while looking like consistency.
  *
  * What is checked instead is that the caller is operating a control this
  * pipeline actually offers them — the option handle resolves to one of this
@@ -76,6 +76,11 @@ async function locate(
  * may write it. The returned `variableId` is then what the caller matches the
  * target row against, which is the real rule: you may edit a layout through the
  * setting that renders it.
+ *
+ * All three `*OptionGate`s now take this shape. Prompts were the exception —
+ * they were gated on ownership, because they were namespaced to a spec — and
+ * pooling them by node made the ownership question as meaningless for a prompt
+ * as it always was for a layout.
  */
 export async function variableOptionGate(
 	db: Db,
@@ -106,9 +111,9 @@ export async function variableOptionGate(
 /**
  * The gate every context-template mutation passes first.
  *
- * Same shape as `variableOptionGate`, and not the shape `promptInSpec` takes,
- * for the same reason: a template is shared across pipelines on purpose, so
- * "does this row belong to this spec" has no true answer. What is checked is
+ * Same shape as `variableOptionGate`, for the same reason: a template is shared
+ * across pipelines on purpose, so "does this row belong to this spec" has no
+ * true answer. What is checked is
  * that the caller is operating a control this pipeline actually offers them —
  * the option handle resolves to one of this spec's declarations, that
  * declaration is a template reference, and the viewer may write it. The
@@ -122,7 +127,7 @@ export async function contextTemplateOptionGate(
 	slug: string,
 	viewer: Viewer,
 	id: string
-): Promise<{ nodeTypeId: string; specId: number }> {
+): Promise<{ nodeTypeId: string; engine: string; specId: number }> {
 	const { at, decl } = await locate(db, secret, slug, id)
 	if (decl.control !== "context-template-ref" || !decl.nodeTypeId)
 		throw new OptionNotFoundError(
@@ -135,7 +140,81 @@ export async function contextTemplateOptionGate(
 		viewer.isAdmin ? "config" : undefined,
 		decl.matrixSlot
 	)
-	return { nodeTypeId: decl.nodeTypeId, specId: at.specId }
+	return {
+		nodeTypeId: decl.nodeTypeId,
+		// The language this slot is written in, which is half the template pool.
+		// Returned rather than left to the caller because the caller would have
+		// to guess, and the only guess available is core's — which is exactly
+		// how a jinja2 slot ends up holding Handlebars source that renders as
+		// raw markup instead of failing.
+		engine: decl.engine ?? CORE_TEMPLATE_ENGINE,
+		specId: at.specId
+	}
+}
+
+/**
+ * The gate every prompt mutation passes first.
+ *
+ * It replaces `promptInSpec`, which asked whether the prompt belonged to the
+ * pipeline whose panel was open. That question had a true answer while prompts
+ * were namespaced to a spec and has none now: a prompt is pooled by the node
+ * that consumes it precisely so an action reusing that node inherits it, and a
+ * gate demanding ownership would refuse every one of those — removing the
+ * feature while looking like a security check.
+ *
+ * It is still a real one. `promptId` arrives from the client as a small integer
+ * somebody can guess, so without a gate a guess edits or deletes another
+ * pipeline's wording through this one's panel. What is checked is the same
+ * thing the other two gates check: the option handle resolves to a prompt
+ * setting *this* pipeline declares, and the viewer may write it. The returned
+ * pool is then what the caller matches the target row against — you may edit a
+ * prompt through a setting that uses it.
+ *
+ * Both halves of the pool are returned because both are the key: a type may
+ * declare two prompts slots with different field sets, and matching on the node
+ * type alone would let one slot's rows be edited through the other's control.
+ */
+export async function promptOptionGate(
+	db: Db,
+	secret: string,
+	slug: string,
+	viewer: Viewer,
+	id: string
+): Promise<{
+	nodeTypeId: string
+	slot: string
+	/** The declaration's own node, so a caller can re-check with `assertSelectable`. */
+	nodeKey: string
+	specId: number
+	specVersionId: number
+}> {
+	const { at, decl } = await locate(db, secret, slug, id)
+	if (decl.control !== "prompts-ref" || !decl.nodeTypeId)
+		throw new OptionNotFoundError(
+			"That setting does not choose a prompt, so there is nothing here to " +
+				"edit."
+		)
+	// Same refusal the write path uses, rather than a second copy of the rule,
+	// and it tightens what `promptInSpec` allowed: that gate checked ownership
+	// and never asked whether the caller could write at all, so any signed-in
+	// person could reword a row from outside every session. That was already
+	// generous when a prompt served one pipeline's configs; pooled, an edit
+	// reaches every pipeline reusing the node, which makes it structural. A
+	// non-admin editing inside their own session still passes — `prompts` is
+	// the one slot the write matrix opens at session scope — and outside one
+	// they are told to open the session they meant.
+	resolveWriteScope(
+		viewer,
+		viewer.isAdmin ? "config" : undefined,
+		decl.matrixSlot
+	)
+	return {
+		nodeTypeId: decl.nodeTypeId,
+		slot: decl.slot,
+		nodeKey: decl.nodeKey,
+		specId: at.specId,
+		specVersionId: at.specVersionId
+	}
 }
 
 /**
@@ -258,6 +337,29 @@ export async function writeOption(
 
 	if (decl.control === "scripts-chain")
 		value = await checkChain(db, decl, value)
+
+	// A prompt reference is checked against the slot's pool before it is
+	// stored, the same way a chain is checked against its hook's accepted
+	// types. The picker only offers what fits, so this catches a stale client
+	// and a guessed id — and both produce the failure this layer refuses
+	// everywhere: a selection that stores cleanly and does nothing, with the
+	// panel showing the chosen prompt while the run renders blanks.
+	//
+	// Guarded on `number` rather than applied to everything: a value of another
+	// type is not a reference at all, and refusing it here would report a pool
+	// mismatch for what is really a malformed payload.
+	if (decl.control === "prompts-ref" && typeof value === "number") {
+		const { assertSelectable } = await import(
+			"$lib/server/pipelines/entities/prompts"
+		)
+		await assertSelectable(
+			db,
+			at.specVersionId,
+			decl.nodeKey,
+			decl.slot,
+			value
+		)
+	}
 
 	const target = resolveWriteScope(
 		viewer,

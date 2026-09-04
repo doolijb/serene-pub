@@ -90,6 +90,19 @@
 		systemSettingsCtx.capabilityDefaults?.["text->image"]?.connectionId ??
 			null
 	)
+	/**
+	 * The chat default, read from the same table as its image twin above.
+	 *
+	 * It used to come from `system_settings.default_connection_id` — a second
+	 * spelling that was dual-written beside `connection_defaults` and is gone
+	 * with 0181. Three sites below ask this (the sort's "float the current model
+	 * to the top", the delete guard, and the row's checkmark), and they asked it
+	 * three separate ways.
+	 */
+	let textConnectionId = $derived(
+		systemSettingsCtx.capabilityDefaults?.["text->text"]?.connectionId ??
+			null
+	)
 	let selectedImageModel = $derived(
 		connectionsList.find(
 			(c) =>
@@ -135,7 +148,7 @@
 					modelKind === "image"
 						? selectedImageModel === m.name
 						: findConnectionForModel(m.name)?.id ===
-							systemSettingsCtx.settings?.defaultConnectionId
+							textConnectionId
 				const aTop = isTop(a)
 				const bTop = isTop(b)
 				if (aTop && !bTop) return -1
@@ -232,7 +245,7 @@
 	}
 
 	function handleDeleteClick(model: KoboldCppModel) {
-		const defaultConnId = systemSettingsCtx.settings?.defaultConnectionId
+		const defaultConnId = textConnectionId
 		const conn = findConnectionForModel(model.name)
 		if (conn && conn.id === defaultConnId) {
 			toaster.error({
@@ -579,8 +592,7 @@
 		{#each filteredModels as model}
 			{@const loaded = isCurrentlyLoaded(currentModel, model.name)}
 			{@const isDefault =
-				findConnectionForModel(model.name)?.id ===
-				systemSettingsCtx.settings?.defaultConnectionId}
+				findConnectionForModel(model.name)?.id === textConnectionId}
 			{@const existingConn = findConnectionForModel(model.name)}
 			{@const existingImageConn = findImageConnectionForModel(model.name)}
 			{@const inUseForImages = selectedImageModel === model.name}

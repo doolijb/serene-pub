@@ -253,10 +253,17 @@ export interface RenderInput {
 	/** Decides whether the result is one string or role-tagged messages. */
 	promptFormat?: string
 	/**
-	 * Which template language `template` is written in. NULL means core's
-	 * default — the column is nullable for exactly that reason (12 §2a).
+	 * Which template language `template` is written in.
+	 *
+	 * **Required, and no longer nullable.** It was `string | null`, on the
+	 * reading that NULL meant core's default — and for the whole of 0.6 to date
+	 * it was null on every run, because `world.ts` dereferenced the template row
+	 * for its `source` and dropped the `engine` beside it. Every context
+	 * template on every install rendered as Handlebars whatever it declared,
+	 * with nothing anywhere to show it. Both template tables store `engine` NOT
+	 * NULL now, so an absence here can only mean a caller lost it in transit.
 	 */
-	engine?: string | null
+	engine: string
 	/**
 	 * The `variables` slot: how the values *this* node produces are laid out,
 	 * already dereferenced from row ids into template sources by `world.ts`.

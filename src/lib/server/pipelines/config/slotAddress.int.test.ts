@@ -89,16 +89,19 @@ beforeAll(async () => {
 
 	// The fallback the broken path lands on. If this pointed at `chosenId` the
 	// whole file would prove nothing.
-	const [settings] = await db.select().from(schema.systemSettings).limit(1)
-	if (settings)
-		await db
-			.update(schema.systemSettings)
-			.set({ defaultConnectionId: defaultId })
-			.where(eq(schema.systemSettings.id, settings.id))
-	else
-		await db
-			.insert(schema.systemSettings)
-			.values({ id: 1, defaultConnectionId: defaultId })
+	//
+	// Registered in `connection_defaults` rather than written to
+	// `system_settings.default_connection_id`, which is where it lived until
+	// 0181 — and it is not a mechanical swap: the fallback only EXISTS because a
+	// default was registered. Nothing picks a connection because it is saved, so
+	// without this line `world.activeConnection` is empty and the trap this file
+	// describes could not be sprung at all.
+	const { setCapabilityDefault } = await import(
+		"$lib/server/connections/capabilityDefaults"
+	)
+	await setCapabilityDefault(db as any, "text->text", {
+		connectionId: defaultId
+	})
 
 	// A global edit lands in the instance's SELECTED config, and the shipped one
 	// is immutable by design ("duplicate it and edit the copy"). So do that —

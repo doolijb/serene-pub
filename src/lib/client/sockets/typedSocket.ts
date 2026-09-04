@@ -306,9 +306,23 @@ export type SocketEventMap = {
 		params: Sockets.Connections.Delete.Params
 		response: Sockets.Connections.Delete.Response
 	}
-	"connections:setUserActive": {
-		params: Sockets.Connections.SetUserActive.Params
-		response: Sockets.Connections.SetUserActive.Response
+	// Registers this connection as the default for ONE named capability.
+	// Formerly `connections:setUserActive`: "active" implied a single starred
+	// connection the app used for whatever it needed, and one KoboldCPP row
+	// serves five capabilities — so the star never said which was meant.
+	"connections:setDefault": {
+		params: Sockets.Connections.SetDefault.Params
+		response: Sockets.Connections.SetDefault.Response
+	}
+	// The admin Defaults screen. `list` is the capability list plus what is
+	// registered; `set` writes one half of one capability's default.
+	"connectionDefaults:list": {
+		params: Sockets.ConnectionDefaults.List.Params
+		response: Sockets.ConnectionDefaults.List.Response
+	}
+	"connectionDefaults:set": {
+		params: Sockets.ConnectionDefaults.Set.Params
+		response: Sockets.ConnectionDefaults.Set.Response
 	}
 	"connections:test": {
 		params: Sockets.Connections.Test.Params
@@ -1202,6 +1216,14 @@ export type SocketEventMap = {
 		params: never
 		response: { error?: string }
 	}
+	"pipelines:createPrompt": {
+		params: Sockets.Pipelines.CreatePrompt.Params
+		response: Sockets.Pipelines.CreatePrompt.Response
+	}
+	"pipelines:createPrompt:error": {
+		params: never
+		response: { error?: string }
+	}
 	"pipelines:clonePrompt": {
 		params: Sockets.Pipelines.ClonePrompt.Params
 		response: Sockets.Pipelines.ClonePrompt.Response
@@ -1656,9 +1678,10 @@ export type SocketEventMap = {
 	}
 	// Its image counterpart: creates a koboldcpp_managed_image connection naming
 	// this file and registers it as the text->image default. Separate from
-	// connectModel because the "make it default" writers differ — text stars
-	// system_settings.default_connection_id, image registers a row in
-	// connection_defaults.
+	// connectModel because the two branches share a type predicate with nothing
+	// else — not because the "make it default" writers differ. They no longer
+	// do: both register a row in `connection_defaults`, text under `text->text`
+	// and image under `text->image`. There is no starred column left to claim.
 	"koboldcpp:connectImageModel": {
 		params: Sockets.KoboldCPP.ConnectImageModel.Params
 		response: Sockets.KoboldCPP.ConnectImageModel.Response
@@ -2342,6 +2365,42 @@ export type SocketEventMap = {
 		response: Sockets.Media.Delete.Response
 	}
 	"media:delete:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	// Storage cleanup (0182). Preview is priced separately from the two cull
+	// actions on purpose: an admin sees a count and a size before anything is
+	// destroyed, and culling originals is its own louder event rather than a
+	// flag on the safe one.
+	"media:cleanupPreview": {
+		params: Sockets.Media.CleanupPreview.Params
+		response: Sockets.Media.CleanupPreview.Response
+	}
+	"media:cleanupPreview:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"media:cullDerived": {
+		params: Sockets.Media.CullDerived.Params
+		response: Sockets.Media.CullDerived.Response
+	}
+	"media:cullDerived:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"media:cullOriginals": {
+		params: Sockets.Media.CullOriginals.Params
+		response: Sockets.Media.CullOriginals.Response
+	}
+	"media:cullOriginals:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"media:setCachePolicy": {
+		params: Sockets.Media.SetCachePolicy.Params
+		response: Sockets.Media.SetCachePolicy.Response
+	}
+	"media:setCachePolicy:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}

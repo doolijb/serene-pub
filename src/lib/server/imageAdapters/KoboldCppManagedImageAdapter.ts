@@ -244,6 +244,15 @@ const exports: ImageAdapterExports = {
 	// A1111's, unchanged and deliberately not subclassed. The wire format is the
 	// same one; everything this type does differently happens before the render
 	// starts, in dispatchImage and in the two functions above.
+	//
+	// Literally the same constructor, which is why three connection types
+	// (A1111, KOBOLDCPP, KOBOLDCPP_MANAGED_IMAGE) resolve to two modules and ONE
+	// class. That is fine for the derivation and worth stating rather than
+	// re-deriving: what a type can express is read off the actions its class
+	// implements, so all three get `text->image` and none of them gets
+	// `text+image->image` — and they cannot disagree about it, because there is
+	// no second implementation to drift from this one. A subclass here would
+	// create that second implementation for no wire-level reason.
 	Adapter: a1111.Adapter,
 	listModels,
 	testConnection,

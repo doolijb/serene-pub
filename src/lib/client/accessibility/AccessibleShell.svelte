@@ -36,7 +36,14 @@
 	const socket = useTypedSocket()
 
 	let userCtx: UserCtx = $state({ user: undefined })
-	let systemSettingsCtx: SystemSettingsCtx = $state({ settings: undefined })
+	// `capabilityDefaults` starts as `{}` and is non-optional — an optional
+	// field makes every reader handle `undefined`, and the handling that gets
+	// written is `?? settings.defaultConnectionId`, which is the second spelling
+	// 0181 removed. Same initializer as the main shell's (Layout.svelte).
+	let systemSettingsCtx: SystemSettingsCtx = $state({
+		settings: undefined,
+		capabilityDefaults: {}
+	})
 	let ollamaSettingsCtx: OllamaSettingsCtx = $state({ settings: undefined })
 	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state({
 		settings: undefined
@@ -72,6 +79,14 @@
 			isAndroidWrapper: message.isAndroidWrapper,
 			localEmbeddingsSupported: message.localEmbeddingsSupported
 		}
+		// The capability defaults ride BESIDE the settings row, not inside it —
+		// they are their own table since 0175 and the only place a default
+		// lives since 0181. Document View's own pages read them (the setup
+		// checklist's "is there a connection", the connections list's "used for
+		// chat"), so this shell has to copy them across exactly as the main
+		// Layout does. Without this line those pages read `{}` forever and
+		// report a correctly-configured instance as unconfigured.
+		systemSettingsCtx.capabilityDefaults = message.capabilityDefaults ?? {}
 		ollamaSettingsCtx.settings = { ...message.ollamaSettings }
 		koboldCppSettingsCtx.settings = { ...message.koboldCppSettings }
 	}

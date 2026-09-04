@@ -10,19 +10,33 @@
 	 *
 	 * ## Why `usedBy` is on every row
 	 *
-	 * Prompts are namespaced to a pipeline, but context templates and variable
-	 * layouts are shared on purpose — which makes "may I delete this" genuinely
-	 * unanswerable from inside one pipeline's settings, since the thing holding
-	 * a row is routinely somewhere the person looking is not. The server already
-	 * refuses a delete that would strand a selection; this says *what* is
-	 * holding it before they try, which is the difference between a rule and a
-	 * dead end.
+	 * Everything listed here is shared on purpose — which makes "may I delete
+	 * this" genuinely unanswerable from inside one pipeline's settings, since
+	 * the thing holding a row is routinely somewhere the person looking is not.
+	 * The server already refuses a delete that would strand a selection; this
+	 * says *what* is holding it before they try, which is the difference
+	 * between a rule and a dead end.
 	 *
-	 * ## Grouped by pool, not by pipeline
+	 * ## Grouped by pool, not by pipeline — prompts included, now
 	 *
 	 * Templates group by the step that renders them and layouts by the variable
 	 * they render, because that is what "these are interchangeable" means. A
 	 * pipeline heading would suggest ownership the model does not have.
+	 *
+	 * **Prompts used to be the exception** and were grouped by pipeline. They
+	 * are pooled by `(step, slot)` now and follow their step into every
+	 * pipeline reusing it, so a pipeline heading over them was asserting
+	 * exactly the ownership the paragraph above rejects. They group like
+	 * everything else here.
+	 *
+	 * ## A pool names its language
+	 *
+	 * A template pool is `(what it renders, which language)`. Grouping on the
+	 * node or variable alone would put a Jinja row and a Handlebars row under
+	 * one heading, interleaved, with no way to tell which was which but reading
+	 * the markup — and the "New" button under that heading would have no way to
+	 * know which language it was creating in. So the grouping key carries the
+	 * engine, and `createIn` splits it back apart.
 	 *
 	 * Admin-only, checked here and again in every handler. The check here is for
 	 * the person; the check in the handler is the one that matters.
@@ -35,6 +49,10 @@
 	import TemplateEditor from "$lib/client/components/templates/TemplateEditor.svelte"
 	import { getVariable } from "@serene-pub/sdk"
 	import { contextTemplateScope } from "$lib/shared/utils/contextConfigCards"
+	import {
+		CORE_TEMPLATE_ENGINE,
+		splitPoolKey
+	} from "$lib/shared/pipelines/poolKey"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
@@ -64,12 +82,18 @@
 	 * a page nobody can find anything on.
 	 */
 	let openRow = $state<string | null>(null)
-	/** Unsaved edits, keyed the same way, so switching rows cannot cross them. */
+	/**
+	 * Unsaved edits, keyed the same way, so switching rows cannot cross them.
+	 *
+	 * `engine` is a concrete id, never null. It used to be `string | null`
+	 * with null meaning "core's default", which made the dirty check wrong in a
+	 * way nobody would look for: a freshly-opened Handlebars row seeded a null
+	 * draft and compared it against a row whose engine now reads back as the
+	 * concrete core id, so the row was "dirty" the instant it was expanded and
+	 * the save bar appeared over an untouched template.
+	 */
 	let drafts = $state<
-		Record<
-			string,
-			{ name: string; source: string; engine: string | null }
-		>
+		Record<string, { name: string; source: string; engine: string }>
 	>({})
 
 	const rowKey = (kind: string, id: number) => `${kind}:${id}`
@@ -88,28 +112,25 @@
 			return
 		}
 		openRow = key
-		if (!drafts[key])
-			drafts[key] = {
-				name: row.name,
-				source: row.source,
-				engine: row.engine ?? null
-			}
+		if (!drafts[key]) drafts[key] = seedDraft(row)
 	}
 
+	const seedDraft = (row: EditableRow) => ({
+		name: row.name,
+		source: row.source,
+		engine: row.engine ?? CORE_ENGINE
+	})
+
 	const draftFor = (kind: string, row: EditableRow) =>
-		drafts[rowKey(kind, row.id)] ?? {
-			name: row.name,
-			source: row.source,
-			engine: row.engine ?? null
-		}
+		drafts[rowKey(kind, row.id)] ?? seedDraft(row)
 
 	function edit(
 		kind: string,
 		id: number,
-		patch: { name?: string; source?: string; engine?: string | null }
+		patch: { name?: string; source?: string; engine?: string }
 	) {
 		const key = rowKey(kind, id)
-		const d = drafts[key] ?? { name: "", source: "", engine: null }
+		const d = drafts[key] ?? { name: "", source: "", engine: CORE_ENGINE }
 		drafts[key] = { ...d, ...patch }
 	}
 
@@ -119,19 +140,35 @@
 			!!d &&
 			(d.name !== row.name ||
 				d.source !== row.source ||
-				d.engine !== (row.engine ?? null))
+				d.engine !== (row.engine ?? CORE_ENGINE))
 		)
 	}
 
 	/* --- template engines --------------------------------------------- */
 
 	/**
-	 * NULL on a row means core's default, so the picker maps the default id
-	 * back to null on save — a template that never chose stays "whatever core
-	 * ships" rather than pinning today's engine id.
+	 * Core's engine, named rather than inferred from an absence.
+	 *
+	 * The row's column is NOT NULL now, so "unset means core's" is no longer a
+	 * thing the data can say — and it never should have been the thing the
+	 * *editor* said either: a template keeps whatever language it was written
+	 * in, which is the argument the column's own note has always made.
 	 */
-	const CORE_ENGINE = "core:template/handlebars@1"
+	const CORE_ENGINE = CORE_TEMPLATE_ENGINE
 	const engines = $derived(view?.engines ?? [])
+
+	/**
+	 * A pool key's two halves, split back apart.
+	 *
+	 * The grouping key is `<node type or variable>#<engine>` — see the header.
+	 * `#` is safe as the separator because neither half contains one and both
+	 * contain colons. A key with no `#` is a row whose pool nothing declares
+	 * any more (a disabled plugin's), and it falls back to core's engine so it
+	 * still gets a heading rather than vanishing off a page whose whole job is
+	 * to show what exists.
+	 */
+	const splitPool = (poolKey: string) =>
+		splitPoolKey(poolKey, CORE_ENGINE)
 
 	/* --- template + layout writes ------------------------------------ */
 
@@ -178,10 +215,21 @@
 		})
 	}
 
-	function createIn(t: Tab, poolId: string) {
+	/**
+	 * A new row in this pool — in this pool's *language*.
+	 *
+	 * The heading's key carries both halves; the create names them separately,
+	 * because the server stores them in separate columns. Without the engine
+	 * the row would land in core's pool whatever heading the button sat under,
+	 * which is a "New" button that creates something into a list you are not
+	 * looking at.
+	 */
+	function createIn(t: Tab, poolKey: string) {
+		const { poolId, engine } = splitPool(poolKey)
 		socket.emit("pipelines:libraryCreateTemplate", {
 			kind: templateKind(t) as any,
-			poolId
+			poolId,
+			engine
 		})
 	}
 
@@ -197,9 +245,10 @@
 	 * so `getVariable` comes back empty and the editor simply offers no
 	 * assistance rather than the wrong assistance.
 	 */
-	function scopeFor(t: Tab, poolId: string) {
+	function scopeFor(t: Tab, poolKey: string) {
 		if (t === "templates") return contextTemplateScope()
-		return getVariable(poolId)?.scope
+		// The bare variable id — the registry knows nothing about pools.
+		return getVariable(splitPool(poolKey).poolId)?.scope
 	}
 
 	/* --- prompt writes ------------------------------------------------ */
@@ -227,7 +276,7 @@
 
 	function preview(
 		t: Tab,
-		poolId: string,
+		poolKey: string,
 		row: { id: number; source: string }
 	) {
 		const key = rowKey(templateKind(t), row.id)
@@ -236,8 +285,14 @@
 		socket.emit("pipelines:previewTemplate", {
 			kind: t === "templates" ? "context" : "variable",
 			source: d.source,
+			// The DRAFT's engine, not the pool's — someone changing the engine
+			// picker wants to see what that change does, and previewing in the
+			// pool's language would show them the one thing they did not ask
+			// about. Concrete rather than nullable: an optional engine here
+			// previewed in core's language whatever the draft said, so the
+			// template rendered on this screen and shipped raw markup for real.
 			engine: d.engine,
-			poolId
+			poolId: splitPool(poolKey).poolId
 		})
 	}
 
@@ -322,6 +377,39 @@
 		>()
 		for (const p of pools) out.set(p.id, { label: p.label, rows: [] })
 		for (const r of rows) {
+			// A row's `poolId` is the first half only; its `engine` is the
+			// second. Recombined here rather than sent pre-joined so the field
+			// keeps meaning what the server's contract says it means.
+			const key = `${r.poolId}#${r.engine}`
+			const g = out.get(key) ?? { label: r.poolLabel, rows: [] }
+			g.rows.push(r)
+			out.set(key, g)
+		}
+		return [...out.entries()].sort((a, b) =>
+			a[1].label.localeCompare(b[1].label)
+		)
+	}
+
+	/**
+	 * Prompts by pool, seeded from the declared pools — the same shape, and the
+	 * same reason, as `byPool` above.
+	 *
+	 * This was `promptsBySpec`, grouping on `specSlug`. That column is gone,
+	 * and so is the claim it encoded: a prompt belongs to a step, not to a
+	 * pipeline. Seeding from `promptPools` also gives an empty pool its own
+	 * heading, which is the case core does not have and a plugin's node —
+	 * shipping a prompts slot and no prose — always does.
+	 */
+	function promptsByPool(
+		rows: Sockets.Pipelines.Library.LibraryPrompt[],
+		pools: Sockets.Pipelines.Library.LibraryPool[]
+	) {
+		const out = new Map<
+			string,
+			{ label: string; rows: Sockets.Pipelines.Library.LibraryPrompt[] }
+		>()
+		for (const p of pools) out.set(p.id, { label: p.label, rows: [] })
+		for (const r of rows) {
 			const g = out.get(r.poolId) ?? { label: r.poolLabel, rows: [] }
 			g.rows.push(r)
 			out.set(r.poolId, g)
@@ -331,17 +419,22 @@
 		)
 	}
 
-	function promptsBySpec(rows: Sockets.Pipelines.Library.LibraryPrompt[]) {
-		const out = new Map<
-			string,
-			{ label: string; rows: Sockets.Pipelines.Library.LibraryPrompt[] }
-		>()
-		for (const r of rows) {
-			const g = out.get(r.specSlug) ?? { label: r.specName, rows: [] }
-			g.rows.push(r)
-			out.set(r.specSlug, g)
+	/**
+	 * Copy archived text, rather than restore it.
+	 *
+	 * The step no longer declares the field, so putting the text back would put
+	 * it where nothing reads it — and the next boot's sweep would move it out
+	 * again. Copying hands it to the person, who knows where it belongs now.
+	 */
+	async function copyArchived(text: string) {
+		try {
+			await navigator.clipboard.writeText(text)
+			toaster.success({ title: "Copied to the clipboard" })
+		} catch {
+			toaster.error({
+				title: "Could not reach the clipboard. Select the text and copy it."
+			})
 		}
-		return [...out.entries()]
 	}
 
 	/* --- wiring ------------------------------------------------------- */
@@ -473,16 +566,27 @@
 			{/if}
 		</section>
 	{:else if tab === "prompts"}
+		{@const promptPools = view.promptPools ?? []}
 		<section class="flex flex-col gap-4">
-			{#if !view.prompts?.length}
+			{#if !view.prompts?.length && !promptPools.length}
 				<EmptyState
 					icon={Icons.MessageSquareText}
-					message="No prompts yet. Core seeds one per pipeline at startup."
+					message="Nothing declares a prompts slot. Core publishes its own pipelines at startup, so an empty page usually means the type registry refused to sync."
 				/>
 			{/if}
-			{#each promptsBySpec(view.prompts ?? []) as [slug, group] (slug)}
+			{#each promptsByPool(view.prompts ?? [], promptPools) as [poolId, group] (poolId)}
 				<div class="flex flex-col gap-2">
 					<h2 class="text-sm font-semibold">{group.label}</h2>
+					{#if !group.rows.length}
+						<!-- A declared pool with nothing in it. Core has none;
+						     a plugin node that ships no prose of its own always
+						     does, and grouping the rows alone would leave it
+						     off the page entirely. -->
+						<p class="text-muted text-xs">
+							Nothing written for this step yet. It runs on
+							whatever the pipeline's configuration selects.
+						</p>
+					{/if}
 					{#each group.rows as row (row.id)}
 						{@const key = rowKey("prompt", row.id)}
 						<div class="card bg-surface-100-800 p-3">
@@ -507,6 +611,25 @@
 											size={12}
 											class="shrink-0"
 										/>
+									{/if}
+									{#if row.origin}
+										<!-- Where it was written, which is not
+										     where it belongs: a prompt follows
+										     its step into every pipeline that
+										     reuses it. -->
+										<span
+											class="text-muted shrink-0 text-xs"
+										>
+											from {row.origin}
+										</span>
+									{/if}
+									{#if Object.keys(row.archived ?? {}).length}
+										<span
+											class="preset-tonal-warning shrink-0 rounded-full px-2 py-0.5 text-[0.68rem]"
+											title={`Archived: ${Object.keys(row.archived).join(", ")}`}
+										>
+											{Object.keys(row.archived).length} archived
+										</span>
 									{/if}
 								</button>
 								<button
@@ -595,6 +718,68 @@
 											></textarea>
 										</label>
 									{/each}
+									{#if Object.keys(row.archived ?? {}).length}
+										<!-- Read-only, and apart from the boxes
+										     above. `fields` and `archived` are
+										     two columns; rendered as one list
+										     the archived text would be saved
+										     back into `fields`, and the next
+										     boot's sweep would move it out
+										     again — a row ping-ponging between
+										     two shapes forever. -->
+										<div
+											class="border-surface-500/30 space-y-2 border-t pt-3"
+										>
+											<p class="text-muted text-xs">
+												<Icons.Archive
+													size={11}
+													class="inline"
+												/>
+												Archived — this step no longer has
+												{Object.keys(row.archived)
+													.length === 1
+													? "this field"
+													: "these fields"}. Kept so
+												the wording can be copied
+												somewhere it is still used.
+											</p>
+											{#each Object.entries(row.archived) as [field, text] (field)}
+												<div
+													class="flex flex-col gap-1"
+												>
+													<div
+														class="flex items-center gap-2"
+													>
+														<span
+															class="flex-1 text-xs font-medium"
+														>
+															{field}
+														</span>
+														<button
+															type="button"
+															class="btn btn-sm preset-tonal-surface shrink-0"
+															onclick={() =>
+																copyArchived(
+																	text
+																)}
+														>
+															<Icons.Copy
+																size={13}
+															/> Copy
+														</button>
+													</div>
+													<textarea
+														class="textarea w-full font-mono text-xs opacity-70"
+														rows="3"
+														readonly
+														spellcheck="false"
+														value={text}
+													></textarea>
+												</div>
+											{/each}
+										</div>
+									{/if}
+
 									{#if promptDirty(row)}
 										{@render saveBar(
 											() => {
@@ -750,25 +935,33 @@
 										<!-- Only when there is a choice to
 										     make: with core's engine alone, a
 										     picker with one option is chrome.
-										     NULL means "core's default", so
-										     picking the core id saves null. -->
+
+										     The chosen id is saved as itself.
+										     It used to map core's id back to
+										     NULL — "stay on whatever core
+										     ships" — which the column can no
+										     longer express and which was the
+										     wrong intent anyway: a template
+										     keeps the language it was written
+										     in, so core's default moving must
+										     not silently rewrite it.
+
+										     ⚠ Changing this MOVES the row into
+										     another pool. It leaves this
+										     heading and appears under that
+										     language's, which is why the note
+										     below says so. -->
 										<label
 											class="flex flex-col gap-1 text-xs font-medium"
 										>
 											Engine
 											<select
 												class="select w-full"
-												value={d.engine ?? CORE_ENGINE}
+												value={d.engine}
 												onchange={(e) =>
 													edit(kind, row.id, {
-														engine:
-															e.currentTarget
-																.value ===
-															CORE_ENGINE
-																? null
-																: e
-																		.currentTarget
-																		.value
+														engine: e.currentTarget
+															.value
 													})}
 											>
 												{#each engines as eng (eng.id)}
@@ -780,6 +973,22 @@
 													</option>
 												{/each}
 											</select>
+											{#if d.engine !== (row.engine ?? CORE_ENGINE)}
+												<span
+													class="text-muted text-xs"
+												>
+													<Icons.Info
+														size={11}
+														class="inline"
+													/>
+													Saving moves this out of
+													<strong>
+														{group.label}
+													</strong>
+													and in under the new language's
+													heading. The text is not translated.
+												</span>
+											{/if}
 										</label>
 									{/if}
 									<div class="flex items-center gap-2">

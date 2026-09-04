@@ -1,17 +1,25 @@
 /**
- * The media management handlers (28).
+ * The media management handlers (28, resplit by 0182).
  *
  * The rule under test throughout is that *managing* a blob is owner-only, and
  * deliberately narrower than viewing it: `canViewMedia` lets a shared character
  * carry its gallery to a session guest, but that guest must never be able to
  * delete, re-cut or re-scope someone else's image.
+ *
+ * The second rule, new to 0182, is that this panel is the ONLY place a variant
+ * is queried — and that what it sends is still metadata. A `variants` row is
+ * the only place an on-disk path lives now, so the path-leak assertion below is
+ * load-bearing in a way it was not before: it is what proves nobody spread one
+ * into a response.
  */
 import { beforeAll, afterAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { eq } from "drizzle-orm"
 import { PNG } from "pngjs"
 import * as schema from "$lib/server/db/schema"
+import { MediaVariant } from "$lib/shared/constants/MediaVisibility"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 vi.setConfig({ testTimeout: 60_000 })
@@ -72,16 +80,34 @@ afterAll(async () => {
 
 async function makeImage(seed: number, filename?: string) {
 	const { createMedia } = await import("$lib/server/media")
-	return createMedia(db, {
+	const { file } = await createMedia(db, {
 		userId: ownerId,
 		characterId: charId,
 		bytes: png(seed),
 		filename
 	})
+	return file
+}
+
+/** Straight at the table, because the whole point of the split is that no
+ *  payload builder reads it. */
+async function variantsOf(fileId: number) {
+	return db
+		.select()
+		.from(schema.variants)
+		.where(eq(schema.variants.fileId, fileId))
+}
+
+async function fileRow(fileId: number) {
+	const [row] = await db
+		.select()
+		.from(schema.files)
+		.where(eq(schema.files.id, fileId))
+	return row ?? null
 }
 
 describe("media:list", () => {
-	test("returns the owner's originals with labels, and never a derivative", async () => {
+	test("returns the owner's files with labels, and what each one stores", async () => {
 		const { mediaList } = await import("./media")
 		await makeImage(1, "one.png")
 		await makeImage(2, "two.png")
@@ -90,9 +116,16 @@ describe("media:list", () => {
 		const res = await mediaList.handler(fakeSocket(ownerId), {}, emit)
 
 		expect(res.media.length).toBeGreaterThanOrEqual(2)
-		// Thumbnails exist for these, and none of them are in the list.
-		expect(res.media.every((m) => m.thumbMediaId !== null)).toBe(true)
-		expect(res.media.every((m) => m.hasThumbnail)).toBe(true)
+		// A fresh upload has exactly ONE representation, and it is both the
+		// uploaded bytes and what a bare URL serves. That is the healthy state
+		// under lazy derivation, not a missing thumbnail.
+		for (const m of res.media) {
+			expect(m.variants.length).toBeGreaterThanOrEqual(1)
+			expect(
+				m.variants.some((v) => v.isOriginal && v.isDisplay)
+			).toBe(true)
+			expect(m.storedBytes).toBeGreaterThan(0)
+		}
 		expect(res.media[0].attachedTo).toEqual({
 			type: "character",
 			id: charId,
@@ -101,12 +134,29 @@ describe("media:list", () => {
 		expect(res.totalBytes).toBeGreaterThan(0)
 	})
 
+	test("no longer carries the removed thumbnail fields", async () => {
+		const { mediaList } = await import("./media")
+		const { emit } = captureEmits()
+		const res = await mediaList.handler(fakeSocket(ownerId), {}, emit)
+		// Both were symptoms of one table doing two jobs: a payload needed a
+		// second query for its thumbnail, and "does one exist" was a warning
+		// the panel showed. Lazy derivation makes "not yet" the normal state,
+		// so the fields went rather than being re-wired.
+		expect(res.media[0]).not.toHaveProperty("thumbMediaId")
+		expect(res.media[0]).not.toHaveProperty("hasThumbnail")
+	})
+
 	test("never leaks a filesystem path", async () => {
 		const { mediaList } = await import("./media")
 		const { emit } = captureEmits()
 		const res = await mediaList.handler(fakeSocket(ownerId), {}, emit)
+		// Independent of the unit-level check on `toClientMedia`: this is the
+		// whole response, including the variant rows that are the only thing
+		// holding a path at all.
 		expect(JSON.stringify(res)).not.toContain(dataDir)
 		expect(JSON.stringify(res)).not.toContain("data/users")
+		for (const m of res.media)
+			for (const v of m.variants) expect(v).not.toHaveProperty("path")
 	})
 
 	test("shows nothing of another user's", async () => {
@@ -116,7 +166,7 @@ describe("media:list", () => {
 		expect(res.media).toHaveLength(0)
 	})
 
-	test("sorts server-side", async () => {
+	test("sorts by what storing a file costs, not what showing it costs", async () => {
 		const { mediaList } = await import("./media")
 		const { emit } = captureEmits()
 		const largest = await mediaList.handler(
@@ -124,17 +174,28 @@ describe("media:list", () => {
 			{ sort: "largest" },
 			emit
 		)
-		const sizes = largest.media.map((m) => m.bytes)
-		expect([...sizes].sort((a, b) => b - a)).toEqual(sizes)
+		const stored = largest.media.map((m) => m.storedBytes)
+		expect([...stored].sort((a, b) => b - a)).toEqual(stored)
+
+		const smallest = await mediaList.handler(
+			fakeSocket(ownerId),
+			{ sort: "smallest" },
+			emit
+		)
+		const asc = smallest.media.map((m) => m.storedBytes)
+		expect([...asc].sort((a, b) => a - b)).toEqual(asc)
 	})
 })
 
 describe("media:regenerateThumbnail", () => {
-	test("replaces the derivative with a fresh row", async () => {
+	test("derives the thumb variant and replaces it on a second run", async () => {
 		const { mediaRegenerateThumbnail } = await import("./media")
-		const { thumbsByParent } = await import("$lib/server/media")
 		const row = await makeImage(3, "regen.png")
-		const before = (await thumbsByParent(db, [row.id])).get(row.id)!
+		// Nothing is derived on upload any more, so the first regenerate is
+		// also the first derivation.
+		expect((await variantsOf(row.id)).map((v) => v.variant)).toEqual([
+			MediaVariant.ORIGINAL
+		])
 
 		const { emit } = captureEmits()
 		const res = await mediaRegenerateThumbnail.handler(
@@ -144,13 +205,24 @@ describe("media:regenerateThumbnail", () => {
 		)
 		expect(res.regenerated).toBe(true)
 
-		const after = (await thumbsByParent(db, [row.id])).get(row.id)!
-		// A regenerate has to actually produce a row even though the old one
-		// was byte-identical — ensureThumbnail no-ops when one exists, so the
-		// handler deleting first is the whole behaviour under test.
-		expect(after).toBeTruthy()
-		expect(after.parentMediaId).toBe(row.id)
-		expect(before).toBeTruthy()
+		const after = await variantsOf(row.id)
+		const thumb = after.find((v) => v.variant === MediaVariant.THUMB)
+		expect(thumb).toBeTruthy()
+		expect(thumb!.cache).toBe(true)
+
+		// Again. The handler dropping the existing row first is the whole
+		// behaviour under test — `ensureVariant` returns what is already there,
+		// which is what makes it safe on a render path and useless as a "redo
+		// this" button on its own.
+		await mediaRegenerateThumbnail.handler(
+			fakeSocket(ownerId),
+			{ mediaId: row.id },
+			emit
+		)
+		const again = await variantsOf(row.id)
+		expect(
+			again.filter((v) => v.variant === MediaVariant.THUMB)
+		).toHaveLength(1)
 	})
 
 	test("refuses another user's image", async () => {
@@ -168,9 +240,8 @@ describe("media:regenerateThumbnail", () => {
 })
 
 describe("media:setVisibility", () => {
-	test("applies to the original and its derivative", async () => {
+	test("writes one row, because there is no second copy left to drift", async () => {
 		const { mediaSetVisibility } = await import("./media")
-		const { thumbsByParent, getMedia } = await import("$lib/server/media")
 		const row = await makeImage(5)
 		const { emit } = captureEmits()
 		await mediaSetVisibility.handler(
@@ -178,9 +249,12 @@ describe("media:setVisibility", () => {
 			{ mediaId: row.id, visibility: "private" },
 			emit
 		)
-		expect((await getMedia(db, row.id))!.visibility).toBe("private")
-		const thumb = (await thumbsByParent(db, [row.id])).get(row.id)!
-		expect(thumb.visibility).toBe("private")
+		expect((await fileRow(row.id))!.visibility).toBe("private")
+		// The old handler wrote `visibility` twice to keep a derivative in
+		// step. The column is gone from the variant, so the duplicated-state
+		// bug class is structurally absent rather than handled.
+		for (const v of await variantsOf(row.id))
+			expect(v).not.toHaveProperty("visibility")
 	})
 
 	test("rejects an unknown level", async () => {
@@ -198,11 +272,9 @@ describe("media:setVisibility", () => {
 })
 
 describe("media:delete", () => {
-	test("removes the blob and clears the avatar pointer it fed", async () => {
+	test("removes every representation and clears the avatar pointer it fed", async () => {
 		const { mediaDelete } = await import("./media")
-		const { getMedia } = await import("$lib/server/media")
 		const row = await makeImage(7)
-		const { eq } = await import("drizzle-orm")
 		await db
 			.update(schema.characters)
 			.set({ avatarMediaId: row.id })
@@ -211,7 +283,10 @@ describe("media:delete", () => {
 		const { emit } = captureEmits()
 		await mediaDelete.handler(fakeSocket(ownerId), { mediaId: row.id }, emit)
 
-		expect(await getMedia(db, row.id)).toBeNull()
+		expect(await fileRow(row.id)).toBeNull()
+		// The one operation allowed to leave a file with no representations,
+		// because it takes the file row with them.
+		expect(await variantsOf(row.id)).toHaveLength(0)
 		const char = await db.query.characters.findFirst({
 			where: (c, { eq }) => eq(c.id, charId)
 		})
@@ -230,13 +305,10 @@ describe("media:delete", () => {
 	})
 })
 
-describe("uuid as a cache token", () => {
-	test("regenerating rotates both the thumbnail's and the original's address", async () => {
+describe("rev as the cache token", () => {
+	test("regenerating bumps rev and leaves the uuid alone", async () => {
 		const { mediaRegenerateThumbnail } = await import("./media")
-		const { thumbsByParent, getMedia } = await import("$lib/server/media")
 		const row = await makeImage(9, "rotate.png")
-		const beforeParent = row.uuid
-		const beforeThumb = (await thumbsByParent(db, [row.id])).get(row.id)!.uuid
 
 		const { emit } = captureEmits()
 		await mediaRegenerateThumbnail.handler(
@@ -245,21 +317,30 @@ describe("uuid as a cache token", () => {
 			emit
 		)
 
-		expect((await getMedia(db, row.id))!.uuid).not.toBe(beforeParent)
-		expect(
-			(await thumbsByParent(db, [row.id])).get(row.id)!.uuid
-		).not.toBe(beforeThumb)
+		const after = (await fileRow(row.id))!
+		// The property is unchanged from when the uuid rotated: what the URL
+		// serves changed, so the URL string had to change. The mechanism moved,
+		// because one uuid is now shared by every variant of the file and
+		// rotating it would re-address representations whose bytes are
+		// untouched.
+		expect(after.rev).toBeGreaterThan(row.rev)
+		expect(after.uuid).toBe(row.uuid)
 	})
 
-	test("the list serves uuid URLs, never row ids", async () => {
+	test("the list serves uuid URLs carrying rev, never row ids", async () => {
 		const { mediaList } = await import("./media")
 		const { emit } = captureEmits()
 		const res = await mediaList.handler(fakeSocket(ownerId), {}, emit)
 		const uuid =
-			/^\/media\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+			"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 		for (const m of res.media) {
-			expect(m.url).toMatch(uuid)
-			expect(m.thumbUrl).toMatch(uuid)
+			expect(m.url).toMatch(new RegExp(`^/media/${uuid}\\?r=\\d+$`))
+			expect(m.thumbUrl).toMatch(
+				new RegExp(`^/media/${uuid}\\?v=thumb&r=\\d+$`)
+			)
+			expect(m.originalUrl).toMatch(
+				new RegExp(`^/media/${uuid}\\?v=original&r=\\d+$`)
+			)
 		}
 	})
 })

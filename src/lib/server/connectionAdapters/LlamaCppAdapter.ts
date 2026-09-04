@@ -11,6 +11,7 @@ import {
 	type BasePromptSession
 } from "./BaseConnectionAdapter"
 import { type CompiledPrompt } from "./types"
+import type { TextGenResult } from "$lib/server/adapters/actions"
 import axios from "axios"
 import { Readable } from "stream"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -297,17 +298,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 		return result
 	}
 
-	async generate(): Promise<{
-		completionResult:
-			| string
-			| ((
-					contentCb: (chunk: string) => void,
-					thinkingCb?: (chunk: string) => void
-			  ) => Promise<void>)
-		compiledPrompt: CompiledPrompt
-		isAborted: boolean
-		thinkingContent?: string
-	}> {
+	async generateText(): Promise<TextGenResult> {
 		const stream = this.connection.extraJson?.stream || false
 		// Prepare stop strings
 		const stopStrings = StopStrings.get({
@@ -561,9 +552,7 @@ const exports: AdapterExports = {
 	listModels,
 	connectionDefaults:
 		CONNECTION_DEFAULTS[CONNECTION_TYPE.LLAMACPP_COMPLETION],
-	samplingKeyMap: llamaCppSamplingKeyMap,
-	// 20 §9: SP formats and grammar-constrains via jsonSchemaToGbnf.
-	capabilities: { toolUse: "emulated" }
+	samplingKeyMap: llamaCppSamplingKeyMap
 }
 
 export default exports

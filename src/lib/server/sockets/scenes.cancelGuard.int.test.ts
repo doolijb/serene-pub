@@ -106,25 +106,31 @@ describe("sceneCompileHandler — narrowed cancel guard (PGlite integration)", (
 				.returning()
 		)[0]
 
+		// Context and prompt still live on `system_settings` — they point at the
+		// 0.5 archive tables. Connection and sampling do not: since 0181 they
+		// are a `connection_defaults` row keyed by capability, registered below.
 		const existingSettings = await testDb.query.systemSettings.findFirst()
 		if (existingSettings) {
 			await testDb
 				.update(schema.systemSettings)
 				.set({
-					defaultConnectionId: connection.id,
-					defaultSamplingConfigId: sampling.id,
 					defaultContextConfigId: contextConfig.id,
 					defaultPromptConfigId: promptConfig.id
 				})
 				.where(eq(schema.systemSettings.id, existingSettings.id))
 		} else {
 			await testDb.insert(schema.systemSettings).values({
-				defaultConnectionId: connection.id,
-				defaultSamplingConfigId: sampling.id,
 				defaultContextConfigId: contextConfig.id,
 				defaultPromptConfigId: promptConfig.id
 			} as any)
 		}
+		const { setCapabilityDefault } = await import(
+			"$lib/server/connections/capabilityDefaults"
+		)
+		await setCapabilityDefault(testDb as any, "text->text", {
+			connectionId: connection.id,
+			samplingConfigId: sampling.id
+		})
 
 		const lorebook = (
 			await testDb

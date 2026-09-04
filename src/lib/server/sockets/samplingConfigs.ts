@@ -5,16 +5,47 @@ import { user } from "./users"
 import { systemSettingsGet } from "./systemSettings"
 import type { Handler } from "$lib/shared/events"
 import { normalizeSamplingRow, SAMPLING_SCHEMAS, S } from "@serene-pub/sdk"
-import {
-	capabilityForSamplingShape,
-	setCapabilityDefault
-} from "$lib/server/connections/capabilityDefaults"
+import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
 import {
 	modalityLabel,
 	modalityOfShape
 } from "$lib/shared/constants/ConnectionTypes"
+import {
+	aggregateCombos,
+	type RegistryTypeRow
+} from "$lib/shared/capabilities/combos"
+import { samplingShapeForCapability } from "$lib/shared/capabilities/samplingShape"
 
 // --- WEIGHTS SOCKET HANDLERS ---
+
+/**
+ * Every capability whose sampling vocabulary is this shape.
+ *
+ * Asked of the AGGREGATION rather than of a literal list, so a plugin's
+ * `text->video` provider gets its default registered by the same star press
+ * that registers core's — the whole reason the combo list is derived. Runs the
+ * mapping forwards (capability → shape) rather than backwards, because
+ * backwards is the direction that cannot be derived: `S.imageGen` does not say
+ * which of the three image transforms was meant, and the hand-written inverse
+ * exists to name one representative for the pickers, not to enumerate a group.
+ *
+ * An empty result is returned as empty. There is no `text->image` consolation
+ * prize: a shape with no capabilities is a real state (the registry has no node
+ * demanding it and no adapter serving it), and inventing one row would put a
+ * default on a screen that lists no such capability.
+ */
+async function capabilitiesForShape(shape: string): Promise<string[]> {
+	const rows = (await db
+		.select({
+			typeId: schema.pipelineTypeRegistry.typeId,
+			version: schema.pipelineTypeRegistry.version,
+			slots: schema.pipelineTypeRegistry.slots
+		})
+		.from(schema.pipelineTypeRegistry)) as RegistryTypeRow[]
+	return aggregateCombos(rows)
+		.filter((c) => samplingShapeForCapability(c.id) === shape)
+		.map((c) => c.id)
+}
 
 /**
  * A shape this build has a vocabulary for.
@@ -250,10 +281,10 @@ export const samplingConfigsSetUserActive: Handler<
 		}
 
 		// Update system-wide default sampling config (replaces the old per-user
-		// active sampling). Which of the two default columns it lands in is the
-		// ROW's own shape (0172), never a parameter the caller passes: a client
-		// that could name the column could set the image default to a text
-		// config, and the whole point of the shape is that it cannot.
+		// active sampling). Which capabilities it lands against is the ROW's own
+		// shape, never a parameter the caller passes: a client that could name
+		// the capability could set the chat default to an image config, and the
+		// whole point of the shape is that it cannot.
 		const target = await db.query.samplingConfigs.findFirst({
 			where: (c, { eq }) => eq(c.id, params.id)
 		})
@@ -265,26 +296,30 @@ export const samplingConfigsSetUserActive: Handler<
 			throw new Error("Sampling config not found.")
 		}
 
-		// Registered against the capability the row's SHAPE belongs to (0175) —
-		// never a column named by the caller, since a client that could name the
-		// column could make an image config the text default, and the shape
-		// exists precisely so that it cannot.
-		// A shape the mapper does not recognise registers nothing rather than
-		// falling back to text — starring a config of some future shape must not
-		// quietly become "this is now the default for chat".
-		const capability = capabilityForSamplingShape(target.shape)
-		if (capability)
+		// Registered against EVERY capability whose output kind this shape
+		// speaks — not against the one canonical representative.
+		//
+		// `TRANSFORMS` names `text->image`, `text+image->image` and
+		// `image->image`, and all three take the same steps/CFG/sampler
+		// vocabulary. Writing only `text->image` would leave a screen whose one
+		// control says "the image default" while one of three rows moved: an
+		// img2img node would go on reading whatever was registered against
+		// `text+image->image` — usually nothing — and the star would look like
+		// it had done its job. The fan-out is what makes the control's label
+		// true.
+		//
+		// A shape whose capabilities the aggregation does not name registers
+		// NOTHING rather than falling back to text: starring a config of some
+		// future shape must not quietly become "this is now the default for
+		// chat". And there is deliberately no `text->image`-only fallback for
+		// an empty aggregation — that fallback is precisely the silent gap this
+		// replaces, and it would hide an aggregation that had stopped working.
+		const shape = target.shape ?? S.textGen
+		const capabilities = await capabilitiesForShape(shape)
+		for (const capability of capabilities)
 			await setCapabilityDefault(db, capability, {
 				samplingConfigId: params.id
 			})
-
-		// The text default is ALSO still mirrored onto system_settings, because
-		// the legacy generation path reads that column and has not moved.
-		if (target.shape !== S.imageGen)
-			await db
-				.update(schema.systemSettings)
-				.set({ defaultSamplingConfigId: params.id })
-				.where(eq(schema.systemSettings.id, 1))
 
 		await user(socket, {}, emitToUser)
 		if (params.id) {
@@ -443,25 +478,47 @@ export const samplingConfigsDelete: Handler<
 			})
 			throw new Error("Cannot delete immutable samplingConfigs")
 		}
-		// If the deleted config is the system default, fall back to the first immutable config
-		const systemSettings = await db.query.systemSettings.findFirst({
-			columns: { id: true, defaultSamplingConfigId: true }
-		})
-		if (systemSettings?.defaultSamplingConfigId === params.id) {
-			const fallback = await db.query.samplingConfigs.findFirst({
-				where: (sc, { eq }) => eq(sc.isImmutable, true),
-				columns: { id: true }
+		// No fallback pick. This used to search for the first immutable config
+		// and, failing that, use `id: 1` — a first-capable search plus a
+		// hardcoded seed id, which is two of the three things piece 3 exists to
+		// delete. Nothing chooses a config because it exists.
+		//
+		// Nothing needs to happen here at all: `connection_defaults.sampling_config_id`
+		// is `ON DELETE SET NULL`, so deleting a starred config clears the
+		// registration and leaves the ROW, which is what makes "the default was
+		// cleared" a different sentence from "no default was ever set". And a
+		// null sampling default is not fatal — `resolveSampling(null)` means
+		// "send nothing and let the backend use its own defaults", a perfectly
+		// good answer. The connection half is the fatal one, and it is not
+		// touched by this.
+		// Asked BEFORE the delete, because afterwards the cascade has already
+		// erased the evidence — and asked at all so the push below is
+		// conditional. A settings push is not free of consequences: it throws on
+		// an instance with no settings row, and "delete an id that isn't there"
+		// must stay the clean no-op it is (samplingConfigs.notFoundHandling).
+		// Nothing registered means nothing to refresh.
+		const registeredAgainst = await db
+			.select({
+				// The key, which since 0183 is the transform's two sides rather
+				// than its id. Only the COUNT is read below — nothing here needs
+				// the capability named, so nothing here converts it back.
+				input: schema.connectionDefaults.input,
+				output: schema.connectionDefaults.output
 			})
-			await samplingConfigsSetUserActive.handler(
-				socket,
-				{ id: fallback?.id ?? 1 },
-				emitToUser
-			)
-		}
+			.from(schema.connectionDefaults)
+			.where(eq(schema.connectionDefaults.samplingConfigId, params.id))
+
 		await db
 			.delete(schema.samplingConfigs)
 			.where(eq(schema.samplingConfigs.id, params.id))
 		await samplingConfigsListHandler.handler(socket, {}, emitToUser)
+		// `ON DELETE SET NULL` just cleared those registrations, so every
+		// client's copy of `capabilityDefaults` still points at a row that no
+		// longer exists and the sampling sidebar would keep drawing the star on
+		// nothing. This is the push that used to ride along on the fallback
+		// setUserActive call the deletion above removed — minus the fallback.
+		if (registeredAgainst.length)
+			await systemSettingsGet.handler(socket, {}, emitToUser)
 
 		const res: Sockets.SamplingConfigs.Delete.Response = {
 			success: "Sampling config deleted successfully"

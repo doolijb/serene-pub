@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest"
+import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 
 const SECRET_KEY = "sk-do-not-leak-9f8e7d"
 const SECRET_URL = "http://192.168.1.50:5001"
@@ -34,7 +35,8 @@ let seen: {
 let mode: "text" | "stream" | "empty" | "abort" = "text"
 let connectionForRun: any = connection
 
-class FakeAdapter {
+/** Pinned to the real action, so a rename cannot pass here — fakeTextAdapter.ts. */
+class FakeAdapter implements FakeTextAdapter {
 	injected: any
 	aborted = false
 	promptBuilder: any = {}
@@ -50,7 +52,7 @@ class FakeAdapter {
 		this.aborted = true
 		seen.aborted = true
 	}
-	async generate() {
+	async generateText() {
 		if (mode === "empty")
 			return {
 				completionResult: "",
@@ -90,11 +92,16 @@ class FakeAdapter {
 vi.mock("$lib/server/utils/getConnectionAdapter", () => ({
 	getConnectionAdapter: async () => ({ Adapter: FakeAdapter })
 }))
+/** What the resolver was ASKED for — tier 2 arrives in these params. */
+let resolveArgs: any = null
 vi.mock("$lib/server/utils/resolveTaskConfig", () => ({
-	resolveTaskConfig: async () => ({
-		connection: connectionForRun,
-		sampling: { id: 1, temperature: 1 }
-	})
+	resolveTaskConfig: async (params: any) => {
+		resolveArgs = params
+		return {
+			connection: connectionForRun,
+			sampling: { id: 1, temperature: 1 }
+		}
+	}
 }))
 vi.mock("$lib/server/utils/getUserConfigurations", () => ({
 	getUserConfigurations: async () => ({
@@ -142,6 +149,7 @@ const compiled = { prompt: "You are Alice.", meta: { built: "by a Task" } }
 
 beforeEach(() => {
 	seen = {}
+	resolveArgs = null
 	mode = "text"
 	sessionRow = true
 	connectionForRun = connection
@@ -331,6 +339,33 @@ describe("the generate-text binding", () => {
 		)
 		expect(r.kind).toBe("ok")
 		expect(seen.compiledPrompt).toBe(compiled)
+	})
+
+	it("forwards its own connection and sampling slots as tier 2", async () => {
+		// The middle tier of `capability default → pipeline config → session
+		// override`. Its absence was invisible: the panel showed Connection and
+		// Sampling pickers on the reply step, they stored fine, and nothing ever
+		// read them — the run resolved from the instance default every time. The
+		// `generate-image` sibling forwarded them all along, which is what made
+		// the gap look like a difference in kind rather than an omission.
+		await runWith(
+			{ sessionId: 7 },
+			{
+				compiledPrompt: compiled,
+				connection: { id: 42 },
+				sampling: { id: 99 }
+			}
+		)
+		expect(resolveArgs?.pipelineConnectionId).toBe(42)
+		expect(resolveArgs?.pipelineSamplingId).toBe(99)
+	})
+
+	it("sends null for a slot nobody set, rather than inventing one", async () => {
+		// A node with no connection chosen must fall through to the capability
+		// default — not to a guess, and not to whatever the last run used.
+		await runWith({ sessionId: 7 })
+		expect(resolveArgs?.pipelineConnectionId).toBeNull()
+		expect(resolveArgs?.pipelineSamplingId).toBeNull()
 	})
 
 	it("halts on an empty completion rather than erroring", async () => {

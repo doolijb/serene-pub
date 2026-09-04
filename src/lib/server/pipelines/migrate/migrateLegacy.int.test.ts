@@ -27,6 +27,7 @@ let userId: number
 let sessionId: number
 let mineId: number
 let narratorMineId: number
+let sceneMineId: number
 
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
@@ -76,6 +77,23 @@ beforeAll(async () => {
 		})
 		.returning()
 	narratorMineId = narratorMine.id
+
+	// A BUNDLED legacy config, which is what the split exists for: one row
+	// carrying four texts that belong to four different node types. Under the
+	// old model they migrated as a single prompt every step pointed at; under
+	// the pool they must become one row per step, or three of the four steps
+	// refuse the configuration the migration just wrote for them.
+	const [sceneMine] = await db
+		.insert(schema.sceneSummarizeConfigs)
+		.values({
+			name: "My Scene Summarizer",
+			batchSystemPrompt: "Draft it my way.",
+			synthSystemPrompt: "Weave it my way.",
+			nameSystemPrompt: "Title it my way.",
+			characterExtractionSystemPrompt: "List the cast my way."
+		})
+		.returning()
+	sceneMineId = sceneMine.id
 
 	const [session] = await db
 		.insert(schema.sessions)
@@ -128,11 +146,15 @@ describe("a user's own config comes across", () => {
 	})
 
 	it("keeps their wording exactly", async () => {
+		// Found by `created_for_spec_id` rather than by ownership: a migrated
+		// prompt lands in the POOL its step reads from, and that pool is shared
+		// with every other pipeline reusing the step. Which pipeline it was
+		// written in is now a grouping fact, which is exactly what this asserts.
 		const specId = await specIdOf("core:spec/respond")
 		const prompts = await db
 			.select()
 			.from(schema.pipelinePrompts)
-			.where(eq(schema.pipelinePrompts.specId, specId))
+			.where(eq(schema.pipelinePrompts.createdForSpecId, specId))
 		const mine: any = prompts.find(
 			(p: any) => p.name === "My Questions-Only Config"
 		)
@@ -140,6 +162,121 @@ describe("a user's own config comes across", () => {
 		expect(mine.isImmutable).toBe(false)
 		expect(mine.fields.systemPrompt).toBe(MY_SYSTEM)
 		expect(mine.fields.postHistoryInstructions).toBe(MY_POST)
+	})
+
+	/**
+	 * The split, which is what "no data migration" does **not** exempt.
+	 *
+	 * A legacy summarize config is a bundle: `batch`, `synth` and `name` belong
+	 * to three different node types and only ever travelled together because
+	 * the spec was the namespace. Copied whole into one pool, the other two
+	 * steps would refuse the row — the panel would show a migrated
+	 * configuration and then decline to let its own steps use it.
+	 */
+	it("splits a bundled legacy config into one prompt per pool", async () => {
+		const specId = await specIdOf("core:spec/summarize-scene")
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.id, specId))
+		const { declarations } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		const decls = (
+			await declarations(db as any, spec.activeVersionId!)
+		).filter((d: any) => d.control === "prompts-ref")
+		const pools = new Set(
+			decls.map((d: any) => `${d.nodeTypeId}#${d.slot}`)
+		)
+		expect(
+			pools.size,
+			"the scene summarizer no longer reads from several pools"
+		).toBeGreaterThan(1)
+
+		const [config] = await db
+			.select()
+			.from(schema.pipelineConfigs)
+			.where(
+				eq(
+					schema.pipelineConfigs.seedKey,
+					`migrated:core:spec/summarize-scene:${sceneMineId}`
+				)
+			)
+		expect(config, "the scene config was not migrated").toBeTruthy()
+
+		const values = (
+			await db
+				.select()
+				.from(schema.pipelineConfigValues)
+				.where(eq(schema.pipelineConfigValues.configId, config.id))
+		).filter((v: any) => v.slot === "prompts")
+
+		const seen = new Set<number>()
+		for (const d of decls) {
+			const v: any = values.find(
+				(row: any) => row.nodeKey === d.nodeKey && row.slot === d.slot
+			)
+			expect(
+				v,
+				`${d.nodeKey}.${d.slot} got no prompt from the migration`
+			).toBeTruthy()
+			const [row] = await db
+				.select()
+				.from(schema.pipelinePrompts)
+				.where(eq(schema.pipelinePrompts.id, v.value))
+			// In the step's own pool, carrying that step's fields and nothing
+			// belonging to another one.
+			expect(`${row.nodeTypeId}#${row.slot}`).toBe(
+				`${(d as any).nodeTypeId}#${d.slot}`
+			)
+			expect(Object.keys(row.fields as any).sort()).toEqual(
+				[...((d as any).promptFields ?? [])].sort()
+			)
+			seen.add(row.id)
+		}
+		// Several rows, not one bundle pointed at from four places.
+		expect(seen.size).toBe(pools.size)
+	})
+
+	it("re-uses one row where two pipelines migrate the same legacy config", async () => {
+		// Scene and history summarization read the same legacy table into pools
+		// they share. Two rows would be a duplicate the pool's unique name index
+		// refuses — a raw constraint error in the middle of boot — so the second
+		// pass must find the first pass's row.
+		const sceneId = await specIdOf("core:spec/summarize-scene")
+		const historyId = await specIdOf("core:spec/summarize-history")
+		const valuesOf = async (specId: number, seedKey: string) => {
+			const [config] = await db
+				.select()
+				.from(schema.pipelineConfigs)
+				.where(eq(schema.pipelineConfigs.seedKey, seedKey))
+			if (!config) return new Map<string, number>()
+			expect(config.specId).toBe(specId)
+			const rows = await db
+				.select()
+				.from(schema.pipelineConfigValues)
+				.where(eq(schema.pipelineConfigValues.configId, config.id))
+			return new Map<string, number>(
+				(rows as any[])
+					.filter((r) => r.slot === "prompts")
+					.map((r) => [r.nodeKey, r.value])
+			)
+		}
+		const scene = await valuesOf(
+			sceneId,
+			`migrated:core:spec/summarize-scene:${sceneMineId}`
+		)
+		const history = await valuesOf(
+			historyId,
+			`migrated:core:spec/summarize-history:${sceneMineId}`
+		)
+		let shared = 0
+		for (const [nodeKey, id] of history)
+			if (scene.has(nodeKey)) {
+				expect(scene.get(nodeKey)).toBe(id)
+				shared++
+			}
+		expect(shared, "the two summarizers migrated no shared step").toBeGreaterThan(0)
 	})
 
 	it("puts the narrator's own config in the narrator namespace, not the reply one", async () => {
@@ -158,7 +295,7 @@ describe("a user's own config comes across", () => {
 		const prompts = await db
 			.select()
 			.from(schema.pipelinePrompts)
-			.where(eq(schema.pipelinePrompts.specId, narrateId))
+			.where(eq(schema.pipelinePrompts.createdForSpecId, narrateId))
 		const mine: any = prompts.find((p: any) => p.name === "My Narrator")
 		expect(mine.fields.narratorName).toBe("The Room")
 	})

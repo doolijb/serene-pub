@@ -4701,7 +4701,7 @@ export const promptTokenCountHandler: Handler<
 			// resolveTaskConfig (session override → prompt config override → system default)
 			const { contextConfig, promptConfig } =
 				await getUserConfigurations(userId)
-			const { connection, sampling } = await resolveTaskConfig({
+			const { connection, sampling, problem } = await resolveTaskConfig({
 				taskType: "session",
 				promptConfigId: promptConfig?.id,
 				sessionId: session.id
@@ -4709,7 +4709,12 @@ export const promptTokenCountHandler: Handler<
 
 			if (!connection) {
 				const res: Sockets.Sessions.PromptTokenCount.Response = {
-					error: "No AI connection configured. Please set up a connection first."
+					// The resolver's sentence names which tier failed and where
+					// to fix it; the literal below is only for a caller that
+					// somehow returned no connection and no reason.
+					error:
+						problem?.message ??
+						"No AI connection configured. Please set up a connection first."
 				}
 				emitToUser("sessions:promptTokenCount", res)
 				return res

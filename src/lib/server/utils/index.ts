@@ -7,7 +7,7 @@ import * as schema from "$lib/server/db/schema"
 import {
 	createMedia,
 	clientMediaFor,
-	deleteMedia,
+	deleteFile,
 	getMedia,
 	mediaFor,
 	reorderMedia
@@ -113,16 +113,20 @@ export async function handleCharacterAvatarUpload({
 	character: { id: number; userId: number; avatarMediaId?: number | null }
 	avatarFile: Buffer
 }) {
-	const row = await createMedia(db, {
+	// `createMedia` answers with the file and the original variant it just
+	// wrote (0182). An avatar pointer names the FILE — never a stored
+	// representation, which is what lets the original be culled later without
+	// stranding the pointer.
+	const created = await createMedia(db, {
 		userId: character.userId,
 		characterId: character.id,
 		bytes: avatarFile
 	})
 	await db
 		.update(schema.characters)
-		.set({ avatarMediaId: row.id })
+		.set({ avatarMediaId: created.file.id })
 		.where(eq(schema.characters.id, character.id))
-	return row
+	return created
 }
 
 export async function handlePersonaAvatarUpload({
@@ -132,16 +136,16 @@ export async function handlePersonaAvatarUpload({
 	persona: { id: number; userId: number; avatarMediaId?: number | null }
 	avatarFile: Buffer
 }) {
-	const row = await createMedia(db, {
+	const created = await createMedia(db, {
 		userId: persona.userId,
 		personaId: persona.id,
 		bytes: avatarFile
 	})
 	await db
 		.update(schema.personas)
-		.set({ avatarMediaId: row.id })
+		.set({ avatarMediaId: created.file.id })
 		.where(eq(schema.personas.id, persona.id))
-	return row
+	return created
 }
 
 /**
@@ -195,7 +199,7 @@ export async function deleteUserBackground({
 	// Ownership is the whole check: a background has no entity parent, so
 	// there is no sharing path that could make someone else's deletable.
 	if (!row || row.userId !== userId) return
-	await deleteMedia(db, mediaId)
+	await deleteFile(db, mediaId)
 	await db
 		.update(schema.userSettings)
 		.set({ backgroundMediaId: null })
@@ -257,8 +261,10 @@ export async function uploadPersonaGalleryImage({
  * the row and the file were two independent facts that drifted. They are one
  * fact now, so this is a query.
  *
- * Returns originals only, and not by filtering: a thumbnail carries no
- * `characterId`, so it never matches (28 §5).
+ * Returns files, and not by filtering: since 0182 a stored representation has
+ * no provenance columns at all, so `characterId = X` cannot match one. That
+ * absence replaced the old trick of writing a thumbnail with all four
+ * provenance columns NULL to keep it out of exactly this query.
  */
 export async function listCharacterGallery({
 	characterId
@@ -288,7 +294,7 @@ export async function deleteCharacterGalleryImage({
 }) {
 	const row = await getMedia(db, mediaId)
 	if (!row || row.characterId !== characterId) return
-	await deleteMedia(db, mediaId)
+	await deleteFile(db, mediaId)
 	// The deleted image may have been the avatar. Clearing the pointer is
 	// cheap and keeps a broken image off every card and message; a dangling
 	// pointer elsewhere is tolerated by design, but not one we can see.
@@ -313,7 +319,7 @@ export async function deletePersonaGalleryImage({
 }) {
 	const row = await getMedia(db, mediaId)
 	if (!row || row.personaId !== personaId) return
-	await deleteMedia(db, mediaId)
+	await deleteFile(db, mediaId)
 	await db
 		.update(schema.personas)
 		.set({ avatarMediaId: null })

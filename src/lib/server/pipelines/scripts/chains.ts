@@ -578,33 +578,33 @@ export async function scriptExtras(
 
 /**
  * The run's connection and its stop guards, by the one rule the runtime uses:
- * the instance default (`system_settings.default_connection_id`) — the same
- * connection dispatch resolves for the generate step. Best-effort like
- * `scriptExtras`: no default, no rows, or a failed read means no guards, never
- * a failed turn.
+ * the instance's registered `text->text` default — the same connection dispatch
+ * resolves for the generate step. Best-effort like `scriptExtras`: no default,
+ * no rows, or a failed read means no guards, never a failed turn.
+ *
+ * ⚠ It read `system_settings.default_connection_id` directly until 0181, which
+ * is why this docblock named a column. `connection_defaults` is the only store
+ * now, and the read goes through `resolveCapabilityTarget` rather than the table
+ * so this and the generate step cannot end up guarding different connections —
+ * a stop guard attached to the connection the run is NOT using is worse than no
+ * guard, because the receipt says a guard was in play.
  */
 export async function connectionStopsFor(
 	db: Db
 ): Promise<ScriptApplierOptions["connectionStops"]> {
 	try {
-		const [settings] = await db
-			.select({
-				defaultConnectionId: schema.systemSettings.defaultConnectionId
-			})
-			.from(schema.systemSettings)
-			.where(eq(schema.systemSettings.id, 1))
-			.limit(1)
-		const connectionId = settings?.defaultConnectionId
-		if (connectionId == null) return undefined
-		const [conn] = await db
-			.select({
-				id: schema.connections.id,
-				name: schema.connections.name
-			})
-			.from(schema.connections)
-			.where(eq(schema.connections.id, connectionId))
-			.limit(1)
-		if (!conn) return undefined
+		const { resolveCapabilityTarget, TEXT_CAPABILITY } = await import(
+			"$lib/server/connections/capabilityTarget"
+		)
+		const target = await resolveCapabilityTarget(db, {
+			capability: TEXT_CAPABILITY
+		})
+		// The refusal sentence is deliberately dropped rather than surfaced.
+		// Nothing here is the run: the turn fails (or doesn't) at dispatch, with
+		// that same sentence, and raising it from a guard lookup would report a
+		// missing default twice and from the wrong place.
+		if (!target.ok) return undefined
+		const conn = target.connection
 		const { listConnectionScripts } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)

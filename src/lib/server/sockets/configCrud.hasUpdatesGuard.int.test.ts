@@ -6,15 +6,19 @@
  * promptConfigsUpdate/narratorPromptConfigsUpdate/
  * summarizePromptConfigsUpdate (round 8). Also: samplingConfigsCreate used
  * to call samplingConfigsSetUserActive after insert, silently making every
- * newly created sampling config the instance-wide default
- * (systemSettings.defaultSamplingConfigId) — unlike every sibling
- * *ConfigsCreate handler.
+ * newly created sampling config the instance-wide default — unlike every
+ * sibling *ConfigsCreate handler.
+ *
+ * That default used to be `systemSettings.defaultSamplingConfigId`. The column
+ * is gone (0181) and `connection_defaults` is the only store, so the assertions
+ * below read the table. Same subject, same bug guarded; the assertion had to
+ * move or it would have compiled to a comparison of two `undefined`s.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { byCapability } from "$lib/server/connections/capabilityDefaults"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
@@ -134,13 +138,23 @@ describe("samplingConfigsUpdate — empty .set() guard", () => {
 })
 
 describe("samplingConfigsCreate — no longer sets the instance-wide default", () => {
-	test("creating a sampling config doesn't change systemSettings.defaultSamplingConfigId", async () => {
+	/**
+	 * REPOINTED, not rewritten. The subject is unchanged — creating a config
+	 * must not make it the instance default — but the place a default LIVES
+	 * moved: `system_settings.default_sampling_id` is gone (0181) and
+	 * `connection_defaults` is the only store. Asserting against the dropped
+	 * column would have compiled to nothing and passed forever.
+	 *
+	 * It is asserted against the TABLE rather than deleted because it is the
+	 * only coverage that create does not reach the defaults path at all, and
+	 * that path is now a fan-out over every capability sharing the config's
+	 * shape — strictly more to go wrong than the single column it replaced.
+	 */
+	test("creating a sampling config registers no capability default", async () => {
 		const { samplingConfigsCreate } = await import("./samplingConfigs")
 		const admin = await makeAdmin("config-crud-sampling-create-user")
 
-		const before = await testDb.query.systemSettings.findFirst({
-			where: (s, { eq }) => eq(s.id, 1)
-		})
+		const before = await testDb.select().from(schema.connectionDefaults)
 
 		const res = await samplingConfigsCreate.handler(
 			fakeSocket(admin.id),
@@ -148,12 +162,48 @@ describe("samplingConfigsCreate — no longer sets the instance-wide default", (
 			noopEmit
 		)
 
-		const after = await testDb.query.systemSettings.findFirst({
-			where: (s, { eq }) => eq(s.id, 1)
-		})
-		expect(after?.defaultSamplingConfigId).toBe(
-			before?.defaultSamplingConfigId
+		const after = await testDb.select().from(schema.connectionDefaults)
+		expect(after).toEqual(before)
+		expect(
+			after.some((r) => r.samplingConfigId === res.sampling.id),
+			"the created config was registered as a default — samplingConfigsCreate is calling the star path again"
+		).toBe(false)
+	})
+
+	test("starring one DOES register it, against every capability sharing its shape", async () => {
+		// The other half, and the reason the assertion above is not vacuous: if
+		// setUserActive had stopped writing anything, "create writes nothing"
+		// would pass for the wrong reason. Text-gen is the shape a row with no
+		// `shape` column takes, and `text->text` is the capability it speaks.
+		const { samplingConfigsCreate, samplingConfigsSetUserActive } =
+			await import("./samplingConfigs")
+		const admin = await makeAdmin("config-crud-sampling-star-user")
+
+		// The star path finishes by pushing `systemSettings:get`, which is how
+		// every client's copy of `capabilityDefaults` refreshes — and that
+		// handler throws on an instance with no settings row. A test DB is
+		// migrated but not seeded, so the row has to exist here for the same
+		// reason it exists on a real install.
+		await testDb
+			.insert(schema.systemSettings)
+			.values({ id: 1 })
+			.onConflictDoNothing()
+
+		const res = await samplingConfigsCreate.handler(
+			fakeSocket(admin.id),
+			{ sampling: { name: "Starred Sampling Config" } as any },
+			noopEmit
 		)
-		expect(after?.defaultSamplingConfigId).not.toBe(res.sampling.id)
+		await samplingConfigsSetUserActive.handler(
+			fakeSocket(admin.id),
+			{ id: res.sampling.id },
+			noopEmit
+		)
+
+		const rows = await testDb
+			.select()
+			.from(schema.connectionDefaults)
+			.where(byCapability("text->text"))
+		expect(rows[0]?.samplingConfigId).toBe(res.sampling.id)
 	})
 })

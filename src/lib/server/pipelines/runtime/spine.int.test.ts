@@ -8,7 +8,7 @@
  * against real rows.
  *
  * The model is faked and only the model. Everything else — the store, the
- * registry, the host, the adapters' own `generate()` — is the real code.
+ * registry, the host, the adapters' own `generateText()` — is the real code.
  *
  * What this does **not** prove is parity. It proves the spine runs end to end
  * and that each stage's output reaches the next one; whether the bytes match
@@ -23,14 +23,26 @@ import { saveDocument, loadDocument } from "$lib/server/pipelines/boot/store"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
+import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { spec, compile, run, slot } from "@serene-pub/sdk"
 import * as C from "@serene-pub/contracts"
 import * as schema from "$lib/server/db/schema"
+import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 
 /** What the fake model was asked to say, so a test can read the prompt back. */
 let lastPrompt: any = null
 
-class FakeAdapter {
+/**
+ * `implements` is load-bearing here, more than anywhere else in this directory.
+ *
+ * `dispatch.ts`'s header records that THIS fake once "accepted whatever it was
+ * given", so the pipeline was handing a real adapter a payload carrying neither
+ * `prompt` nor `messages` — an empty generation that read as a model fault. The
+ * clause pins the one action the fake stands in for at the real signature, so a
+ * drift from it fails to compile rather than passing green. See
+ * fakeTextAdapter.ts for why `implements AdapterActions` would check nothing.
+ */
+class FakeAdapter implements FakeTextAdapter {
 	injected: any
 	promptBuilder: any = {}
 	constructor(_params: any) {}
@@ -40,7 +52,7 @@ class FakeAdapter {
 		return this
 	}
 	abort() {}
-	async generate() {
+	async generateText() {
 		return {
 			completionResult: "The Ashguard ride at dawn.",
 			compiledPrompt: this.injected,
@@ -192,14 +204,12 @@ beforeAll(async () => {
 		.returning()
 	sessionId = session.id
 
-	await db
-		.insert(schema.sessionCharacters)
-		.values({
-			sessionId,
-			characterId,
-			isActive: true,
-			visibility: "visible"
-		})
+	await db.insert(schema.sessionCharacters).values({
+		sessionId,
+		characterId,
+		isActive: true,
+		visibility: "visible"
+	})
 	await db
 		.insert(schema.sessionPersonas)
 		.values({ sessionId, personaId: persona.id })
@@ -218,34 +228,58 @@ beforeAll(async () => {
 			{ sessionId, role: "user", content: "Have you seen the ashguard?" }
 		])
 
-	// The story string a user would have authored, reached the way the app
-	// reaches it: a context config row, pointed at by system settings, resolved
-	// through `buildWorld`. Passing the template inline would skip the layer
-	// that decides which template a given session actually gets.
-	const [contextConfig] = await db
-		.insert(schema.contextConfigs)
-		.values({
-			name: "Spine Context",
-			template:
-				"{{instructions}}\n{{characters}}\n{{#each sessionMessages}}{{this.content}}\n{{/each}}"
-		})
-		.returning()
-
-	// A fresh install has no settings row until one is written; the world
-	// resolver reads it rather than assuming a default, which is why this has to
-	// exist for the template to reach Assemble at all.
-	await db
-		.insert(schema.systemSettings)
-		.values({ id: 1, defaultContextConfigId: contextConfig.id })
+	// ⚠ The story string used to be seeded as a `context_configs` row pointed at
+	// by `system_settings.default_context_config_id`, on the stated grounds that
+	// this was "the way the app reaches it". It has not been, since `world.ts`
+	// stopped projecting that table — the template is a
+	// `pipeline_context_templates` reference resolved through the config layer
+	// now, and this ad-hoc spec has no config layer to resolve it through.
+	//
+	// **This test stayed green for the whole of that time while Assemble
+	// rendered nothing of the kind.** The slot resolved to `{}`, the binding
+	// coerced it with `String(...)` into the literal seven characters
+	// `[object Object]`, that is a perfectly valid Handlebars template, and
+	// every assertion here only checks that `rendered` is a *string*. Making
+	// the engine reach the renderer is what surfaced it: an empty object has no
+	// engine either.
+	//
+	// So the template is layered into the world directly, exactly as
+	// `parity/harness.ts` does for the same reason — `source` and `engine`
+	// together, never one alone.
+	await db.insert(schema.systemSettings).values({ id: 1 })
 }, 60_000)
+
+const SPINE_TEMPLATE =
+	"{{instructions}}\n{{characters}}\n{{#each sessionMessages}}{{this.content}}\n{{/each}}"
 
 const execute = async (input: any = {}) => {
 	const saved = await saveDocument(db as any, promptPipeline(), {
 		publish: true
 	})
 	const doc = await loadDocument(db as any, saved.specVersionId)
+	const world = await buildWorld(db as any, { sessionId })
+	// At `defaults`, under anything a fixture might override — and as a PAIR,
+	// which is the rule `world.ts`'s `pushTemplate` enforces on the real path.
+	// A source with no engine now halts rather than being rendered as
+	// Handlebars on a guess.
+	world.overrides.push(
+		{
+			nodeKey: "prompt",
+			slot: "template",
+			path: "source",
+			value: SPINE_TEMPLATE,
+			scopeKind: "defaults"
+		} as any,
+		{
+			nodeKey: "prompt",
+			slot: "template",
+			path: "engine",
+			value: CORE_TEMPLATE_ENGINE,
+			scopeKind: "defaults"
+		} as any
+	)
 	return await run(doc, {
-		world: await buildWorld(db as any, { sessionId }),
+		world,
 		input: {
 			text: "Have you seen the ashguard?",
 			sessionScope: { sessionId },
@@ -294,9 +328,18 @@ describe("the prompt path, end to end", () => {
 		expect(at("history").output).toBeTruthy()
 		expect((at("lore").output as any).hits.length).toBeGreaterThan(0)
 		expect((at("context").output as any).templateContext.char).toBe("Alice")
-		expect((at("prompt").output as any).context.rendered).toBeTypeOf(
-			"string"
-		)
+		// ⚠ Not just "is a string". That is all this asserted for the whole
+		// period in which Assemble was rendering the literal `[object Object]`
+		// — a template that never arrived, coerced into truthiness, compiled by
+		// Handlebars without complaint. A type check cannot tell a prompt from
+		// a stringified empty object; naming something the story string must
+		// have put there can.
+		const rendered = (at("prompt").output as any).context.rendered
+		expect(rendered).toBeTypeOf("string")
+		expect(rendered).not.toContain("[object Object]")
+		// `{{characters}}` — a value only the story string could have placed
+		// there, and one no coercion accident produces.
+		expect(rendered).toContain("A knight sworn to Bob.")
 		expect((at("generate").output as any).text).toBe(
 			"The Ashguard ride at dawn."
 		)

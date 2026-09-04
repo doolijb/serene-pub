@@ -17,6 +17,10 @@ import {
 	resolveCharacterRefs
 } from "$lib/server/utils/summarizer/availableSceneCast"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
+import {
+	resolveCapabilityTarget,
+	TEXT_CAPABILITY
+} from "$lib/server/connections/capabilityTarget"
 import { activityStore } from "$lib/server/utils/activityStore"
 import { withSessionTriggerLock } from "$lib/server/utils/sessionTriggerLock"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
@@ -511,7 +515,7 @@ export const sceneCompileHandler: Handler<
 			throw new Error("No scenes found for this history entry.")
 		}
 
-		const { connection, sampling, contextConfig, promptConfig } =
+		const { contextConfig, promptConfig } =
 			await getUserConfigurations(userId)
 
 		/**
@@ -533,14 +537,38 @@ export const sceneCompileHandler: Handler<
 			await resolveStepConfigs(db, SUMMARIZE_HISTORY_SPEC_ID, ["synth"])
 		)["synth"]
 
-		const compileConnection = synthCfg?.connection ?? connection
-		const compileSampling = synthCfg?.sampling ?? sampling
-
-		if (!compileConnection) {
+		// The synth node's own pick, over the instance's `text->text` default.
+		//
+		// It used to be `synthCfg?.connection ?? connection`, where `connection`
+		// came from `getUserConfigurations` — a fourth tier, and one that read
+		// the instance default from a different column than every other
+		// consumer. `resolveCapabilityTarget` is the whole chain: the capability
+		// default underneath, the synth node's selection over it, and the
+		// refusal sentence when neither spoke. `resolveStepConfigs` hands back
+		// rows, so their ids go in as the pipelineConfig tier.
+		const target = await resolveCapabilityTarget(db, {
+			capability: TEXT_CAPABILITY,
+			pipelineConfig: {
+				connectionId: synthCfg?.connection?.id ?? null,
+				samplingConfigId: synthCfg?.sampling?.id ?? null
+			}
+		})
+		if (!target.ok) throw new Error(target.problem.message)
+		const compileConnection = target.connection
+		// ⚠ A missing sampling config is NOT fatal to the chain — `resolveSampling
+		// (null)` means "let the backend use its own defaults" — but it is fatal
+		// to THIS caller: `compileScenesForEntry` takes a row and reads
+		// `sampling.name` off it to label the queue entry. So it is refused here,
+		// where the sentence can name a screen, rather than reaching the
+		// summarizer as a null and surfacing as a property access on undefined.
+		// It is only reachable if somebody clears the sampling half explicitly —
+		// `db/defaults.ts` re-seeds `text->text` on every boot while it is unset.
+		if (!target.sampling)
 			throw new Error(
-				"No AI connection configured. Please set up a connection first."
+				"No sampling config is set for chat, and summarizing needs one. " +
+					"Choose one in Admin → Defaults."
 			)
-		}
+		const compileSampling = target.sampling
 
 		const lorebook = (historyEntry as any).lorebook
 		const historyEntryDate = `Year ${historyEntry.year}${historyEntry.month ? `, Mo. ${historyEntry.month}` : ""}${historyEntry.day ? `, Day ${historyEntry.day}` : ""}`

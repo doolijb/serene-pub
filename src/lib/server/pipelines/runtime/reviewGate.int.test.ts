@@ -15,6 +15,8 @@ import { describe, it, expect, beforeAll, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
+import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
+import type { CompiledPrompt } from "$lib/server/connectionAdapters/types"
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 })
 
@@ -25,14 +27,25 @@ const answers = [
 ]
 let call = 0
 
-class FakeStepAdapter {
+/**
+ * What a step adapter reports it sent — see summarizeRun.int.test.ts for the
+ * same shape and the reason it is stated rather than left as `{}`.
+ */
+const NO_PAYLOAD: CompiledPrompt = {
+	prompt: undefined,
+	messages: undefined,
+	meta: {} as any
+}
+
+/** Pinned to the real action, so a rename cannot pass here — fakeTextAdapter.ts. */
+class FakeStepAdapter implements FakeTextAdapter {
 	constructor(_p: any) {}
 	abort() {}
 	async preflight() {}
-	async generate() {
+	async generateText() {
 		const text = answers[Math.min(call++, answers.length - 1)]!
 		return {
-			compiledPrompt: {},
+			compiledPrompt: NO_PAYLOAD,
 			isAborted: false,
 			completionResult: async (onContent: (c: string) => void) => {
 				onContent(text)
@@ -94,20 +107,18 @@ beforeAll(async () => {
 		.insert(schema.samplingConfigs)
 		.values({ name: "Fake sampling", isImmutable: false })
 		.returning()
-	await db
-		.insert(schema.systemSettings)
-		.values({
-			id: 1,
-			defaultConnectionId: connection.id,
-			defaultSamplingConfigId: sampling.id
-		})
-		.onConflictDoUpdate({
-			target: [schema.systemSettings.id],
-			set: {
-				defaultConnectionId: connection.id,
-				defaultSamplingConfigId: sampling.id
-			}
-		})
+	// The instance default: a `connection_defaults` row keyed by capability since
+	// 0181, where it used to be two `system_settings` columns. Not decoration —
+	// the summarize steps have no connection of their own, and under the
+	// no-implicit-pickup rule an unregistered capability means every step
+	// refuses before the gate is ever reached.
+	const { setCapabilityDefault } = await import(
+		"$lib/server/connections/capabilityDefaults"
+	)
+	await setCapabilityDefault(db as any, "text->text", {
+		connectionId: connection.id,
+		samplingConfigId: sampling.id
+	})
 
 	const { SUMMARIZE_WORLD_SPEC_ID } = await import(
 		"$lib/server/pipelines/specs/summarize"

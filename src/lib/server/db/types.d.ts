@@ -187,9 +187,15 @@ export global {
 	// The message model (20 §1)
 	export type SelectMessagePart = typeof schema.messageParts.$inferSelect
 	export type SelectMessageRow = typeof schema.messages.$inferSelect
-	export type SelectMedia = typeof schema.media.$inferSelect
-	/** @deprecated 28 folded session_assets into media. */
-	export type SelectSessionAsset = SelectMedia
+	// Media (28, resplit by 0182): a `files` row is the logical file and its
+	// metadata, a `variants` row is one set of bytes on disk. A payload is
+	// built from the file row alone.
+	export type SelectFile = typeof schema.files.$inferSelect
+	export type SelectVariant = typeof schema.variants.$inferSelect
+	/** @deprecated 28 folded session_assets into media, and 0182 split media
+	 *  into files + variants. This is the FILE row; bytes, mime and path live
+	 *  on a variant. */
+	export type SelectSessionAsset = SelectFile
 
 	// Session Persona types
 	export type SelectSessionPersona =

@@ -140,9 +140,12 @@ export async function migrateContextTemplates(
 		}
 
 		if (legacy.seedKey === CORE_CONTEXT_SEED_KEY) {
+			// Core's engine by name rather than by `legacy.engine`: this branch
+			// is core's own seeded row, and 0.5 had one template language.
 			const shipped = await defaultContextTemplateFor(
 				db,
-				CONTEXT_TEMPLATE_NODE_TYPE
+				CONTEXT_TEMPLATE_NODE_TYPE,
+				CORE_TEMPLATE_ENGINE
 			)
 			copies.set(legacyId, shipped)
 			return shipped

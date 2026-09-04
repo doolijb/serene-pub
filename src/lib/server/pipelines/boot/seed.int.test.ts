@@ -22,7 +22,7 @@ import { describe, it, expect, beforeAll, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -243,18 +243,66 @@ describe("core's specs", () => {
 			// for specs that declare prompt slots at all. A promptless spec
 			// (create-chat is one: identity + shape, no LLM step yet) rightly
 			// ships nothing here.
-			if (promptDecls.length > 0) {
-				const prompts = await db
+			for (const d of promptDecls) {
+				const rows = await db
 					.select()
 					.from(schema.pipelinePrompts)
-					.where(eq(schema.pipelinePrompts.specId, spec.id))
+					.where(
+						and(
+							eq(
+								schema.pipelinePrompts.nodeTypeId,
+								(d as any).nodeTypeId
+							),
+							eq(schema.pipelinePrompts.slot, d.slot)
+						)
+					)
 				expect(
-					prompts.some((p: any) => p.isImmutable),
-					`${entry.slug} has no shipped prompt row`
+					rows.some((p: any) => p.isImmutable),
+					`${entry.slug} step ${d.nodeKey}.${d.slot} has no shipped prompt row`
 				).toBe(true)
 			}
 		}
 	})
+
+	/**
+	 * The one property that carries the whole re-keying, now that there is no
+	 * data migration behind it: **a fresh install converges, and a second boot
+	 * changes nothing.**
+	 *
+	 * Run as `sync()` + `bootstrapPipelines()` twice in one `it`, and compared
+	 * byte for byte rather than by row count. A count catches a duplicate and
+	 * misses everything else — a refresh pass that rewrites the same text with
+	 * a new `updated_at`, a sweep that moves a field out and back, a
+	 * `default_for_specs` that flips. Each of those is a boot that never
+	 * settles, and none of them shows up anywhere a person would look.
+	 */
+	it("seeds prompts identically on a second boot", async () => {
+		const snapshot = async () =>
+			(await db.select().from(schema.pipelinePrompts))
+				.map((r: any) =>
+					JSON.stringify({
+						id: r.id,
+						nodeTypeId: r.nodeTypeId,
+						slot: r.slot,
+						seedKey: r.seedKey,
+						name: r.name,
+						isImmutable: r.isImmutable,
+						createdForSpecId: r.createdForSpecId,
+						defaultForSpecs: r.defaultForSpecs,
+						fields: r.fields,
+						archivedFields: r.archivedFields
+					})
+				)
+				.sort()
+
+		const before = await snapshot()
+		expect(before.length).toBeGreaterThan(0)
+
+		await (await import("$lib/server/db/defaults")).sync()
+		await bootstrapPipelines(db as any)
+
+		expect(await snapshot()).toEqual(before)
+	}, 120_000)
 
 	it("subscribes each spec to the event it declared", async () => {
 		const subs = await db.select().from(schema.pipelineEventSubscriptions)

@@ -3,21 +3,26 @@ import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 
 /**
- * Gets user's active context/prompt configurations with fallback to system defaults.
- * Connection and sampling config are resolved separately via resolveTaskConfig.
+ * The user's active context/prompt configurations, with fallback to the system
+ * defaults. The 0.5 archives, in other words — three columns on
+ * `system_settings` that still point at three legacy tables.
+ *
+ * ⚠ It used to hand back a `connection` and a `sampling` too, read from
+ * `system_settings.default_connection_id` / `default_sampling_id`. Those columns
+ * are gone (0181) and, more to the point, so is the arrangement: this was a
+ * SECOND reading of the instance default sitting beside `resolveTaskConfig`'s,
+ * and the two were only ever equal because they read the same column. Both call
+ * sites promptly used it as a fourth resolution tier — `resolved.sampling ??
+ * defaultSampling` in `dispatch.ts`, `synthCfg?.connection ?? connection` in
+ * `scenes.ts` — which was a no-op right up until it wouldn't have been.
+ *
+ * Connection and sampling come from `resolveCapabilityTarget` now, through
+ * `resolveTaskConfig` or directly. There is one chain and this is not on it.
  */
 export async function getUserConfigurations(
 	userId: number,
 	retryCount = 0
 ): Promise<{
-	connection: SelectConnection | null
-	/**
-	 * The row, not the parameters — same contract as `ResolvedTaskConfig.sampling`
-	 * (resolveTaskConfig.ts). Callers that hand it to an adapter run it through
-	 * `resolveSampling()` first; spreading the row would put `values`/`enabled`
-	 * on the wire and send samplers the user had switched off.
-	 */
-	sampling: SelectSamplingConfig
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
 	narratorPromptConfig: SelectNarratorPromptConfig | null
@@ -62,30 +67,13 @@ export async function getUserConfigurations(
 				})
 			: undefined
 
-		// Resolve connection + sampling from system default (no per-user override anymore)
-		const connection = systemSettings?.defaultConnectionId
-			? await db.query.connections.findFirst({
-					where: (c, { eq }) =>
-						eq(c.id, systemSettings.defaultConnectionId!)
-				})
-			: undefined
-
-		const sampling = systemSettings?.defaultSamplingConfigId
-			? await db.query.samplingConfigs.findFirst({
-					where: (sc, { eq }) =>
-						eq(sc.id, systemSettings.defaultSamplingConfigId!)
-				})
-			: undefined
-
-		if (!sampling || !contextConfig || !promptConfig) {
+		if (!contextConfig || !promptConfig) {
 			throw new Error(
-				`Missing required configuration for user ${userId}:${!sampling ? " sampling" : ""}${!contextConfig ? " context" : ""}${!promptConfig ? " prompt" : ""}`
+				`Missing required configuration for user ${userId}:${!contextConfig ? " context" : ""}${!promptConfig ? " prompt" : ""}`
 			)
 		}
 
 		return {
-			connection: connection ?? null,
-			sampling,
 			contextConfig,
 			promptConfig,
 			narratorPromptConfig: narratorPromptConfig ?? null
@@ -102,18 +90,27 @@ export async function getUserConfigurations(
 				const systemSettings = await db.query.systemSettings.findFirst({
 					where: (s, { eq }) => eq(s.id, 1)
 				})
+				// ⚠ `defaultSamplingConfigId: 1` used to be here, and it was two
+				// rule violations in one line: a hardcoded row id (nothing
+				// guarantees the seeded sampling config is at id 1 — see
+				// `defaults.ts`, which resolves every seeded row by `seedKey`
+				// precisely because a repair pointed at an id once overwrote a
+				// user's config), and a REPAIR path writing an instance default,
+				// which is now a `connection_defaults` row that only
+				// `db/defaults.ts` seeds and only by seedKey.
+				//
+				// The two context/prompt ids below are the same violation and are
+				// deliberately left: they point at the 0.5 archive tables, and
+				// unpicking them is its own change. Recorded rather than fixed by
+				// halves.
 				if (!systemSettings) {
 					await db.insert(schema.systemSettings).values({
 						id: 1,
-						defaultConnectionId: null,
-						defaultSamplingConfigId: 1,
 						defaultContextConfigId: 1,
 						defaultPromptConfigId: 1
 					})
 				} else {
 					const updates: any = {}
-					if (!systemSettings.defaultSamplingConfigId)
-						updates.defaultSamplingConfigId = 1
 					if (!systemSettings.defaultContextConfigId)
 						updates.defaultContextConfigId = 1
 					if (!systemSettings.defaultPromptConfigId)

@@ -7,29 +7,63 @@
  */
 import { describe, expect, test, vi } from "vitest"
 import { runQueuedLLMCall } from "./runQueuedLLMCall"
+import type { TextGenResult } from "$lib/server/adapters/actions"
+import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
+import type { CompiledPrompt } from "$lib/server/connectionAdapters/types"
 
 function macrotask() {
 	return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
+/**
+ * What the mock reports it sent. Nothing here reads it back, but the action
+ * requires it — so the fake states an empty payload rather than omitting a field
+ * the real `generateText` promises. The `as any` is on `meta` alone: those
+ * fields describe a build that did not happen.
+ */
+const NO_PAYLOAD: CompiledPrompt = {
+	prompt: undefined,
+	messages: undefined,
+	meta: {} as any
+}
+
 function makeMockAdapter(
 	overrides: {
-		onGenerate?: () => Promise<{
-			completionResult: string
-			isAborted: boolean
-		}>
+		onGenerate?: () => Promise<TextGenResult>
 		onAbort?: () => void
 	} = {}
 ) {
-	return {
+	// `satisfies` and not a bare literal: the method name and its return are
+	// checked against the real `text->text` action, so a mock that kept the old
+	// `generate` name — as this one did until the actions were split — fails to
+	// compile here instead of type-checking green and dying at runtime with
+	// "adapter.generateText is not a function". See fakeTextAdapter.ts.
+	//
+	// The lifecycle members are spelled into the target because this is an object
+	// LITERAL, where excess-property checking makes a bare `satisfies
+	// FakeTextAdapter` reject `preflight` and `abort` outright. A class fake uses
+	// `implements FakeTextAdapter` and needs none of this.
+	const mock = {
 		preflight: async () => {},
-		generate:
+		generateText:
 			overrides.onGenerate ??
-			(async () => ({ completionResult: "ok", isAborted: false })),
+			(async () => ({
+				completionResult: "ok",
+				compiledPrompt: NO_PAYLOAD,
+				isAborted: false
+			})),
 		abort: () => {
 			overrides.onAbort?.()
 		}
-	} as any
+	} satisfies FakeTextAdapter & {
+		preflight(): Promise<void>
+		abort(): void
+	}
+
+	// The bridge takes a whole BaseConnectionAdapter; this is the three members
+	// it actually touches, so the cast is at the boundary rather than hiding the
+	// shape check above.
+	return mock as any
 }
 
 describe("runQueuedLLMCall — signal bridge", () => {
@@ -60,7 +94,11 @@ describe("runQueuedLLMCall — signal bridge", () => {
 		const adapter = makeMockAdapter({
 			onGenerate: async () => {
 				await generateGate
-				return { completionResult: "partial", isAborted: abortCalled }
+				return {
+					completionResult: "partial",
+					compiledPrompt: NO_PAYLOAD,
+					isAborted: abortCalled
+				}
 			},
 			onAbort: () => {
 				abortCalled = true
@@ -79,7 +117,7 @@ describe("runQueuedLLMCall — signal bridge", () => {
 			signal: controller.signal
 		})
 
-		// Let execution actually reach the blocked generate() call before
+		// Let execution actually reach the blocked generateText() call before
 		// aborting — otherwise this would only exercise the pre-check.
 		await macrotask()
 
@@ -100,7 +138,11 @@ describe("runQueuedLLMCall — signal bridge", () => {
 		const blockerAdapter = makeMockAdapter({
 			onGenerate: async () => {
 				await blockerGate
-				return { completionResult: "blocker", isAborted: false }
+				return {
+					completionResult: "blocker",
+					compiledPrompt: NO_PAYLOAD,
+					isAborted: false
+				}
 			}
 		})
 		const blockerPromise = runQueuedLLMCall({

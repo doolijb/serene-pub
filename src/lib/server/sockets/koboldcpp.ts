@@ -5,7 +5,7 @@ import * as schema from "$lib/server/db/schema"
 // import needed/available for it.
 import { eq, and, inArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
-import { connectionsList, connectionsSetUserActive } from "./connections"
+import { connectionsList, connectionsSetDefault } from "./connections"
 import { systemSettingsGet } from "./systemSettings"
 import { getAppDataDir } from "$lib/server/db/drizzle.config"
 import koboldCppManagedAdapter from "$lib/server/connectionAdapters/KoboldCppManagedAdapter"
@@ -578,9 +578,15 @@ export const koboldCppConnectModelHandler: Handler<
 			existingConnection = newConnection
 		}
 
-		await connectionsSetUserActive.handler(
+		// Explicitly `text->text`, and explicitly here rather than as a side
+		// effect of the insert above: "Use for chat" IS somebody choosing, which
+		// is exactly what the ruling requires and what the deleted auto-star in
+		// `connections:create` was not. The capability is named because the
+		// handler cannot derive it — this same managed KoboldCPP also serves
+		// `text->image` through its own connection row.
+		await connectionsSetDefault.handler(
 			socket,
-			{ id: existingConnection.id },
+			{ capability: "text->text", id: existingConnection.id },
 			emitToUser
 		)
 		await connectionsList.handler(socket, {}, emitToUser)
@@ -600,11 +606,17 @@ export const koboldCppConnectModelHandler: Handler<
  * The image counterpart of connectModel: one image model, one connection.
  *
  * A separate handler rather than a `kind` param on that one, because the two
- * agree on almost nothing. Different type, different validation, and a different
- * writer for "make this the default" — the text side stars through
- * `connections:setUserActive`, which also claims
- * `system_settings.default_connection_id`, a slot an image connection has no
- * business holding.
+ * agree on almost nothing: different type, different validation, different
+ * model kind.
+ *
+ * The one thing they DO now share is how the default is written. Both register a
+ * `connection_defaults` row — this one for `text->image`, `connectModel` for
+ * `text->text` — and the capability is passed explicitly by each, precisely
+ * because this managed KoboldCPP serves both and no derivation could tell which
+ * a caller meant. Until 0181 the text side also claimed
+ * `system_settings.default_connection_id` and this side did not, which is the
+ * asymmetry this paragraph used to describe; the column is gone and the
+ * asymmetry with it.
  *
  * Nothing is loaded here. Which model koboldcpp is holding is the model
  * manager's decision at render time, exactly as the text side defers its load to

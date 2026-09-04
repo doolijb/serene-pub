@@ -643,18 +643,19 @@ export const importExecuteSillyTavern: Handler<
 							// rule 6): it lands under the entity it produced,
 							// through the same choke point, rather than
 							// getting its own tree and its own path format.
-							// Thumbnails are left to the backfill pass — a
-							// bulk import should not stop to encode.
-							const row = await createMedia(db, {
+							// Nothing here asks not to encode a thumbnail any
+							// more: since 0182 derivation happens on first
+							// request, so a bulk import already pays for
+							// nothing it does not need.
+							const created = await createMedia(db, {
 								userId,
 								characterId: newChar.id,
 								bytes: buffer,
-								filename: charItem.filename,
-								thumbnail: false
+								filename: charItem.filename
 							})
 							await db
 								.update(schema.characters)
-								.set({ avatarMediaId: row.id })
+								.set({ avatarMediaId: created.file.id })
 								.where(eq(schema.characters.id, newChar.id))
 						} catch (e) {
 							console.warn(
@@ -762,16 +763,15 @@ export const importExecuteSillyTavern: Handler<
 					)
 					try {
 						const buffer = await fsPromises.readFile(avatarSrc)
-						const row = await createMedia(db, {
+						const created = await createMedia(db, {
 							userId,
 							personaId: newPersona.id,
 							bytes: buffer,
-							filename: avatarFilename,
-							thumbnail: false
+							filename: avatarFilename
 						})
 						await db
 							.update(schema.personas)
-							.set({ avatarMediaId: row.id })
+							.set({ avatarMediaId: created.file.id })
 							.where(eq(schema.personas.id, newPersona.id))
 					} catch {
 						/* no avatar file — that's fine */

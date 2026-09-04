@@ -27,6 +27,7 @@ import {
 	subscription
 } from "$lib/server/pipelines/config/panel/declarations"
 import { optionId } from "$lib/server/pipelines/config/panel/ids"
+import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 import {
 	visibleTo,
 	writeScopeFor
@@ -390,6 +391,11 @@ export async function namespaceView(
 						}
 					}
 				: {}),
+			// On the option itself, not inside `prompt` — the create button needs
+			// it precisely when no row is selected.
+			...(d.control === "prompts-ref"
+				? { promptFields: d.promptFields ?? [] }
+				: {}),
 			...(promptRow
 				? {
 						prompt: {
@@ -400,7 +406,51 @@ export async function namespaceView(
 								string
 							>,
 							readOnly: !!promptRow.isImmutable,
-							declared: d.promptFields ?? []
+							declared: d.promptFields ?? [],
+							// Text for fields the slot stopped declaring, off
+							// the row's archive. Shown apart and read-only —
+							// left in `fields` it would be invisible, because
+							// the editor renders one box per DECLARED field, so
+							// a prompt somebody spent an afternoon on becomes
+							// unfindable rather than merely unused. Omitted
+							// when empty, which is every row on a healthy
+							// install.
+							...(Object.keys(promptRow.archivedFields ?? {})
+								.length
+								? {
+										archived:
+											promptRow.archivedFields as Record<
+												string,
+												string
+											>
+									}
+								: {}),
+							// Read back off the choice the picker already
+							// computed rather than re-deriving it here — two
+							// places deciding "which group is this in" is two
+							// places to disagree, and the editor's caption and
+							// the list would be the ones disagreeing. Same
+							// ride-along the context template makes, and now
+							// for the same reason: a pooled prompt may well
+							// have been written in another pipeline.
+							...((c) =>
+								c
+									? {
+											group: c.group,
+											...(c.description
+												? { origin: c.description }
+												: {})
+										}
+									: {})(
+								(
+									sets.promptsBy.get(
+										promptPoolKeyFor(
+											promptRow.nodeTypeId,
+											promptRow.slot
+										)
+									) as any[] | undefined
+								)?.find((c) => c.id === promptRow.id)
+							)
 						}
 					}
 				: {}),

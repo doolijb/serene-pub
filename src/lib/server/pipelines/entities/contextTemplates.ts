@@ -7,13 +7,23 @@
  * `pipeline_prompts` and `pipeline_variable_templates`; the difference is what
  * it is keyed by.
  *
- * ## Keyed by node type, grouped by origin
+ * ## Keyed by node type AND engine, grouped by origin
  *
  * A template is compatible with a node, not with a pipeline. Session reply and the
  * narrator both run `core:task/assemble`, so one row genuinely serves both —
  * which is how `context_configs` has always behaved. Keying on the spec would
  * mean two copies of the same template, kept in sync by hand, and one more copy
  * for every pipeline anyone ever adds.
+ *
+ * The **engine is the pool's other half**, and it is not symmetry. A template is
+ * a piece of writing in a language: a Jinja story string and a Handlebars one
+ * both render the assemble node's context and are not interchangeable for a
+ * second. Pooled on the node type alone, either was selectable into either
+ * slot — it stored cleanly, and then shipped its own unrendered markup to the
+ * model as prose. There is deliberately **no cross-engine fallback** anywhere
+ * in this file or in `defaultContextTemplateFor`: a slot whose language has no
+ * template gets nothing, and assemble's "has no template" halt is loud where a
+ * silent wrong-language render is not.
  *
  * That leaves a real problem this file also solves: at ten rows, "compatible"
  * and "the one I want" stop being the same answer. So a row also remembers
@@ -32,12 +42,16 @@
  * once rather than twice.
  */
 
-import { and, asc, eq, inArray, isNull } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { declarations } from "$lib/server/pipelines/config/panel"
-import { poolKeyFor } from "$lib/server/pipelines/entities/contextTemplateDefaults"
+import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
+import {
+	contextPoolKeyFor,
+	poolKeyFor
+} from "$lib/server/pipelines/entities/contextTemplateDefaults"
 
-export { poolKeyFor }
+export { contextPoolKeyFor, poolKeyFor }
 
 type Db = { select: any; insert: any; update: any; delete: any }
 
@@ -53,7 +67,13 @@ export interface ContextTemplateRecord {
 	createdForSpecId: number | null
 	name: string
 	source: string
-	engine: string | null
+	/**
+	 * The language it is written in, and half the pool key. Never null: the
+	 * column is NOT NULL and a caller that passes nothing is normalized to
+	 * core's on the way in, so every reader downstream — `renderTemplate` most
+	 * of all — is handed a real engine rather than an absence to guess about.
+	 */
+	engine: string
 	isImmutable: boolean
 }
 
@@ -76,12 +96,19 @@ const toRecord = (r: any): ContextTemplateRecord => ({
 	createdForSpecId: r.createdForSpecId ?? null,
 	name: r.name,
 	source: r.source ?? "",
-	engine: r.engine ?? null,
+	// The column is NOT NULL, so this coalesce only catches a row handed in by
+	// a caller that built it in memory. Core's engine is the honest answer for
+	// one of those — it is what a row with nothing said has always rendered as.
+	engine: r.engine ?? CORE_TEMPLATE_ENGINE,
 	isImmutable: !!r.isImmutable
 })
 
 /**
  * Every template a node can use, in the order the picker should show them.
+ *
+ * `engine` narrows to the language the slot declares, and is required for the
+ * reason the file header gives: a list that crossed engines would offer a
+ * person a template that stores cleanly and renders its own markup as prose.
  *
  * `forSpecId` is the pipeline being configured. Omitted, everything not shipped
  * lands in `alsoFits` — which is the right answer for a caller that is not
@@ -90,15 +117,19 @@ const toRecord = (r: any): ContextTemplateRecord => ({
 export async function listContextTemplates(
 	db: Db,
 	nodeTypeId: string,
+	engine: string,
 	forSpecId?: number
 ): Promise<GroupedContextTemplate[]> {
 	const rows = await db
 		.select()
 		.from(schema.pipelineContextTemplates)
 		.where(
-			eq(
-				schema.pipelineContextTemplates.nodeTypeId,
-				poolKeyFor(nodeTypeId)
+			and(
+				eq(
+					schema.pipelineContextTemplates.nodeTypeId,
+					poolKeyFor(nodeTypeId)
+				),
+				eq(schema.pipelineContextTemplates.engine, engine)
 			)
 		)
 		.orderBy(asc(schema.pipelineContextTemplates.id))
@@ -141,16 +172,23 @@ export async function listContextTemplates(
 /**
  * Check that a template may be selected for this node, and say why if not.
  *
- * The one hard rule: the pool key must match. Everything else about "does this
- * fit" — whether the variables it names are supplied by this version — is a
- * warning, because a template referencing a variable a pipeline does not supply
- * renders it as empty, which is a legible outcome and sometimes the intended
- * one.
+ * Two hard rules, and they are the two halves of the pool key: the node type
+ * must match, and so must the **engine**. Everything else about "does this fit"
+ * — whether the variables it names are supplied by this version — is a warning,
+ * because a template referencing a variable a pipeline does not supply renders
+ * it as empty, which is a legible outcome and sometimes the intended one.
+ *
+ * The engine refusal names the *language* rather than the engine id, because
+ * the id is a pinned string a person did not choose and the language is the
+ * thing they can act on. Rendering across it is not a legible outcome: the
+ * foreign syntax survives untouched and is sent to the model as prose, which
+ * reads as the model ignoring the whole template.
  */
 export async function assertSelectable(
 	db: Db,
 	nodeTypeId: string,
-	templateId: number
+	templateId: number,
+	engine: string
 ): Promise<ContextTemplateRecord> {
 	const [row] = await db
 		.select()
@@ -171,20 +209,56 @@ export async function assertSelectable(
 				`the copy if that is what you meant.`
 		)
 
+	const rowEngine = row.engine ?? CORE_TEMPLATE_ENGINE
+	if (rowEngine !== engine)
+		throw new ContextTemplateNotUsableError(
+			`'${row.name}' is written in ${languageOf(rowEngine)} and this step ` +
+				`renders ${languageOf(engine)}. Selected anyway it would not be ` +
+				`translated — its markup would be sent to the model as ordinary ` +
+				`text. Duplicate it and rewrite the copy in ${languageOf(engine)}.`
+		)
+
 	return toRecord(row)
 }
 
-/** What the slot resolves to once dereferenced: the template itself. */
+/**
+ * An engine id as the name of a language.
+ *
+ * `core:template/handlebars@1` is a pinned id nobody chose; "Handlebars" is
+ * the word on the page they are looking at. Falls back to the id when the
+ * shape is not the familiar one, because a plugin may publish anything and a
+ * wrong guess in a refusal message is worse than a raw id.
+ */
+const languageOf = (engineId: string): string => {
+	const name = engineId.split("/")[1]?.split("@")[0]
+	if (!name) return engineId
+	return name.charAt(0).toUpperCase() + name.slice(1)
+}
+
+/**
+ * What the slot resolves to once dereferenced: the template itself.
+ *
+ * Returns the engine **and** the source, and the caller must carry both. This
+ * used to be read for its `source` alone (`world.ts`'s `derefTemplate`), which
+ * is how every template on every install rendered as Handlebars whatever it
+ * declared: the engine was resolved here, correctly, and then dropped one line
+ * later. See `pushTemplate` in `world.ts` for the rule that replaced it.
+ */
 export async function resolveContextTemplate(
 	db: Db,
 	templateId: number
-): Promise<{ engine: string | null; source: string } | null> {
+): Promise<{ engine: string; source: string } | null> {
 	const [row] = await db
 		.select()
 		.from(schema.pipelineContextTemplates)
 		.where(eq(schema.pipelineContextTemplates.id, templateId))
 		.limit(1)
-	return row ? { engine: row.engine ?? null, source: row.source ?? "" } : null
+	return row
+		? {
+				engine: row.engine ?? CORE_TEMPLATE_ENGINE,
+				source: row.source ?? ""
+			}
+		: null
 }
 
 export interface CreateContextTemplateInput {
@@ -208,7 +282,13 @@ export async function createContextTemplate(
 			nodeTypeId: poolKeyFor(input.nodeTypeId),
 			name: input.name,
 			source: input.source,
-			engine: input.engine ?? null,
+			// Normalized here rather than left to the column default, because
+			// the engine is half the pool key and a row that lands in the wrong
+			// pool is invisible: it simply never appears in the picker it was
+			// written for. `null` from a caller means "core's", which is what a
+			// null column always meant — said once, in the one place that can
+			// still say it before the row exists.
+			engine: input.engine ?? CORE_TEMPLATE_ENGINE,
 			createdForSpecId: input.createdForSpecId ?? null,
 			seedKey: input.seedKey ?? null,
 			isImmutable: input.isImmutable ?? false,
@@ -242,11 +322,14 @@ export async function duplicateContextTemplate(
 			"That context template no longer exists."
 		)
 
+	// The copy keeps the original's language. A duplicate is "the same template,
+	// mine to edit" — changing what it is written in would hand someone a copy
+	// that no longer fits the slot they duplicated it from.
 	return await createContextTemplate(db, {
 		nodeTypeId: row.nodeTypeId,
 		name,
 		source: row.source ?? "",
-		engine: row.engine ?? null,
+		engine: row.engine ?? CORE_TEMPLATE_ENGINE,
 		createdForSpecId: createdForSpecId ?? null
 	})
 }
@@ -272,12 +355,61 @@ export async function updateContextTemplate(
 				`pointing at the original keeps working.`
 		)
 
+	// `null` means "core's" here as it does on create — the panel's engine
+	// picker sends null for the default rather than pinning today's id.
+	const nextEngine =
+		patch.engine === undefined
+			? (row.engine ?? CORE_TEMPLATE_ENGINE)
+			: (patch.engine ?? CORE_TEMPLATE_ENGINE)
+	const nextName = patch.name ?? row.name
+
+	/**
+	 * The unique key is `(node type, engine, name)`, and both halves a person
+	 * can edit are in it. Checked here rather than left to Postgres because the
+	 * constraint violation surfaces as `duplicate key value violates unique
+	 * constraint "pipeline_context_templates_pool_name_idx"` — a sentence that
+	 * tells the person nothing, on a screen where the row it collided with may
+	 * be in a *different* pool from the one they are looking at. Changing the
+	 * engine is the case that surprises: it moves the row into another pool,
+	 * where its name may already be taken by something they cannot see.
+	 */
+	if (
+		nextName !== row.name ||
+		nextEngine !== (row.engine ?? CORE_TEMPLATE_ENGINE)
+	) {
+		const [clash] = await db
+			.select()
+			.from(schema.pipelineContextTemplates)
+			.where(
+				and(
+					eq(
+						schema.pipelineContextTemplates.nodeTypeId,
+						row.nodeTypeId
+					),
+					eq(schema.pipelineContextTemplates.engine, nextEngine),
+					eq(schema.pipelineContextTemplates.name, nextName),
+					ne(schema.pipelineContextTemplates.id, templateId)
+				)
+			)
+			.limit(1)
+		if (clash)
+			throw new ContextTemplateNotUsableError(
+				nextEngine === (row.engine ?? CORE_TEMPLATE_ENGINE)
+					? `Another template for this step is already called '${nextName}'. ` +
+						`Pick a different name.`
+					: `Rewriting '${row.name}' in ${languageOf(nextEngine)} would move it ` +
+						`in beside a template of the same name, which already exists there. ` +
+						`Rename it first — templates for one step are listed per language, ` +
+						`so the one it would collide with is not on this list.`
+			)
+	}
+
 	await db
 		.update(schema.pipelineContextTemplates)
 		.set({
 			...(patch.name !== undefined ? { name: patch.name } : {}),
 			...(patch.source !== undefined ? { source: patch.source } : {}),
-			...(patch.engine !== undefined ? { engine: patch.engine } : {}),
+			...(patch.engine !== undefined ? { engine: nextEngine } : {}),
 			updatedAt: new Date()
 		})
 		.where(eq(schema.pipelineContextTemplates.id, templateId))
@@ -377,8 +509,18 @@ export async function deleteContextTemplate(
 		.where(eq(schema.pipelineContextTemplates.id, templateId))
 }
 
-/** The template a node type falls back to, by seed identity. */
-export async function shippedContextTemplate(db: Db, nodeTypeId: string) {
+/**
+ * The template a node type falls back to, by seed identity.
+ *
+ * Per language, like everything else here: core ships a Handlebars row for the
+ * assemble node and nothing in any other engine, so a jinja2 slot correctly
+ * gets `null` rather than core's Handlebars source in a Jinja slot's clothing.
+ */
+export async function shippedContextTemplate(
+	db: Db,
+	nodeTypeId: string,
+	engine: string = CORE_TEMPLATE_ENGINE
+) {
 	const [row] = await db
 		.select()
 		.from(schema.pipelineContextTemplates)
@@ -388,6 +530,7 @@ export async function shippedContextTemplate(db: Db, nodeTypeId: string) {
 					schema.pipelineContextTemplates.nodeTypeId,
 					poolKeyFor(nodeTypeId)
 				),
+				eq(schema.pipelineContextTemplates.engine, engine),
 				eq(schema.pipelineContextTemplates.isImmutable, true),
 				isNull(schema.pipelineContextTemplates.createdForSpecId)
 			)

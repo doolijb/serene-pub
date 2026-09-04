@@ -12,6 +12,7 @@ import {
 	type BasePromptSession
 } from "./BaseConnectionAdapter"
 import { type CompiledPrompt } from "./types"
+import type { TextGenResult } from "$lib/server/adapters/actions"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { ollamaSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
@@ -129,17 +130,10 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		})
 	}
 
-	async generate(): Promise<{
-		completionResult:
-			| string
-			| ((
-					contentCb: (chunk: string) => void,
-					thinkingCb?: (chunk: string) => void
-			  ) => Promise<void>)
-		compiledPrompt: CompiledPrompt
-		isAborted: boolean
-		thinkingContent?: string
-	}> {
+	// `generateText` is Serene Pub's action; `ollama.generate()` below is the
+	// Ollama SDK's completion endpoint, the counterpart to `ollama.chat()`. Two
+	// unrelated senses of the word in one file — do not rename the SDK calls.
+	async generateText(): Promise<TextGenResult> {
 		const model =
 			this.connection.model ??
 			CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].baseUrl
@@ -553,9 +547,7 @@ const exports: AdapterExports = {
 	listModels,
 	testConnection,
 	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA],
-	samplingKeyMap: ollamaSamplingKeyMap,
-	// 20 §9: per-model — /api/show reports 'tools'; emulated until a probe answers.
-	capabilities: { toolUse: "probed" }
+	samplingKeyMap: ollamaSamplingKeyMap
 }
 
 export default exports

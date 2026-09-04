@@ -136,6 +136,13 @@ function declsForSlot(
 			{
 				...base,
 				path: "",
+				// The pool's first half — the second is `slot`, which every
+				// Decl already carries. Together they are the whole selection
+				// rule for a prompt, and the reason one crosses pipeline
+				// boundaries: an action reusing this node is offered these same
+				// rows, because the node does the same job wherever it runs.
+				// Version stripped, for the reason `poolKeyFor` gives.
+				nodeTypeId: poolKeyFor(typeId),
 				promptFields: Object.keys(decl.fields ?? {}),
 				label: humanizeCamel(slotName),
 				...(slotDescription ? { description: slotDescription } : {}),

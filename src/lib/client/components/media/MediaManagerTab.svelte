@@ -28,6 +28,7 @@
 		MediaVisibility,
 		MediaVisibilityLabels
 	} from "$lib/shared/constants/MediaVisibility"
+	import { CULL_ORIGINALS_CONFIRM } from "$lib/shared/constants/MediaCleanup"
 
 	const socket = useTypedSocket()
 
@@ -45,6 +46,15 @@
 	let menuOpenFor = $state<number | null>(null)
 	let busyId = $state<number | null>(null)
 	let brokenIds = $state(new Set<number>())
+
+	// Storage cleanup (0182). Collapsed and unpriced until asked for: the
+	// preview is a full pass over this user's variant rows, and nobody opening
+	// a media panel to look at their pictures asked for it.
+	let cleanupOpen = $state(false)
+	let cleanup = $state<Sockets.Media.CleanupPreview.Response | null>(null)
+	let cleanupBusy = $state(false)
+	let cullOriginalsOpen = $state(false)
+	let cullConfirm = $state("")
 
 	let lightboxOpen = $state(false)
 	let lightboxSrc = $state<string | null>(null)
@@ -89,6 +99,11 @@
 		return [
 			displayName(item),
 			formatBytes(item.bytes),
+			// Only when the two differ, which is only once something has been
+			// derived — otherwise it reads as the same number twice.
+			item.storedBytes !== item.bytes
+				? `${formatBytes(item.storedBytes)} on disk`
+				: null,
 			item.width && item.height ? `${item.width}×${item.height}` : null,
 			fullDate(item.createdAt),
 			item.attachedTo
@@ -123,10 +138,6 @@
 		})
 	)
 
-	let missingThumbs = $derived(
-		items.filter((i) => i.kind === "image" && !i.hasThumbnail).length
-	)
-
 	function refresh() {
 		socket.emit("media:list", {
 			sort,
@@ -151,15 +162,43 @@
 
 	function download(item: Item) {
 		menuOpenFor = null
-		// `?download=1` always serves the original and sets an attachment
-		// disposition; the anchor is created rather than rendered so the
-		// filename attribute cannot fight the server's Content-Disposition.
+		// `originalUrl`, not `url`: since 0182 a bare media URL serves the
+		// DISPLAY form, and "download" means the bytes that were uploaded.
+		//
+		// Note the `&`. Every URL in a payload now carries `?r={rev}` already,
+		// so appending `?download=1` would produce `…?r=3?download=1` — a
+		// silently broken download rather than an error.
 		const a = document.createElement("a")
-		a.href = `${item.url}?download=1`
+		a.href = `${item.originalUrl}&download=1`
 		a.rel = "noopener"
 		document.body.appendChild(a)
 		a.click()
 		a.remove()
+	}
+
+	function toggleCleanup() {
+		cleanupOpen = !cleanupOpen
+		if (cleanupOpen) socket.emit("media:cleanupPreview", {})
+	}
+
+	function cullDerived() {
+		cleanupBusy = true
+		socket.emit("media:cullDerived", {})
+	}
+
+	function confirmCullOriginals() {
+		// The server checks the same phrase; this is only so the button is not
+		// live before the words are typed. Sending what the user actually typed
+		// rather than the constant keeps the server's check the real gate.
+		if (cullConfirm.trim() !== CULL_ORIGINALS_CONFIRM) return
+		cleanupBusy = true
+		cullOriginalsOpen = false
+		socket.emit("media:cullOriginals", { confirm: cullConfirm })
+		cullConfirm = ""
+	}
+
+	function setCachePolicy(enabled: boolean) {
+		socket.emit("media:setCachePolicy", { derivedCacheEnabled: enabled })
 	}
 
 	function regenerate(item: Item) {
@@ -201,9 +240,7 @@
 			// another chance.
 			brokenIds = new Set()
 		}
-		const onRegen = (
-			res: Sockets.Media.RegenerateThumbnail.Response
-		) => {
+		const onRegen = (res: Sockets.Media.RegenerateThumbnail.Response) => {
 			busyId = null
 			toaster.success({
 				title: res.regenerated
@@ -212,25 +249,86 @@
 			})
 		}
 		const onDelete = () => toaster.success({ title: "Image deleted" })
-		const onError = (e: any) =>
+		const onCleanup = (res: Sockets.Media.CleanupPreview.Response) => {
+			cleanup = res
+			cleanupBusy = false
+		}
+		const onCullDerived = (res: Sockets.Media.CullDerived.Response) => {
+			cleanupBusy = false
+			toaster.success({
+				title: res.variants
+					? `Freed ${formatBytes(res.bytes)} across ${res.variants} ${res.variants === 1 ? "copy" : "copies"}`
+					: "Nothing to remove"
+			})
+			socket.emit("media:cleanupPreview", {})
+		}
+		const onCullOriginals = (res: Sockets.Media.CullOriginals.Response) => {
+			cleanupBusy = false
+			toaster.success({
+				title: res.files
+					? `Freed ${formatBytes(res.freedBytes)} from ${res.files} ${res.files === 1 ? "file" : "files"}`
+					: "No originals could be removed safely",
+				// The net, not the gross: reporting only what was freed while
+				// bytes went straight back on disk deriving the fallbacks is
+				// the number an admin would later call a lie.
+				description: res.addedBytes
+					? `${formatBytes(res.addedBytes)} written to derive the copies left behind.`
+					: undefined
+			})
+			socket.emit("media:cleanupPreview", {})
+		}
+		const onCachePolicy = (res: Sockets.Media.SetCachePolicy.Response) => {
+			if (cleanup)
+				cleanup = {
+					...cleanup,
+					derivedCacheEnabled: res.derivedCacheEnabled
+				}
+			toaster.success({
+				title: res.derivedCacheEnabled
+					? "Derived forms will be kept on disk"
+					: "Derived forms will be re-made on every request"
+			})
+		}
+		const onError = (e: any) => {
+			cleanupBusy = false
 			toaster.error({ title: e?.error ?? "Something went wrong" })
+		}
 
 		socket.on("media:list", onList)
 		socket.on("media:regenerateThumbnail", onRegen)
 		socket.on("media:delete", onDelete)
+		socket.on("media:cleanupPreview", onCleanup)
+		socket.on("media:cullDerived", onCullDerived)
+		socket.on("media:cullOriginals", onCullOriginals)
+		socket.on("media:setCachePolicy", onCachePolicy)
 		socket.on("media:list:error" as any, onError)
 		socket.on("media:regenerateThumbnail:error" as any, onError)
 		socket.on("media:delete:error" as any, onError)
 		socket.on("media:setVisibility:error" as any, onError)
+		socket.on("media:cleanupPreview:error" as any, onError)
+		socket.on("media:cullDerived:error" as any, onError)
+		socket.on("media:cullOriginals:error" as any, onError)
+		socket.on("media:setCachePolicy:error" as any, onError)
 
+		// Every teardown names its listener. A bare `socket.off(event)` removes
+		// the FIRST registered listener for that event — usually Layout's — and
+		// that has caused two real bugs in this codebase.
 		return () => {
 			socket.off("media:list", onList)
 			socket.off("media:regenerateThumbnail", onRegen)
 			socket.off("media:delete", onDelete)
+			socket.off("media:cleanupPreview", onCleanup)
+			socket.off("media:cullDerived", onCullDerived)
+			socket.off("media:cullOriginals", onCullOriginals)
+			socket.off("media:setCachePolicy", onCachePolicy)
 			socket.off("media:list:error" as any, onError)
 			socket.off("media:regenerateThumbnail:error" as any, onError)
 			socket.off("media:delete:error" as any, onError)
 			socket.off("media:setVisibility:error" as any, onError)
+			socket.off("media:cleanupPreview:error" as any, onError)
+			socket.off("media:cullDerived:error" as any, onError)
+			socket.off("media:cullOriginals:error" as any, onError)
+			socket.off("media:setCachePolicy:error" as any, onError)
 		}
 	})
 </script>
@@ -268,6 +366,14 @@
 							{#if item.width && item.height}
 								· {item.width}×{item.height}
 							{/if}
+						</p>
+						<!-- What is held right now, not what is missing. Under
+						     lazy derivation a fresh upload has exactly one
+						     entry here and that is the healthy state. -->
+						<p class="text-surface-600-400 text-xs">
+							{formatBytes(item.storedBytes)} on disk ·
+							{item.variants.map((v) => v.variant).join(", ") ||
+								"nothing stored"}
 						</p>
 					</header>
 					<article class="flex flex-col gap-1">
@@ -385,14 +491,11 @@
 		</select>
 	</div>
 
+	<!-- `totalBytes` is what STORING this library costs, across every
+	     representation — the question a cleanup panel is for. -->
 	<p class="text-surface-600-400 text-xs">
 		{filtered.length} of {items.length}
-		{items.length === 1 ? "item" : "items"} · {formatBytes(totalBytes)}
-		{#if missingThumbs > 0}
-			· <span class="text-warning-600-400">
-				{missingThumbs} without a thumbnail
-			</span>
-		{/if}
+		{items.length === 1 ? "item" : "items"} · {formatBytes(totalBytes)} on disk
 	</p>
 
 	{#if isLoading}
@@ -543,16 +646,15 @@
 							{#if item.width && item.height}
 								· {item.width}×{item.height}
 							{/if}
-							· <span title={fullDate(item.createdAt)}>
+							·
+							<span title={fullDate(item.createdAt)}>
 								{shortDate(item.createdAt)}
 							</span>
 							{#if item.attachedTo}
 								· {item.attachedTo.name ?? "orphaned"}
 							{/if}
-							{#if !item.hasThumbnail && item.kind === "image"}
-								· <span class="text-warning-600-400">
-									no thumbnail
-								</span>
+							{#if item.storedBytes !== item.bytes}
+								· {formatBytes(item.storedBytes)} on disk
 							{/if}
 						</p>
 					</div>
@@ -573,6 +675,161 @@
 			{/each}
 		</div>
 	{/if}
+
+	<!--
+		Storage cleanup (0182). Two actions, and they are deliberately not
+		symmetrical: the safe one is offered plainly with its numbers, and the
+		irreversible one is louder, separate, and gated on typing a phrase.
+
+		Neither of them decides anything. `cullVariant` on the server refuses to
+		take a file's last representation and refuses to take the display target
+		with nowhere to re-point, checked per call — so whatever order these
+		buttons are pressed in, no file can be left with nothing. A guard here
+		would only make the UI polite about a rule it cannot enforce.
+	-->
+	<div class="card preset-filled-surface-100-900 shadow-sm">
+		<button
+			type="button"
+			class="flex w-full items-center gap-2 p-3 text-left text-sm font-semibold"
+			onclick={toggleCleanup}
+			aria-expanded={cleanupOpen}
+			aria-controls="media-cleanup"
+		>
+			<Icons.HardDrive size={16} aria-hidden="true" />
+			<span class="flex-1">Storage cleanup</span>
+			{#if cleanupOpen}
+				<Icons.ChevronUp size={16} aria-hidden="true" />
+			{:else}
+				<Icons.ChevronDown size={16} aria-hidden="true" />
+			{/if}
+		</button>
+		{#if cleanupOpen}
+			<div
+				id="media-cleanup"
+				class="border-surface-300-600 flex flex-col gap-4 border-t p-3"
+			>
+				{#if !cleanup}
+					<div class="flex justify-center py-4">
+						<Icons.Loader2
+							class="text-surface-600-400 h-5 w-5 animate-spin"
+						/>
+					</div>
+				{:else}
+					<section class="flex flex-col gap-2">
+						<h3 class="text-sm font-semibold">Derived forms</h3>
+						<p class="text-surface-600-400 text-xs">
+							Thumbnails and other copies that can be re-made from
+							what is kept. Removing them frees space now and
+							costs one re-encode the next time each image is
+							shown.
+						</p>
+						<p class="text-sm">
+							{cleanup.derived.variants}
+							{cleanup.derived.variants === 1 ? "copy" : "copies"}
+							across {cleanup.derived.files}
+							{cleanup.derived.files === 1 ? "file" : "files"} ·
+							<strong>
+								{formatBytes(cleanup.derived.bytes)}
+							</strong>
+						</p>
+						<button
+							type="button"
+							class="btn btn-sm preset-filled-primary-500 self-start"
+							onclick={cullDerived}
+							disabled={cleanupBusy ||
+								cleanup.derived.variants === 0}
+						>
+							<Icons.Trash2 size={16} aria-hidden="true" />
+							<span>Remove derived forms</span>
+						</button>
+					</section>
+
+					<section
+						class="border-error-500/50 bg-error-500/5 flex flex-col gap-2 rounded-lg border p-3"
+					>
+						<h3
+							class="text-error-600-400 flex items-center gap-2 text-sm font-semibold"
+						>
+							<Icons.AlertTriangle size={16} aria-hidden="true" />
+							<span>Uploaded originals — irreversible</span>
+						</h3>
+						<p class="text-surface-600-400 text-xs">
+							Deletes the bytes you uploaded, leaving the web-safe
+							copy stored beside them to serve. Nothing can bring
+							an original back afterwards.
+						</p>
+						<p class="text-sm">
+							at least {cleanup.originals.files}
+							{cleanup.originals.files === 1 ? "file" : "files"} ·
+							<strong>
+								{formatBytes(cleanup.originals.bytes)}
+							</strong>
+						</p>
+						<!-- "at least" is not hedging: pricing a file whose
+						     web-safe copy has never been made would mean doing
+						     the encode, which is the expensive half. Those
+						     files are absent from the figure and are still
+						     acted on, so this is a floor. -->
+						<p class="text-surface-600-400 text-xs">
+							Files whose web-safe copy has not been made yet are
+							not counted until it exists.
+						</p>
+						<button
+							type="button"
+							class="btn btn-sm preset-filled-error-500 self-start"
+							onclick={() => (cullOriginalsOpen = true)}
+							disabled={cleanupBusy}
+						>
+							<Icons.AlertTriangle size={16} aria-hidden="true" />
+							<span>Delete originals…</span>
+						</button>
+					</section>
+
+					{#if cleanup.skipped.length}
+						<section class="flex flex-col gap-1">
+							<h3 class="text-sm font-semibold">
+								Originals that will be kept
+							</h3>
+							<!-- With the reason, because "why did it skip 400
+							     of my photos" has to be answerable without
+							     reading the code. -->
+							<ul
+								class="text-surface-600-400 flex flex-col gap-1 text-xs"
+							>
+								{#each cleanup.skipped as row (row.reason)}
+									<li>
+										<strong>{row.files}</strong>
+										{row.files === 1 ? "file" : "files"} — {row.reason}
+									</li>
+								{/each}
+							</ul>
+						</section>
+					{/if}
+
+					<label class="flex items-start gap-2">
+						<input
+							type="checkbox"
+							class="checkbox mt-0.5 shrink-0"
+							checked={cleanup.derivedCacheEnabled}
+							onchange={(e) =>
+								setCachePolicy(e.currentTarget.checked)}
+						/>
+						<span>
+							<span class="text-sm">
+								Keep derived forms on disk
+							</span>
+							<span class="text-surface-600-400 block text-xs">
+								Off means a thumbnail is re-made on every
+								request — less disk, more CPU. The display form
+								is never affected: it is what a plain image URL
+								serves, not an optimisation of it.
+							</span>
+						</span>
+					</label>
+				{/if}
+			</div>
+		{/if}
+	</div>
 </div>
 
 <EntityGalleryViewModal
@@ -612,10 +869,12 @@
 						</div>
 					{/if}
 					<p class="text-surface-700-300 text-sm">
-						Delete <strong>{displayName(pendingDelete)}</strong>?
+						Delete <strong>{displayName(pendingDelete)}</strong>
+						?
 						{#if pendingDelete.attachedTo?.name}
 							It belongs to
-							<strong>{pendingDelete.attachedTo.name}</strong>.
+							<strong>{pendingDelete.attachedTo.name}</strong>
+							.
 						{/if}
 					</p>
 					<p class="text-surface-600-400 text-xs">
@@ -636,6 +895,87 @@
 					>
 						<Icons.Trash2 class="h-4 w-4" />
 						Delete
+					</button>
+				</footer>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
+
+<Dialog
+	open={cullOriginalsOpen}
+	onOpenChange={(e) => {
+		if (!e.open) {
+			cullOriginalsOpen = false
+			cullConfirm = ""
+		}
+	}}
+>
+	<Portal>
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 max-w-md space-y-4 p-6 shadow-xl"
+			>
+				<header class="flex items-center gap-3">
+					<Icons.AlertTriangle
+						class="text-error-500 h-5 w-5 shrink-0"
+					/>
+					<h2 class="text-lg font-bold">Delete uploaded originals</h2>
+				</header>
+				<p class="text-surface-700-300 text-sm">
+					This deletes the bytes you uploaded for
+					{#if cleanup}
+						at least <strong>{cleanup.originals.files}</strong>
+						{cleanup.originals.files === 1 ? "file" : "files"}
+						({formatBytes(cleanup.originals.bytes)})
+					{:else}
+						your files
+					{/if}
+					and keeps the web-safe copy in their place.
+				</p>
+				<p class="text-surface-600-400 text-xs">
+					The copies left behind are full quality, so images will look
+					the same — but the files as you uploaded them are gone. This
+					is <strong>irreversible</strong>
+					: there is no undo and no recycle bin. Any file with nothing
+					safe to fall back on is left alone.
+				</p>
+				<label class="flex flex-col gap-1 text-sm">
+					<span>
+						Type <strong>{CULL_ORIGINALS_CONFIRM}</strong>
+						 to confirm
+					</span>
+					<input
+						type="text"
+						class="input"
+						bind:value={cullConfirm}
+						autocomplete="off"
+						spellcheck="false"
+						aria-label="Type {CULL_ORIGINALS_CONFIRM} to confirm deleting originals"
+					/>
+				</label>
+				<footer class="flex justify-end gap-2">
+					<button
+						class="btn preset-filled-surface-400-600"
+						onclick={() => {
+							cullOriginalsOpen = false
+							cullConfirm = ""
+						}}
+					>
+						Cancel
+					</button>
+					<button
+						class="btn preset-filled-error-500"
+						onclick={confirmCullOriginals}
+						disabled={cullConfirm.trim() !== CULL_ORIGINALS_CONFIRM}
+					>
+						<Icons.Trash2 class="h-4 w-4" />
+						Delete originals
 					</button>
 				</footer>
 			</Dialog.Content>

@@ -167,7 +167,7 @@ describe("KoboldCppAdapter — base URL trailing-slash normalization", () => {
 		expect(result.models[0].name).toContain("loaded-model")
 	})
 
-	test("generate()'s abort() targets the normalized URL", async () => {
+	test("generateText()'s abort() targets the normalized URL", async () => {
 		const adapter = makeAdapter({ baseUrl: "http://localhost:5001/" })
 		;(adapter as any).genKey = "test-genkey"
 		fetchMock.mockResolvedValue({
@@ -238,7 +238,7 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		const adapter = makeAdapter({ extraJson: { stream: false } })
 		mockCompilePrompt(adapter)
 		expect(adapter.responseFormat).toBe("text")
-		await adapter.generate()
+		await adapter.generateText()
 		expect(findGenerateCallBody()).not.toHaveProperty("grammar")
 	})
 
@@ -246,7 +246,7 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		const adapter = makeAdapter({ extraJson: { stream: false } })
 		mockCompilePrompt(adapter)
 		adapter.responseFormat = "json"
-		await adapter.generate()
+		await adapter.generateText()
 		const body = findGenerateCallBody()
 		expect(typeof body.grammar).toBe("string")
 		expect(body.grammar).toContain("root")
@@ -260,7 +260,7 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		})
 		mockCompilePrompt(adapter)
 		adapter.responseFormat = "json"
-		await adapter.generate()
+		await adapter.generateText()
 		expect(typeof findGenerateCallBody().grammar).toBe("string")
 	})
 
@@ -269,7 +269,7 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		mockCompilePrompt(adapter)
 		adapter.responseFormat = "json"
 		adapter.responseSchema = buildPerspectiveSchema("Corb")
-		await adapter.generate()
+		await adapter.generateText()
 		const grammar = findGenerateCallBody().grammar
 		// The pin itself — the value `from` is allowed to take.
 		expect(grammar).toContain('("\\"Corb\\"")')
@@ -287,7 +287,7 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		mockCompilePrompt(adapter)
 		adapter.responseSchema = buildPerspectiveSchema("Corb")
 		expect(adapter.responseFormat).toBe("text")
-		await adapter.generate()
+		await adapter.generateText()
 		expect(findGenerateCallBody()).not.toHaveProperty("grammar")
 	})
 
@@ -300,7 +300,7 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 			}
 		})
 		mockCompilePrompt(adapter)
-		const result = await adapter.generate()
+		const result = await adapter.generateText()
 		expect(typeof result.completionResult).toBe("string")
 
 		const body = findGenerateCallBody()
@@ -317,7 +317,7 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 			extraJson: { useSession: true, stream: false, enableThinking: true }
 		})
 		mockCompilePrompt(adapter)
-		await adapter.generate()
+		await adapter.generateText()
 
 		const body = findGenerateCallBody()
 		expect(body).not.toHaveProperty("enable_thinking")
@@ -329,7 +329,7 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 			extraJson: { useSession: true, stream: false, enableThinking: null }
 		})
 		mockCompilePrompt(adapter)
-		await adapter.generate()
+		await adapter.generateText()
 
 		expect(findGenerateCallBody()).not.toHaveProperty(
 			"chat_template_kwargs"
@@ -383,7 +383,7 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 			extraJson: { useSession: true, stream: true }
 		})
 		mockCompilePrompt(adapter)
-		const result = await adapter.generate()
+		const result = await adapter.generateText()
 
 		let content = ""
 		let thinking = ""
@@ -421,7 +421,7 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 			extraJson: { useSession: true, stream: false }
 		})
 		mockCompilePrompt(adapter)
-		const result = await adapter.generate()
+		const result = await adapter.generateText()
 
 		expect(result.completionResult).toBe("Hello there.")
 		expect((result as any).thinkingContent).toBe("Pondering deeply.")
@@ -440,7 +440,7 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 			extraJson: { useSession: true, stream: false }
 		})
 		mockCompilePrompt(adapter)
-		const result = await adapter.generate()
+		const result = await adapter.generateText()
 
 		expect((result as any).thinkingContent).toBeUndefined()
 	})

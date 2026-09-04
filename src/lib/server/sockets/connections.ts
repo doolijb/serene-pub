@@ -24,9 +24,14 @@ async function adapterIO(type: string) {
 		: await getConnectionAdapter(type)
 }
 import type { Handler } from "$lib/shared/events"
-import { capabilityLabel } from "@serene-pub/sdk"
-import type { CapabilityOverrides, CapabilitySet } from "@serene-pub/sdk"
+import { capabilityLabel, gradeOf } from "@serene-pub/sdk"
+import type {
+	CapabilityId,
+	CapabilityOverrides,
+	CapabilitySet
+} from "@serene-pub/sdk"
 import { adapterCapabilities } from "$lib/shared/connectionAdapters/manifest"
+import { capabilityRefusal } from "$lib/server/pipelines/runtime/capabilityGuard"
 import {
 	capabilityColumn,
 	persistCapabilities,
@@ -209,17 +214,22 @@ export const connectionsCreate: Handler<
 			.insert(schema.connections)
 			.values(data)
 			.returning()
-		// Auto-set as default only when no default exists yet (first connection)
-		const sysSettings = await db.query.systemSettings.findFirst({
-			columns: { defaultConnectionId: true }
-		})
-		if (!sysSettings?.defaultConnectionId) {
-			await connectionsSetUserActive.handler(
-				socket,
-				{ id: conn.id },
-				emitToUser
-			)
-		}
+		// ⚠ Saving a connection does NOT make it the default. Anything.
+		//
+		// This used to auto-star the first connection ever saved — "only when no
+		// default exists yet", which reads harmless and was not: it wrote
+		// `text->text` regardless of what the row could DO, so an instance whose
+		// first connection was an image endpoint got that endpoint as its chat
+		// default, and the failure arrived later, from `getConnectionAdapter`,
+		// naming a type rather than the choice nobody made.
+		//
+		// The ruling: "pipelines will not automatically choose a saved connection
+		// just because it exists. it needs to be set somewhere in the app for
+		// use." Existing is not choosing, and being the only one is not choosing
+		// either. A connection becomes usable by being registered in
+		// Admin → Defaults, or by the explicit one-click paths that call
+		// `connectionsSetDefault` with the capability they mean
+		// (`koboldcpp:connectModel`, `ollama:connectModel`).
 		await connectionsList.handler(socket, {}, emitToUser)
 		const res: Sockets.Connections.Create.Response = { connection: conn }
 		emitToUser("connections:create", res)
@@ -387,8 +397,12 @@ export const connectionsSetCapability: Handler<
 			)
 
 		// Three states, and only three. A value off this list is a malformed
-		// payload rather than a new state, and writing it would put a tier
+		// payload rather than a new state, and writing it would put a grade
 		// nothing can read into the durable half of the column.
+		//
+		// `"none"` is a legal `Band` and is deliberately NOT accepted: `false`
+		// already says off, and a second spelling of it would be a durable value
+		// whose meaning depends on which writer produced it.
 		const { value } = params
 		if (
 			value !== null &&
@@ -405,8 +419,15 @@ export const connectionsSetCapability: Handler<
 		// the probe — the honest owner of what the backend actually does — while
 		// `false` outranks every probe that will ever run, permanently blinding
 		// the row to it.
+		//
+		// The wire says a BAND and the column stores a GRADE, and this is the one
+		// place that converts. `"native"` is the capability's top band — 2 for
+		// `tools`, 1 for `text->image` — so the number cannot be decided by a
+		// client that would have to carry every capability's scale to do it.
 		if (value === null) delete overrides[params.capability]
-		else overrides[params.capability] = value
+		else
+			overrides[params.capability] =
+				value === false ? false : gradeOf(params.capability, value)
 
 		const resolved = resolveConnectionCapabilities({
 			type: row.type,
@@ -453,33 +474,61 @@ export const connectionsDelete: Handler<
 			)
 		}
 
-		// Clear default connection in system settings if it's the one being deleted
-		const systemSettings = await db.query.systemSettings.findFirst({
-			columns: { id: true, defaultConnectionId: true }
-		})
-		if (systemSettings?.defaultConnectionId === params.id) {
-			await connectionsSetUserActive.handler(
-				socket,
-				{ id: null },
-				emitToUser
-			)
-		}
-
+		// No clear-on-delete dance. `connection_defaults.connection_id` is
+		// ON DELETE SET NULL, so deleting a connection releases every capability
+		// it held, in one statement, for capabilities this handler has never
+		// heard of. The read-then-unstar that used to sit here only ever knew
+		// about `text->text`: an image connection holding `text->image` was
+		// deleted with its registration left pointing at a row that no longer
+		// existed, and the failure surfaced at render time as a dangling id.
+		//
+		// The cascade is also what makes the "cleared" refusal a different
+		// sentence from "unset" — a surviving row with a null connection is the
+		// only evidence that something WAS set up and is now gone
+		// (capabilityTarget.ts).
 		await db
 			.delete(schema.connections)
 			.where(eq(schema.connections.id, params.id))
 		await connectionsList.handler(socket, {}, emitToUser)
 		const res: Sockets.Connections.Delete.Response = { id: params.id }
 		emitToUser("connections:delete", res)
+		// The defaults ride on `systemSettings:get`, and the cascade above may
+		// just have emptied one. Without this the star stays on screen against a
+		// connection that is gone.
+		await systemSettingsGet.handler(socket, {}, emitToUser)
 		return res
 	}
 }
 
-export const connectionsSetUserActive: Handler<
-	Sockets.Connections.SetUserActive.Params,
-	Sockets.Connections.SetUserActive.Response
+/**
+ * Register one connection as the instance's default for ONE capability.
+ *
+ * Renamed from `connections:setUserActive`, which had not been about a user
+ * since the per-user active connection was retired, and which wrote two places:
+ * `system_settings.default_connection_id` AND the capability-keyed table. Both,
+ * "in step" — except reads checked the table first and the column only when the
+ * row was ABSENT, never when it was merely STALE, so on an upgraded install
+ * every star press after the first landed in the column, lost to the seeded row,
+ * and left pipeline runs on the old connection while every legacy screen
+ * honoured the new one. A fresh install has no seeded row, so the fallback
+ * worked and local testing never saw it. The column is gone (0181) and
+ * `connection_defaults` is the only store.
+ *
+ * ⚠ `capability` is required and is NOT derived from the connection. One
+ * KoboldCPP row can serve five capabilities, and the derivation most likely to
+ * be written is "the first one it can do" — which is how an image-capable
+ * connection becomes the chat default. The caller names what it means.
+ *
+ * A null id writes null rather than skipping, so unstarring CLEARS the
+ * registration instead of stranding the last value — and lands the row in the
+ * same state the delete cascade produces, which is what the "cleared" refusal
+ * reads.
+ */
+export const connectionsSetDefault: Handler<
+	Sockets.Connections.SetDefault.Params,
+	Sockets.Connections.SetDefault.Response
 > = {
-	event: "connections:setUserActive",
+	event: "connections:setDefault",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) {
 			const res = {
@@ -489,40 +538,58 @@ export const connectionsSetUserActive: Handler<
 			throw new Error("Access denied.")
 		}
 
-		// Update system-wide default connection (replaces the old per-user active connection)
-		await db
-			.update(schema.systemSettings)
-			.set({ defaultConnectionId: params.id })
-			.where(eq(schema.systemSettings.id, 1))
+		// The star is refused where the connection cannot do the thing, rather
+		// than accepted and failed later at dispatch. Registering an image-only
+		// endpoint as the chat default is a write that succeeds, shows a star on
+		// screen, and then fails every Send with a sentence about adapters — and
+		// it is exactly what the deleted auto-star did on its own. Judged with
+		// `capabilityRefusal`, the same reader the picker and the bind guard use,
+		// so all three agree about what a connection can do.
+		//
+		// Clearing (`id: null`) is never refused: it names no connection to
+		// judge, and refusing to un-star would be a trap.
+		if (params.id != null) {
+			const row = await db.query.connections.findFirst({
+				where: (c, { eq }) => eq(c.id, params.id!),
+				columns: {
+					id: true,
+					name: true,
+					type: true,
+					capabilities: true
+				}
+			})
+			if (!row) {
+				const res = { error: "Connection not found." }
+				emitToUser("error", res)
+				throw new Error("Connection not found.")
+			}
+			const refusal = capabilityRefusal(
+				row,
+				params.capability as CapabilityId
+			)
+			if (refusal) {
+				const res = { error: refusal }
+				emitToUser("error", res)
+				throw new Error(refusal)
+			}
+		}
 
-		// ...and the capability-keyed table, which is what the PIPELINE path
-		// reads. Both, in step, exactly as the sampling twin does it.
-		//
-		// Writing only the column above would be silently wrong on upgraded
-		// installs and nowhere else: 0175 seeded `connection_defaults` from
-		// `default_connection_id` ONCE, and `world.ts` reads the table first,
-		// falling back to the column only when the row is ABSENT — never when it
-		// is merely STALE. So every later star press would land in the column,
-		// lose to the seeded row, and leave pipeline runs on the old connection
-		// while every legacy path honoured the new one. A fresh install has no
-		// seeded row, so the fallback works and local testing never sees it.
-		//
-		// A null id writes null rather than skipping, so unstarring clears the
-		// registration instead of stranding the last value.
-		await setCapabilityDefault(db, "text->text", {
+		await setCapabilityDefault(db, params.capability, {
 			connectionId: params.id ?? null
 		})
 
 		if (params.id)
 			await connectionsGet.handler(socket, { id: params.id }, emitToUser)
 
-		const res: Sockets.Connections.SetUserActive.Response = {
+		const res: Sockets.Connections.SetDefault.Response = {
 			ok: true,
+			capability: params.capability,
 			id: params.id
 		}
-		emitToUser("connections:setUserActive", res)
+		emitToUser("connections:setDefault", res)
 
-		// Push updated system settings and user so clients reflect the new default immediately
+		// The defaults ride on `systemSettings:get`, so this is how every client
+		// learns the star moved.
 		await systemSettingsGet.handler(socket, {}, emitToUser)
 		await usersCurrent.handler(socket, {}, emitToUser)
 
@@ -837,7 +904,7 @@ export function registerConnectionHandlers(
 	register(socket, connectionsCreate, emitToUser)
 	register(socket, connectionsUpdate, emitToUser)
 	register(socket, connectionsDelete, emitToUser)
-	register(socket, connectionsSetUserActive, emitToUser)
+	register(socket, connectionsSetDefault, emitToUser)
 	register(socket, connectionsTest, emitToUser)
 	register(socket, connectionsRefreshModels, emitToUser)
 	register(socket, connectionsCapabilities, emitToUser)

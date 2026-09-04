@@ -1,64 +1,143 @@
 /**
- * Media (28) — one module for every blob the instance stores.
+ * Media (28, resplit by 0182) — one module for every blob the instance stores.
  *
  * Replaces five hand-built upload paths, two near-identical gallery tables and
  * a serving route that parsed ownership out of a URL. See PLANS/28 for the
  * design; the rules worth knowing at a call site are:
  *
- *  - **Provenance, not role.** A row says what it belongs to. What it is *for*
- *    is a pointer from the owner (`characters.avatarMediaId`, …).
+ *  - **A payload is ONE row.** `files` carries the metadata, `variants` carries
+ *    the bytes, and building a client payload reads the file row and nothing
+ *    else — see `toClientMedia`. The URL says which representation is wanted
+ *    and the HTTP handler resolves it, deriving on first request. Putting a
+ *    variant lookup back on the render path is the one thing this split exists
+ *    to prevent.
+ *  - **Provenance, not role.** A file says what it belongs to. What it is *for*
+ *    is a pointer from the owner (`characters.avatarMediaId`, …). A variant has
+ *    no provenance at all, which is what makes it structurally unreachable by a
+ *    provenance query — the replacement for the old trick of leaving a
+ *    thumbnail's four columns NULL.
  *  - **No FKs, no cascade.** A stale id keeps an orphan groupable.
- *  - **`path` never leaves the server** except to an admin — see
- *    `toClientMedia`, which is the only thing that should ever build a payload.
+ *  - **`path` never leaves the server.** It only exists on a variant row, and
+ *    no payload builder loads one, so that is structural rather than a rule
+ *    somebody has to remember.
  */
 import crypto from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { and, eq, isNull, asc, sql, type SQL } from "drizzle-orm"
+import { and, eq, isNull, asc, type SQL } from "drizzle-orm"
 import { db as defaultDb } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import {
+	MediaFidelity,
 	MediaKind,
 	MediaVariant,
 	MediaVisibility,
+	type MediaVariantName,
 	type MediaVisibilityType
 } from "$lib/shared/constants/MediaVisibility"
-import {
-	mediaRelPath,
-	derivativeRelPath,
-	resolveMediaPath,
-	type MediaProvenance
-} from "./paths"
+import { mediaRelPath, resolveMediaPath, type MediaProvenance } from "./paths"
 import { sniffMedia, MAX_MEDIA_UPLOAD_BYTES } from "./sniff"
-import { makeThumbnail, readDimensions } from "./thumbnail"
+import { WEB_SAFE_IMAGE_MIMES } from "./thumbnail"
+import { readDimensions, readMotion } from "./convert/codecs"
+import {
+	ensureVariant,
+	getVariant,
+	removeVariant,
+	variantsFor,
+	type ResolvedVariant
+} from "./variants"
 
-export { mediaRelPath, derivativeRelPath, resolveMediaPath } from "./paths"
+export { mediaRelPath, variantRelPath, resolveMediaPath } from "./paths"
 export { sniffMedia, MAX_MEDIA_UPLOAD_BYTES } from "./sniff"
 export { canViewMedia } from "./access"
-export { makeThumbnail, THUMB_MAX_EDGE } from "./thumbnail"
+export {
+	makeThumbnail,
+	THUMB_MAX_EDGE,
+	WEB_SAFE_IMAGE_MIMES
+} from "./thumbnail"
+export { readMotion, type MotionInfo } from "./convert/codecs"
+/**
+ * The kind-for-kind conversion router — image → image, document → document, as
+ * opposed to the cross-kind generation a pipeline does. `makeDisplayWebp` used
+ * to stand here as a named operation of its own; it was one call into this
+ * router with one target, and `deriveDisplay` now makes that call itself.
+ */
+export {
+	convertMedia,
+	convertMediaTo,
+	convertMediaBatch,
+	converterExists,
+	reachableTargets,
+	refusalToError,
+	MediaDowngradeError,
+	type ConvertInput,
+	type ConvertedMedia,
+	type ConversionRefused,
+	type ConversionRefusalCode,
+	type ConversionResult
+} from "./convert"
+export {
+	bumpFileRev,
+	displayDerivable,
+	ensureVariant,
+	getVariant,
+	getVariantById,
+	removeVariant,
+	setDisplayPointer,
+	variantsFor,
+	listVariants,
+	type ResolvedVariant
+} from "./variants"
+export {
+	cullVariant,
+	cullableDerived,
+	cullableOriginals,
+	storedBytesByFile,
+	type CullOutcome,
+	type DerivedCullable,
+	type OriginalCullable
+} from "./cull"
 
-export type MediaRow = typeof schema.media.$inferSelect
+/** The logical file and its metadata. The only row a payload is built from. */
+export type FileRow = typeof schema.files.$inferSelect
+/** One stored representation. Carries the path; never leaves the server. */
+export type VariantRow = typeof schema.variants.$inferSelect
+/** @deprecated 0182 split `media` into `files` + `variants`. This is the FILE
+ *  row — mime, bytes and path moved to a variant. */
+export type MediaRow = FileRow
+
 type Db = typeof defaultDb
 
-/** What a non-admin client is allowed to know about a blob. */
+/** What a non-admin client is allowed to know about a file. */
 export interface ClientMedia {
 	id: number
 	/** The public address. Every URL below is built from this, never from
-	 *  `id` — see the note on `media.uuid`. */
+	 *  `id` — see the note on `files.uuid`. */
 	uuid: string
+	/** Cache token, carried by every URL below. It changes when the bytes
+	 *  behind that URL do, which is what lets the response be immutable. */
+	rev: number
 	kind: string
+	/** The DISPLAY variant's mime, denormalised onto the file row so this
+	 *  payload is one query. */
 	mime: string
+	/** The DISPLAY variant's byte length — what showing this file costs, not
+	 *  what storing it costs. */
 	bytes: number
 	width: number | null
 	height: number | null
+	durationMs: number | null
 	filename: string | null
 	visibility: string
 	position: number
-	/** Always `/media/{id}` — a proxy, never a location. */
+	/** `/media/{uuid}?r={rev}` — the display form. ALREADY HAS A QUERY STRING:
+	 *  anything appending to it must use `&`. */
 	url: string
-	/** The thumbnail's proxy URL, or the original's when there is none. */
+	/** `/media/{uuid}?v=thumb&r={rev}`. Derived on first request. */
 	thumbUrl: string
-	thumbMediaId: number | null
+	/** `/media/{uuid}?v=original&r={rev}`. The bytes as uploaded — for a
+	 *  download or a card export, never for routine rendering. */
+	originalUrl: string
 	characterId: number | null
 	personaId: number | null
 	sessionId: number | null
@@ -66,37 +145,40 @@ export interface ClientMedia {
 }
 
 /**
- * The ONLY way a media row becomes a client payload.
+ * The ONLY way a file row becomes a client payload, and it issues NO QUERY.
  *
- * `path` is not in `ClientMedia`, so a leak is a type error rather than a
- * review catch. This matters more than it looks: today `characters.avatar`
- * *is* the path, and it ships `/images/data/users/1/characters/5/avatar-ab12.png`
- * to every browser — disclosing the data-dir layout, the owner's user id and
- * the character id to anyone who can read a socket payload. Never spread a raw
- * row into a response.
+ * `path` is not in `ClientMedia` and is not on the row this takes, so a leak is
+ * two type errors deep rather than a review catch. This matters more than it
+ * looks: before 28 `characters.avatar` *was* the path, and it shipped
+ * `/images/data/users/1/characters/5/avatar-ab12.png` to every browser —
+ * disclosing the data-dir layout, the owner's user id and the character id to
+ * anyone who could read a socket payload.
+ *
+ * It used to take an optional thumbnail row so it could build `thumbUrl` from
+ * the thumbnail's own uuid, which cost every list a second query. One uuid per
+ * file plus `?v=` retired that: the thumbnail's address is derivable from the
+ * row in hand, whether or not the thumbnail exists yet.
  */
-export function toClientMedia(
-	row: MediaRow,
-	opts?: { thumb?: MediaRow | null }
-): ClientMedia {
-	const thumb = opts?.thumb ?? null
+export function toClientMedia(row: FileRow): ClientMedia {
 	return {
 		id: row.id,
 		uuid: row.uuid,
+		rev: row.rev,
 		kind: row.kind,
-		mime: row.mime,
-		bytes: row.bytes,
+		// Null only for a file whose display form has not been derived yet —
+		// a format needing conversion, which `sniff.ts` cannot currently even
+		// accept. The payload will not promise a type it has not produced.
+		mime: row.displayMime ?? "application/octet-stream",
+		bytes: row.displayBytes ?? 0,
 		width: row.width,
 		height: row.height,
+		durationMs: row.durationMs,
 		filename: row.filename,
 		visibility: row.visibility,
 		position: row.position,
-		url: mediaUrl(row.uuid),
-		// The thumbnail's OWN uuid when there is one, so the client never needs
-		// the `?v=thumb` resolution and the response can be immutable. When
-		// there is none, the original IS the thumbnail.
-		thumbUrl: mediaUrl(thumb?.uuid ?? row.uuid),
-		thumbMediaId: thumb?.id ?? null,
+		url: mediaUrl(row.uuid, row.rev),
+		thumbUrl: mediaUrl(row.uuid, row.rev, MediaVariant.THUMB),
+		originalUrl: mediaUrl(row.uuid, row.rev, MediaVariant.ORIGINAL),
 		characterId: row.characterId,
 		personaId: row.personaId,
 		sessionId: row.sessionId,
@@ -104,8 +186,22 @@ export function toClientMedia(
 	}
 }
 
-export function mediaUrl(uuid: string): string {
-	return `/media/${uuid}`
+/**
+ * The uuid form — the real address.
+ *
+ * `r` is a cache-buster, not a token: the handler reads it and ignores its
+ * value. Its only job is to make the URL *string* change when the bytes behind
+ * it do, so an immutable cached entry is not consulted. Validating it would
+ * turn a client holding a stale URL into a broken image instead of a stale one,
+ * which is strictly worse.
+ */
+export function mediaUrl(
+	uuid: string,
+	rev: number,
+	variant?: MediaVariantName
+): string {
+	const query = variant ? `v=${variant}&r=${rev}` : `r=${rev}`
+	return `/media/${uuid}?${query}`
 }
 
 /**
@@ -113,17 +209,17 @@ export function mediaUrl(uuid: string): string {
  * persona row carries `avatarMediaId` and nothing else, and joining for a uuid
  * at all ~46 read sites would be a large blast radius.
  *
- * `/media/{id}` is a **redirect** to the row's uuid URL (see the route), so the
- * cached bytes still live at an immutable address; only the tiny, uncached
- * redirect is re-fetched. `?v=thumb` redirects to the thumbnail's uuid.
+ * `/media/{id}` is a **redirect** to the uuid form (see the route), which is
+ * also where `rev` is injected — that is what lets the client-side builders in
+ * `$lib/client/utils/media.ts` stay rev-unaware.
  */
-export function mediaIdUrl(id: number, variant?: "thumb"): string {
+export function mediaIdUrl(id: number, variant?: MediaVariantName): string {
 	return `/media/${id}${variant ? `?v=${variant}` : ""}`
 }
 
-/** @deprecated use mediaIdUrl(id, "thumb"). */
+/** @deprecated use mediaIdUrl(id, MediaVariant.THUMB). */
 export function mediaThumbUrl(id: number): string {
-	return mediaIdUrl(id, "thumb")
+	return mediaIdUrl(id, MediaVariant.THUMB)
 }
 
 export interface CreateMediaInput extends MediaProvenance {
@@ -137,9 +233,6 @@ export interface CreateMediaInput extends MediaProvenance {
 	allowDocuments?: boolean
 	/** User-level bucket when there is no entity parent (eg. "backgrounds"). */
 	bucket?: string
-	/** Generate a thumbnail inline. Off during migrations and bulk imports,
-	 *  where the backfill pass handles it instead. */
-	thumbnail?: boolean
 	/**
 	 * How this was made — prompt, seed, model, backend (0173). Stored verbatim,
 	 * never interpreted, and never consulted for access.
@@ -151,16 +244,46 @@ export interface CreateMediaInput extends MediaProvenance {
 	meta?: Record<string, unknown> | null
 }
 
+export interface CreatedMedia {
+	file: FileRow
+	/** The variant holding the bytes just handed in. Also the display form when
+	 *  the upload was already web-safe, which is every format the instance can
+	 *  currently accept. */
+	original: VariantRow
+}
+
+function sha256(bytes: Buffer): string {
+	return crypto.createHash("sha256").update(bytes).digest("hex")
+}
+
 /**
- * Write bytes and insert the row, deduping on (userId, hash, variant).
+ * Whether the bytes as given can be served to a browser unchanged, so the
+ * original IS the display form and no second copy is written.
+ *
+ * True for a web-safe image, and true for every non-image kind — a PDF or a
+ * video has no derivation available in this codec stack, so the bytes as given
+ * are the only representation there will ever be, and leaving the pointer null
+ * would only mean a payload that cannot say what its own mime is.
+ */
+function isServableAsGiven(kind: string, mime: string): boolean {
+	if (kind !== MediaKind.IMAGE) return true
+	return WEB_SAFE_IMAGE_MIMES.has(mime)
+}
+
+/**
+ * Write bytes and insert the rows, deduping on (userId, hash).
  *
  * Idempotent by construction: the filename is the hash, so a re-upload of
- * identical bytes rewrites the same file and returns the existing row.
+ * identical bytes rewrites the same file and returns the existing rows.
+ *
+ * **No derivation happens here.** Before 0182 this encoded a thumbnail inline,
+ * which meant a codec problem could fail or stall an upload; the first request
+ * pays for it now, where the cost can fall back to the display form.
  */
 export async function createMedia(
 	db: Db,
 	input: CreateMediaInput
-): Promise<MediaRow> {
+): Promise<CreatedMedia> {
 	const buf = Buffer.isBuffer(input.bytes)
 		? input.bytes
 		: Buffer.from(input.bytes)
@@ -168,16 +291,20 @@ export async function createMedia(
 		filename: input.filename ?? undefined,
 		allowDocuments: input.allowDocuments
 	})
-	const hash = crypto.createHash("sha256").update(buf).digest("hex")
+	const hash = sha256(buf)
 
-	const existing = await db.query.media.findFirst({
+	const existing = await db.query.files.findFirst({
 		where: and(
-			eq(schema.media.userId, input.userId),
-			eq(schema.media.hash, hash),
-			isNull(schema.media.variant)
+			eq(schema.files.userId, input.userId),
+			eq(schema.files.hash, hash)
 		)
 	})
-	if (existing) return existing
+	if (existing) {
+		return {
+			file: existing,
+			original: await restoreOriginal(db, existing, buf, sniffed.mime)
+		}
+	}
 
 	const relPath = mediaRelPath(input, hash, sniffed.ext, {
 		bucket: input.bucket
@@ -186,13 +313,15 @@ export async function createMedia(
 	await fs.mkdir(path.dirname(abs), { recursive: true })
 	await fs.writeFile(abs, buf)
 
-	const dims =
-		sniffed.kind === MediaKind.IMAGE
-			? await readDimensions(buf, sniffed.mime)
-			: null
+	const isImage = sniffed.kind === MediaKind.IMAGE
+	const dims = isImage ? await readDimensions(buf, sniffed.mime) : null
+	// `motion.animated` is the signal a time dimension exists — not the
+	// duration, which a WebP container can leave unstated while still being an
+	// animation. See readMotion; both animating formats are probed.
+	const motion = isImage ? await readMotion(buf, sniffed.mime) : null
 
-	const [row] = await db
-		.insert(schema.media)
+	const [file] = await db
+		.insert(schema.files)
 		.values({
 			userId: input.userId,
 			characterId: input.characterId ?? null,
@@ -200,105 +329,108 @@ export async function createMedia(
 			sessionId: input.sessionId ?? null,
 			messageId: input.messageId ?? null,
 			visibility: input.visibility ?? MediaVisibility.SCOPED,
-			hash,
-			mime: sniffed.mime,
-			bytes: buf.byteLength,
 			kind: sniffed.kind,
-			path: relPath,
+			hash,
 			filename: input.filename ?? null,
 			width: dims?.width ?? null,
 			height: dims?.height ?? null,
+			// Null for a still, and null for an animation whose container
+			// states no delays — `duration_ms` has never promised to be the
+			// animated/still flag, and `displayDerivable` says why it cannot be
+			// read as one.
+			durationMs: motion?.animated ? motion.durationMs : null,
 			position: input.position ?? 0,
 			meta: input.meta ?? null
 		})
 		.returning()
 
-	if (input.thumbnail !== false && sniffed.kind === MediaKind.IMAGE) {
-		await ensureThumbnail(db, row, buf)
-	}
-	return row
+	const [original] = await db
+		.insert(schema.variants)
+		.values({
+			fileId: file.id,
+			variant: MediaVariant.ORIGINAL,
+			mime: sniffed.mime,
+			bytes: buf.byteLength,
+			path: relPath,
+			hash,
+			width: dims?.width ?? null,
+			height: dims?.height ?? null,
+			isOriginal: true,
+			// NOT a cache entry: irreplaceable, and only the explicit
+			// destructive admin action may ever remove it.
+			cache: false,
+			fidelity: MediaFidelity.FULL
+		})
+		.returning()
+
+	if (!isServableAsGiven(sniffed.kind, sniffed.mime))
+		return { file, original }
+
+	// The original IS the display form. One statement, so the pointer and the
+	// mime/bytes denormalised from it can never disagree; no `rev` bump,
+	// because nothing has been served from this brand-new row yet.
+	const [pointed] = await db
+		.update(schema.files)
+		.set({
+			displayVariantId: original.id,
+			displayMime: original.mime,
+			displayBytes: original.bytes
+		})
+		.where(eq(schema.files.id, file.id))
+		.returning()
+	return { file: pointed ?? file, original }
 }
 
 /**
- * Generate and store the thumbnail for an original, if it does not have one.
+ * Re-write an original that a dedupe hit found missing.
  *
- * **Never throws.** A failed encode must not fail the upload — the original
- * still lands and serves, and the backfill pass retries. An image matters more
- * than its optimisation.
- */
-/**
- * Note on uuids: this deliberately does NOT rotate the parent's address.
+ * `files_user_hash_unique` is on the ORIGINAL's sha256 and `files.hash`
+ * survives culling, so this sequence is reachable: upload photo.jpg, admin
+ * culls originals, user re-uploads photo.jpg. The file row matches, and there
+ * is no honest original to return with it.
  *
- * On first generation there is nothing cached to invalidate, and rotating here
- * would hand `createMedia` back a row whose uuid was already stale — a dead URL
- * for its own caller. Rotation belongs to the callers that *replace* an
- * existing thumbnail (the regenerate handler and the backfill re-cut), because
- * only they know a browser may be holding the old one.
+ * The hash matched, so these bytes are provably the same file — writing them
+ * back costs nothing we are not already holding, and it is the conservative
+ * answer: the alternative is a return type that lies or a caller that has to
+ * handle a case it cannot fix. The display pointer is deliberately left where
+ * it is: it already names a live full-fidelity row (`cullVariant` guarantees
+ * that), and moving it would bump `rev` for no change in what the file is.
  */
-export async function ensureThumbnail(
+async function restoreOriginal(
 	db: Db,
-	original: MediaRow,
-	sourceBytes?: Buffer
-): Promise<MediaRow | null> {
-	if (original.variant) return null
-	if (original.kind !== MediaKind.IMAGE) return null
-	try {
-		const existing = await db.query.media.findFirst({
-			where: and(
-				eq(schema.media.parentMediaId, original.id),
-				eq(schema.media.variant, MediaVariant.THUMB)
-			)
+	file: FileRow,
+	buf: Buffer,
+	mime: string
+): Promise<VariantRow> {
+	const present = await getVariant(db, file.id, MediaVariant.ORIGINAL)
+	if (present) return present
+
+	const dims =
+		file.kind === MediaKind.IMAGE ? await readDimensions(buf, mime) : null
+	const ext = mime.split("/")[1] ?? "bin"
+	const relPath = mediaRelPath(file, file.hash, ext)
+	const abs = resolveMediaPath(relPath)
+	await fs.mkdir(path.dirname(abs), { recursive: true })
+	await fs.writeFile(abs, buf)
+
+	const [row] = await db
+		.insert(schema.variants)
+		.values({
+			fileId: file.id,
+			variant: MediaVariant.ORIGINAL,
+			mime,
+			bytes: buf.byteLength,
+			path: relPath,
+			hash: file.hash,
+			width: dims?.width ?? null,
+			height: dims?.height ?? null,
+			isOriginal: true,
+			cache: false,
+			fidelity: MediaFidelity.FULL
 		})
-		if (existing) return existing
-
-		const buf =
-			sourceBytes ?? (await fs.readFile(resolveMediaPath(original.path)))
-		const thumb = await makeThumbnail(buf, original.mime)
-		if (!thumb) return null
-
-		const relPath = derivativeRelPath(
-			original.path,
-			MediaVariant.THUMB,
-			thumb.ext
-		)
-		const abs = resolveMediaPath(relPath)
-		await fs.mkdir(path.dirname(abs), { recursive: true })
-		await fs.writeFile(abs, thumb.bytes)
-
-		const hash = crypto
-			.createHash("sha256")
-			.update(thumb.bytes)
-			.digest("hex")
-
-		// A thumbnail carries NO entity provenance — its only parent is the
-		// image it represents (28 §5). That is what keeps mediaFor() returning
-		// originals only, with no `variant IS NULL` filter at any call site,
-		// and what makes "never export a thumbnail" true with no code.
-		const [row] = await db
-			.insert(schema.media)
-			.values({
-				userId: original.userId,
-				visibility: original.visibility,
-				hash,
-				mime: thumb.mime,
-				bytes: thumb.bytes.byteLength,
-				kind: MediaKind.IMAGE,
-				path: relPath,
-				width: thumb.width,
-				height: thumb.height,
-				parentMediaId: original.id,
-				variant: MediaVariant.THUMB
-			})
-			.onConflictDoNothing()
-			.returning()
-		return row ?? null
-	} catch (err) {
-		console.warn(
-			`[media] thumbnail generation failed for media ${original.id}:`,
-			err instanceof Error ? err.message : err
-		)
-		return null
-	}
+		.onConflictDoNothing()
+		.returning()
+	return row ?? (await getVariant(db, file.id, MediaVariant.ORIGINAL))!
 }
 
 export type MediaParent =
@@ -310,150 +442,136 @@ export type MediaParent =
 
 function parentWhere(parent: MediaParent): SQL {
 	if ("characterId" in parent)
-		return eq(schema.media.characterId, parent.characterId)
+		return eq(schema.files.characterId, parent.characterId)
 	if ("personaId" in parent)
-		return eq(schema.media.personaId, parent.personaId)
+		return eq(schema.files.personaId, parent.personaId)
 	if ("messageId" in parent)
-		return eq(schema.media.messageId, parent.messageId)
+		return eq(schema.files.messageId, parent.messageId)
 	if ("sessionId" in parent)
-		return eq(schema.media.sessionId, parent.sessionId)
+		return eq(schema.files.sessionId, parent.sessionId)
 	return and(
-		eq(schema.media.userId, parent.userId),
-		isNull(schema.media.characterId),
-		isNull(schema.media.personaId),
-		isNull(schema.media.sessionId)
+		eq(schema.files.userId, parent.userId),
+		isNull(schema.files.characterId),
+		isNull(schema.files.personaId),
+		isNull(schema.files.sessionId)
 	)!
 }
 
 /**
- * Every original grouped under a parent, in `position` order.
+ * Every file grouped under a parent, in `position` order.
  *
- * Returns originals only — and not because of a filter here. A thumbnail
- * carries no entity provenance, so `characterId = X` simply never matches one.
+ * There is no derivative filter here and there is nothing to filter: a variant
+ * has no provenance columns at all, so `characterId = X` cannot match one. That
+ * claim was made before 0182 too, but it was false — `mediaFor` carried an
+ * `isNull(variant)` filter because a thumbnail lived in the same table. Now it
+ * is true structurally.
  */
 export async function mediaFor(
 	db: Db,
 	parent: MediaParent
-): Promise<MediaRow[]> {
+): Promise<FileRow[]> {
 	return db
 		.select()
-		.from(schema.media)
-		.where(and(parentWhere(parent), isNull(schema.media.variant)))
-		.orderBy(asc(schema.media.position), asc(schema.media.id))
+		.from(schema.files)
+		.where(parentWhere(parent))
+		.orderBy(asc(schema.files.position), asc(schema.files.id))
 }
 
-/** Originals for a parent, each paired with its thumbnail, ready for a payload. */
+/** A parent's files, ready for a payload — ONE query, no variant lookup. */
 export async function clientMediaFor(
 	db: Db,
 	parent: MediaParent
 ): Promise<ClientMedia[]> {
-	const rows = await mediaFor(db, parent)
-	if (!rows.length) return []
-	const thumbs = await thumbsByParent(
-		db,
-		rows.map((r) => r.id)
-	)
-	return rows.map((r) => toClientMedia(r, { thumb: thumbs.get(r.id) ?? null }))
+	return (await mediaFor(db, parent)).map(toClientMedia)
 }
 
-/** Thumbnail rows keyed by the id of the original they represent. */
-export async function thumbsByParent(
-	db: Db,
-	originalIds: number[]
-): Promise<Map<number, MediaRow>> {
-	const out = new Map<number, MediaRow>()
-	if (!originalIds.length) return out
-	const rows = await db
-		.select()
-		.from(schema.media)
-		.where(
-			and(
-				eq(schema.media.variant, MediaVariant.THUMB),
-				sql`${schema.media.parentMediaId} IN ${originalIds}`
-			)
-		)
-	for (const r of rows) if (r.parentMediaId) out.set(r.parentMediaId, r)
-	return out
-}
-
-/** Look a row up by its public address. */
+/** Look a file up by its public address. */
 export async function getMediaByUuid(
 	db: Db,
 	uuid: string
-): Promise<MediaRow | null> {
+): Promise<FileRow | null> {
 	// Cheap shape guard so a junk path parameter never reaches the database as
 	// a uuid comparison (which errors rather than returning empty).
-	if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid))
+	if (
+		!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+			uuid
+		)
+	)
 		return null
-	const row = await db.query.media.findFirst({
-		where: eq(schema.media.uuid, uuid)
+	const row = await db.query.files.findFirst({
+		where: eq(schema.files.uuid, uuid)
 	})
 	return row ?? null
+}
+
+export async function getMedia(db: Db, id: number): Promise<FileRow | null> {
+	if (!Number.isInteger(id)) return null
+	const row = await db.query.files.findFirst({
+		where: eq(schema.files.id, id)
+	})
+	return row ?? null
+}
+
+export type ReadMediaResult = ResolvedVariant & {
+	file: FileRow
+	/** Non-null here: `readMedia` only ever resolves `original` or `display`,
+	 *  and neither is a cache row, so both are always persisted. */
+	row: VariantRow
 }
 
 /**
- * Give a row a new public address.
+ * Read a file's bytes off disk. Null when the row or the file is gone — a
+ * dangling reference is expected here (28 §2), not exceptional.
  *
- * Called when what the row serves could differ from what a browser already
- * cached. Bytes at a given uuid never change, so this is the only thing that
- * has to happen for a cache to be correct — and it is why every media response
- * can be `immutable` rather than revalidating.
+ * Defaults to the ORIGINAL, because the callers are exports: a character card
+ * embeds its avatar's actual PNG, and a session asset is handed on as it
+ * arrived. When the original has been culled this falls back to the display
+ * form rather than returning nothing, which is the same rule the serving route
+ * follows for `?v=original`.
  */
-export async function rotateMediaUuid(db: Db, id: number): Promise<void> {
-	await db
-		.update(schema.media)
-		.set({ uuid: sql`gen_random_uuid()` })
-		.where(eq(schema.media.id, id))
-}
-
-export async function getMedia(db: Db, id: number): Promise<MediaRow | null> {
-	if (!Number.isInteger(id)) return null
-	const row = await db.query.media.findFirst({
-		where: eq(schema.media.id, id)
-	})
-	return row ?? null
-}
-
-/** Read a row's bytes off disk. Null when the row or the file is gone — a
- *  dangling reference is expected here (28 §2), not exceptional. */
 export async function readMedia(
 	db: Db,
-	id: number
-): Promise<{ row: MediaRow; bytes: Buffer } | null> {
-	const row = await getMedia(db, id)
-	if (!row) return null
-	try {
-		return { row, bytes: await fs.readFile(resolveMediaPath(row.path)) }
-	} catch {
-		return null
-	}
+	id: number,
+	variant: MediaVariantName = MediaVariant.ORIGINAL
+): Promise<ReadMediaResult | null> {
+	const file = await getMedia(db, id)
+	if (!file) return null
+	const resolved =
+		(await ensureVariant(db, file, variant)) ??
+		(variant === MediaVariant.ORIGINAL
+			? await ensureVariant(db, file, MediaVariant.DISPLAY)
+			: null)
+	if (!resolved?.row) return null
+	return { ...resolved, row: resolved.row, file }
 }
 
 /**
- * Delete a row, its file, and any derivative of it.
+ * Delete a file, every representation of it, and its bytes.
  *
- * Deliberately narrow: it clears nothing that *points* at the row. A dangling
- * `avatarMediaId` renders as a missing image and is collected by the cleanup
- * tool — that is the trade 28 §2 makes on purpose.
+ * The one operation allowed to leave nothing behind — because the file itself
+ * is going away, so there is nothing left to orphan. Reclaiming space WITHOUT
+ * deleting the file is `cullVariant`, which refuses to take the last copy.
+ *
+ * Deliberately narrow in the other direction: it clears nothing that *points*
+ * at the file. A dangling `avatarMediaId` renders as a missing image and is
+ * collected by the cleanup tool — the trade 28 §2 makes on purpose.
  */
-export async function deleteMedia(db: Db, id: number): Promise<void> {
-	const row = await getMedia(db, id)
-	if (!row) return
-	const derivatives = await db
-		.select()
-		.from(schema.media)
-		.where(eq(schema.media.parentMediaId, id))
-	for (const r of [...derivatives, row]) {
-		try {
-			await fs.unlink(resolveMediaPath(r.path))
-		} catch {
-			// Already gone, or never written. Removing the row is the point.
-		}
-		await db.delete(schema.media).where(eq(schema.media.id, r.id))
+export async function deleteFile(db: Db, fileId: number): Promise<void> {
+	const file = await getMedia(db, fileId)
+	if (!file) return
+	for (const variant of await variantsFor(db, fileId)) {
+		await removeVariant(db, variant)
 	}
+	await db.delete(schema.files).where(eq(schema.files.id, fileId))
 }
 
-/** Set `position` across a parent's originals, in the order given. */
+/** @deprecated 0182 renamed this to `deleteFile`, which is what it always
+ *  did — the id is a file id, and every variant goes with it. */
+export async function deleteMedia(db: Db, id: number): Promise<void> {
+	return deleteFile(db, id)
+}
+
+/** Set `position` across a parent's files, in the order given. */
 export async function reorderMedia(
 	db: Db,
 	parent: MediaParent,
@@ -465,8 +583,8 @@ export async function reorderMedia(
 	for (const id of orderedIds) {
 		if (!allowed.has(id)) continue
 		await db
-			.update(schema.media)
+			.update(schema.files)
 			.set({ position: position++ })
-			.where(eq(schema.media.id, id))
+			.where(eq(schema.files.id, id))
 	}
 }

@@ -3,7 +3,7 @@ import { db } from "$lib/server/db"
 import type { Handler } from "$lib/shared/events"
 import { getImageAdapter } from "../utils/getImageAdapter"
 import { capabilityRefusal } from "$lib/server/pipelines/runtime/capabilityGuard"
-import { createMedia } from "$lib/server/media"
+import { createMedia, mediaUrl } from "$lib/server/media"
 import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { buildImageRequest } from "$lib/server/imageGen/buildRequest"
@@ -238,7 +238,7 @@ export const imagesGenerate: Handler<
 			)
 			const { Adapter } = await getImageAdapter(connection.type)
 			const adapter = new Adapter(target as any)
-			result = await adapter.generate(req, {
+			result = await adapter.generateImage(req, {
 				signal: controller.signal,
 				onProgress
 			})
@@ -277,7 +277,7 @@ export const imagesGenerate: Handler<
 
 		const media: GeneratedMedia[] = []
 		for (const item of result.media) {
-			const row = await createMedia(db, {
+			const { file, original } = await createMedia(db, {
 				userId,
 				bytes: Buffer.from(item.base64, "base64"),
 				filename: `generated.${extFor(item.mime)}`,
@@ -303,14 +303,25 @@ export const imagesGenerate: Handler<
 					...(item.meta ?? {})
 				}
 			})
+			// Built field by field, and note what is NOT here: `path`. This
+			// used to spread the on-disk location of a freshly written file into
+			// a socket response, disclosing the data-dir layout and the owner's
+			// user id to every browser that could read it. The path-leak tests
+			// only inspected `toClientMedia`, so nothing caught it for as long
+			// as it stood — `images.pathLeak.int.test.ts` covers this shape now.
 			media.push({
-				id: row.id,
-				uuid: row.uuid,
-				path: row.path,
-				mime: row.mime,
-				kind: row.kind,
-				width: row.width,
-				height: row.height,
+				id: file.id,
+				uuid: file.uuid,
+				url: mediaUrl(file.uuid, file.rev),
+				rev: file.rev,
+				// The DISPLAY variant's mime. `createMedia` always writes the
+				// projection, so the fallback is the row it was projected from
+				// rather than an invented type — a null must never become a
+				// confident "application/octet-stream" for an image.
+				mime: file.displayMime ?? original.mime,
+				kind: file.kind,
+				width: file.width,
+				height: file.height,
 				...(item.seed !== undefined ? { seed: item.seed } : {})
 			})
 		}

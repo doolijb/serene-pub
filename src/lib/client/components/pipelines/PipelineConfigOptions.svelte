@@ -297,13 +297,46 @@
 		set(option, ids)
 	}
 
-	/* --- prompt clone / edit / delete ------------------------------- */
+	/* --- prompt create / clone / edit / delete ----------------------- */
+
+	/**
+	 * Every prompt mutation names the **option**, not just the pipeline.
+	 *
+	 * A prompt row is shared across pipelines now — it follows its node — so
+	 * "does this belong to this spec" has no true answer for one, and the slug
+	 * alone can no longer authorize the write. The option handle proves the
+	 * caller is operating a control this pipeline actually offers them, and the
+	 * setting's pool is what the target row has to match. Exactly the move the
+	 * layout mutations made when layouts became shared.
+	 */
+	function createPrompt(option: Sockets.Pipelines.Option) {
+		cloningFor = option.id
+		socket.emit("pipelines:createPrompt", {
+			slug,
+			optionId: option.id,
+			name: "New prompt",
+			// One empty box per field the step declares, rather than an empty
+			// row: a create that produced no fields would open an editor with
+			// nothing in it, which reads as broken rather than as blank.
+			// `option.promptFields`, not `option.prompt?.declared`: the latter only
+			// exists once a prompt is SELECTED, so creating the first prompt for
+			// an empty slot — the one case this button is for — produced a row
+			// with no fields and an editor with nothing in it.
+			fields: Object.fromEntries(
+				(option.promptFields ?? option.prompt?.declared ?? []).map(
+					(f) => [f, ""]
+				)
+			),
+			sessionId
+		})
+	}
 
 	function clonePrompt(option: Sockets.Pipelines.Option) {
 		if (!option.prompt) return
 		cloningFor = option.id
 		socket.emit("pipelines:clonePrompt", {
 			slug,
+			optionId: option.id,
 			promptId: option.prompt.id,
 			sessionId
 		})
@@ -322,7 +355,22 @@
 	const nameValue = (option: Sockets.Pipelines.Option) =>
 		draftOf(option)?.name ?? option.prompt?.name ?? ""
 
-	/** Seed a draft from the stored row on the first keystroke. */
+	/**
+	 * Seed a draft from the stored row on the first keystroke.
+	 *
+	 * ⚠ **Archived keys are kept out of the draft**, and this is load-bearing
+	 * rather than tidy. `fields` and `archived_fields` are two columns, and the
+	 * boot sweep moves a key the slot no longer declares out of the first into
+	 * the second. This used to copy `{...row.fields}` wholesale; the moment the
+	 * two were separate columns that was still correct — but a draft seeded
+	 * from the *union* would write the archived text straight back into
+	 * `fields` on the next save, and the next boot would sweep it out again.
+	 * The row would ping-pong between two shapes forever, with the panel
+	 * showing whichever side of the loop it last loaded.
+	 *
+	 * So: only what the row currently has in `fields`, which is what the
+	 * editors below render.
+	 */
 	function startDraft(option: Sockets.Pipelines.Option) {
 		const existing = draftOf(option)
 		if (existing) return existing
@@ -333,6 +381,31 @@
 			fields: { ...row.fields }
 		}
 		return promptDrafts[option.id]!
+	}
+
+	/** Text somebody may still want, off a field the step stopped declaring. */
+	const archivedOf = (option: Sockets.Pipelines.Option) =>
+		Object.entries(option.prompt?.archived ?? {})
+
+	/**
+	 * Copy archived text to the clipboard.
+	 *
+	 * The whole recovery affordance, and deliberately a copy rather than a
+	 * "restore": the field is gone from the step's declaration, so restoring it
+	 * would put text back where nothing reads it. Copying hands it to the
+	 * person, who knows which other prompt or pipeline it belongs in now.
+	 */
+	async function copyArchived(text: string) {
+		try {
+			await navigator.clipboard.writeText(text)
+			toaster.success({ title: "Copied to the clipboard" })
+		} catch {
+			// A denied clipboard permission is not an error worth a red toast —
+			// the text is on screen and selectable, which is the fallback.
+			toaster.error({
+				title: "Could not reach the clipboard. Select the text and copy it."
+			})
+		}
 	}
 
 	function editField(
@@ -362,6 +435,7 @@
 		if (!draft) return
 		socket.emit("pipelines:updatePrompt", {
 			slug,
+			optionId: option.id,
 			promptId: draft.id,
 			name: draft.name,
 			fields: draft.fields,
@@ -375,14 +449,16 @@
 		if (
 			!confirm(
 				`Delete the prompt '${option.prompt.name}'? Your selection ` +
-					`here goes back to what it inherits. If a configuration or ` +
-					`someone else still uses this prompt, the server refuses.`
+					`here goes back to what it inherits. Prompts are shared ` +
+					`between pipelines that use this step, so if another one ` +
+					`still points at it the server refuses.`
 			)
 		)
 			return
 		delete promptDrafts[option.id]
 		socket.emit("pipelines:deletePrompt", {
 			slug,
+			optionId: option.id,
 			promptId: option.prompt.id,
 			sessionId
 		})
@@ -607,7 +683,11 @@
 	}
 	// A clone answers with the copy's id: select it for this option and open
 	// the editor — clone-and-edit is one gesture, not three.
-	const onCloned = (res: Sockets.Pipelines.ClonePrompt.Response) => {
+	const onCloned = (
+		res:
+			| Sockets.Pipelines.ClonePrompt.Response
+			| Sockets.Pipelines.CreatePrompt.Response
+	) => {
 		if (res.error) return
 		if (!res.pipeline || res.pipeline.slug !== slug) return
 		const optionId = cloningFor
@@ -666,6 +746,8 @@
 	onMount(() => {
 		socket.on("pipelines:get", onGet)
 		socket.on("pipelines:clonePrompt", onCloned)
+		socket.on("pipelines:createPrompt", onCloned)
+		socket.on("pipelines:createPrompt:error", showRefusal)
 		socket.on("pipelines:setOption:error", showRefusal)
 		socket.on("pipelines:clearOption:error", showRefusal)
 		socket.on("pipelines:selectConfig:error", showRefusal)
@@ -689,6 +771,8 @@
 	onDestroy(() => {
 		socket.off("pipelines:get", onGet)
 		socket.off("pipelines:clonePrompt", onCloned)
+		socket.off("pipelines:createPrompt", onCloned)
+		socket.off("pipelines:createPrompt:error", showRefusal)
 		socket.off("pipelines:setOption:error", showRefusal)
 		socket.off("pipelines:clearOption:error", showRefusal)
 		socket.off("pipelines:selectConfig:error", showRefusal)
@@ -757,9 +841,7 @@
 	 * lives at this one derivation so every read downstream — rows, groups,
 	 * controls — sees the draft without knowing it exists.
 	 */
-	const overlay = (
-		o: Sockets.Pipelines.Option
-	): Sockets.Pipelines.Option => {
+	const overlay = (o: Sockets.Pipelines.Option): Sockets.Pipelines.Option => {
 		if (!draftMode) return o
 		if (pendingClears?.includes(o.id))
 			return {
@@ -884,7 +966,8 @@
 							? rest.length
 							: 0,
 					canCollapse:
-						!selectorsOnly && !!(quick.length && rest.length && open),
+						!selectorsOnly &&
+						!!(quick.length && rest.length && open),
 					count: facets.reduce((n, f) => n + f.rows.length, 0)
 				}
 			})
@@ -1120,7 +1203,20 @@
 			     the editor below edits that row. The editor is always on
 			     screen because the wording *is* the setting — a dropdown onto
 			     text nobody can see is half a control. A shipped prompt shows
-			     the same boxes, read-only, with Duplicate as the way in. -->
+			     the same boxes, read-only, with Duplicate as the way in.
+
+			     Grouped exactly the way the context-template picker below is,
+			     and for the same reason: prompts are pooled by the STEP that
+			     consumes them rather than by pipeline, so a row written while
+			     configuring one pipeline is genuinely offered in another that
+			     reuses the step. The grouping is ordering, never permission —
+			     the entire reason a prompt is not spec-scoped is that a row
+			     from elsewhere works here. -->
+			{@const promptGroups = [
+				{ key: "usedHere", label: "Used in this pipeline" },
+				{ key: "shipped", label: "Serene Pub ships" },
+				{ key: "alsoFits", label: "Also fits (from other pipelines)" }
+			]}
 			<div class="flex items-center gap-1">
 				<select
 					id="opt-{option.id}"
@@ -1133,15 +1229,40 @@
 					}}
 				>
 					<!-- Unset is a fallback, not an absence: the step resolves
-				     to the pipeline's own default prompt (the first it ships
-				     with), so a run never goes out with empty instructions. -->
+				     to the prompt this pipeline ships for it, so a run never
+				     goes out with empty instructions. -->
 					<option value="">— Pipeline Default —</option>
-					{#each option.choices ?? [] as choice (choice.id)}
-						<option value={String(choice.id)}>
-							{choice.label}
-						</option>
+					{#each promptGroups as g (g.key)}
+						{@const inGroup = (option.choices ?? []).filter(
+							(c: any) => (c.group ?? "alsoFits") === g.key
+						)}
+						{#if inGroup.length}
+							<optgroup label={g.label}>
+								{#each inGroup as choice (choice.id)}
+									<option value={String(choice.id)}>
+										{choice.label}{choice.description
+											? ` — ${choice.description}`
+											: ""}
+									</option>
+								{/each}
+							</optgroup>
+						{/if}
 					{/each}
 				</select>
+				{#if !selectorsOnly}
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-surface shrink-0"
+						title="Write a new prompt for this step"
+						onclick={() => createPrompt(option)}
+					>
+						<!-- Present even with rows in the pool, and required
+						     without them: a step whose pool is empty — any
+						     plugin node that ships no prose — would otherwise
+						     be a picker with nothing in it and no way in. -->
+						<Icons.Plus size={14} />
+					</button>
+				{/if}
 				{#if option.prompt && !selectorsOnly}
 					<button
 						type="button"
@@ -1186,6 +1307,19 @@
 						</label>
 					{/if}
 
+					{#if option.prompt.origin}
+						<!-- Answers the question the grouping raises: this row
+						     is selectable here and was written elsewhere, and
+						     editing it reaches there too. The same note the
+						     template editor carries, because since prompts
+						     became pooled it is the same situation. -->
+						<p class="text-muted text-xs">
+							<Icons.Info size={11} class="inline" />
+							Written {option.prompt.origin} — edits reach every pipeline
+							using this step.
+						</p>
+					{/if}
+
 					<!-- One box per declared field. The field list comes from
 					     the prompt row, which was written against the node's
 					     declaration — so a node that declares another field
@@ -1215,6 +1349,58 @@
 							></textarea>
 						</label>
 					{/each}
+
+					{#if archivedOf(option).length}
+						<!-- Text off a field this step stopped declaring.
+						     Read-only and shown apart from the editors: left
+						     folded into the boxes above it would be invisible,
+						     because those render one box per DECLARED field —
+						     so a prompt somebody spent an afternoon on would
+						     become unfindable rather than merely unused.
+
+						     Copy rather than Restore, deliberately. The field
+						     is gone from the step, so putting the text back
+						     would put it where nothing reads it. Copying hands
+						     it to the person, who knows which prompt or
+						     pipeline it belongs in now. -->
+						<div
+							class="border-surface-500/30 space-y-2 border-t pt-3"
+						>
+							<p class="text-muted text-xs">
+								<Icons.Archive size={11} class="inline" />
+								Archived — this step no longer has
+								{archivedOf(option).length === 1
+									? "this field"
+									: "these fields"}. Kept so you can copy the
+								wording somewhere it is still used.
+							</p>
+							{#each archivedOf(option) as [field, text] (field)}
+								<div class="flex flex-col gap-1">
+									<div class="flex items-center gap-2">
+										<span
+											class="flex-1 text-xs font-medium"
+										>
+											{humanize(field)}
+										</span>
+										<button
+											type="button"
+											class="btn btn-sm preset-tonal-surface shrink-0"
+											title="Copy this text"
+											onclick={() => copyArchived(text)}
+										>
+											<Icons.Copy size={13} /> Copy
+										</button>
+									</div>
+									<textarea
+										class="textarea w-full text-xs opacity-70"
+										rows="3"
+										readonly
+										value={text}
+									></textarea>
+								</div>
+							{/each}
+						</div>
+					{/if}
 
 					{#if isDirty(option)}
 						<div class="flex items-center justify-end gap-2">
@@ -1273,9 +1459,27 @@
 						{#if inGroup.length}
 							<optgroup label={g.label}>
 								{#each inGroup as choice (choice.id)}
-									<option value={String(choice.id)}>
+									<!-- `disabled` with a `reason`, never
+									     hidden — the same shape and the same
+									     rule the connection picker established.
+									     A template whose engine has no
+									     registered renderer is exactly the row
+									     an admin needs to see: it exists, it is
+									     simply unrenderable until the extension
+									     that speaks its language is enabled. A
+									     row that vanished when a plugin was
+									     disabled would read as data loss, and
+									     "why isn't mine in the list" would be
+									     unanswerable on the screen that raised
+									     the question. -->
+									<option
+										value={String(choice.id)}
+										disabled={choice.disabled}
+									>
 										{choice.label}{choice.description
 											? ` — ${choice.description}`
+											: ""}{choice.reason
+											? ` — ${choice.reason}`
 											: ""}
 									</option>
 								{/each}
@@ -1716,7 +1920,10 @@
 				     `disabled` for a connection nobody has tested yet — a
 				     caveat on a choice that is still selectable. -->
 				{#each option.choices as choice (choice.id)}
-					<option value={String(choice.id)} disabled={choice.disabled}>
+					<option
+						value={String(choice.id)}
+						disabled={choice.disabled}
+					>
 						{choice.label}{choice.description
 							? ` · ${choice.description}`
 							: ""}{choice.reason ? ` — ${choice.reason}` : ""}
@@ -1801,78 +2008,88 @@
 			{/each}
 		</div>
 	{:else}
-	<!-- Grouped by what a setting *is*, not by which step computes it. A group
+		<!-- Grouped by what a setting *is*, not by which step computes it. A group
 	     with nothing visible to this viewer is skipped rather than shown
 	     empty — for a non-admin that usually leaves just the prompt. -->
-	<!-- The wrapper measures the host this panel actually has — the builder's
+		<!-- The wrapper measures the host this panel actually has — the builder's
 	     full-width inspector, its 25rem map rail, or the session sidebar —
 	     and the groups flow two columns only when that host is wide (22
 	     §2.5). A container query on its OWN box, because the pane's width
 	     says nothing about the rail's. -->
-	<div class="inspector-pane">
-	<div class="option-groups space-y-3">
-		{#each stepGroups as group (group.key)}
-			<section class="card preset-filled-surface-100-900 space-y-3 p-3">
-				{#if stepKey == null}
-					<!-- The sidebar shows every step, so each card needs its
+		<div class="inspector-pane">
+			<div class="option-groups space-y-3">
+				{#each stepGroups as group (group.key)}
+					<section
+						class="card preset-filled-surface-100-900 space-y-3 p-3"
+					>
+						{#if stepKey == null}
+							<!-- The sidebar shows every step, so each card needs its
 					     name. The builder shows one — its host already titles
 					     it ("Chat · step 1 of 7"), and repeating it inside the
 					     card said everything twice. -->
-					<h3 class="text-sm font-semibold">{group.label}</h3>
-				{/if}
-				{#each group.facets as facet (facet.label)}
-					{#if showFacetHeadings(group)}
-						<p
-							class="text-muted text-xs font-semibold tracking-wide uppercase"
-						>
-							{facet.label}
-						</p>
-					{/if}
-					{#each facet.rows as row (row.option.id)}
-						{@render optionRow(row.option, row.option.label)}
-					{/each}
+							<h3 class="text-sm font-semibold">{group.label}</h3>
+						{/if}
+						{#each group.facets as facet (facet.label)}
+							{#if showFacetHeadings(group)}
+								<p
+									class="text-muted text-xs font-semibold tracking-wide uppercase"
+								>
+									{facet.label}
+								</p>
+							{/if}
+							{#each facet.rows as row (row.option.id)}
+								{@render optionRow(
+									row.option,
+									row.option.label
+								)}
+							{/each}
+						{/each}
+
+						{#if group.hidden || group.canCollapse}
+							<button
+								type="button"
+								class="btn btn-sm preset-tonal-surface w-full"
+								onclick={() =>
+									(showAll[group.key] = !(
+										showAll[group.key] ?? false
+									))}
+							>
+								{#if group.hidden}
+									<Icons.ChevronDown size={14} />
+									{group.hidden} more
+									{group.hidden === 1
+										? "setting"
+										: "settings"}
+								{:else}
+									<Icons.ChevronUp size={14} /> Fewer settings
+								{/if}
+							</button>
+						{/if}
+					</section>
 				{/each}
 
-				{#if group.hidden || group.canCollapse}
-					<button
-						type="button"
-						class="btn btn-sm preset-tonal-surface w-full"
-						onclick={() =>
-							(showAll[group.key] = !(
-								showAll[group.key] ?? false
-							))}
-					>
-						{#if group.hidden}
-							<Icons.ChevronDown size={14} />
-							{group.hidden} more
-							{group.hidden === 1 ? "setting" : "settings"}
-						{:else}
-							<Icons.ChevronUp size={14} /> Fewer settings
-						{/if}
-					</button>
+				{#if tuning.length}
+					<details class="card preset-filled-surface-100-900 p-3">
+						<summary
+							class="text-muted flex cursor-pointer items-center gap-1 text-xs font-medium select-none"
+						>
+							<Icons.SlidersHorizontal size={12} />
+							Advanced — per-step tuning ({tuning.length})
+						</summary>
+						<div
+							class="border-surface-300-700 mt-3 flex flex-col gap-3 border-l-2 pl-3"
+						>
+							{#each tuning as row (row.option.id)}
+								{@render optionRow(
+									row.option,
+									qualify(row, tuning)
+								)}
+							{/each}
+						</div>
+					</details>
 				{/if}
-			</section>
-		{/each}
-
-		{#if tuning.length}
-			<details class="card preset-filled-surface-100-900 p-3">
-				<summary
-					class="text-muted flex cursor-pointer items-center gap-1 text-xs font-medium select-none"
-				>
-					<Icons.SlidersHorizontal size={12} />
-					Advanced — per-step tuning ({tuning.length})
-				</summary>
-				<div
-					class="border-surface-300-700 mt-3 flex flex-col gap-3 border-l-2 pl-3"
-				>
-					{#each tuning as row (row.option.id)}
-						{@render optionRow(row.option, qualify(row, tuning))}
-					{/each}
-				</div>
-			</details>
-		{/if}
-	</div>
-	</div>
+			</div>
+		</div>
 	{/if}
 {/if}
 

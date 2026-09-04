@@ -13,13 +13,22 @@
  *
  * | SP row | pipeline slot | on which node |
  * |---|---|---|
- * | `context_configs.template` + `.engine` | `template` | the Assemble task |
  * | `prompt_configs.*` | `prompts` | the Assemble task |
  * | `sampling_configs` | `sampling` | the Provider |
  * | `connections` | `connection` | the Provider |
  *
  * That table is the whole migration of user configuration, stated once. When
  * 08 §5b's migration writes preset rows, it writes exactly these mappings.
+ *
+ * ⚠ It used to list `context_configs.template` + `.engine` → `template` as a
+ * fourth row, and that line documented a path that never existed. The story
+ * string is a `pipeline_context_templates` reference resolved through the
+ * config layer (see the "template: nothing to project" note below), and the
+ * `.engine` half in particular was fiction in both directions: the legacy
+ * column was never read here, and the *new* engine was resolved and then
+ * thrown away one line later in `derefTemplate` — which is the bug
+ * `pushTemplate` exists to make unrepeatable. `migrateContextTemplates` reads
+ * the legacy columns once, to carry each scope's selection across.
  *
  * **Credentials never enter.** `ConnectionRecord.metadata` is readable by a
  * node; `material` is not, and is injected per call by the host. The API key
@@ -40,10 +49,18 @@ import {
 	capabilityDefaults,
 	capabilityForSamplingShape
 } from "$lib/server/connections/capabilityDefaults"
+// Imported rather than re-declared. It was a `const TEXT_CAPABILITY` at the
+// bottom of this file and another in `capabilityTarget.ts`, which is the same
+// two-spellings shape the dropped `system_settings` columns had — and the string
+// keys the `connection_defaults` PRIMARY KEY (as its two sides since 0183), so a
+// divergence would not be a mismatch, it would be a capability nothing can ever
+// satisfy.
+import { TEXT_CAPABILITY } from "$lib/server/connections/capabilityTarget"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { resolvePromptFields } from "$lib/server/pipelines/entities/prompts"
 import { declarations, type Decl } from "$lib/server/pipelines/config/panel"
 import { NARRATE_SPEC_ID, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { storedCapabilities } from "$lib/server/pipelines/runtime/capabilityGuard"
 
 /**
  * Reads only.
@@ -77,8 +94,14 @@ export interface WorldScope {
  *
  * | today | scope layer |
  * |---|---|
- * | `system_settings.default*` | `instance` |
+ * | `connection_defaults` (per capability) | `defaults` |
+ * | `system_settings.default*PromptConfigId` | `defaults` |
  * | `sessions.connectionId` / `samplingConfigId` / `promptConfigId` | `session` |
+ *
+ * The connection/sampling half of that first row used to read
+ * `system_settings.default_connection_id` / `default_sampling_id`. Those columns
+ * are gone (0181) and `connection_defaults` is the only store; the prompt
+ * columns beside them are 0.5 archives and stay.
  *
  * The legacy `user_settings.active*` columns are no longer projected (ruled
  * 2026-08-24): the user layer is gone from the model, so a person's levers are
@@ -240,11 +263,10 @@ export async function buildWorld(
 	// The instance layer is keyed by CAPABILITY (`connection_defaults`), so the
 	// provider gets the default for the thing it actually needs to do rather
 	// than the default for whatever family it was filed under. The session layer
-	// is still text-only, and that is a fact about the columns rather than a
-	// policy: `sessions.connection_id` predates there being anything but text
-	// and cannot say which capability it means. Layering it onto an image
-	// provider would hand a session's chat connection to a backend that has
-	// never heard of a temperature.
+	// is written further down — after the pipeline layer, deliberately; its
+	// block says why — and is still text-only, because layering
+	// `sessions.connection_id` onto an image provider would hand a session's
+	// chat connection to a backend that has never heard of a temperature.
 	const defaultsByCapability = await capabilityDefaults(db)
 	// The shape is the fallback and `??` is what keeps it one: a slot that named
 	// a capability never reads its declarations a second time, and a slot
@@ -262,19 +284,20 @@ export async function buildWorld(
 		? defaultsByCapability[providerCapability]
 		: undefined
 
+	// The table, and only the table (0181). This used to read
+	// `?? (providerIsText ? system.defaultConnectionId : undefined)`, because
+	// 0175 seeded `connection_defaults` from that column ONCE and a later star
+	// press landed only in the column — so the fallback existed to stop the
+	// screen and the run disagreeing. Both writers now write here, so the
+	// fallback has nothing left to rescue and would only be a second place for a
+	// default to live.
 	layer(
 		"defaults",
 		undefined,
 		provider,
 		"connection",
 		SLOT_VALUE,
-		// The legacy column is the fallback for text and for nothing else. It is
-		// still what starring a connection in the sidebar writes, and 0175 seeded
-		// `connection_defaults` from it *once* — so on an install where the star
-		// has moved since, the table is behind the screen, and reading only the
-		// table would drop the default a person can plainly see is set.
-		idOrNull(instanceDefault?.connectionId) ??
-			(providerIsText ? idOrNull(system?.defaultConnectionId) : undefined)
+		idOrNull(instanceDefault?.connectionId)
 	)
 	layer(
 		"defaults",
@@ -282,12 +305,39 @@ export async function buildWorld(
 		provider,
 		"sampling",
 		SLOT_VALUE,
-		idOrNull(instanceDefault?.samplingConfigId) ??
-			(providerIsText
-				? idOrNull(system?.defaultSamplingConfigId)
-				: undefined)
+		idOrNull(instanceDefault?.samplingConfigId)
 	)
 
+	// ── the pipeline layer, which wins over everything above ─────────────
+	//
+	// Written last so it is *appended* after the legacy projection, and
+	// `resolveConfigSources` walks candidates in SCOPE_ORDER and takes the first
+	// match at each scope — so a value a person set in the pipeline panel is the
+	// one that runs. Without this the panel would edit rows nothing reads, which
+	// is worse than not having it: every screen would agree with the user and
+	// the model would not.
+	if (scope.specId) await applyPipelineLayer(db, overrides, scope)
+
+	// ── the session's own columns, BELOW the panel's session-scope rows ───
+	//
+	// ⚠ The order of these two blocks is load-bearing and it used to be wrong.
+	// `resolveConfigSources` takes the FIRST candidate it finds at each scope,
+	// and both `sessions.connection_id` and a session-scope
+	// `pipeline_node_overrides` row live at `session` — so whichever is pushed
+	// first wins. This block sat ABOVE `applyPipelineLayer`, which meant the
+	// legacy column silently outranked the pick made in the pipeline panel: the
+	// panel showed one connection and the run used another, with nothing
+	// anywhere saying so.
+	//
+	// Moved below, so among two session-scope values the one a person set in the
+	// panel wins — which is what this change is canonising the chain to say.
+	// Exposure is near-zero (there is no session connection picker left in the
+	// sessions UI) but it IS a silent flip wherever both are set, which is why
+	// `worldPipelineLayer.int.test.ts` pins which one the panel displays.
+	//
+	// Still text-only, and that is a fact about the columns rather than a
+	// policy: `sessions.connection_id` predates there being anything but text
+	// and cannot say which capability it means.
 	if (providerIsText) {
 		layer(
 			"session",
@@ -307,31 +357,12 @@ export async function buildWorld(
 		)
 	}
 
-	// ── the pipeline layer, which wins over everything above ─────────────
-	//
-	// Written last so it is *appended* after the legacy projection, and
-	// `resolveConfigSources` walks candidates in SCOPE_ORDER and takes the first
-	// match at each scope — so a value a person set in the pipeline panel is the
-	// one that runs. Without this the panel would edit rows nothing reads, which
-	// is worse than not having it: every screen would agree with the user and
-	// the model would not.
-	if (scope.specId) await applyPipelineLayer(db, overrides, scope)
-
 	/**
 	 * The instance default a node falls back to when its connection slot names
-	 * nothing.
-	 *
-	 * The legacy column is the fallback for text and for nothing else, for the
-	 * same reason it is above: starring a connection in the sidebar still writes
-	 * it, and 0175 seeded `connection_defaults` from it *once*, so on an install
-	 * where the star has moved since, reading only the table would drop a
-	 * default the person can plainly see is set.
+	 * nothing — a plain read of the one store (0181).
 	 */
 	const defaultConnectionFor = (capability: string) =>
-		idOrNull(defaultsByCapability[capability]?.connectionId) ??
-		(capability === TEXT_CAPABILITY
-			? idOrNull(system?.defaultConnectionId)
-			: undefined)
+		idOrNull(defaultsByCapability[capability]?.connectionId)
 
 	// Published under BOTH a capability key and a shape key, which is not
 	// redundancy: the defaults are registered per CAPABILITY
@@ -340,11 +371,15 @@ export async function buildWorld(
 	// capability keys would silently empty the fallback for every spec running
 	// today; only the shapes would put the new table out of the executor's
 	// reach. Both, until the executor is keyed by capability too.
+	//
+	// ⚠ Seeded from what is REGISTERED, and nothing else. The loop used to start
+	// from `new Set([TEXT_CAPABILITY, ...keys])`, so `text->text` was always
+	// asked about — harmless only while the legacy column could answer it. With
+	// the column gone that entry resolves to nothing, and adding a key with no
+	// value is how "the instance has chat set up" becomes true on an instance
+	// where nobody set it up.
 	const activeConnection: Record<string, string | null> = {}
-	for (const capability of new Set([
-		TEXT_CAPABILITY,
-		...Object.keys(defaultsByCapability)
-	])) {
+	for (const capability of Object.keys(defaultsByCapability)) {
 		const id = defaultConnectionFor(capability)
 		if (id) activeConnection[capability] = id
 	}
@@ -400,7 +435,10 @@ export async function buildWorld(
 			// shape of a connection nobody has tested, and never "can do
 			// nothing": a reader that treats it as a denial hides working
 			// connections.
-			capabilities: c.capabilities?.resolved ?? {}
+			// Intersected against what the manifest still declares — same reader
+			// the bind guard and the picker use, so all three agree about what a
+			// connection can do.
+			capabilities: storedCapabilities(c)
 		})),
 		activeConnection
 	}
@@ -525,6 +563,19 @@ async function applyPipelineLayer(
 			.filter((d) => d.control === "context-template-ref")
 			.map((d) => d.slot)
 	)
+	/**
+	 * Which slots hold a *prompt* reference — same argument as the two sets
+	 * above, and it stopped being hypothetical when prompts became pooled by
+	 * (node type, slot). The literal `"prompts"` used to work only because every
+	 * shipped node happens to name its slot that; a plugin naming its slot
+	 * anything else had its reference left underefenced, and the pool key that
+	 * FINDS the prompt is built from the real slot name two lines from where the
+	 * result was pushed at the literal — so the two could disagree about which
+	 * slot a prompt belonged to.
+	 */
+	const promptSlots = new Set(
+		allDecls.filter((d) => d.control === "prompts-ref").map((d) => d.slot)
+	)
 
 	/**
 	 * A layout reference becomes the template itself.
@@ -542,19 +593,64 @@ async function applyPipelineLayer(
 	}
 
 	/**
-	 * A template reference becomes the source itself.
+	 * A template reference becomes the template itself — source **and** engine.
 	 *
-	 * Returns undefined for a dangling id, which `push` then drops — the node
-	 * falls through to its in-code default layout rather than rendering an id.
-	 * Losing a customization is the right cost here; losing the prompt is not.
+	 * ⚠ This returned `row.source` alone, and that single line was the reason
+	 * every context template on every install rendered as Handlebars whatever
+	 * it declared. `resolveContextTemplate` hands back `{engine, source}`; the
+	 * engine was dropped here, so `input.template` reached the assemble binding
+	 * as a bare string, `input.template.engine` was `undefined` on every run
+	 * ever made, and `renderTemplate` answered the absence with core's engine.
+	 * Nothing failed, nothing logged, and a Jinja template would have shipped
+	 * its `{% %}` to the model as prose.
+	 *
+	 * `derefLayout` next door had it right the whole time — it returns the
+	 * resolved object — which is why the same defect never reached layouts.
+	 *
+	 * Returns undefined for a dangling id, which `pushTemplate` then drops
+	 * whole. Losing a customization is the right cost here; losing the prompt
+	 * is not.
 	 */
 	const derefTemplate = async (value: unknown) => {
 		if (typeof value !== "number") return undefined
 		const { resolveContextTemplate } = await import(
 			"$lib/server/pipelines/entities/contextTemplates"
 		)
-		const row = await resolveContextTemplate(db as any, value)
-		return row ? row.source : undefined
+		return (await resolveContextTemplate(db as any, value)) ?? undefined
+	}
+
+	/**
+	 * A template slot, written as the two paths a renderer needs: **both, or
+	 * neither.**
+	 *
+	 * The slot has always been addressed at `source` — that is where the value
+	 * lives, and the reference is an implementation detail of where the string
+	 * came from. `engine` sits beside it because a template is a piece of
+	 * writing *in a language*, and the two are one fact: a source without its
+	 * engine is a string somebody has to guess about, which is exactly what
+	 * used to happen.
+	 *
+	 * Emitting them together in one helper, rather than as two `push` calls at
+	 * each of the two call sites, is the point. Two calls is four places to get
+	 * a pair right, and the failure mode of getting it wrong — a source at one
+	 * scope with an engine from another, or a source with no engine at all — is
+	 * a prompt that renders in the wrong language with nothing to show for it.
+	 */
+	const pushTemplate = async (
+		scopeKind: OverrideRow["scopeKind"],
+		scopeId: string | number | undefined,
+		nodeKey: string,
+		slot: string,
+		value: unknown
+	) => {
+		const template = await derefTemplate(value)
+		// A dangling reference drops the pair rather than half of it. Half a
+		// pair is worse than none: the node would get an engine naming a
+		// language for a source that never arrived, and fall back to its
+		// in-code default while claiming to be rendering something else.
+		if (!template) return
+		push(scopeKind, scopeId, nodeKey, slot, "source", template.source)
+		push(scopeKind, scopeId, nodeKey, slot, "engine", template.engine)
 	}
 
 	// ── the selected config, as the preset layer ─────────────────────────
@@ -577,7 +673,7 @@ async function applyPipelineLayer(
 			.where(eq(schema.pipelineConfigValues.configId, selected.configId))
 
 		for (const v of values as any[]) {
-			if (v.slot === "prompts") {
+			if (promptSlots.has(v.slot)) {
 				// A reference. The fields it names become individual paths, so
 				// per-path resolution still works above it — someone overriding
 				// one field does not pin the rest of the prompt.
@@ -586,21 +682,16 @@ async function applyPipelineLayer(
 					Number(v.value)
 				)
 				for (const [field, text] of Object.entries(fields))
-					push("preset", undefined, v.nodeKey, "prompts", field, text)
+					push("preset", undefined, v.nodeKey, v.slot, field, text)
 				continue
 			}
 			if (templateSlots.has(v.slot)) {
-				// Addressed at `source`, which is where the slot's value has
-				// always lived — the reference is an implementation detail of
-				// where the string came from, not a change to what the node
-				// reads.
-				push(
+				await pushTemplate(
 					"preset",
 					undefined,
 					v.nodeKey,
 					v.slot,
-					"source",
-					await derefTemplate(v.value)
+					v.value
 				)
 				continue
 			}
@@ -632,26 +723,19 @@ async function applyPipelineLayer(
 		const scopeKind: OverrideRow["scopeKind"] = "session"
 		const scopeId = scope.sessionId
 
-		if (o.slot === "prompts" && !(o.path ?? "")) {
+		if (promptSlots.has(o.slot) && !(o.path ?? "")) {
 			// A prompts-ref override stores the *id* of a `pipeline_prompts`
 			// row — the same shape a config value stores, dereferenced the
 			// same way, because a node needs the words and not the number.
 			// Pushed per field so per-path resolution above it still works.
 			const fields = await resolvePromptFields(db as any, Number(o.value))
 			for (const [field, text] of Object.entries(fields))
-				push(scopeKind, scopeId, o.nodeKey, "prompts", field, text)
+				push(scopeKind, scopeId, o.nodeKey, o.slot, field, text)
 			continue
 		}
 
 		if (templateSlots.has(o.slot)) {
-			push(
-				scopeKind,
-				scopeId,
-				o.nodeKey,
-				o.slot,
-				"source",
-				await derefTemplate(o.value)
-			)
+			await pushTemplate(scopeKind, scopeId, o.nodeKey, o.slot, o.value)
 			continue
 		}
 
@@ -680,28 +764,78 @@ async function applyPipelineLayer(
 	// an override deletes a row rather than writing one. With nothing
 	// underneath, the node ran with empty instructions, which does not read
 	// as "no prompt is selected"; it reads as the model ignoring its
-	// character sheet. So the namespace's own default is projected at
-	// `defaults`, below everything anyone chose: the pipeline's shipped
-	// prompt, or the first it ships with (`defaultPromptFor`).
+	// character sheet. So the shipped default is projected at `defaults`,
+	// below everything anyone chose.
+	//
+	// It is also the safety net for a boot that never reconciled:
+	// `bootstrapPipelines` returns early on a `TypeRegistryConflictError`
+	// (bootstrap.ts) without writing config values, and on that boot this is
+	// the only thing standing between a run and empty instructions. So it has
+	// to be right before anything is allowed to depend on it.
+	//
+	// ⚠ **Resolved per pool, not once per pipeline.** This used to resolve ONE
+	// `defaultPromptFor(db, spec.id)` and push its fields onto EVERY prompts
+	// node in the spec. Pool-blind, that is actively wrong now: a summarize run
+	// has four different prompts nodes, and one row's fields on all of them
+	// means the world summarizer's drafting instructions land on the
+	// name-entry step. That text renders. It reads as plausible English. The
+	// only way to notice is to compare the prompt against the step it came
+	// from, which nobody does when the output merely looks a bit off.
 	//
 	// Pushed after the legacy projection, so on a migrated instance the
 	// user's own carried-over wording still wins at this scope — this fills
 	// the hole rather than papering over what somebody already had.
 	if (!spec.activeVersionId) return
-	const promptNodes = new Set<string>()
-	for (const d of await declarations(db as any, spec.activeVersionId))
-		if (d.control === "prompts-ref") promptNodes.add(d.nodeKey)
+	const promptDecls = allDecls.filter((d) => d.control === "prompts-ref")
 
-	if (promptNodes.size) {
+	if (promptDecls.length) {
 		const { defaultPromptFor } = await import(
 			"$lib/server/pipelines/boot/seedPrompts"
 		)
-		const fallbackId = await defaultPromptFor(db as any, spec.id)
-		if (fallbackId != null) {
-			const fields = await resolvePromptFields(db as any, fallbackId)
-			for (const nodeKey of promptNodes)
-				for (const [field, text] of Object.entries(fields))
-					push("defaults", undefined, nodeKey, "prompts", field, text)
+		const { promptPoolKeyFor } = await import(
+			"$lib/server/pipelines/entities/promptPool"
+		)
+		// One resolution per pool rather than per declaration: two nodes of the
+		// same type with the same slot are the same pool and must land on the
+		// same row, and a spec with several such nodes should not pay for the
+		// lookup twice. Keyed in memory only — the table indexes two columns
+		// (see `promptPool.ts`).
+		const byPool = new Map<string, Record<string, string> | null>()
+		for (const d of promptDecls) {
+			// The pool is a property of the node's TYPE, so a declaration that
+			// cannot say which type it came from cannot be given a floor. Its
+			// slot resolves to nothing rather than to somebody else's wording,
+			// which is the same trade the layouts floor makes below.
+			if (!d.nodeTypeId) continue
+			const poolKey = promptPoolKeyFor(d.nodeTypeId, d.slot)
+			if (!byPool.has(poolKey)) {
+				// `defaultPromptFor(db, nodeTypeId, slot, spec)` — the pool,
+				// then the pipeline asking. BOTH halves of the spec are needed
+				// and neither substitutes for the other: `default_for_specs`
+				// holds slugs (one row is the shipped default for two
+				// summarizers at once, so a single owning id cannot say it)
+				// while `created_for_spec_id` holds an id. The resolution order
+				// is: a row in this pool defaulted to this slug → the immutable
+				// row in this pool written here → the oldest immutable row in
+				// the pool → null.
+				const id = await defaultPromptFor(
+					db as any,
+					d.nodeTypeId,
+					d.slot,
+					{
+						id: spec.id,
+						slug: spec.slug
+					}
+				)
+				byPool.set(
+					poolKey,
+					id == null ? null : await resolvePromptFields(db as any, id)
+				)
+			}
+			const fields = byPool.get(poolKey)
+			if (!fields) continue
+			for (const [field, text] of Object.entries(fields))
+				push("defaults", undefined, d.nodeKey, d.slot, field, text)
 		}
 	}
 
@@ -742,16 +876,6 @@ async function applyPipelineLayer(
 		}
 	}
 }
-
-/**
- * What every legacy column, and every slot that named nothing, means.
- *
- * `system_settings.default_connection_id` and `sessions.connection_id` predate
- * there being a second capability and cannot say which one they hold; a slot
- * authored before `requires` existed is in the same position. Both resolve to
- * this one, which is what they have always in fact been.
- */
-const TEXT_CAPABILITY = "text->text"
 
 /**
  * The transform a slot is shopping for, out of everything it requires.

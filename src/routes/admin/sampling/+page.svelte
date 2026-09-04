@@ -34,8 +34,22 @@
 		socket.off("samplingConfigs:list", handleList)
 	})
 
-	let defaultId = $derived(
-		systemSettingsCtx.settings?.defaultSamplingConfigId
+	/**
+	 * Every sampling config registered as a capability default, by row id.
+	 *
+	 * A Set rather than a single id: one config is the default for THREE image
+	 * capabilities (`text->image`, `text+image->image`, `image->image` share a
+	 * vocabulary), and the old single `defaultSamplingConfigId` could only ever
+	 * describe the text one. The badge says "in use", which is the fact this
+	 * list can honestly assert — which capabilities is the Defaults screen's
+	 * question.
+	 */
+	let inUseIds = $derived(
+		new Set(
+			Object.values(systemSettingsCtx.capabilityDefaults ?? {})
+				.map((d) => d?.samplingConfigId)
+				.filter((id): id is number => id != null)
+		)
 	)
 
 	/**
@@ -107,10 +121,11 @@
 	{#snippet cell(row, col)}
 		{#if col.key === "name"}
 			<span class="font-semibold">{row.name}</span>
-			{#if row.id != null && row.id === defaultId}
+			{#if row.id != null && inUseIds.has(row.id)}
 				<span
 					class="preset-tonal-primary ml-1.5 rounded-full px-1.5 py-0.5 text-[0.68rem] font-semibold"
-					>default</span
+					title="Registered as a capability default — see Admin → Defaults"
+					>in use</span
 				>
 			{/if}
 		{:else if col.key === "temperature"}

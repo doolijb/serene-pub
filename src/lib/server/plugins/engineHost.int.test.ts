@@ -13,6 +13,7 @@ import {
 	renderTemplate,
 	knownEngines,
 	_resetRenderers,
+	CORE_TEMPLATE_ENGINE,
 	TemplateEngineError
 } from "$lib/server/pipelines/prompt/renderers"
 
@@ -111,7 +112,20 @@ describe("a plugin's template engine", () => {
 	})
 
 	it("core's engine is untouched throughout", async () => {
-		const rendered = await renderTemplate(undefined, {
+		// ⚠ This used to pass `undefined` and rely on `renderTemplate`
+		// defaulting to core's engine. That default is gone, and its removal is
+		// the point rather than a side effect: `world.ts` dereferenced a
+		// template row for its `source` and dropped the `engine` beside it, so
+		// the default was taken on EVERY run on every install and every context
+		// template rendered as Handlebars whatever it declared — silently, and
+		// fatally for the first plugin that shipped its own assembler. Both
+		// template tables store `engine` NOT NULL now, so an absent one can
+		// only mean a caller lost it.
+		//
+		// What this test is actually about — a plugin registering and releasing
+		// its own engine never disturbs core's — is unchanged, and is asserted
+		// by naming core's engine rather than by omitting one.
+		const rendered = await renderTemplate(CORE_TEMPLATE_ENGINE, {
 			template: "still {{name}}",
 			variables: { name: "here" }
 		})
@@ -128,9 +142,7 @@ describe("declaration validation", () => {
 		expect(
 			engineDeclarationError("acme/x", "rival.y:template/thing@1")
 		).toMatch(/namespace/)
-		expect(engineDeclarationError("acme/x", "not an id")).toMatch(
-			/grammar/
-		)
+		expect(engineDeclarationError("acme/x", "not an id")).toMatch(/grammar/)
 	})
 
 	it("reads a manifest tolerantly", () => {
