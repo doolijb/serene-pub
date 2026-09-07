@@ -41,6 +41,7 @@ package-lock.json
 
 /*.md
 !/DOCKER.md
+!/NOMENCLATURE.md
 /AI-TEMP/*
 
 # Android
