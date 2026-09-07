@@ -15,6 +15,7 @@
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
+import { WORLD_LORE_TYPE_ID, ofType } from "$lib/server/utils/lorebookEntries"
 import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 import type { CompiledPrompt } from "$lib/server/connectionAdapters/types"
 
@@ -189,7 +190,10 @@ describe("a summarize run, stopped at the write", () => {
 		expect(out("naming")?.name).toBeTruthy()
 
 		// No lore entry was written — that is the whole point of the stop.
-		const entries = await db.select().from(schema.worldLoreEntries)
+		const entries = await db
+			.select()
+			.from(schema.lorebookEntries)
+			.where(ofType(WORLD_LORE_TYPE_ID))
 		expect(entries.length).toBe(0)
 
 		// Every model step announced itself, in phase order — the executor's

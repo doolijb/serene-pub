@@ -393,8 +393,19 @@ describe("the five refusals", () => {
 			expect(res.problem.kind).toBe("incapable")
 			// The guard's own wording, which names the capability the way the
 			// connection screen labelled it — never its id.
-			expect(res.problem.message).toContain("Drawing Only")
+			expect(res.problem.message).toContain("Chat")
 			expect(res.problem.message).toContain("Admin → Defaults")
+			// ...and never the CONNECTION. This sentence ends up in
+			// `Error.message` and in `Receipt.haltReason`, both plain strings
+			// that no projection can reach into, and both of which a non-admin
+			// reads. The identity rides beside it instead, under the one key
+			// `withoutConnectionIdentity` removes.
+			expect(res.problem.message).not.toContain("Drawing Only")
+			expect(res.problem.connection).toMatchObject({
+				id: 2,
+				name: "Drawing Only",
+				type: "ollama"
+			})
 		}
 	})
 

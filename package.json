@@ -47,7 +47,8 @@
 		"android:build:debug": "cd android && ./gradlew assembleDebug",
 		"android:full": "npm run build && npm install --omit=dev && npm rebuild && npm run android:prepare && npm run android:build && npm install",
 		"sdk:build": "npm run build --prefix ../serene-pub-sdk",
-		"sdk:test": "npm test --prefix ../serene-pub-sdk"
+		"sdk:test": "npm test --prefix ../serene-pub-sdk",
+		"pipeline:ab": "node scripts/prompt-ab.js"
 	},
 	"devDependencies": {
 		"@fontsource/fira-mono": "^5.0.0",
@@ -147,6 +148,7 @@
 		"socket.io": "^4.8.3",
 		"socket.io-client": "^4.8.3",
 		"svelte-dnd-action": "^0.9.61",
+		"translate": "^3.1.0",
 		"uuid": "^11.1.0",
 		"zod": "^3.25.76",
 		"zod-to-json-schema": "^3.24.6"

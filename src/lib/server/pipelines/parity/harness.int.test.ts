@@ -19,9 +19,75 @@
  * against another, byte for byte; what changed is that the comparison is now
  * across releases rather than within one.
  *
- * RAG is compared in `parity.rag.int.test.ts` rather than here: the two arms need
+ * RAG is compared in `parity.rag.int.test.ts` rather than here: the two mechanisms need
  * opposite worlds — this file asserts no embedding model is loaded, that one
  * asserts there is one — and mocking is per-file.
+ *
+ * ## Three more measured blind spots — retrieval plan phase 1, 2026-09-06
+ *
+ * Recorded here rather than banked as a green, per design §10.1: *a green suite
+ * is evidence only if the thing under test can move it.* Each of the four
+ * controls that lane declares was perturbed to a live value and the corpus
+ * re-run; two of the results are evidence and three are not.
+ *
+ *   · **`lexicalScoring: 'balanced'` (BM25) — the corpus sees it.**
+ *     `session/over-budget` diverges, which is the twelve near-identical
+ *     Ashguard entries reordering under length normalisation. The green with
+ *     the switch off is therefore real evidence about this control.
+ *   · **`trigramFolding` — the corpus cannot see it, at any strength.** Green at
+ *     0.5 and green at 1. Every key in every fixture is a single common word
+ *     that is either present verbatim or absent from an unrelated topic, so
+ *     there are no near-misses for folding to catch and nothing for it to add.
+ *   · **`titleWeight: 3` — the corpus cannot see it, and the reason generalises
+ *     beyond this control.** `normaliseTfidf` divides the whole pool by its own
+ *     maximum, so *any* change that scales every candidate's tf-idf by the same
+ *     factor is invisible downstream. Every entry in `session/over-budget` is
+ *     titled `Ashguard fact N` and shares the term the window carries, so
+ *     tripling the title's weight triples all twelve alike and normalisation
+ *     divides it straight back out. This is worth remembering before reading any
+ *     future green about a tf-idf change: only a change that is *non-uniform
+ *     across the pool* survives that step.
+ *   · **`signalProximity` — the corpus cannot see it, structurally.** Every lore
+ *     entry in every fixture has **exactly one key** (`ashguard`, `gate`,
+ *     `siege`), and proximity is the distance between two matched keys, so the
+ *     signal is 0 on every candidate here whatever it is weighted. This is bug
+ *     17's shape exactly — a signal that could never fire on the corpus that
+ *     was passing for it — and closing it needs a fixture with a multi-key
+ *     entry, which is a new fixture rather than an edit to one of these.
+ *
+ * ## ⚠ The largest blind spot, measured — retrieval plan phases 2/3, 2026-09-06
+ *
+ * **This corpus can no longer see lore *scoring* at all**, and the measurement
+ * is blunt: with **every lore signal weight set to 0** — keyword, name match,
+ * entity overlap, tf-idf, last-referred, the priority bonus, the lot — all
+ * eleven gate fixtures stay byte-identical. So does setting the three mechanism
+ * strengths to 0. Nothing about how a lore entry is *ranked* is under this gate.
+ *
+ * It is green because these fixtures do not contend: each one's lore fits its
+ * band, so `select` keeps everything and ties fall through to authored position,
+ * which is the order the goldens hold. `session/over-budget` is the one fixture
+ * with real contention and its twelve entries are near-identical by
+ * construction, so they tie under any weighting and the cut lands in the same
+ * place.
+ *
+ * `session/entity-cooccurrence` was the exception — 1.17.0 promoted it into the
+ * gate for exactly this reason, as *"the only fixture in the corpus whose lore
+ * can be reordered by a signal"* — and it has since become a deliberate
+ * departure (see `DEPARTED`). So the coverage it carried is **gone from this
+ * file**, and pretending otherwise is what §10.1 forbids.
+ *
+ * What this gate still holds is everything up to and including selection's
+ * *shape*: which gather branches produce candidates, what the visibility rules withhold,
+ * what the budget cuts, and every byte of assembly and rendering. What it does
+ * not hold is the ordering within a band. That moved to unit coverage —
+ * `ranking/select.test.ts` for the weighted sum and the mechanism strengths,
+ * `ranking/keywordQuery.test.ts` for the graded entity overlap, and
+ * `runtime/nodeParams.test.ts` for each declared weight reaching the scorer —
+ * where a fixture can be built to discriminate rather than found to.
+ *
+ * Closing it here needs a fixture whose lore genuinely competes on score, and
+ * a golden for one is a `v0.5.1-beta` capture rather than anything this tree can
+ * produce.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
@@ -36,9 +102,16 @@ import { SHIPPED_CONTEXT_TEMPLATE } from "$lib/server/pipelines/entities/context
 import { renderParity, parityGate } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
+import {
+	HISTORY_TYPE_ID,
+	WORLD_LORE_TYPE_ID,
+	entryInsert
+} from "$lib/server/utils/lorebookEntries"
+import { score } from "$lib/server/pipelines/ranking/select"
+import { DEFAULT_SIGNAL_WEIGHTS } from "$lib/server/pipelines/ranking/weights"
 
 vi.mock("$lib/server/embedding", () => ({
-	// The keyword arm alone. RAG has its own fixtures once this one is green;
+	// The keyword mechanism alone. RAG has its own fixtures once this one is green;
 	// adding a second variable to a red comparison makes neither diagnosable.
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -209,12 +282,17 @@ async function seedWorld(
 		.returning()
 
 	if (opts.lore?.length)
-		await db.insert(schema.worldLoreEntries).values(
-			opts.lore.map((l) => ({
-				lorebookId: lorebook.id,
-				retrievalStrategy: "keyword",
-				...l
-			}))
+		await db.insert(schema.lorebookEntries).values(
+			opts.lore.map((l, i) =>
+				entryInsert({
+					typeId: WORLD_LORE_TYPE_ID,
+					lorebookId: lorebook.id,
+					// `position` is unique per (lorebook, type) and has no
+					// column default on the one table, so a fixture states it.
+					position: i + 1,
+					...l
+				})
+			)
 		)
 
 	const [session] = await db
@@ -484,23 +562,25 @@ const datedHistory: ParityFixture = {
 			characters: [{ name: "Alice", description: "A knight." }],
 			messages: [{ role: "user", content: "What happened at the siege?" }]
 		})
-		await db.insert(schema.historyEntries).values([
-			{
+		await db.insert(schema.lorebookEntries).values([
+			entryInsert({
+				typeId: HISTORY_TYPE_ID,
 				lorebookId: w.lorebook.id,
-				name: "The siege",
+				position: 1,
 				keys: "siege",
 				content: "The wall fell.",
 				year: 1204,
 				month: 3,
 				day: 7
-			},
-			{
+			}),
+			entryInsert({
+				typeId: HISTORY_TYPE_ID,
 				lorebookId: w.lorebook.id,
-				name: "The founding",
+				position: 2,
 				keys: "siege",
 				content: "The keep was raised.",
 				year: 1180
-			}
+			})
 		])
 		return {
 			sessionId: w.session.id,
@@ -655,6 +735,88 @@ const overBudget: ParityFixture = {
 	}
 }
 
+/**
+ * A cast name inside a lore entry's own name — the co-occurrence signal.
+ *
+ * The corpus was **blind** to `entityCooccurrence` until this fixture. Its cast
+ * (Alice, Bob, Cara, Dala) was chosen independently of its lore vocabulary
+ * (Ashguard, Silverwood, Gate, siege), so the signal scored 0 on every one of
+ * the frozen fixtures while carrying a weight of 0.2 — the second-heaviest of
+ * the six. Any change to entity scoring passed parity for free.
+ *
+ * Two entries share one key, so `keyword` and `lastRefRecency` are equal and
+ * the order is decided by the two signals that differ. Measured through the
+ * `worldLore` query node, not assumed:
+ *
+ *   The Ashguard Riders  cooccurrence 0 · tfidf 0.405465 → 0.489551
+ *   Alice Keeps Vigil    cooccurrence 1 · tfidf 0.135155 → 0.662520
+ *
+ * so 0.5 renders `Alice Keeps Vigil` **first**, against its authored position.
+ * Zero the co-occurrence weight and the second entry scores 0.462520, below the
+ * first, and the authored order comes back. The signal is not merely non-zero
+ * here — it is what decides the order, which is the only shape of fixture that
+ * can catch a regression in it.
+ *
+ * ⚠ **This fixture was open, and for a reason that was not co-occurrence.**
+ * 0.6 did not order these two by score at all: the shipped `respond` spec ran
+ * its three disjoint lore gather branches through `core:task/merge-candidates@1`, whose
+ * `presetScore` overrides the weighted sum, so the order was retrieval order.
+ * Spec 1.17.0 concatenates instead and the fixture is in the gate; the record
+ * of what it held is in the note above `OPEN`.
+ *
+ * The world is `session/one-on-one`'s, character for character: same cast, same
+ * messages, same scenario, only the lore differs. That is about the *golden*
+ * rather than the scoring. The legacy builder is deleted, so a 0.5 render of a
+ * brand-new world cannot be captured; this one's golden is
+ * `session__one-on-one.txt` — a real capture — with a single line replaced, and
+ * `derives the co-occurrence golden from one-on-one's, changing one line`
+ * asserts that the two files still differ on that line alone.
+ */
+const entityCooccurrence: ParityFixture = {
+	name: "session/entity-cooccurrence",
+	async seed(db: any) {
+		const w = await seedWorld(db, {
+			characters: [
+				{
+					name: "Alice",
+					description: "A knight sworn to {{user}}.",
+					personality: "Steady.",
+					scenario: "In the keep at dusk."
+				}
+			],
+			lore: [
+				// Position 1. Named for the key it matches, which is what gives
+				// it the higher tf-idf of the two — and, without the
+				// co-occurrence signal, the higher total.
+				{
+					name: "The Ashguard Riders",
+					keys: "ashguard",
+					content: "Riders who patrol the ash wastes."
+				},
+				// Position 2, and it wins. `Alice` is a cast name, so the entry
+				// co-occurs with a character the session is about even though
+				// the conversation never says so.
+				{
+					name: "Alice Keeps Vigil",
+					keys: "ashguard",
+					content: "Alice keeps the gate against the ash."
+				}
+			],
+			messages: [
+				{ role: "user", content: "Well met." },
+				{ role: "assistant", content: "And you." },
+				{ role: "user", content: "Have you seen the ashguard?" }
+			]
+		})
+		return {
+			sessionId: w.session.id,
+			userId: w.user.id,
+			currentCharacterId: w.characters[0]!.id,
+			text: "Have you seen the ashguard?"
+		}
+	}
+}
+
 /** Fixtures the two paths agree on, byte for byte. The gate runs on these. */
 /**
  * The session above, rendered by the **template Serene Pub actually ships**.
@@ -801,6 +963,11 @@ const CORPUS = [
 	allHidden,
 	narrator,
 	overBudget
+	// ⚠ `entityCooccurrence` is **not** here. It was promoted into the gate when
+	// spec 1.17.0 stopped routing the three disjoint lore gather branches through
+	// `core:task/merge-candidates@1`, and it left again when the signal it is
+	// named for changed measurement. See `DEPARTED`, which is where it is now
+	// held — with more assertions on it than it had in the gate, not fewer.
 ]
 
 /**
@@ -814,13 +981,68 @@ const CORPUS = [
  * - a fixture here that starts passing **fails the test**, so it gets promoted
  *   rather than sitting in the open list forever looking like a known problem.
  *
- * It is empty. `session/over-budget` was its first and only entry, and the second
- * rule is what emptied it: fixing the tf-idf signal made the fixture pass, and
- * the suite went red until it was moved into the gate above. That is the
- * mechanism working, not a formality — a passing fixture in this list is a test
- * nobody is running.
+ * It is empty, for the second time, and the second rule emptied it twice.
+ * `session/over-budget` was the first: fixing the tf-idf signal made it pass and
+ * the suite went red until it was moved into the gate.
+ * `session/entity-cooccurrence` was the second, and its entry is worth keeping
+ * in the record because of what it was holding —
+ *
+ * > 0.5 orders lore by the weighted signal sum, so `Alice Keeps Vigil`
+ * > (entityCooccurrence 1, total 0.662520) renders above `The Ashguard Riders`
+ * > (0, total 0.489551) despite the later authored position. 0.6 rendered them
+ * > the other way round, and **not because the signal changed** — the query
+ * > node computed both totals correctly. `core:task/merge-candidates@1` stamps
+ * > a reciprocal-rank `presetScore` on every candidate it passes through, and
+ * > `select`'s `scoreOf` prefers `presetScore` over the weighted sum, so after
+ * > the merge the order was the *retrieval* order (id ascending) and every lore
+ * > signal weight was inert.
+ *
+ * — which was correct when two mechanisms have to be fused and wrong when disjoint
+ * lists are being passed along, which is what the shipped `respond` spec did
+ * until 1.17.0. It is fixed by `core:task/concat-candidates@1`: concatenation
+ * is not fusion, so the node that concatenates stamps no score and the ranker
+ * has something to rank. That is a live fix on the shipped path, not a harness
+ * change — the golden is untouched.
+ *
+ * A passing fixture in this list is a test nobody is running.
  */
 const OPEN: Array<{ fixture: ParityFixture; because: string }> = []
+
+/**
+ * Divergences 0.6 chose, kept apart from the ones it is still explaining.
+ *
+ * `OPEN` above holds a difference nobody has accounted for yet, and its second
+ * rule — a fixture that starts passing fails the test — is what stops it
+ * becoming a drawer. That rule cannot apply here: a **deliberate** departure
+ * from 0.5 will never start passing, because 0.5's arithmetic is frozen in the
+ * golden and the builder that produced it is deleted. Filing one in `OPEN`
+ * would put a permanent resident in a list whose whole discipline is that
+ * nothing stays.
+ *
+ * So the discipline here is a different one, borrowed from
+ * `contextTemplateWrappers.test.ts` — which pins the *other* deliberate
+ * departure, spec 1.9.0's split of the relationships block. **Say precisely
+ * what differs, and assert that nothing else does.** A departure nobody has
+ * bounded is indistinguishable from a regression that happens to land in the
+ * same file.
+ */
+const DEPARTED: Array<{ fixture: ParityFixture; because: string }> = [
+	{
+		fixture: entityCooccurrence,
+		because:
+			"World lore's entity signal is the graded, rarity-weighted, " +
+			"word-boundary, two-sided overlap now (retrieval plan phase 3) " +
+			"rather than a binary substring test against a list of cast names. " +
+			"This fixture's two entries are both keyed `ashguard` and its " +
+			"window names nothing else, so any two-sided measure scores them " +
+			"identically and the tf-idf tie-break decides. 0.5 separates them " +
+			"only by firing on Alice — a cast member the conversation never " +
+			"says — which is the one-sidedness design §13.6 removes, so the " +
+			"predecessor wins here by being wrong and no correct measure can " +
+			"match it (§13.11 predicted exactly this). The golden is a record " +
+			"of 0.5's arithmetic and cannot be re-derived."
+	}
+]
 
 describe("the parity corpus", () => {
 	it("has fixtures at all", () => {
@@ -834,7 +1056,15 @@ describe("the parity corpus", () => {
 		// it is a fixture that belongs in the gate. Failing here is what makes
 		// the open list shrink.
 		for (const { fixture, because } of OPEN) {
-			const r = await runFixture(db as any, fixture, configs)
+			// `withPipelineTemplate`, exactly as the gate below applies it. An
+			// open fixture rendered without its 0.6 template pair diverges on
+			// the template rather than on the thing it is holding, so it would
+			// stay open through the fix and never be promoted.
+			const r = await runFixture(
+				db as any,
+				withPipelineTemplate(fixture),
+				configs
+			)
 			console.log(renderParity(r))
 			expect(because.length).toBeGreaterThan(40)
 			expect({ fixture: fixture.name, identical: r.identical }).toEqual({
@@ -865,6 +1095,144 @@ describe("the parity corpus", () => {
 
 		// Empty on the left of the pipe: no visible assistant character to name.
 		expect(rendered).toContain("NAMES:|Bob")
+	})
+
+	it("fires the co-occurrence signal, which nothing else in the corpus does", async () => {
+		/**
+		 * The fixture asserting it is the shape it claims to be, the way
+		 * `session/all-hidden` does above.
+		 *
+		 * **The signal fires**, read off the query node of a real run rather
+		 * than recomputed here — every other fixture in the corpus scores 0 on
+		 * every entry, which is what made a weighted signal invisible to a
+		 * passing gate (bug 17, design §10.1).
+		 *
+		 * ## ⚠ What it can no longer prove, and why that is the correct outcome
+		 *
+		 * Until phase 3 it also proved the signal **decided**: the second entry
+		 * outscored the first because of it, and zeroing the weight put them
+		 * back in authored order. That is gone, and not because the signal got
+		 * worse.
+		 *
+		 * 0.5's measure asked what the *entry* names: `Alice Keeps Vigil` scored
+		 * 1 for containing a cast name and `The Ashguard Riders` scored 0, and
+		 * the conversation — *"Well met. And you. Have you seen the ashguard?"*
+		 * — never says Alice at all. That one-sidedness is design §13.6's third
+		 * named defect and it is what the graded overlap removes. Both entries
+		 * are keyed `ashguard`, the window names nothing else, so a two-sided
+		 * measure scores them **identically** and the tf-idf tie-break decides.
+		 *
+		 * So this fixture is now blind to the entity weight, and stating that is
+		 * more useful than quietly keeping a test whose subject moved out from
+		 * under it. Arbitrating a graded entity ordering wants a fixture whose
+		 * *conversation* names a cast member, which this corpus does not have
+		 * and cannot capture — the goldens are 0.5's output and its builder is
+		 * deleted. The graded measure's ordering is covered instead by
+		 * `ranking/keywordQuery.test.ts` ("is graded, not binary"), where a
+		 * fixture can be built to discriminate it.
+		 */
+		const { pipelinePreview } = await import(
+			"$lib/server/pipelines/parity/harness"
+		)
+		await db
+			.update(schema.systemSettings)
+			.set({
+				defaultPromptConfigId: configs.promptConfig.id,
+				defaultContextConfigId: configs.contextConfig.id
+			})
+			.where(eq(schema.systemSettings.id, 1))
+
+		const scope = await withPipelineTemplate(entityCooccurrence).seed(
+			db as any
+		)
+		const run: any = await pipelinePreview(db as any, scope)
+		const worldLore = (run.nodes as any[]).find(
+			(n) => n.nodeKey === "worldLore"
+		)
+		const scored = (worldLore?.output?.main ?? []).map((c: any) => ({
+			name: c.payload?.name as string,
+			entityCooccurrence: c.signals?.entityCooccurrence as number,
+			total: score(c.signals, DEFAULT_SIGNAL_WEIGHTS.worldLore, 1),
+			without: score(
+				c.signals,
+				{ ...DEFAULT_SIGNAL_WEIGHTS.worldLore, entityCooccurrence: 0 },
+				1
+			)
+		}))
+		expect(scored).toHaveLength(2)
+
+		// It fires — the whole reason this fixture exists.
+		for (const c of scored) expect(c.entityCooccurrence).toBeGreaterThan(0)
+
+		// And it fires *equally*, because both entries name the one thing the
+		// window names. This is the assertion that would fail if the signal
+		// silently went back to reading only the entry's own side.
+		expect(scored[0]!.entityCooccurrence).toBeCloseTo(
+			scored[1]!.entityCooccurrence,
+			10
+		)
+
+		// Which is why zeroing the weight changes nothing here: the corpus
+		// cannot see this weight any more, and says so rather than implying it
+		// can.
+		const order = (key: "total" | "without") =>
+			[...scored].sort((a, b) => b[key] - a[key]).map((c) => c.name)
+		expect(order("total")).toEqual(order("without"))
+
+		// 0.5's reading, transcribed rather than imported — the function is
+		// deleted, and a parity test's job is to say what the old engine did.
+		// It separates the two entries, on Alice, whom the conversation never
+		// names. That separation is the whole of the departure recorded in
+		// `DEPARTED`, seen from the signal side instead of the byte side.
+		const legacyCooccurrence = (entryName: string) =>
+			`${entryName} ashguard`.toLowerCase().includes("alice") ? 1 : 0
+		expect(
+			scored.map((c: { name: string }) => legacyCooccurrence(c.name))
+		).toEqual([0, 1])
+	})
+
+	it("derives the co-occurrence golden from one-on-one's, changing one line", async () => {
+		/**
+		 * What licenses a golden for a fixture 0.5 never rendered.
+		 *
+		 * Every other golden here is a capture: 0.5's builder ran and its
+		 * output was frozen. That builder is deleted, so a new world cannot be
+		 * captured — and a golden produced by running 0.6 would be the pipeline
+		 * grading its own homework, which `harness.ts` says in so many words is
+		 * worse than having no golden at all.
+		 *
+		 * So this fixture seeds `session/one-on-one`'s world exactly and its
+		 * golden **is** `session__one-on-one.txt` with the one line the lore
+		 * changes, written in the order 0.5's scorer puts the two entries in
+		 * (the arithmetic is in the fixture's comment, and the test above
+		 * measures the signals it rests on). This assertion is what keeps that
+		 * claim true: if the two files ever differ anywhere else, the
+		 * derivation has stopped holding and the golden is no longer evidence.
+		 */
+		const { readFileSync } = await import("node:fs")
+		const { goldenPathFor } = await import(
+			"$lib/server/pipelines/parity/harness"
+		)
+		const base = readFileSync(goldenPathFor(oneOnOne.name), "utf8").split(
+			"\n"
+		)
+		const derived = readFileSync(
+			goldenPathFor(entityCooccurrence.name),
+			"utf8"
+		).split("\n")
+
+		expect(derived.length).toBe(base.length)
+		const differing = base
+			.map((line, i) => (line === derived[i] ? -1 : i))
+			.filter((i) => i >= 0)
+		expect(differing.length).toBe(1)
+
+		// And the one line that differs is the lore block, in 0.5's score
+		// order — the later-authored entry first, because it co-occurs.
+		expect(derived[differing[0]!]).toBe(
+			'{"Alice Keeps Vigil":"Alice keeps the gate against the ash.",' +
+				'"The Ashguard Riders":"Riders who patrol the ash wastes."}'
+		)
 	})
 
 	it("reports where the paths diverge", async () => {
@@ -905,5 +1273,77 @@ describe("the parity corpus", () => {
 		// a boolean nobody reads.
 		expect(gate.reason ?? "green").toBe("green")
 		expect(gate.pass).toBe(true)
+	})
+
+	it("bounds each deliberate departure to exactly what it changed", async () => {
+		/**
+		 * The rule `OPEN` cannot enforce, in the shape
+		 * `contextTemplateWrappers.test.ts` uses for 1.9.0's departure.
+		 *
+		 * A fixture in `DEPARTED` is expected to differ *and* expected to differ
+		 * in one stated way. Asserting only the first would make this list a
+		 * place where a real regression could hide, since anything landing in
+		 * the same prompt would keep it red for the same reason.
+		 *
+		 * For `session/entity-cooccurrence` the stated way is: **the same two
+		 * world-lore entries, in the other order.** Both prompts are normalised
+		 * by sorting the keys of the `World lore` JSON object — nothing else is
+		 * touched — and they must then be byte-identical. A dropped entry, a
+		 * changed body, a different block anywhere else in the prompt all fail.
+		 */
+		const { readFileSync } = await import("node:fs")
+		const { goldenPathFor, pipelinePreview } = await import(
+			"$lib/server/pipelines/parity/harness"
+		)
+
+		for (const { fixture, because } of DEPARTED) {
+			expect(because.length).toBeGreaterThan(120)
+
+			const r = await runFixture(
+				db as any,
+				withPipelineTemplate(fixture),
+				configs
+			)
+			console.log(renderParity(r))
+			// It still has to actually differ. A departure that quietly stopped
+			// happening is a fixture that belongs back in the gate.
+			expect({ fixture: fixture.name, identical: r.identical }).toEqual({
+				fixture: fixture.name,
+				identical: false
+			})
+
+			const scope = await withPipelineTemplate(fixture).seed(db as any)
+			const preview: any = await pipelinePreview(db as any, scope)
+			const pipeline: string =
+				preview.preview?.context?.rendered?.rendered ?? ""
+			const legacy = readFileSync(goldenPathFor(fixture.name), "utf8")
+
+			/** Sort the keys of any minified JSON object on its own line. */
+			const sortObjects = (text: string) =>
+				text
+					.split("\n")
+					.map((line) => {
+						if (!line.startsWith("{") || !line.endsWith("}"))
+							return line
+						try {
+							const parsed = JSON.parse(line) as Record<
+								string,
+								unknown
+							>
+							return JSON.stringify(
+								Object.fromEntries(
+									Object.entries(parsed).sort(([a], [b]) =>
+										a.localeCompare(b)
+									)
+								)
+							)
+						} catch {
+							return line
+						}
+					})
+					.join("\n")
+
+			expect(sortObjects(pipeline)).toBe(sortObjects(legacy))
+		}
 	})
 })

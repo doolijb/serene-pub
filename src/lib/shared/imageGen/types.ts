@@ -16,6 +16,8 @@
  * usually "this backend has no such knob".
  */
 
+import type { ConnectionIdentity } from "$lib/shared/connections/identity"
+
 /**
  * One render, in backend-neutral terms.
  *
@@ -92,6 +94,16 @@ export interface ImageGenProgress {
 	/** A partially-denoised frame, when the backend offers one. Transient: shown, never stored. */
 	preview?: { base64: string; mime: string }
 	message?: string
+	/**
+	 * Which connection this step is about.
+	 *
+	 * A FIELD, because the sentence beside it must not name one: an image model
+	 * is a path on the administrator's disk, and this event fans out to everyone
+	 * watching the session. `withoutConnectionIdentity` removes the key at every
+	 * egress, so an administrator's client can render "Loading sd-1.5" and
+	 * nobody else's is even told there is a connection.
+	 */
+	connection?: ConnectionIdentity
 }
 
 /**

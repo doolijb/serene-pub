@@ -4,6 +4,7 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -400,12 +401,16 @@ describe("characters import/export (PGlite integration)", () => {
 		// genuinely entry-less book as absent, same as v2/v3's own bookless
 		// placeholder — a real entry is needed for `book` to come back
 		// non-null on re-import below.
-		await testDb.insert(schema.worldLoreEntries).values({
-			lorebookId: lorebook.id,
-			name: "Ancient Ruins",
-			content: "Ruins in the desert",
-			keys: "ruins"
-		})
+		await testDb.insert(schema.lorebookEntries).values(
+			worldLoreValues([
+				{
+					lorebookId: lorebook.id,
+					name: "Ancient Ruins",
+					content: "Ruins in the desert",
+					keys: "ruins"
+				}
+			])
+		)
 
 		const exported = await charactersExportCard.handler(
 			fakeSocket(user.id),
@@ -479,12 +484,16 @@ describe("characters import/export (PGlite integration)", () => {
 			characterId,
 			binding: "{{char:1}}"
 		})
-		await testDb.insert(schema.worldLoreEntries).values({
-			lorebookId: lorebook.id,
-			name: "Ancient Ruins",
-			content: "Ruins in the desert",
-			keys: "ruins"
-		})
+		await testDb.insert(schema.lorebookEntries).values(
+			worldLoreValues([
+				{
+					lorebookId: lorebook.id,
+					name: "Ancient Ruins",
+					content: "Ruins in the desert",
+					keys: "ruins"
+				}
+			])
+		)
 
 		const exported = await charactersExportCard.handler(
 			fakeSocket(user.id),

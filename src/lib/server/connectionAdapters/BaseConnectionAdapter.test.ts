@@ -129,3 +129,154 @@ describe("BaseConnectionAdapter.compilePrompt()", () => {
 		)
 	})
 })
+
+/**
+ * The shared accessor every text-completion branch now reads through.
+ *
+ * `KoboldCppAdapter`, `OllamaAdapter`, `LMStudioAdapter` and `LlamaCppAdapter`
+ * each wrote `compiledPrompt.prompt!` — an assertion that a payload built for a
+ * chat endpoint does not satisfy. It could not be reached while the pipeline was
+ * incapable of producing a role array (the connection's format never got to the
+ * render, so every payload was one string); restoring that wire is what makes
+ * the shape arrive.
+ *
+ * The adapter-level proof is in `KoboldCppAdapter.test.ts`, where the request
+ * body is inspected. These are the branches themselves.
+ */
+describe("BaseConnectionAdapter.promptTextFor()", () => {
+	const messages = [
+		{ role: "system", content: "Stay in character." },
+		{ role: "user", content: "Bob: Hello." }
+	]
+
+	test("returns a prompt string untouched", () => {
+		const adapter = makeAdapter() as any
+		expect(
+			adapter.promptTextFor({ prompt: "### System:\nx\n", messages })
+		).toBe("### System:\nx\n")
+	})
+
+	test("an empty prompt string is still the payload's answer, not a rebuild", () => {
+		// `""` is what a template that rendered nothing produces, and it is a
+		// string: rebuilding from `messages` there would invent a prompt the
+		// render did not make. Only an ABSENT prompt falls through.
+		const adapter = makeAdapter() as any
+		expect(adapter.promptTextFor({ prompt: "", messages })).toBe("")
+	})
+
+	test("rebuilds from messages in the connection's own format", () => {
+		const adapter = makeAdapter({
+			connection: { id: 1, promptFormat: "chatml", extraJson: {} } as any
+		}) as any
+		const out = adapter.promptTextFor({ messages })
+		expect(out).toContain("<|im_start|>system")
+		expect(out).toContain("<|im_start|>user")
+		expect(out).toContain("Bob: Hello.")
+	})
+
+	test("a cleared format rebuilds as Vicuna, not ChatML", () => {
+		// The `||` trap, at the third of the three sites that answer it.
+		const adapter = makeAdapter({
+			connection: { id: 1, promptFormat: "", extraJson: {} } as any
+		}) as any
+		const out = adapter.promptTextFor({ messages })
+		expect(out).toContain("### System:")
+		expect(out).not.toContain("<|im_start|>")
+	})
+
+	test("opens a turn for the model when the payload does not already seed one", () => {
+		const adapter = makeAdapter() as any
+		expect(adapter.promptTextFor({ messages }).endsWith("### Assistant:\n")).toBe(
+			true
+		)
+	})
+
+	test("does not open a second turn when the last message is the seed", () => {
+		const adapter = makeAdapter() as any
+		const out = adapter.promptTextFor({
+			messages: [...messages, { role: "assistant", content: "Alice:" }]
+		})
+		expect(out.match(/### Assistant:/g)?.length).toBe(1)
+	})
+
+	test("refuses rather than sending an empty string when there is neither shape", () => {
+		const adapter = makeAdapter() as any
+		expect(() => adapter.promptTextFor({ messages: [] })).toThrow(
+			/neither a prompt string nor any messages/
+		)
+	})
+})
+
+describe("BaseConnectionAdapter's attachment limits", () => {
+	/**
+	 * The seam, at the class rather than in the engine.
+	 *
+	 * The engine's own rules are exercised in
+	 * `$lib/server/adapters/attachments.test.ts` against literal declarations.
+	 * What is asserted here is only the wiring: that the class resolves the
+	 * limits from the connection's TYPE through the static manifest, and that a
+	 * type nobody declared anything for does not thereby refuse everything.
+	 *
+	 * Deliberately no real image bytes. PNG is in Anthropic's accepted list, so
+	 * every file below is FORWARDED rather than converted — which keeps this file
+	 * free of the codec stack and puts the conversion cases where the fixtures
+	 * are.
+	 */
+	const stub = (n: number) => ({
+		bytes: Buffer.alloc(n, 3),
+		mime: "image/png"
+	})
+
+	const forType = (type: string) =>
+		makeAdapter({
+			connection: {
+				id: 1,
+				type,
+				promptFormat: "vicuna",
+				extraJson: {}
+			} as any
+		})
+
+	test("the limits come from the connection's type", async () => {
+		const adapter = forType("anthropic") as any
+		expect(adapter.io?.in?.image?.maxFiles?.max).toBe(100)
+		expect(adapter.io?.maxRequestBytes?.max).toBe(32 * 1024 * 1024)
+	})
+
+	test("a request over the declared count is refused, not trimmed", async () => {
+		const adapter = forType("anthropic") as any
+		const plan = await adapter.prepareAttachments(
+			Array.from({ length: 101 }, () => stub(8))
+		)
+		expect(plan.ok).toBe(false)
+		expect(plan.code).toBe("too-many-files")
+		// The published number, and the receipt for it, both in the message the
+		// user would see.
+		expect(plan.reason).toContain("100")
+		expect(plan.reason).toContain("Anthropic")
+	})
+
+	test("a request at the declared count goes through untouched", async () => {
+		const adapter = forType("anthropic") as any
+		const plan = await adapter.prepareAttachments(
+			Array.from({ length: 100 }, () => stub(8))
+		)
+		expect(plan.ok).toBe(true)
+		expect(plan.files.length).toBe(100)
+		expect(plan.files.some((f: any) => f.converted)).toBe(false)
+	})
+
+	test("⚠ a type that declares nothing blocks nothing", async () => {
+		// The failure this guards is the one the whole limits design is arranged
+		// around: an unknown limit read as zero would refuse every attachment on
+		// eight of the nine connection types, and the message would sound like it
+		// came from the service.
+		const adapter = forType("openai") as any
+		expect(adapter.io).toBeUndefined()
+		const plan = await adapter.prepareAttachments(
+			Array.from({ length: 300 }, () => stub(1024))
+		)
+		expect(plan.ok).toBe(true)
+		expect(plan.files.length).toBe(300)
+	})
+})

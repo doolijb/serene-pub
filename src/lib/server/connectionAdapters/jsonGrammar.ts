@@ -24,8 +24,8 @@
  * matching this grammar's whitespace discipline is. See the WHITESPACE
  * OWNERSHIP block there.
  *
- * Used by the adapters whose providers accept GBNF — KoboldCPP and llama.cpp.
- * Providers with a native JSON mode (Ollama's `format`, OpenAI's
+ * Used by the adapters whose services accept GBNF — KoboldCPP and llama.cpp.
+ * Services with a native JSON mode (Ollama's `format`, OpenAI's
  * `response_format`) use that instead and never see this string.
  */
 export const JSON_OBJECT_GBNF = `root   ::= object

@@ -19,6 +19,7 @@
  * and the database is byte-for-byte unchanged. Output is a GraphProposal for review.
  */
 
+import { ComposedError } from "$lib/server/connections/visibility"
 import { getConnectionAdapter } from "./getConnectionAdapter"
 import { resolveSampling } from "./resolveSampling"
 import { TokenCounters } from "./TokenCounterManager"
@@ -342,7 +343,7 @@ async function runLLM(
 	})
 
 	// Every call this builder makes must come back as a JSON object. Each
-	// adapter translates this into whatever its provider supports; ones that
+	// adapter translates this into whatever its service supports; ones that
 	// support nothing ignore it and the prompt + retry path still applies.
 	//
 	// Assigned rather than passed to the constructor on purpose — see
@@ -357,7 +358,7 @@ async function runLLM(
 	// JSON must opt out here.
 	adapter.responseFormat = responseFormat
 	// When the caller supplies a shape, the constraint tightens from "any JSON
-	// object" to exactly that shape. Adapters whose providers cannot take a
+	// object" to exactly that shape. Adapters whose services cannot take a
 	// schema ignore it and stay at object level — see
 	// BaseConnectionAdapter.responseSchema.
 	if (responseSchema && responseFormat === "json")
@@ -538,7 +539,19 @@ function messageContainsName(text: string, name: string): boolean {
 
 // ─── Parsers ──────────────────────────────────────────────────────────────────
 
-export class GraphParseError extends Error {
+/**
+ * The model's output could not be read as a graph.
+ *
+ * A `ComposedError` because every sentence it can carry is about that OUTPUT
+ * and is written here — it names no connection, so `activityError` shows it as
+ * written instead of replacing it with the opaque one. `raw` is the model's own
+ * text, which is the entire point of the field.
+ *
+ * ⚠ Nothing constructs this today; `narrativeGraph.ts` still branches on it.
+ * The marking is what keeps that branch honest if it is ever revived — see
+ * `ComposedError` on why unmarked is the unsafe default.
+ */
+export class GraphParseError extends ComposedError {
 	public raw: string
 	public truncated: boolean
 	constructor(message: string, raw: string, truncated = false) {
@@ -726,9 +739,9 @@ function parseCharacterPerspectives(
 		 *
 		 * The cost of the stricter rule is carried by the decoder rather than
 		 * by recall: `from` is pinned to the subject's literal name in
-		 * buildPerspectiveSchema, so on any provider that honours the schema a
+		 * buildPerspectiveSchema, so on any service that honours the schema a
 		 * reversed pair is unemittable and this branch never fires. It stays as
-		 * the backstop for providers that cannot take one.
+		 * the backstop for services that cannot take one.
 		 *
 		 * A MISSING `from` is not a wrong direction and is not discarded — the
 		 * source then comes from the caller, as it always did. Only a positive

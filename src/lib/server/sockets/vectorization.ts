@@ -1,6 +1,18 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm"
+import { DEFAULT_VECTOR_NAME } from "$lib/server/utils/lorebookEntries"
+import {
+	and,
+	desc,
+	eq,
+	inArray,
+	isNotNull,
+	isNull,
+	ne,
+	or,
+	sql,
+	type SQL
+} from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { EMBEDDING_MODELS, findModel } from "$lib/server/embedding/models"
 import {
@@ -721,18 +733,6 @@ export const vectorizationCheckRagStatus: Handler<
 		// Lorebook content (aggregate across all linked lorebooks)
 		let lorebook: Sockets.Vectorization.RagTypeCounts | null = null
 		if (allLorebookIds.length > 0) {
-			const lbWhere = inArray(
-				schema.worldLoreEntries.lorebookId,
-				allLorebookIds
-			)
-			const clWhere = inArray(
-				schema.characterLoreEntries.lorebookId,
-				allLorebookIds
-			)
-			const heWhere = inArray(
-				schema.historyEntries.lorebookId,
-				allLorebookIds
-			)
 			const nnWhere = inArray(
 				schema.lorebookBindings.lorebookId,
 				allLorebookIds
@@ -742,16 +742,44 @@ export const vectorizationCheckRagStatus: Handler<
 				allLorebookIds
 			)
 
+			/**
+			 * The three entry types, counted once.
+			 *
+			 * They are one table, and the vector they are counted against is a
+			 * row in another — so `IS NULL` becomes "no default-space vector"
+			 * and the stale test becomes "a vector whose model is not the
+			 * active one". Every clause keeps the meaning it had as a column.
+			 */
+			const entryWhere = inArray(
+				schema.lorebookEntries.lorebookId,
+				allLorebookIds
+			)
+			const countEntries = async (extra?: SQL) => {
+				const [row] = await db
+					.select({ n: sql<number>`count(*)` })
+					.from(schema.lorebookEntries)
+					.leftJoin(
+						schema.lorebookEntryVectors,
+						and(
+							eq(
+								schema.lorebookEntryVectors.entryId,
+								schema.lorebookEntries.id
+							),
+							eq(
+								schema.lorebookEntryVectors.vectorName,
+								DEFAULT_VECTOR_NAME
+							),
+							eq(schema.lorebookEntryVectors.chunkIndex, 0)
+						)
+					)
+					.where(extra ? and(entryWhere, extra) : entryWhere)
+				return Number(row?.n ?? 0)
+			}
+
 			const [
-				wleTotal,
-				wleNull,
-				wleStale,
-				cleTotal,
-				cleNull,
-				cleStale,
-				heTotal,
-				heNull,
-				heStale,
+				entryTotal,
+				entryNull,
+				entryStale,
 				nnTotal,
 				nnNull,
 				nnStale,
@@ -759,52 +787,12 @@ export const vectorizationCheckRagStatus: Handler<
 				nrNull,
 				nrStale
 			] = await Promise.all([
-				db.$count(schema.worldLoreEntries, lbWhere),
-				db.$count(
-					schema.worldLoreEntries,
-					and(lbWhere, isNull(schema.worldLoreEntries.embedding))
-				),
-				db.$count(
-					schema.worldLoreEntries,
+				countEntries(),
+				countEntries(isNull(schema.lorebookEntryVectors.entryId)),
+				countEntries(
 					and(
-						lbWhere,
-						sql`${schema.worldLoreEntries.embedding} IS NOT NULL`,
-						ne(
-							schema.worldLoreEntries.embeddingModel,
-							activeModelName
-						)
-					)
-				),
-				db.$count(schema.characterLoreEntries, clWhere),
-				db.$count(
-					schema.characterLoreEntries,
-					and(clWhere, isNull(schema.characterLoreEntries.embedding))
-				),
-				db.$count(
-					schema.characterLoreEntries,
-					and(
-						clWhere,
-						sql`${schema.characterLoreEntries.embedding} IS NOT NULL`,
-						ne(
-							schema.characterLoreEntries.embeddingModel,
-							activeModelName
-						)
-					)
-				),
-				db.$count(schema.historyEntries, heWhere),
-				db.$count(
-					schema.historyEntries,
-					and(heWhere, isNull(schema.historyEntries.embedding))
-				),
-				db.$count(
-					schema.historyEntries,
-					and(
-						heWhere,
-						sql`${schema.historyEntries.embedding} IS NOT NULL`,
-						ne(
-							schema.historyEntries.embeddingModel,
-							activeModelName
-						)
+						isNotNull(schema.lorebookEntryVectors.entryId),
+						ne(schema.lorebookEntryVectors.model, activeModelName)
 					)
 				),
 				db.$count(schema.lorebookBindings, nnWhere),
@@ -844,24 +832,9 @@ export const vectorizationCheckRagStatus: Handler<
 				)
 			])
 
-			const lbTotal =
-				Number(wleTotal) +
-				Number(cleTotal) +
-				Number(heTotal) +
-				Number(nnTotal) +
-				Number(nrTotal)
-			const lbNull =
-				Number(wleNull) +
-				Number(cleNull) +
-				Number(heNull) +
-				Number(nnNull) +
-				Number(nrNull)
-			const lbStale =
-				Number(wleStale) +
-				Number(cleStale) +
-				Number(heStale) +
-				Number(nnStale) +
-				Number(nrStale)
+			const lbTotal = entryTotal + Number(nnTotal) + Number(nrTotal)
+			const lbNull = entryNull + Number(nnNull) + Number(nrNull)
+			const lbStale = entryStale + Number(nnStale) + Number(nrStale)
 
 			lorebook = {
 				total: lbTotal,

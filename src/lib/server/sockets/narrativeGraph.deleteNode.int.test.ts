@@ -17,6 +17,7 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { readSceneCast, writeSceneCast } from "$lib/server/utils/sceneCast"
 
@@ -80,8 +81,8 @@ describe("narrativeGraph:deleteNode — scene array cleanup (PGlite integration)
 		const node = await makeBinding(lorebook.id, "{{char:1}}", "Doomed")
 		const other = await makeBinding(lorebook.id, "{{char:2}}", "Survivor")
 		const [historyEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id }]))
 			.returning()
 		const [scene] = await testDb
 			.insert(schema.scenes)

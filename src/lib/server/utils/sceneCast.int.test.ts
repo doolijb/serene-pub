@@ -14,6 +14,7 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -44,8 +45,8 @@ async function setup(label: string, bindingCount = 3) {
 		.values({ name: label, userId: user.id })
 		.returning()
 	const [historyEntry] = await testDb
-		.insert(schema.historyEntries)
-		.values({ lorebookId: lorebook.id })
+		.insert(schema.lorebookEntries)
+		.values(historyValues([{ lorebookId: lorebook.id }]))
 		.returning()
 	const [scene] = await testDb
 		.insert(schema.scenes)

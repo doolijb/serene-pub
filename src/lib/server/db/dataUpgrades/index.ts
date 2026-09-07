@@ -48,10 +48,12 @@ export interface DataUpgrade {
  * queries drift with the schema. Raw SQL through `tx` ages far better.
  */
 export const DATA_UPGRADES: DataUpgrade[] = [
-	{
-		afterMigration: "0166_media",
-		load: () => import("./0166_media")
-	}
+	// Empty, and deliberately so. Every 0.6-cycle migration was squashed into
+	// `0094_baseline_0_6` (2026-09-06), which took `0166_media` and its anchored
+	// upgrade with it — an anchor naming a tag that is no longer in the journal
+	// makes `runMigrationsWithUpgrades` throw on every boot, fresh installs
+	// included. The runner itself is kept: the data-upgrade pass for 0.6 is
+	// still to be written, against real installs, before the first PR/RC.
 ]
 
 function tagsInJournalOrder(migrationsFolder: string): string[] {

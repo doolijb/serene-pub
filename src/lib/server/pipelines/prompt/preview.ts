@@ -28,6 +28,15 @@
  * moment anyone selected a prose layout. It calls `renderVariable` with the
  * same resolved layouts the run would use, which also means the two previews
  * compose: change a layout, and the context preview updates with it.
+ *
+ * ## Nothing here carries a run, and that is the correct answer
+ *
+ * These renders can still go to a plugin's engine — a draft names whatever
+ * engine it is written in — so they are sandboxed hook calls like any other.
+ * They just belong to no pipeline run: somebody is typing in an editor, there
+ * is no session and nothing to cancel. So `RenderRun` is left unset rather than
+ * invented, and the hook is bounded by its own 3s budget, which is what bounds
+ * a hook nobody has stopped.
  */
 
 import { getVariable, allVariables, sampleValues } from "@serene-pub/sdk"

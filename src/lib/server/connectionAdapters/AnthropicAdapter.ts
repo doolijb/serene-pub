@@ -8,6 +8,7 @@ import {
 } from "./BaseConnectionAdapter"
 import type { CompiledPrompt } from "./types"
 import type { TextGenResult } from "$lib/server/adapters/actions"
+import type { PreparedAttachment } from "$lib/server/adapters/attachments"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { anthropicSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
@@ -26,6 +27,135 @@ const ANTHROPIC_MODELS = [
 	{ id: "claude-3-5-haiku-20241022", name: "Claude 3.5 Haiku" },
 	{ id: "claude-3-opus-20240229", name: "Claude 3 Opus" }
 ]
+
+// ── Attachments on the wire ─────────────────────────────────────────────────
+//
+// The Messages API carries a file as a CONTENT BLOCK inside a message, beside
+// the text, with the bytes inlined as base64 — not as a separate field and not
+// as a URL this app could serve. So sending a file is an edit to one message's
+// content, which is why the assembly below rewrites a message rather than adding
+// a request parameter.
+//
+// ⚠ Order. `attachments` is a list because "these three, in this order" is the
+// thing a list expresses, and the blocks are emitted in exactly that order. A
+// reordering here does not read as a plumbing fault: it reads as the MODEL
+// misreading the pictures, which is the most expensive failure available in this
+// area. Nothing below groups, filters or sorts.
+
+/**
+ * The image mimes a base64 `source` may declare, from the SDK's own union.
+ *
+ * A runtime set beside the compile-time type, because by the time a negotiated
+ * mime arrives here it is a `string`. The manifest's `accepts` for this entry is
+ * exactly these four, so `prepareAttachments` cannot hand back a fifth today —
+ * and if that list ever grows a format the wire format does not take, this is
+ * where it is caught, naming the file, rather than at the service naming a
+ * base64 blob.
+ */
+const IMAGE_MEDIA_TYPES: ReadonlySet<string> = new Set([
+	"image/jpeg",
+	"image/png",
+	"image/gif",
+	"image/webp"
+] satisfies Anthropic.Base64ImageSource["media_type"][])
+
+const isImageMediaType = (
+	mime: string
+): mime is Anthropic.Base64ImageSource["media_type"] =>
+	IMAGE_MEDIA_TYPES.has(mime)
+
+/** How a file is named in a refusal — the same shape the engine's refusals use,
+ *  so a user reads one vocabulary whichever half declined. */
+const nameOf = (file: PreparedAttachment, index: number): string =>
+	file.filename
+		? `${file.filename} (attachment ${index + 1})`
+		: `attachment ${index + 1}`
+
+/**
+ * One prepared file as the block that carries it.
+ *
+ * Two kinds and no more, because two is what the Messages API takes: an `image`
+ * block and a `document` block of PDF. Both are declared in this entry's `io`,
+ * so both are negotiated and capped before they reach here.
+ *
+ * Anything else THROWS rather than being skipped. A kind this entry declares no
+ * limits for is forwarded by the engine — "absent means no known limit" is a
+ * statement about counts and sizes, not a promise that the wire format can
+ * express the file — so this is the last honest place to say no, and dropping it
+ * instead would send a request whose text refers to a file that never left.
+ */
+function contentBlockFor(
+	file: PreparedAttachment,
+	index: number
+): Anthropic.ContentBlockParam {
+	// The NEGOTIATED bytes: what the format check and both byte caps were
+	// applied to, never the source's.
+	const data = file.bytes.toString("base64")
+
+	if (file.kind === "image") {
+		if (!isImageMediaType(file.mime))
+			throw new Error(
+				`${nameOf(file, index)} is ${file.mime}, which the Anthropic Messages API does not take as an image. ` +
+					`It accepts JPEG, PNG, GIF and WebP.`
+			)
+		return {
+			type: "image",
+			source: { type: "base64", media_type: file.mime, data }
+		}
+	}
+
+	if (file.mime === "application/pdf")
+		return {
+			type: "document",
+			source: { type: "base64", media_type: "application/pdf", data },
+			// The one field a filename can usefully reach on the wire; it is
+			// display metadata everywhere else and would otherwise be dropped.
+			...(file.filename ? { title: file.filename } : {})
+		}
+
+	throw new Error(
+		`${nameOf(file, index)} is ${file.mime}, a ${file.kind} file, and the Anthropic Messages API carries only ` +
+			`images and PDFs alongside a prompt. It is not sent rather than sent as something it is not.`
+	)
+}
+
+/**
+ * The messages, with the files on the turn they travel with.
+ *
+ * That turn is the LAST USER message — the current one, which is what the files
+ * were attached to and what the reply is about. `buildAnthropicMessages`
+ * guarantees one exists and that it is last; the search is by role anyway so
+ * this cannot silently attach to an assistant turn if that ever changes.
+ *
+ * Blocks come BEFORE the text, which is Anthropic's own documented ordering
+ * advice for a question about an image, and the text block is omitted entirely
+ * when the turn has nothing to say — the API rejects an empty text block, and a
+ * bare "here are some files" turn is a legitimate request.
+ *
+ * A new array rather than a mutation, so the object whose size was measured for
+ * the request cap is not the object that changed underneath it.
+ */
+function withAttachmentBlocks(
+	messages: readonly Anthropic.MessageParam[],
+	blocks: readonly Anthropic.ContentBlockParam[]
+): Anthropic.MessageParam[] {
+	const target = messages.reduce(
+		(found, msg, index) => (msg.role === "user" ? index : found),
+		-1
+	)
+	if (target < 0) return [...messages, { role: "user", content: [...blocks] }]
+
+	const existing = messages[target]!.content
+	const text = Array.isArray(existing)
+		? existing
+		: typeof existing === "string" && existing.length
+			? [{ type: "text" as const, text: existing }]
+			: []
+
+	return messages.map((msg, index) =>
+		index === target ? { role: "user", content: [...blocks, ...text] } : msg
+	)
+}
 
 class AnthropicAdapter extends BaseConnectionAdapter {
 	private _client?: Anthropic
@@ -158,6 +288,55 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		return { system, messages }
 	}
 
+	/**
+	 * Yes: this class puts attachments on the wire. See the base class — this is
+	 * a fact about the CODE, not a capability claim about a model.
+	 */
+	override get consumesAttachments(): boolean {
+		return true
+	}
+
+	/**
+	 * The request's files, negotiated, capped and encoded — or a throw carrying
+	 * the engine's own sentence.
+	 *
+	 * ⚠ `transport: "base64"`, and it is the point of doing this here. Anthropic
+	 * inlines every file into the JSON body, and BOTH its published byte limits
+	 * are about that encoded body — the vision docs say "10 MB (base64-encoded)"
+	 * per image in as many words, and the 32MB request limit is an HTTP body that
+	 * is base64 throughout. So the real ceilings are 7.5MiB per image and about
+	 * 24MiB of files per request. Nothing but the adapter knows the wire format,
+	 * which is why the engine takes the transport from the caller rather than
+	 * assuming one; without it a 9MB image and a 30MB request would both pass
+	 * their checks here and be refused by the service, and the app would have
+	 * told the user it was fine.
+	 *
+	 * `overheadBytes` is the rest of the request measured exactly, by serialising
+	 * the request as it stands before the files go in. The per-block scaffolding
+	 * (`{"type":"image","source":{…}}`, some 80 bytes each) is deliberately left
+	 * out: an unstated overhead under-counts, which lets a borderline request
+	 * reach the service, and a guessed one refuses requests that fit.
+	 *
+	 * A refusal arrives as a VALUE from the engine and leaves here as a throw,
+	 * carrying that value's sentence unchanged — which names the cap and cites
+	 * where the number came from, so "too many images" is never all a user gets.
+	 */
+	private async attachmentBlocks(
+		requestWithoutFiles: unknown
+	): Promise<Anthropic.ContentBlockParam[]> {
+		if (!this.attachments.length) return []
+
+		const plan = await this.prepareAttachments(this.attachments, {
+			transport: "base64",
+			overheadBytes: Buffer.byteLength(
+				JSON.stringify(requestWithoutFiles)
+			)
+		})
+		if (!plan.ok) throw new Error(plan.reason)
+
+		return plan.files.map((file, index) => contentBlockFor(file, index))
+	}
+
 	async generateText(): Promise<TextGenResult> {
 		const model = this.connection.model || "claude-sonnet-4-5"
 		const stream = this.connection.extraJson?.stream ?? true
@@ -195,7 +374,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 						: {})
 				}
 
-		const baseParams = {
+		const textOnlyParams = {
 			model,
 			max_tokens: maxTokens,
 			messages,
@@ -203,6 +382,18 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 			...(thinkingParam ? { thinking: thinkingParam } : {}),
 			...allowedSampling
 		}
+
+		// The files, if any were handed over. Measured against the request as it
+		// stands without them, then spliced into the turn they belong to — both
+		// paths below send `baseParams`, so streaming and non-streaming carry
+		// the same blocks by construction rather than by two edits agreeing.
+		const attachmentContent = await this.attachmentBlocks(textOnlyParams)
+		const baseParams = attachmentContent.length
+			? {
+					...textOnlyParams,
+					messages: withAttachmentBlocks(messages, attachmentContent)
+				}
+			: textOnlyParams
 
 		const client = this.getClient()
 		// A fresh controller per generation — abort() below fires this, and the

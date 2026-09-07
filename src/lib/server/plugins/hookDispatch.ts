@@ -1,18 +1,18 @@
 /**
- * The plugin-runtime side of the unified hook interface.
+ * The plugin-sandbox side of the unified hook interface.
  *
  * `makeScriptApplier` (the pipeline's one chain applier) routes a link whose
  * type is plugin-owned to a `PluginHookDispatch`; this is that port, backed by
- * the `RuntimeManager`. It does two small things and nothing else:
+ * the `SandboxManager`. It does two small things and nothing else:
  *
  *  1. Resolve the registry's `ownerPluginId` (an integer, `plugins.id`) to the
- *     runtime address everything else uses — the plugin's `namespace/name`
+ *     sandbox address everything else uses — the plugin's `namespace/name`
  *     string id — and the link's script type id to the hook's exported name.
  *  2. Run the hook through `manager.callHook` and translate its richer result
  *     back into the `ScriptRunResult` shape the chain fold expects.
  *
  * Nothing here decides policy: the manager owns the backend, the deadline, the
- * concurrency and the permission-checked capabilities. Resolution failures come
+ * concurrency and the permission-checked host surface. Resolution failures come
  * back as `{ ok: false }`, never throws, so a chain absorbs an unservable link
  * as an error application and the turn continues.
  *
@@ -29,7 +29,7 @@
 
 import { eq } from "drizzle-orm"
 import { plugins } from "$lib/server/db/schema"
-import type { RuntimeManager } from "./RuntimeManager"
+import type { SandboxManager } from "./SandboxManager"
 import type {
 	PluginHookDispatch,
 	PluginHookRequest
@@ -40,7 +40,7 @@ type Db = { select: any }
 
 /** What the port needs from an installed plugin, resolved once per owner. */
 interface OwnerResolution {
-	/** The runtime address — `namespace/name`. */
+	/** The sandbox address — `namespace/name`. */
 	pluginId: string
 	/** `scriptTypeId → exported hook name`, from the compiled manifest. */
 	hookTypes: Record<string, string>
@@ -68,7 +68,7 @@ const fail = (reason: string): ScriptRunResult => ({
 
 export function makePluginHookDispatch(
 	db: Db,
-	manager: RuntimeManager
+	manager: SandboxManager
 ): PluginHookDispatch {
 	// One resolution per owner for the life of the applier (one run). A plugin
 	// enabled or removed mid-run is not observed — the chain a run applies is
@@ -122,7 +122,7 @@ export function makePluginHookDispatch(
 
 			// HookRunResult → ScriptRunResult: the chain fold only ever reads the
 			// shared core (ok / value / logs / durationMs). `backend` and the
-			// typed `outcome` are the runtime's own observability, already logged
+			// typed `outcome` are the sandbox's own observability, already logged
 			// by the manager; the pipeline neither needs nor learns them.
 			return r.ok
 				? {

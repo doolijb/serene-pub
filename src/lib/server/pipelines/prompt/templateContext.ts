@@ -24,6 +24,10 @@
  * formatting — so a difference in output is a difference in *inputs*.
  */
 
+import {
+	CHARACTER_LORE_TYPE_ID,
+	type LorebookEntry
+} from "$lib/shared/entries/types"
 import { InterpolationEngine } from "$lib/server/utils/interpolation/InterpolationEngine"
 import { attachCharacterLoreToCharacters } from "$lib/server/pipelines/prompt/characterLore"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
@@ -32,6 +36,7 @@ import {
 	renderVariable,
 	type ResolvedLayouts
 } from "$lib/server/pipelines/entities/variableLayouts"
+import type { RenderRun } from "$lib/server/pipelines/prompt/renderers"
 
 export interface CharacterRow {
 	id?: number
@@ -75,7 +80,12 @@ export interface PromptTexts {
 	charPostHistory?: string
 }
 
-export interface BuildContextInput {
+/**
+ * `RenderRun` is on the input because every one of the layouts below can name a
+ * plugin's engine — a dozen sandboxed hook calls, in a run that can be
+ * cancelled while they are in flight. Absent for a caller with no run.
+ */
+export interface BuildContextInput extends RenderRun {
 	/** Characters the assistant speaks as, compiled and carrying visibility. */
 	characters: readonly CharacterRow[]
 	personas: readonly PersonaRow[]
@@ -113,7 +123,7 @@ export interface BuildContextInput {
 	relationshipsPerspectives?: unknown
 	relationshipsKnown?: unknown
 	/** Character lore to fold into the cards. Empty on the current path. */
-	characterLore?: readonly SelectCharacterLoreEntry[]
+	characterLore?: readonly LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>[]
 	/** Needed only to map lore bindings onto cast members. */
 	session?: unknown
 	/**
@@ -229,7 +239,7 @@ export async function buildTemplateContext(
 	 * out does not move at all.
 	 */
 	const layout = (key: string, value: unknown) =>
-		renderVariable(input.variables, key, value)
+		renderVariable(input.variables, key, value, input)
 
 	return {
 		instructions: await layout(

@@ -27,6 +27,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import ShareBar from "$lib/client/components/pipelines/ShareBar.svelte"
+	import StrengthBars from "$lib/client/components/pipelines/StrengthBars.svelte"
 	// The value-decl controls (24 T6c): the simple editors live in
 	// @serene-pub/controls now — one component per value-type id, the render
 	// leg of the four-way registry. This panel keeps the behavioural wiring
@@ -1156,6 +1157,23 @@
 				windowTokens={option.windowTokens}
 				onchange={(next) => set(option, next)}
 			/>
+		{:else if option.control === "strengths"}
+			<!-- ⚠ **A different shape from the bar above on purpose.** That one
+			     divides one budget between sources, so raising a band lowers the
+			     others; these are independent strengths and every one of them
+			     may be full at once. Drawing them alike would say "these
+			     compete" in the only language a stacked bar has. -->
+			<StrengthBars
+				members={option.members ?? []}
+				value={option.value as Record<string, number> | undefined}
+				authorDefault={option.authorDefault as
+					| Record<string, number>
+					| undefined}
+				min={option.min}
+				max={option.max}
+				readonly={false}
+				onchange={(next) => set(option, next)}
+			/>
 		{:else if option.control === "per-member"}
 			<!-- Same declared bands as the bar above it, so a ceiling and a
 			     share read as the same five things in the same order and the
@@ -1979,19 +1997,36 @@
 	{#if showConfigPicker && detail.configs.length}
 		<div class="card preset-filled-surface-100-900 mb-3 space-y-2 p-3">
 			<p class="text-sm font-semibold">Configuration</p>
-			<select
-				class="select w-full"
-				value={detail.selectedConfig
-					? String(detail.selectedConfig.id)
-					: ""}
-				onchange={(e) => chooseConfig(e.currentTarget.value)}
-			>
-				{#each detail.configs as c (c.id)}
-					<option value={String(c.id)}>
-						{c.isDefault ? "★ " : ""}{c.name}
-					</option>
-				{/each}
-			</select>
+			{#if detail.canSelectConfig}
+				<select
+					class="select w-full"
+					value={detail.selectedConfig
+						? String(detail.selectedConfig.id)
+						: ""}
+					onchange={(e) => chooseConfig(e.currentTarget.value)}
+				>
+					{#each detail.configs as c (c.id)}
+						<option value={String(c.id)}>
+							{c.isDefault ? "★ " : ""}{c.name}{c.enabled
+								? ""
+								: " (withdrawn)"}
+						</option>
+					{/each}
+				</select>
+			{:else}
+				<!-- Not a disabled control: outside a session the selection is
+				     the instance's, and that one is the administrator's. A
+				     picker here was live, and every use of it ended in a
+				     refusal toast. What is left is the answer to the only
+				     question a reader has — which one is running. -->
+				<p class="text-sm">
+					{detail.selectedConfig?.name ?? "—"}
+				</p>
+				<p class="text-muted text-xs">
+					Chosen for this instance by an administrator. Open a session
+					to choose a different one there.
+				</p>
+			{/if}
 		</div>
 	{/if}
 

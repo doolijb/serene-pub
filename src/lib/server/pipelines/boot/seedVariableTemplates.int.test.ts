@@ -56,16 +56,6 @@ afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
-/** The key scheme 0113 replaced. */
-const oldKeyFor = (t: { variableId: string; name: string }) =>
-	`pipeline-variable-template:${t.variableId}:${t.name}`
-
-const migration = async () =>
-	(await import("node:fs")).readFileSync(
-		"drizzle/0113_variable_template_seed_keys.sql",
-		"utf8"
-	)
-
 const rowBySeedKey = async (key: string) => {
 	const [row] = await db
 		.select()
@@ -73,109 +63,6 @@ const rowBySeedKey = async (key: string) => {
 		.where(eq(schema.pipelineVariableTemplates.seedKey, key))
 	return row as { id: number; name: string; source: string } | undefined
 }
-
-/** Put one shipped row back the way 0.6.0-pre seeded it. */
-const regress = async (t: (typeof SHIPPED_VARIABLE_TEMPLATES)[number]) => {
-	const before = await rowBySeedKey(seedKeyFor(t))
-	expect(before, `${t.variableId}/${t.variant} was never seeded`).toBeTruthy()
-	await db
-		.update(schema.pipelineVariableTemplates)
-		.set({ seedKey: oldKeyFor(t) })
-		.where(eq(schema.pipelineVariableTemplates.id, before!.id))
-	return before!
-}
-
-/**
- * The `(old, new)` pairs the migration itself names.
- *
- * Read out of the SQL rather than rebuilt from `SHIPPED_VARIABLE_TEMPLATES` and
- * today's `name`. The old keys are a *historical* fact — what earlier builds
- * actually wrote — and deriving them from current names quietly asserted that
- * no shipped layout has been renamed since. One has: the graph summary's bare
- * row went from "As written" to "JSON" when it stopped being a passthrough. The
- * migration is right to keep saying "As written", because that is what is in
- * the databases it runs against, and this test now checks the migration rather
- * than a restatement of it.
- */
-const migrationPairs = async (): Promise<Array<[string, string]>> => {
-	const sql = await migration()
-	const named = [...sql.matchAll(/\('([^']+)',\s*'([^']+)'\)/g)].map(
-		(m) => [m[1]!, m[2]!] as [string, string]
-	)
-
-	// Pairs for variables this build no longer ships are dropped, not asserted
-	// against. `core:var/speaker-relationships@1` split into two in 0124, so
-	// its rows are gone and `0113` has nothing of its to re-key — while
-	// remaining exactly right for the databases it actually runs against,
-	// which is why the migration keeps naming it.
-	const shipped = new Set(SHIPPED_VARIABLE_TEMPLATES.map(seedKeyFor))
-	const live = named.filter(([, newKey]) => shipped.has(newKey))
-	if (live.length === 0)
-		throw new Error(
-			"0113 names no pair this build still ships — the test would pass vacuously"
-		)
-	return live
-}
-
-describe("0113 re-keys the shipped layouts", () => {
-	it("moves every name-keyed row onto its variant key, keeping its id", async () => {
-		const pairs = await migrationPairs()
-		expect(pairs.length).toBeGreaterThan(0)
-
-		const ids = new Map<string, number>()
-		for (const [oldKey, newKey] of pairs) {
-			const before = await rowBySeedKey(newKey)
-			expect(before, `${newKey} was never seeded`).toBeTruthy()
-			await db
-				.update(schema.pipelineVariableTemplates)
-				.set({ seedKey: oldKey })
-				.where(eq(schema.pipelineVariableTemplates.id, before!.id))
-			ids.set(newKey, before!.id)
-		}
-		// Nothing is reachable by the new scheme while the database is regressed.
-		for (const key of ids.keys()) {
-			expect(
-				await rowBySeedKey(key),
-				`${key} resolved too early`
-			).toBeFalsy()
-		}
-
-		await db.execute(await migration())
-
-		for (const [key, id] of ids) {
-			const row = await rowBySeedKey(key)
-			expect(row, `${key} was not re-keyed`).toBeTruthy()
-			// The id is the whole point: `pipeline_configs` stores row ids, so a
-			// re-key that minted a new row would silently drop every selection.
-			expect(row!.id, `${key} changed identity`).toBe(id)
-		}
-	})
-
-	it("leaves a row alone when the variant key is already taken", async () => {
-		const t = SHIPPED_VARIABLE_TEMPLATES[0]
-		const keeper = await rowBySeedKey(seedKeyFor(t))
-		const [intruder] = await db
-			.insert(schema.pipelineVariableTemplates)
-			.values({
-				variableId: t.variableId,
-				seedKey: oldKeyFor(t),
-				name: `${t.name} (duplicate)`,
-				source: t.source,
-				isImmutable: true
-			})
-			.returning()
-
-		await db.execute(await migration())
-
-		// The keeper still owns the variant key, and the duplicate kept the old
-		// one rather than colliding with it.
-		expect((await rowBySeedKey(seedKeyFor(t)))!.id).toBe(keeper!.id)
-		expect((await rowBySeedKey(oldKeyFor(t)))!.id).toBe(intruder.id)
-		await db
-			.delete(schema.pipelineVariableTemplates)
-			.where(eq(schema.pipelineVariableTemplates.id, intruder.id))
-	})
-})
 
 describe("a renamed shipped layout is an update, not a second row", () => {
 	it("refreshes the name in place and keeps the row's id", async () => {

@@ -1,4 +1,65 @@
 import { v4 as uuidv4 } from "uuid"
+import {
+	ComposedError,
+	type ConnectionIdentity
+} from "$lib/server/connections/visibility"
+
+/**
+ * What an activity failure says when its own words cannot be shown.
+ *
+ * A sibling of `generationStatus.ts`'s sentence rather than the same constant:
+ * that one is read on a failed message bubble and opens with "Generation
+ * failed", which is the wrong noun on a card that already names the run it
+ * belongs to.
+ */
+const OPAQUE_ACTIVITY_ERROR_MESSAGE =
+	"The service reported an error. An administrator can see the details."
+
+/**
+ * Split a caught failure into the part everyone may read and the part only an
+ * administrator may.
+ *
+ * `getFor` below serves a non-admin THEIR OWN activities, so a caught
+ * `err.message` written straight into `errorMessage` reaches them — and for an
+ * adapter failure that message is the base URL and the model file path, which
+ * `managedPreflight` fills in. The connection projection that
+ * `sockets/activity.ts` now runs on every emit cannot help with it:
+ * `errorMessage` is free text, and no key-shaped rule can see a name that is a
+ * substring.
+ *
+ * So the identity leaves the sentence and becomes a FIELD, under the one key
+ * `withoutConnectionIdentity` removes. Every serving of an activity already
+ * runs that walk — `activity:get` and every `broadcast` go through the same
+ * redacting `send` — so the administrator keeps the whole diagnostic and
+ * nobody else ever receives it. Exactly the shape, and for exactly the
+ * reasons, of `persistGenerationErrorRow`.
+ *
+ * ⚠ A `ComposedError`'s words are ours and name nobody, so they are shown as
+ * written; anything else is treated as a service's and moved into `detail`.
+ * Unmarked therefore degrades to a duller sentence, never to a leak — see
+ * `ComposedError`.
+ */
+export function activityError(err: unknown): {
+	errorMessage: string
+	connection?: ConnectionIdentity
+} {
+	if (err instanceof ComposedError)
+		return {
+			// `ComposedError`'s `message` is optional, matching `Error` — an
+			// empty one would otherwise terminalize the card with a blank.
+			errorMessage: err.message || OPAQUE_ACTIVITY_ERROR_MESSAGE,
+			...(err.connection ? { connection: err.connection } : {})
+		}
+	const detail = err instanceof Error ? err.message : String(err)
+	return {
+		errorMessage: OPAQUE_ACTIVITY_ERROR_MESSAGE,
+		// Only when there is something to carry, matching `connectionIdentity`:
+		// an empty `detail` tells an administrator nothing the opaque sentence
+		// did not, and a `connection` bag that exists changes what the walk
+		// rebuilds.
+		...(detail ? { connection: { detail } } : {})
+	}
+}
 
 export type GraphBuildActivity = {
 	kind: "graph_build"
@@ -28,6 +89,11 @@ export type GraphBuildActivity = {
 	/** Proposed names screened out as World Lore subjects — reported, not dropped. */
 	filteredWorldLoreNames?: string[]
 	errorMessage?: string
+	/**
+	 * Who the failure was about — a field, so the projection strips it for
+	 * everyone but an administrator. Write it only via `activityError`.
+	 */
+	connection?: ConnectionIdentity
 	errorRaw?: string
 	startedAt: string
 }
@@ -60,6 +126,11 @@ export type SceneSummarizeActivity = {
 	batch?: number
 	totalBatches?: number
 	errorMessage?: string
+	/**
+	 * Who the failure was about — a field, so the projection strips it for
+	 * everyone but an administrator. Write it only via `activityError`.
+	 */
+	connection?: ConnectionIdentity
 	pendingResult?: {
 		content: string
 		name?: string
@@ -85,6 +156,11 @@ export type CompileHistoryEntryActivity = {
 	batch?: number
 	totalBatches?: number
 	errorMessage?: string
+	/**
+	 * Who the failure was about — a field, so the projection strips it for
+	 * everyone but an administrator. Write it only via `activityError`.
+	 */
+	connection?: ConnectionIdentity
 	pendingResult?: { content: string }
 	startedAt: string
 }
@@ -111,6 +187,11 @@ export type SessionSummarizeActivity = {
 	batch?: number
 	totalBatches?: number
 	errorMessage?: string
+	/**
+	 * Who the failure was about — a field, so the projection strips it for
+	 * everyone but an administrator. Write it only via `activityError`.
+	 */
+	connection?: ConnectionIdentity
 	pendingResult?: {
 		content: string
 		name?: string

@@ -1,8 +1,8 @@
 /**
  * Assemble: allocation and rendering.
  *
- * The assertion that matters most is the one about excluded blocks surviving
- * into the allocation. A user asking "why isn't my lore showing up" is asking
+ * The assertion that matters most is the one about excluded allocations
+ * surviving into the allocated context. A user asking "why isn't my lore showing up" is asking
  * about something *absent*, so an allocation that lists only what made it
  * cannot answer them — which is the state of the world today.
  */
@@ -10,9 +10,14 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import {
 	allocate,
+	objectByRole,
 	render,
-	referencedVariables
+	referencedVariables,
+	type Allocation
 } from "$lib/server/pipelines/prompt/assemble"
+import { formatHistoryDateKey } from "$lib/server/pipelines/prompt/dateKeys"
+import { entryDeclaration } from "$lib/server/entries/declarations"
+import { HISTORY_TYPE_ID, WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
 import { wrapFor } from "$lib/server/pipelines/entities/variableLayouts"
 import type { Decision } from "$lib/server/pipelines/ranking/select"
 import {
@@ -53,7 +58,7 @@ describe("allocation", () => {
 		expect(a.budget.remaining).toBe(90)
 	})
 
-	it("keeps excluded blocks, because that is the question people ask", async () => {
+	it("keeps excluded allocations, because that is the question people ask", async () => {
 		const a = allocate(
 			[
 				decision({
@@ -69,7 +74,7 @@ describe("allocation", () => {
 		expect(a.blocks[0]!.why.join(" ")).toMatch(/cap reached/)
 	})
 
-	it("carries the score and the reason on the block itself", async () => {
+	it("carries the score and the reason on the allocation itself", async () => {
 		// Not derived at render time: the numbers exist upstream and nowhere else
 		// once the selection loop has moved on.
 		const a = allocate([decision()], { budgetTotal: 100 })
@@ -135,7 +140,7 @@ describe("rendering", () => {
 		expect(r.rendered).toBe("hello")
 	})
 
-	it("excluded blocks do not reach the template", async () => {
+	it("excluded allocations do not reach the template", async () => {
 		const r = await render({
 			allocation: allocate([decision({ included: false })], {
 				budgetTotal: 100
@@ -280,5 +285,125 @@ describe("the engine is data, not an assumption", () => {
 		expect(() =>
 			registerRenderer("chariot.a:engine@1", "chariot.b", () => "")
 		).toThrow(/already rendered by 'chariot.a'/)
+	})
+})
+
+/**
+ * `objectByRole` — the type chooses the projection.
+ *
+ * The two bodies inside it are the two that were `objectByName` and
+ * `objectByDate`; what moved is *which one runs*, from a hardcoded call site to
+ * the declaration. So the assertions here are about the choosing, and about the
+ * one thing the roles vocabulary does **not** buy: the order key's formatting,
+ * which is still core's and is asserted against `formatHistoryDateKey` byte for
+ * byte.
+ */
+const allocation = (over: Partial<Allocation> = {}): Allocation => ({
+	source: "worldLore",
+	id: 1,
+	content: "content",
+	tokens: 1,
+	why: [],
+	included: true,
+	...over
+})
+
+const worldLoreRoles = entryDeclaration(WORLD_LORE_TYPE_ID)!.roles
+const historyRoles = entryDeclaration(HISTORY_TYPE_ID)!.roles
+
+describe("objectByRole", () => {
+	it("keys by the title role, in arrival order, for a type that declares one", () => {
+		const out = objectByRole(
+			[
+				allocation({ id: 1, name: "B", content: "second" }),
+				allocation({ id: 2, name: "A", content: "first" })
+			],
+			worldLoreRoles
+		)
+		expect(Object.keys(out!)).toEqual(["B", "A"])
+		expect(out).toEqual({ B: "second", A: "first" })
+	})
+
+	it("skips a titled block with no title and one with no content", () => {
+		expect(
+			objectByRole(
+				[
+					allocation({ id: 1, content: "orphaned" }),
+					allocation({ id: 2, name: "Named", content: "" })
+				],
+				worldLoreRoles
+			)
+		).toBeUndefined()
+	})
+
+	it("returns undefined rather than {} so `{{#if worldLore}}` still skips", () => {
+		// An empty object is truthy, which is the whole reason this is not `{}`.
+		expect(objectByRole([], worldLoreRoles)).toBeUndefined()
+	})
+
+	it("sorts by the declared order keys and heads by the order key itself", () => {
+		const dated = (
+			year: number,
+			month: number | null,
+			day: number | null
+		) =>
+			allocation({
+				source: "history",
+				id: `${year}-${month}-${day}`,
+				content: `${year}`,
+				meta: { year, month, day }
+			})
+		const out = objectByRole(
+			[dated(410, 3, null), dated(412, null, null), dated(410, 1, 5)],
+			historyRoles
+		)
+		// Newest first, absent parts last — today's assembly sort, stated as
+		// data on the type rather than as arithmetic in this module.
+		expect(Object.keys(out!)).toEqual(["412", "410-03", "410-01-05"])
+	})
+
+	it("produces exactly what formatHistoryDateKey produced, over every precision", () => {
+		// ⚠ The one thing roles do not buy: core formats the order key, and a
+		// second ordered type wants a named policy rather than a branch. This
+		// is the assertion that the generalisation did not move a byte.
+		const cases = [
+			{ year: 412, month: 3, day: 7 },
+			{ year: 412, month: 3, day: null },
+			{ year: 412, month: null, day: null },
+			// The odd one, preserved deliberately: an absent middle part does
+			// not terminate the key, it is skipped.
+			{ year: 412, month: null, day: 5 },
+			{ year: 0, month: 12, day: 31 }
+		]
+		for (const meta of cases) {
+			const out = objectByRole(
+				[allocation({ source: "history", content: "x", meta })],
+				historyRoles
+			)
+			expect(Object.keys(out!)).toEqual([formatHistoryDateKey(meta)])
+		}
+	})
+
+	it("skips blank-after-trim content for an ordered type, which the titled form does not", () => {
+		// The two emptiness rules genuinely differ and are preserved rather
+		// than tidied: tidying one is a change to what a prompt contains.
+		expect(
+			objectByRole(
+				[
+					allocation({
+						source: "history",
+						content: "   ",
+						meta: { year: 1 }
+					})
+				],
+				historyRoles
+			)
+		).toBeUndefined()
+	})
+
+	it("falls back to the titled form for a source no type declares", () => {
+		expect(
+			objectByRole([allocation({ name: "N", content: "c" })], undefined)
+		).toEqual({ N: "c" })
 	})
 })

@@ -197,7 +197,7 @@
 		const g = effectiveGraph
 		const blocks = g?.blocks ?? []
 		const c = (kind: string) => blocks.filter((b) => b.kind === kind).length
-		const lanes = new Set(
+		const branches = new Set(
 			(g?.nodes ?? [])
 				.filter((n) => n.blockId)
 				.map((n) => `${n.blockId}/${n.blockChain}`)
@@ -208,7 +208,7 @@
 			maps: c("map"),
 			loops: c("loop"),
 			routes: c("route"),
-			lanes: lanes.size
+			branches: branches.size
 		}
 	})
 	const countLine = $derived(
@@ -224,8 +224,8 @@
 			counts.routes
 				? `${counts.routes} route${counts.routes === 1 ? "" : "s"}`
 				: null,
-			counts.lanes
-				? `${counts.lanes} lane${counts.lanes === 1 ? "" : "s"}`
+			counts.branches
+				? `${counts.branches} branch${counts.branches === 1 ? "" : "es"}`
 				: null
 		]
 			.filter(Boolean)

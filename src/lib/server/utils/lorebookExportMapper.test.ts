@@ -1,8 +1,6 @@
 import { describe, expect, test } from "vitest"
 import {
-	mapWorldEntry,
-	mapCharacterEntry,
-	mapHistoryEntry,
+	mapEntry,
 	buildSpecV3Lorebook,
 	assignHistoryEntryLocalIds,
 	mapSceneForExport,
@@ -11,9 +9,15 @@ import {
 	attachNarrativeGraph,
 	type SpecV3LorebookLike
 } from "./lorebookExportMapper"
+import {
+	CHARACTER_LORE_TYPE_ID,
+	HISTORY_TYPE_ID,
+	WORLD_LORE_TYPE_ID
+} from "$lib/shared/entries/types"
 
 const baseEntry = {
 	id: 1,
+	typeId: WORLD_LORE_TYPE_ID as string,
 	name: "Entry Name",
 	content: "Some content",
 	keys: "alpha, beta",
@@ -25,9 +29,9 @@ const baseEntry = {
 	extraJson: {}
 }
 
-describe("mapWorldEntry", () => {
+describe("mapEntry — world lore", () => {
 	test("maps a full entry, splitting keys back into an array", () => {
-		const mapped = mapWorldEntry({ ...baseEntry, category: "Locations" }, 0)
+		const mapped = mapEntry({ ...baseEntry, category: "Locations" }, 0)
 		expect(mapped).toEqual({
 			keys: ["alpha", "beta"],
 			content: "Some content",
@@ -47,12 +51,12 @@ describe("mapWorldEntry", () => {
 	})
 
 	test("omits category from extensions when null", () => {
-		const mapped = mapWorldEntry({ ...baseEntry, category: null }, 0)
+		const mapped = mapEntry({ ...baseEntry, category: null }, 0)
 		expect(mapped.extensions).toEqual({ serenepub: { entryType: "world" } })
 	})
 
 	test("preserves foreign extraJson alongside serenepub, not replaced by it", () => {
-		const mapped = mapWorldEntry(
+		const mapped = mapEntry(
 			{ ...baseEntry, category: null, extraJson: { probability: 80 } },
 			0
 		)
@@ -63,7 +67,7 @@ describe("mapWorldEntry", () => {
 	})
 
 	test("defaults use_regex to false when the DB column is null", () => {
-		const mapped = mapWorldEntry(
+		const mapped = mapEntry(
 			{ ...baseEntry, category: null, useRegex: null },
 			0
 		)
@@ -71,25 +75,175 @@ describe("mapWorldEntry", () => {
 	})
 })
 
-describe("mapCharacterEntry", () => {
+describe("mapEntry — the condition", () => {
+	const condition = (overrides: Record<string, any> = {}) => ({
+		...baseEntry,
+		category: null,
+		secondaryKeys: "statue, mural",
+		selectiveLogic: "notAll",
+		...overrides
+	})
+
+	// ⚠ `AND_ANY = 0, NOT_ALL = 1, NOT_ANY = 2, AND_ALL = 3`. 1 and 3 are not
+	// the pair anybody guesses, and an export that mapped `notAll` to 3 would
+	// invert exactly the books the importer gets right — so both directions
+	// are pinned here against the one table.
+	test("writes the spec's keys, the selective gate, and ST's integer", () => {
+		const mapped = mapEntry(condition(), 0)
+		expect(mapped.secondary_keys).toEqual(["statue", "mural"])
+		expect(mapped.selective).toBe(true)
+		expect(mapped.extensions.selectiveLogic).toBe(1)
+
+		expect(
+			mapEntry(condition({ selectiveLogic: "andAll" }), 0).extensions
+				.selectiveLogic
+		).toBe(3)
+		expect(
+			mapEntry(condition({ selectiveLogic: "andAny" }), 0).extensions
+				.selectiveLogic
+		).toBe(0)
+		expect(
+			mapEntry(condition({ selectiveLogic: "notAny" }), 0).extensions
+				.selectiveLogic
+		).toBe(2)
+	})
+
+	test("an entry with no condition writes none of the three keys", () => {
+		// Every book written before conditions existed exports byte-for-byte
+		// what it exported before, so re-importing an older file still reports
+		// "unchanged" rather than "conflict".
+		const mapped = mapEntry(
+			condition({ secondaryKeys: "", selectiveLogic: null }),
+			0
+		)
+		expect("secondary_keys" in mapped).toBe(false)
+		expect("selective" in mapped).toBe(false)
+		expect(mapped.extensions).toEqual({
+			serenepub: { entryType: "world" }
+		})
+	})
+
+	test("a mode with no keys is a rule about nothing, and is not written", () => {
+		const mapped = mapEntry(condition({ secondaryKeys: "" }), 0)
+		expect("secondary_keys" in mapped).toBe(false)
+		expect("selective" in mapped).toBe(false)
+		expect(mapped.extensions.selectiveLogic).toBeUndefined()
+	})
+
+	test("keys with no mode travel, ungated", () => {
+		const mapped = mapEntry(condition({ selectiveLogic: null }), 0)
+		expect(mapped.secondary_keys).toEqual(["statue", "mural"])
+		// No `selective`: SillyTavern gates its condition on that flag, and
+		// with no mode there is no condition to gate.
+		expect("selective" in mapped).toBe(false)
+		expect(mapped.extensions.selectiveLogic).toBeUndefined()
+	})
+
+	test("the row's mode overrides a stale one in the preserved foreign bag", () => {
+		// An imported SillyTavern entry keeps its whole extensions bag verbatim
+		// in extraJson, integer and all. Spreading it unmodified would export
+		// the mode the file arrived with rather than the one the author now
+		// has, and the importer would read it straight back.
+		const mapped = mapEntry(
+			condition({
+				selectiveLogic: "notAny",
+				extraJson: { selectiveLogic: 0, probability: 80 }
+			}),
+			0
+		)
+		expect(mapped.extensions).toEqual({
+			selectiveLogic: 2,
+			probability: 80,
+			serenepub: { entryType: "world" }
+		})
+	})
+
+	test("a cleared mode removes the stale integer rather than resurrecting it", () => {
+		const mapped = mapEntry(
+			condition({
+				selectiveLogic: null,
+				extraJson: { selectiveLogic: 2, probability: 80 }
+			}),
+			0
+		)
+		expect(mapped.extensions).toEqual({
+			probability: 80,
+			serenepub: { entryType: "world" }
+		})
+	})
+
+	test("leaves the foreign bag alone when the entry has no condition keys", () => {
+		// With no keys the importer refuses to read a mode at all, so a stale
+		// integer there is inert — and rewriting the bag would change the bytes
+		// of every SillyTavern book ever imported, since ST stamps
+		// `selectiveLogic` onto every entry it writes.
+		const mapped = mapEntry(
+			condition({
+				secondaryKeys: "",
+				selectiveLogic: null,
+				extraJson: { selectiveLogic: 0, probability: 80 }
+			}),
+			0
+		)
+		expect(mapped.extensions).toEqual({
+			selectiveLogic: 0,
+			probability: 80,
+			serenepub: { entryType: "world" }
+		})
+	})
+
+	test("a regex entry's condition keys go out delimited, like its own keys", () => {
+		const mapped = mapEntry(
+			condition({
+				keys: "dra.on",
+				secondaryKeys: "stat.e",
+				useRegex: true,
+				caseSensitive: false
+			}),
+			0
+		)
+		expect(mapped.keys).toEqual(["/dra.on/i"])
+		expect(mapped.secondary_keys).toEqual(["/stat.e/i"])
+	})
+
+	test("ignores a mode name that is not one of the four", () => {
+		// A bad row does not take an export down; it exports as no condition,
+		// which is how it already behaves (selectiveLogicHolds ignores it).
+		const mapped = mapEntry(condition({ selectiveLogic: "xorSome" }), 0)
+		expect(mapped.secondary_keys).toEqual(["statue", "mural"])
+		expect("selective" in mapped).toBe(false)
+		expect(mapped.extensions.selectiveLogic).toBeUndefined()
+	})
+})
+
+describe("mapEntry — character lore", () => {
 	test("includes bindingLocalId when resolved", () => {
-		const mapped = mapCharacterEntry(baseEntry, 0, 5)
+		const mapped = mapEntry(
+			{ ...baseEntry, typeId: CHARACTER_LORE_TYPE_ID },
+			0,
+			{ bindingLocalId: 5 }
+		)
 		expect(mapped.extensions).toEqual({
 			serenepub: { entryType: "character", bindingLocalId: 5 }
 		})
 	})
 
 	test("omits bindingLocalId when null (unbound entry)", () => {
-		const mapped = mapCharacterEntry(baseEntry, 0, null)
+		const mapped = mapEntry(
+			{ ...baseEntry, typeId: CHARACTER_LORE_TYPE_ID },
+			0,
+			{ bindingLocalId: null }
+		)
 		expect(mapped.extensions).toEqual({
 			serenepub: { entryType: "character" }
 		})
 	})
 })
 
-describe("mapHistoryEntry", () => {
+describe("mapEntry — history", () => {
 	const historyEntry = {
 		...baseEntry,
+		typeId: HISTORY_TYPE_ID,
 		year: 5,
 		month: 3,
 		day: null,
@@ -98,7 +252,7 @@ describe("mapHistoryEntry", () => {
 	}
 
 	test("maps history-specific fields under serenepub", () => {
-		const mapped = mapHistoryEntry(historyEntry, 0, 1, [])
+		const mapped = mapEntry(historyEntry, 0, { localId: 1 })
 		expect(mapped.extensions.serenepub).toEqual({
 			entryType: "history",
 			localId: 1,
@@ -120,12 +274,12 @@ describe("mapHistoryEntry", () => {
 				mentionedCharacters: []
 			}
 		]
-		const mapped = mapHistoryEntry(historyEntry, 0, 1, scenes)
+		const mapped = mapEntry(historyEntry, 0, { localId: 1, scenes })
 		expect(mapped.extensions.serenepub.scenes).toEqual(scenes)
 	})
 
 	test("omits scenes key entirely when there are none", () => {
-		const mapped = mapHistoryEntry(historyEntry, 0, 1, [])
+		const mapped = mapEntry(historyEntry, 0, { localId: 1, scenes: [] })
 		expect(mapped.extensions.serenepub.scenes).toBeUndefined()
 	})
 })
@@ -139,11 +293,18 @@ describe("buildSpecV3Lorebook", () => {
 				uuid: "abc-123",
 				extraJson: {}
 			},
-			[{ ...baseEntry, id: 1, category: null, position: 0 }],
-			[{ ...baseEntry, id: 2, position: 0, lorebookBindingId: null }],
 			[
+				{ ...baseEntry, id: 1, category: null, position: 0 },
 				{
 					...baseEntry,
+					typeId: CHARACTER_LORE_TYPE_ID,
+					id: 2,
+					position: 0,
+					lorebookBindingId: null
+				},
+				{
+					...baseEntry,
+					typeId: HISTORY_TYPE_ID,
 					id: 3,
 					position: 0,
 					year: 1,
@@ -163,9 +324,15 @@ describe("buildSpecV3Lorebook", () => {
 	test("resolves character-entry bindingLocalId via the provided map", () => {
 		const book = buildSpecV3Lorebook(
 			{ name: "Book", description: "", uuid: "u1", extraJson: {} },
-			[],
-			[{ ...baseEntry, id: 2, position: 0, lorebookBindingId: 42 }],
-			[],
+			[
+				{
+					...baseEntry,
+					typeId: CHARACTER_LORE_TYPE_ID,
+					id: 2,
+					position: 0,
+					lorebookBindingId: 42
+				}
+			],
 			new Map([[42, 7]])
 		)
 		expect(book.entries[0].extensions.serenepub.bindingLocalId).toBe(7)
@@ -174,11 +341,10 @@ describe("buildSpecV3Lorebook", () => {
 	test("assigns history entries a synthetic sequential localId, not the real DB id", () => {
 		const book = buildSpecV3Lorebook(
 			{ name: "Book", description: "", uuid: "u1", extraJson: {} },
-			[],
-			[],
 			[
 				{
 					...baseEntry,
+					typeId: HISTORY_TYPE_ID,
 					id: 999,
 					position: 0,
 					year: 1,
@@ -195,8 +361,6 @@ describe("buildSpecV3Lorebook", () => {
 	test("includes uuid and version in top-level extensions.serenepub", () => {
 		const book = buildSpecV3Lorebook(
 			{ name: "Book", description: "", uuid: "the-uuid", extraJson: {} },
-			[],
-			[],
 			[]
 		)
 		expect(book.extensions).toEqual({
@@ -216,8 +380,6 @@ describe("buildSpecV3Lorebook", () => {
 					recursiveScanning: true
 				}
 			},
-			[],
-			[],
 			[]
 		)
 		expect(book.scan_depth).toBe(15)

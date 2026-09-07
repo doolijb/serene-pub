@@ -11,36 +11,36 @@
  *    ses-only (`requiresV8`).
  * A bundle that loads on neither is rejected — there is nothing to run.
  *
- * The probe invokes a hook that cannot exist: the runtime evaluates the whole
+ * The probe invokes a hook that cannot exist: the sandbox evaluates the whole
  * bundle to build its hooks map, then reports `missing`. So `missing` means the
  * bundle evaluated cleanly; an `error`/`load`/`timeout` outcome is a genuine
  * load failure on that backend, carried back as the issue. (This catches
  * *load-time* incompatibility; per-hook runtime SES-hostility is a deeper check
- * for later — the runtime still contains it at call time.)
+ * for later — the sandbox still contains it at call time.)
  */
 
 import { createHash } from "node:crypto"
-import { QuickJsRuntime } from "./QuickJsRuntime"
-import { SesWorkerRuntime } from "./SesWorkerRuntime"
-import type { PluginRuntime, RuntimeKind } from "./types"
+import { QuickJsSandbox } from "./QuickJsSandbox"
+import { SesWorkerSandbox } from "./SesWorkerSandbox"
+import type { PluginSandbox, SandboxKind } from "./types"
 
 export interface ConformanceResult {
 	/** Backends the bundle loaded cleanly on — the compiled `backends` fact. */
-	backends: RuntimeKind[]
+	backends: SandboxKind[]
 	/** Why a backend was excluded, keyed by backend. */
-	issues: Partial<Record<RuntimeKind, string>>
+	issues: Partial<Record<SandboxKind, string>>
 }
 
 export async function checkConformance(
 	bundleSource: string
 ): Promise<ConformanceResult> {
 	const hash = createHash("sha256").update(bundleSource, "utf8").digest("hex")
-	const backends: RuntimeKind[] = []
-	const issues: Partial<Record<RuntimeKind, string>> = {}
+	const backends: SandboxKind[] = []
+	const issues: Partial<Record<SandboxKind, string>> = {}
 
-	const runners: [RuntimeKind, () => PluginRuntime][] = [
-		["quickjs", () => new QuickJsRuntime()],
-		["ses", () => new SesWorkerRuntime()]
+	const runners: [SandboxKind, () => PluginSandbox][] = [
+		["quickjs", () => new QuickJsSandbox()],
+		["ses", () => new SesWorkerSandbox()]
 	]
 
 	for (const [kind, make] of runners) {

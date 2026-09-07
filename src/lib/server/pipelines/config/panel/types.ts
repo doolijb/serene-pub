@@ -276,7 +276,13 @@ export interface NamedConfigSummary {
 	name: string
 	isDefault: boolean
 	readOnly: boolean
-	/** Whether a non-admin may choose this preset. Admin's site-wide switch. */
+	/**
+	 * Whether a non-admin may choose this preset. Admin's site-wide switch.
+	 *
+	 * Only ever `false` in an admin's view: a withdrawn configuration is not
+	 * listed for anyone else (R8 — people choose from the curated set), so a
+	 * non-admin never receives one to render.
+	 */
 	enabled: boolean
 	/**
 	 * Which of the mode's actions sessions on this preset include (19 §3).
@@ -333,6 +339,14 @@ export interface NamespaceView extends NamespaceSummary {
 		origin: "companion" | "attachment"
 	}[]
 	selectedConfig: { id: number; name: string; source: string } | null
+	/**
+	 * Whether this viewer may change the selection from here (R8).
+	 *
+	 * False for a non-admin outside a session: the selection they would be
+	 * making is the instance's, and that one is the administrator's. The panel
+	 * shows what is selected instead of offering a control that is refused.
+	 */
+	canSelectConfig: boolean
 	steps: ConfigStep[]
 	writeScope: WriteScope
 }

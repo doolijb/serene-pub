@@ -26,6 +26,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
+import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -83,8 +84,8 @@ describe("scenes:create/update — participantCharacters/mentionedCharacters sco
 			.values({ name: "Scene Lorebook", userId: owner.id })
 			.returning()
 		const [historyEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id }]))
 			.returning()
 
 		const boundChar = await makeCharacter(owner.id, "Bound Character")
@@ -138,8 +139,8 @@ describe("scenes:create/update — participantCharacters/mentionedCharacters sco
 			.values({ name: "NPC Lorebook", userId: owner.id })
 			.returning()
 		const [historyEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id }]))
 			.returning()
 		// characterId NULL — a discovered character, the shape the old
 		// characterId-based filter could never match and always erased.
@@ -180,8 +181,8 @@ describe("scenes:create/update — participantCharacters/mentionedCharacters sco
 			.values({ name: "Scene Lorebook 2", userId: owner.id })
 			.returning()
 		const [historyEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id }]))
 			.returning()
 		const boundChar = await makeCharacter(owner.id, "Bound Character 2")
 		const [localBinding] = await testDb

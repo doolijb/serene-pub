@@ -31,10 +31,9 @@ import { registerNarratorPromptConfigHandlers } from "./narratorPromptConfigs"
 import { registerGraphBuildConfigHandlers } from "./graphBuildConfigs"
 import { registerUserHandlers } from "./users"
 import { registerUserSettingsHandlers } from "./userSettings"
+import { registerLanguageHandlers } from "./language"
 import { registerLorebookHandlers } from "./lorebooks"
-import { registerWorldLoreEntryHandlers } from "./worldLoreEntries"
-import { registerCharacterLoreEntryHandlers } from "./characterLoreEntries"
-import { registerHistoryEntryHandlers } from "./historyEntries"
+import { registerEntryHandlers } from "./entries"
 import { registerMediaHandlers } from "./media"
 import { registerTagHandlers } from "./tags"
 import { registerSystemSettingsHandlers } from "./systemSettings"
@@ -61,6 +60,7 @@ import { registerAccountHandlers } from "./account"
 import { registerInviteHandlers } from "./invites"
 import { isBlockedDuringSetup } from "$lib/server/auth/setupGate"
 import { archivedWrite } from "./legacyArchive"
+import { redactConnections } from "$lib/server/connections/visibility"
 
 export function connectSockets(io: {
 	on: (arg0: string, arg1: (socket: any) => void) => void
@@ -85,13 +85,29 @@ export function connectSockets(io: {
 		socket.join("user_" + userId)
 
 		// Helper to emit to this socket's own user room
+		//
+		// Connections are redacted HERE rather than in each handler, for the
+		// same reason as the setup gate and the archive check below: a handler
+		// added later cannot forget a rule it never had to know about. The
+		// review card is what forgetting looks like — every connection WRITE
+		// was guarded, and a read-shaped surface handed a non-admin the blob
+		// anyway (see `connections/visibility.ts`).
+		//
+		// The room is this socket's own user, so `socket.user` is the
+		// recipient. Demotion force-disconnects that user's sockets
+		// (`users.privilegeRevocation.int.test.ts`), so the flag cannot go
+		// stale under a live connection.
 		function emitToUser(event: string, data: any) {
-			io.to("user_" + userId).emit(event, data)
+			io.to("user_" + userId).emit(
+				event,
+				redactConnections(data, socket.user)
+			)
 		}
 
 		// Register all handlers by module
 		registerUserHandlers(socket, emitToUser, register)
 		registerUserSettingsHandlers(socket, emitToUser, register)
+		registerLanguageHandlers(socket, emitToUser, register)
 		registerSamplingConfigHandlers(socket, emitToUser, register)
 		registerConnectionHandlers(socket, emitToUser, register)
 		registerConnectionDefaultsHandlers(socket, emitToUser, register)
@@ -110,9 +126,7 @@ export function connectSockets(io: {
 		registerSummarizePromptConfigHandlers(socket, emitToUser, register)
 		registerSessionHandlers(socket, emitToUser, register)
 		registerLorebookHandlers(socket, emitToUser, register)
-		registerWorldLoreEntryHandlers(socket, emitToUser, register)
-		registerCharacterLoreEntryHandlers(socket, emitToUser, register)
-		registerHistoryEntryHandlers(socket, emitToUser, register)
+		registerEntryHandlers(socket, emitToUser, register)
 		registerTagHandlers(socket, emitToUser, register)
 		registerMediaHandlers(socket, emitToUser, register)
 		registerSummarizeHandlers(socket, emitToUser, register)

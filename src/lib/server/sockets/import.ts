@@ -1,5 +1,14 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
+import {
+	WORLD_LORE_TYPE_ID,
+	entryInsert,
+	inBookOfType
+} from "$lib/server/utils/lorebookEntries"
+import {
+	mapImportedEntry,
+	normalizeNativeWorldInfoEntry
+} from "$lib/server/utils/lorebookImportMapper"
 import { insertLegacy } from "$lib/server/messages/store"
 import type { Handler } from "$lib/shared/events"
 import * as fsPromises from "fs/promises"
@@ -684,29 +693,36 @@ export const importExecuteSillyTavern: Handler<
 						characterIdToLorebookId.set(newChar.id, lbId)
 						// Only insert entries for a freshly created lorebook
 						const entryCount = await db.$count(
-							schema.worldLoreEntries,
-							eq(schema.worldLoreEntries.lorebookId, lbId)
+							schema.lorebookEntries,
+							inBookOfType(lbId, WORLD_LORE_TYPE_ID)
 						)
 						if (entryCount === 0) {
+							let position = 0
 							for (const entry of d.character_book.entries) {
-								await db
-									.insert(schema.worldLoreEntries)
-									.values({
-										lorebookId: lbId,
-										name: entry.comment || entry.name || "",
-										keys: Array.isArray(entry.keys)
-											? entry.keys.join(", ")
-											: "",
-										content: entry.content ?? "",
-										enabled: entry.enabled !== false,
-										constant: entry.constant ?? false,
-										priority:
-											entry.priority ??
-											entry.insertion_order ??
-											1,
-										caseSensitive:
-											entry.case_sensitive ?? false
+								await db.insert(schema.lorebookEntries).values(
+									entryInsert({
+										typeId: WORLD_LORE_TYPE_ID,
+										// The identical CCv2/V3 shape
+										// `lorebooks:import` maps, so it
+										// runs the identical mapper —
+										// key-shape regex detection,
+										// declared whole-word intent, the
+										// preserved `extensions` bag and
+										// the 1-3 priority clamp all come
+										// from there rather than from a
+										// second copy of the rules here.
+										...(mapImportedEntry(
+											entry,
+											WORLD_LORE_TYPE_ID,
+											// `position` has no column
+											// default on the one table and
+											// is unique per (lorebook,
+											// type).
+											position++
+										) as any),
+										lorebookId: lbId
 									})
+								)
 							}
 						}
 					}
@@ -819,19 +835,36 @@ export const importExecuteSillyTavern: Handler<
 							entries.length,
 							`Lorebook "${lbName}"`
 						)
+						let position = 0
 						for (const entry of entries) {
-							await db.insert(schema.worldLoreEntries).values({
-								lorebookId: lbId,
-								name: entry.comment ?? "",
-								keys: Array.isArray(entry.key)
-									? entry.key.join(", ")
-									: "",
-								content: entry.content ?? "",
-								enabled: !entry.disable,
-								constant: entry.constant ?? false,
-								priority: entry.order ?? 1,
-								caseSensitive: entry.caseSensitive ?? false
-							})
+							await db.insert(schema.lorebookEntries).values(
+								entryInsert({
+									typeId: WORLD_LORE_TYPE_ID,
+									// ST's *native* World Info shape: the
+									// same facts as a `character_book`
+									// entry under different names, so it is
+									// renamed once and then mapped by the
+									// same function everything else is.
+									//
+									// ⚠ `entry.order` no longer becomes
+									// `priority`. It is ST's insertion
+									// index, defaulting to 100, so clamping
+									// it into Serene Pub's 1-3 band read
+									// "every imported entry is maximum
+									// priority" — a fact the file never
+									// stated. Native World Info declares no
+									// priority, so imported entries take
+									// the mapper's default of 1, which is
+									// what the same book already gets
+									// through `lorebooks:import`.
+									...(mapImportedEntry(
+										normalizeNativeWorldInfoEntry(entry),
+										WORLD_LORE_TYPE_ID,
+										position++
+									) as any),
+									lorebookId: lbId
+								})
+							)
 						}
 					}
 				} catch (e) {

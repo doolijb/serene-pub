@@ -8,9 +8,9 @@
 import { describe, it, expect, afterEach } from "vitest"
 import { compileManifest } from "@serene-pub/cli/sandbox"
 import { bundlePlugin } from "@serene-pub/cli/sandbox-bundle"
-import { QuickJsRuntime } from "./QuickJsRuntime"
-import { SesWorkerRuntime } from "./SesWorkerRuntime"
-import type { PluginRuntime } from "./types"
+import { QuickJsSandbox } from "./QuickJsSandbox"
+import { SesWorkerSandbox } from "./SesWorkerSandbox"
+import type { PluginSandbox } from "./types"
 
 describe("manifest compiler", () => {
 	it("compiles and normalizes a valid declaration", () => {
@@ -79,7 +79,7 @@ describe("manifest compiler", () => {
 	})
 })
 
-const rts: PluginRuntime[] = []
+const rts: PluginSandbox[] = []
 afterEach(async () => {
 	await Promise.all(rts.splice(0).map((r) => r.dispose()))
 })
@@ -93,8 +93,8 @@ describe("bundler", () => {
 		`
 		const bundle = await bundlePlugin({ source })
 		for (const make of [
-			() => new QuickJsRuntime(),
-			() => new SesWorkerRuntime()
+			() => new QuickJsSandbox(),
+			() => new SesWorkerSandbox()
 		]) {
 			const rt = make()
 			rts.push(rt)

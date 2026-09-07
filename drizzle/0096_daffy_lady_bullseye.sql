@@ -1,1 +1,0 @@
-ALTER TABLE "context_configs" ADD COLUMN "engine" text;

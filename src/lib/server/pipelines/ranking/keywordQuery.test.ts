@@ -1,11 +1,11 @@
 /**
- * The keyword arm.
+ * The keyword mechanism.
  *
  * The assertions to read are the ones about `skipped`. A retrieval stage that
  * returns only its hits cannot distinguish "nothing matched" from "your entry
- * is disabled" from "this entry is set to rag" — three different user problems
- * with three different fixes, and today all three present identically as
- * missing lore.
+ * is disabled" from "its condition said not here" — different user problems
+ * with different fixes, and without a receipt all of them present identically
+ * as missing lore.
  */
 
 import { describe, it, expect } from "vitest"
@@ -33,9 +33,7 @@ const run = (
 	keywordQuery({
 		entries,
 		messages: contents.map((content, i) => ({ id: i + 1, content })),
-		entityNames: [],
 		retrieval: DEFAULT_RETRIEVAL,
-		availability: { vectorSearchAvailable: false },
 		countTokens: (text) => Math.ceil(text.length / 4),
 		...over
 	})
@@ -100,33 +98,34 @@ describe("what it declines, and why", () => {
 		)
 	})
 
-	it("an entry belonging to the other arm says so rather than looking absent", () => {
-		const r = run([entry({ retrievalStrategy: "rag" })], ["ashguard"], {
-			availability: { vectorSearchAvailable: true }
-		})
-		expect(r.candidates).toHaveLength(0)
-		expect(r.skipped[0]!.reason).toMatch(/vector search/)
-	})
-
-	it("a rag entry falls back to this arm when there are no embeddings", () => {
-		const r = run([entry({ retrievalStrategy: "rag" })], ["ashguard"], {
-			availability: { vectorSearchAvailable: false }
-		})
-		expect(r.candidates).toHaveLength(1)
-	})
-
-	it("a keyword-only entry is considered whether or not vectors exist", () => {
-		for (const vectorSearchAvailable of [true, false]) {
-			const r = run(
-				[entry({ retrievalStrategy: "keyword" })],
-				["ashguard"],
-				{
-					availability: { vectorSearchAvailable }
-				}
-			)
-			expect(r.candidates).toHaveLength(1)
-		}
-	})
+	/**
+	 * ⚠ **Two governing-rule tests stood here and are deleted, with a reason.**
+	 *
+	 * > *An unavailable mechanism subtracts a signal. It never reroutes,
+	 * > disables a path, or excludes a candidate. Adding a model may only add
+	 * > matches; removing one may only lose them.*
+	 *
+	 * They ran the same fixture twice over an `availability` input — once with
+	 * an embedding model, once without — and asserted the two answers matched.
+	 * That input no longer exists. Migration 0204 dropped
+	 * `lorebook_entries.retrieval_strategy` and the eligibility check that read
+	 * it, and `availability` went with the check because it had no other reader,
+	 * so this mechanism is not *told* whether a model is loaded and has nothing left
+	 * to branch on.
+	 *
+	 * Rewriting them was the alternative and there was nothing to rewrite them
+	 * to: with one behaviour for every entry, both loops assert that a pure
+	 * function returns the same answer twice for the same arguments. The
+	 * property is now held by the type — a call site that starts passing
+	 * availability fails `npm run check` — and by the header of
+	 * `ranking/strategy.ts`, which says what the field was and why it must not
+	 * come back.
+	 *
+	 * Where the rule is still observable it is still asserted end to end:
+	 * `runtime/semanticArm.int.test.ts` runs the shipped spec through all three
+	 * availability states, and `runtime/retrieval.int.test.ts` turns a model on
+	 * between two executions of the same fixture and compares what came back.
+	 */
 })
 
 describe("constant entries", () => {
@@ -135,7 +134,7 @@ describe("constant entries", () => {
 		expect(r.candidates[0]!.pinned).toBe(true)
 	})
 
-	it("still pass through this arm, so the receipt shows where they came from", () => {
+	it("still pass through this mechanism, so the receipt shows where they came from", () => {
 		// Rather than being injected downstream from nowhere, which is what makes
 		// a pinned entry look like a bug to whoever is reading the run.
 		const r = run([entry({ constant: true, keys: "" })], ["unrelated"])
@@ -146,11 +145,32 @@ describe("constant entries", () => {
 		const r = run([entry({ constant: true, enabled: false })], ["x"])
 		expect(r.candidates).toHaveLength(0)
 	})
+
+	it("are not also reported as skipped, which would say two things at once", () => {
+		// `considered` is candidates plus skips at the binding, so an entry in
+		// both is counted twice as well as read as declined.
+		const r = run([entry({ constant: true, keys: "" })], ["unrelated"])
+		expect(r.skipped).toEqual([])
+	})
+
+	it("a non-constant entry still needs a match", () => {
+		// The admission gate itself still stands; `constant` is the only thing
+		// above it.
+		//
+		// ⚠ Three tests here used to state this over `retrievalStrategy` values
+		// — that a constant entry was pinned "whichever mechanism its strategy names",
+		// and that a `keyword` one was unaffected by availability. The column is
+		// gone (migration 0204), and with one behaviour for every entry those
+		// were the same case written three ways.
+		const r = run([entry({ keys: "banner" })], ["ashguard"])
+		expect(r.candidates).toHaveLength(0)
+		expect(r.skipped[0]!.reason).toMatch(/no key matched/)
+	})
 })
 
 describe("tf-idf normalisation", () => {
-	it("is deferred to the pool, because two arms share it", () => {
-		// Normalising inside one arm would normalise against that arm alone and
+	it("is deferred to the pool, because two mechanisms share it", () => {
+		// Normalising inside one mechanism would normalise against that mechanism alone and
 		// make the two incomparable — the engine scores twice for this reason.
 		const r = run(
 			[
@@ -362,5 +382,367 @@ describe("entries from different tables can share an id", () => {
 		expect(
 			new Set(r.candidates.map((c) => `${c.source}:${c.id}`)).size
 		).toBe(3)
+	})
+})
+
+/**
+ * Two co-occurrence definitions, one per source.
+ *
+ * 0.5 asked world lore whether the *entry* named a cast member
+ * (`KeywordInfillEngine:1111`), and character lore whether the entry's own
+ * character **spoke in the guaranteed window** (`:1161-1175`). One function
+ * answered both for a while, so character lore got the world-lore answer —
+ * which a character-lore entry satisfies by construction, since it names its
+ * own character.
+ *
+ * ⚠ **The world-lore half is a different measurement now** (plan phase 3): the
+ * graded, rarity-weighted, word-boundary, two-sided overlap `evidence` computes,
+ * in place of a binary substring test against a list of cast names. The split
+ * itself is what these assertions hold — the two sources still answer two
+ * questions, and `signalEntityCooccurrence` is weighted per source because of
+ * it.
+ */
+describe("co-occurrence is source-specific", () => {
+	const spoke = (characterId: number | null) => ({ characterId })
+
+	const alice = [
+		{ name: "Alice", ref: { kind: "character" as const, id: 7 } }
+	]
+
+	const scan = (
+		entries: LoreRow[],
+		messages: Array<{
+			id: number
+			content: string
+			characterId: number | null
+		}>,
+		entityRefs = alice
+	) =>
+		keywordQuery({
+			entries,
+			messages,
+			entityRefs,
+			retrieval: DEFAULT_RETRIEVAL,
+			countTokens: (text) => Math.ceil(text.length / 4)
+		})
+
+	const messages = [
+		{ id: 1, content: "who guards the gate?", ...spoke(null) },
+		{ id: 2, content: "the ashguard do", ...spoke(7) }
+	]
+
+	it("world lore asks what the conversation and the entry both name", () => {
+		const r = scan(
+			[
+				entry({ id: 1, name: "The Ashguard" }),
+				// Named after a cast member the conversation never mentions.
+				// **0.5 scored this 1** — the old signal only looked at the
+				// entry's side — and that one-sidedness is design §13.6's third
+				// named defect.
+				entry({
+					id: 2,
+					name: "Alice at the Vigil",
+					keys: "ashguard",
+					content: "Alice keeps a watch of her own."
+				})
+			],
+			messages
+		)
+		const scored = Object.fromEntries(
+			r.candidates.map((c) => [c.id, c.signals.entityCooccurrence!])
+		)
+		// Both name what the scene names, so both score.
+		expect(scored[1]).toBeGreaterThan(0)
+		// And the entry that *also* names Alice gains nothing for it, because
+		// the conversation never said her name.
+		expect(scored[2]).toBeCloseTo(scored[1]!, 10)
+	})
+
+	it("is graded, not binary: a rarer shared name is worth more", () => {
+		// `gate` is named by one entry, `ashguard` by three, and the window
+		// names both. The rarity weight is what makes the first worth more —
+		// the old signal returned 1 on the first hit whatever it hit.
+		const rows = [
+			entry({
+				id: 1,
+				name: "The Gate",
+				keys: "gate",
+				content: "A gate."
+			}),
+			entry({ id: 2, name: "The Ashguard", content: "Riders." }),
+			entry({ id: 3, name: "Ashguard Oaths", content: "Ashguard vows." }),
+			entry({ id: 4, name: "Ashguard Roads", content: "Ashguard paths." })
+		]
+		const r = scan(rows, [
+			{ id: 1, content: "the ashguard rode to the gate", ...spoke(null) }
+		])
+		const scored = Object.fromEntries(
+			r.candidates.map((c) => [c.id, c.signals.entityCooccurrence!])
+		)
+		expect(scored[1]).toBeGreaterThan(scored[2]!)
+	})
+
+	it("respects word boundaries: `Al` does not fire on `Alchemy`", () => {
+		// The second of design §13.6's three defects. The old signal matched by
+		// substring, so a short cast name scored against nearly every entry.
+		const r = scan(
+			[
+				entry({
+					id: 1,
+					name: "Alchemy",
+					keys: "flask",
+					content: "Vials."
+				})
+			],
+			[{ id: 1, content: "Al went north", ...spoke(null) }],
+			[{ name: "Al", ref: { kind: "character" as const, id: 7 } }]
+		)
+		expect(r.candidates).toEqual([])
+	})
+
+	it("character lore asks whether its own character spoke", () => {
+		const r = scan(
+			[
+				// Bound to the character who just spoke.
+				entry({
+					id: 1,
+					source: "characterLore",
+					name: "Alice's oath",
+					bindingCharacterId: 7
+				}),
+				// Bound to one who did not, and named after a cast member — the
+				// world-lore question would score this above zero.
+				entry({
+					id: 2,
+					source: "characterLore",
+					name: "Alice remembers",
+					bindingCharacterId: 9
+				})
+			],
+			messages
+		)
+		expect(
+			r.candidates.map((c) => [c.id, c.signals.entityCooccurrence])
+		).toEqual([
+			[1, 1],
+			[2, 0]
+		])
+	})
+
+	it("a character-lore entry bound to a persona or to nobody scores zero", () => {
+		const r = scan(
+			[
+				entry({
+					id: 1,
+					source: "characterLore",
+					name: "Alice's oath",
+					bindingCharacterId: null
+				})
+			],
+			messages
+		)
+		expect(r.candidates[0]!.signals.entityCooccurrence).toBe(0)
+	})
+
+	it("the speaker window is the guaranteed one, not the whole session", () => {
+		const older = Array.from({ length: 12 }, (_, i) => ({
+			id: 100 + i,
+			content: "the ashguard rode on",
+			...spoke(i === 0 ? 7 : 9)
+		}))
+		const r = scan(
+			[
+				entry({
+					id: 1,
+					source: "characterLore",
+					name: "Alice's oath",
+					bindingCharacterId: 7
+				})
+			],
+			older
+		)
+		// Character 7 spoke twelve messages ago; the guaranteed window is ten.
+		expect(r.candidates[0]!.signals.entityCooccurrence).toBe(0)
+	})
+})
+
+// ── Retrieval plan phase 1 — lexical quality ────────────────────────────────
+
+describe("selective logic — found, and then excluded", () => {
+	const conditioned = (over: Partial<LoreRow> = {}) =>
+		entry({
+			keys: "dragon",
+			secondaryKeys: "statue",
+			selectiveLogic: "notAny",
+			...over
+		})
+
+	it("fires when the condition is satisfied", () => {
+		const r = run([conditioned()], ["a dragon crossed the bridge"])
+		expect(r.candidates.map((c) => c.id)).toEqual([1])
+		expect(r.skipped).toEqual([])
+	})
+
+	it("is excluded, not scored down, when the condition fails", () => {
+		const r = run([conditioned()], ["a dragon carved into the statue"])
+		expect(
+			r.candidates,
+			"a rule the author wrote must exclude, not merely rank low — a " +
+				"zero-scored candidate is still a candidate"
+		).toEqual([])
+		expect(r.diagnostics.matched).toBe(0)
+		expect(r.skipped).toHaveLength(1)
+		expect(r.skipped[0]!.kind).toBe("excluded")
+		// Names the *secondary* keys, because the primary ones worked — a
+		// receipt that only said "condition failed" sends somebody to look at
+		// the wrong half of their own entry.
+		expect(r.skipped[0]!.reason).toContain("its keywords matched")
+		expect(r.skipped[0]!.reason).toContain("statue")
+	})
+
+	it("says nothing at all when the entry never matched anyway", () => {
+		const r = run([conditioned()], ["a statue of a horse"])
+		expect(r.candidates).toEqual([])
+		expect(r.skipped[0]!.kind).toBe("missed")
+		expect(r.skipped[0]!.reason).toContain("no key matched")
+	})
+
+	it("a pinned entry keeps bypassing retrieval entirely", () => {
+		// `constant` means bypass retrieval (design §11), and a condition
+		// evaluated against a window is retrieval.
+		const r = run(
+			[conditioned({ constant: true })],
+			["a dragon carved into the statue"]
+		)
+		expect(r.candidates.map((c) => c.id)).toEqual([1])
+		expect(r.candidates[0]!.pinned).toBe(true)
+	})
+
+	it("an entry with no condition is untouched by any of it", () => {
+		const r = run([entry()], ["the ashguard rode north"])
+		expect(r.candidates).toHaveLength(1)
+		expect(r.skipped).toEqual([])
+	})
+})
+
+describe("trigram folding reaches the scan", () => {
+	const rows = [entry({ id: 1, name: "Riders", keys: "riders" })]
+
+	it("finds nothing extra while it is off", () => {
+		expect(run(rows, ["the rider rode north"]).candidates).toEqual([])
+	})
+
+	it("admits a near-miss once it is on, and says how near", () => {
+		const r = run(rows, ["the rider rode north"], {
+			retrieval: { ...DEFAULT_RETRIEVAL, trigramFolding: 0.5 }
+		})
+		expect(r.candidates.map((c) => c.id)).toEqual([1])
+		const signal = r.candidates[0]!.signals.keyword!
+		expect(signal).toBeGreaterThan(0)
+		expect(signal).toBeLessThan(1)
+	})
+
+	it("leaves an exact hit at exactly 1", () => {
+		const r = run(rows, ["the riders rode north"], {
+			retrieval: { ...DEFAULT_RETRIEVAL, trigramFolding: 1 }
+		})
+		expect(r.candidates[0]!.signals.keyword).toBe(1)
+	})
+})
+
+describe("proximity rides along with the key walk", () => {
+	const rows = [entry({ keys: "ashguard, riders" })]
+
+	it("is higher when the keys landed together", () => {
+		const near = run(rows, ["the ashguard riders rode north"])
+		const far = run(rows, [
+			`the ashguard rode north ${"and on ".repeat(40)} riders`
+		])
+		expect(near.candidates[0]!.signals.proximity!).toBeGreaterThan(
+			far.candidates[0]!.signals.proximity!
+		)
+	})
+
+	it("is computed whether or not anything weights it", () => {
+		// The number is free — it falls out of the walk the scan was already
+		// doing — so it is always present and only the weight decides whether
+		// it counts. A signal nothing can read the value of is a signal nobody
+		// can decide to weight.
+		const r = run(rows, ["the ashguard riders rode north"])
+		expect(r.candidates[0]!.signals.proximity).toBeGreaterThan(0)
+	})
+})
+
+describe("the lexical reading is a switch, not an edit", () => {
+	/**
+	 * Six messages, not two.
+	 *
+	 * `buildIdf` is `log(N / (1 + df))`, so on a two-message conversation every
+	 * term the window contains has an idf of zero or below and the whole signal
+	 * is 0 or negative — a fixture that cannot move, which is exactly what
+	 * design §10.1 says to check for before banking a pass.
+	 */
+	const messages = [
+		"who keeps those wastes?",
+		"ashguard do",
+		"a quiet night",
+		"wastes are cold",
+		"we rode home",
+		"fine then"
+	]
+
+	const long = entry({
+		id: 1,
+		name: "A Long Ashguard Entry",
+		keys: "ashguard, ashguard, ashguard, wardens, oathbound, patrol, commander"
+	})
+	const precise = entry({ id: 2, name: "Ashguard", keys: "ashguard" })
+
+	const scoresOf = (retrieval: typeof DEFAULT_RETRIEVAL) =>
+		Object.fromEntries(
+			run([long, precise], messages, { retrieval }).candidates.map(
+				(c) => [c.id, c.signals.tfidf!]
+			)
+		)
+
+	it("ships the reading it always had", () => {
+		const overlap = scoresOf(DEFAULT_RETRIEVAL)
+		// The long, repetitive entry wins on the unsaturated sum, which is the
+		// shape the change exists to correct — asserted so the switch has
+		// something to switch away from.
+		expect(overlap[1]!).toBeGreaterThan(overlap[2]!)
+	})
+
+	it("balances saturation and length once it is switched", () => {
+		const balanced = scoresOf({
+			...DEFAULT_RETRIEVAL,
+			lexicalScoring: "balanced"
+		})
+		expect(balanced[2]!).toBeGreaterThan(balanced[1]!)
+	})
+
+	it("a title weight of 1 changes nothing at all", () => {
+		expect(scoresOf({ ...DEFAULT_RETRIEVAL, titleWeight: 1 })).toEqual(
+			scoresOf(DEFAULT_RETRIEVAL)
+		)
+	})
+
+	it("a raised title weight lifts the entry whose title says it", () => {
+		// Identical bags of words, opposite fields, and the two terms carry
+		// different weight in the conversation — so at 1 they tie and only the
+		// field weighting can separate them.
+		const titled = entry({ id: 3, name: "wastes", keys: "ashguard" })
+		const keyed = entry({ id: 4, name: "ashguard", keys: "wastes" })
+		const of = (titleWeight: number) =>
+			Object.fromEntries(
+				run([titled, keyed], messages, {
+					retrieval: { ...DEFAULT_RETRIEVAL, titleWeight }
+				}).candidates.map((c) => [c.id, c.signals.tfidf!])
+			)
+		const neutral = of(1)
+		expect(neutral[3]!).toBeCloseTo(neutral[4]!, 12)
+		expect(neutral[3]!).toBeGreaterThan(0)
+		const weighted = of(3)
+		expect(weighted[3]!).toBeGreaterThan(weighted[4]!)
 	})
 })

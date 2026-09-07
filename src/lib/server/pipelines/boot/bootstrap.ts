@@ -34,6 +34,13 @@
  */
 
 import { allTypes, allScriptTypes } from "@serene-pub/sdk"
+// Core's **entry** types are declared in the catalog rather than the
+// contracts, and declaring one registers it — so this import is what puts
+// them in `allTypes()` below. The catalog is already loaded by way of
+// `specs/respond`; naming it here is the difference between a dependency
+// and a coincidence, and the failure it prevents is quiet (a fresh install
+// with no entry rows and nothing saying why).
+import "@serene-pub/core-catalog"
 import {
 	seedCoreSpecs,
 	syncEventRegistry,
@@ -56,6 +63,10 @@ import {
 	syncTypeRegistry,
 	TypeRegistryConflictError
 } from "$lib/server/pipelines/boot/registrySync"
+import {
+	projectEntryConstraints,
+	type EntryProjectionReport
+} from "$lib/server/pipelines/boot/entryProjection"
 import { seedVariableTemplates } from "$lib/server/pipelines/boot/seedVariableTemplates"
 import { seedContextTemplates } from "$lib/server/pipelines/boot/seedContextTemplates"
 import {
@@ -78,6 +89,13 @@ export interface BootstrapReport {
 	migration: FullMigrationReport
 	/** What each scope's legacy context config became, and what that pinned. */
 	contextTemplateMigration: ContextTemplateMigrationReport
+	/**
+	 * What each entry type's declared schema became in the database — the CHECK
+	 * constraints and indexes projected from `config_schema`, plus the rows that
+	 * violate one. Absent only when the registry refused, since a projection
+	 * derived from types core just declined to publish would describe nothing.
+	 */
+	entryProjection?: EntryProjectionReport
 	/** Set when the registry refused; the app still boots, pipelines do not run. */
 	conflict?: string
 }
@@ -118,6 +136,39 @@ export async function bootstrapPipelines(db: any): Promise<BootstrapReport> {
 		)
 		assertHookCompleteness()
 
+		// The same shape of check, one construct over: every declared entry
+		// type must name a budget band the ranker's weight map actually
+		// carries. `DEFAULT_SIGNAL_WEIGHTS` is a **total** map over a closed
+		// union, so a type declaring a sixth name is not a new band — it is
+		// candidates scored against `undefined` and dropped, **with a green
+		// parity suite and nothing in the receipt**. That already happened
+		// once: history was absent from every prompt between spec 1.8.0 and
+		// 1.10.0. It also catches the declarations failing to load at all,
+		// which is one dropped side-effectful module away.
+		const { assertEntryDeclarations } = await import(
+			"$lib/server/entries/declarations"
+		)
+		const { DEFAULT_SIGNAL_WEIGHTS } = await import(
+			"$lib/server/pipelines/ranking/weights"
+		)
+		// The same rule over the other kind of producer: a *retrieval mechanism* can
+		// claim a band no entry type declares — the entity mechanism returns
+		// transcript in `messages`, and a message is not an entry — so the
+		// mechanisms' bands go through the same assertion rather than a second one
+		// growing beside it.
+		const { RETRIEVAL_MECHANISM_BANDS } = await import(
+			"$lib/server/pipelines/ranking/entitySearch"
+		)
+		const entryFindings = assertEntryDeclarations(
+			Object.keys(DEFAULT_SIGNAL_WEIGHTS),
+			RETRIEVAL_MECHANISM_BANDS
+		)
+		if (entryFindings.length)
+			throw new Error(
+				`entry type declarations do not fit this build:\n · ` +
+					entryFindings.join("\n · ")
+			)
+
 		// Every type the running build knows about. Importing the contracts is
 		// what registers them, so this is a fact about the code rather than a
 		// list anyone maintains.
@@ -142,6 +193,17 @@ export async function bootstrapPipelines(db: any): Promise<BootstrapReport> {
 		}
 		throw err
 	}
+
+	// Straight after the type sync, and inside its success path: the projection
+	// derives DDL from the registry *rows*, so it has to run once they are in
+	// step with this build — and must not run at all when core just declined to
+	// publish them.
+	//
+	// It cannot fail the boot. Constraints are added NOT VALID and every step
+	// collects its own errors, because the alternative — a declaration change
+	// that stops the application starting — is exactly what a local-first app
+	// cannot afford.
+	report.entryProjection = await projectEntryConstraints(db)
 
 	// After the type sync and inside its success path: the DATA half of the
 	// event set is read off the same descriptors, so an event registry written

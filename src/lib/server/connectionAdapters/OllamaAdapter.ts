@@ -245,7 +245,9 @@ class OllamaAdapter extends BaseConnectionAdapter {
 
 			req = {
 				model,
-				prompt: compiledPrompt.prompt!,
+				// See `promptTextFor`: `compiledPrompt.prompt!` asserted a
+				// string that a chat-shaped payload does not carry.
+				prompt: this.promptTextFor(compiledPrompt),
 				stream,
 				think,
 				keep_alive,

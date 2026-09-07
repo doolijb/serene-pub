@@ -1,5 +1,5 @@
 /**
- * The persistence seam between the DB and the RuntimeManager.
+ * The persistence seam between the DB and the SandboxManager.
  *
  * `plugins` rows are the installed set; `loadEnabledPlugins` projects the
  * enabled ones into the descriptors the manager dispatches against.
@@ -12,8 +12,8 @@
 import { eq } from "drizzle-orm"
 import { plugins, pluginHookInvocations } from "$lib/server/db/schema"
 import { hookSettingsFor } from "./settingsHost"
-import type { InvocationRecord, PluginDescriptor } from "./RuntimeManager"
-import type { RuntimeKind } from "./types"
+import type { InvocationRecord, PluginDescriptor } from "./SandboxManager"
+import type { SandboxKind } from "./types"
 import {
 	declaredPermissions,
 	effectivePermissions,
@@ -42,8 +42,8 @@ interface PluginRow {
 function rowToDescriptor(row: PluginRow): PluginDescriptor {
 	const backends = (
 		Array.isArray(row.backends) ? row.backends : ["quickjs"]
-	).filter((b): b is RuntimeKind => b === "quickjs" || b === "ses")
-	const backend: RuntimeKind =
+	).filter((b): b is SandboxKind => b === "quickjs" || b === "ses")
+	const backend: SandboxKind =
 		row.backend === "ses" || row.backend === "quickjs"
 			? row.backend
 			: "quickjs"
@@ -57,7 +57,7 @@ function rowToDescriptor(row: PluginRow): PluginDescriptor {
 		sequential: row.sequential,
 		// Grants derive from the *effective* set (declared − admin-denied); an admin
 		// storage-quota override rides on top of the effective storage grant.
-		...capabilityGrants(row.manifest, row.adminDenied, row.storageQuotaOverride),
+		...permissionGrants(row.manifest, row.adminDenied, row.storageQuotaOverride),
 		// Manifest-declared settings, resolved for the owning hook (12 §6).
 		...(() => {
 			const s = hookSettingsFor(row.manifest, row.settings)
@@ -67,7 +67,7 @@ function rowToDescriptor(row: PluginRow): PluginDescriptor {
 }
 
 /** Storage + network grants from a row's effective permission set. */
-function capabilityGrants(
+function permissionGrants(
 	manifest: PluginManifest | null | undefined,
 	adminDenied: string[] | null | undefined,
 	storageQuotaOverride?: number | null
@@ -120,8 +120,8 @@ export interface InstallInput {
 	version?: string
 	bundleSource: string
 	bundleHash: string
-	backends: RuntimeKind[]
-	backend?: RuntimeKind
+	backends: SandboxKind[]
+	backend?: SandboxKind
 	sequential?: boolean
 	manifest?: Record<string, unknown>
 }
@@ -178,7 +178,7 @@ export async function setEnabled(
 export async function setBackendPref(
 	db: Db,
 	pluginId: string,
-	backend: RuntimeKind
+	backend: SandboxKind
 ): Promise<void> {
 	await db
 		.update(plugins)

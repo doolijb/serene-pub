@@ -13,6 +13,12 @@
  *
  * Everything below the handler is stubbed on purpose. The point is the response
  * this function builds, not the backend that fed it.
+ *
+ * The second block is a different leak on the same handler, added when
+ * connections became invisible to non-admins: this is the one endpoint that
+ * took a `connectionId` STRAIGHT from the client and rendered on it, so it was
+ * also an enumeration oracle over every connection's name and model. It is
+ * administrators only now, which is why the socket above is one.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -121,7 +127,13 @@ beforeEach(() => {
 async function generate() {
 	const { imagesGenerate } = await import("./images")
 	return imagesGenerate.handler(
-		{ user: { id: 1 } } as any,
+		// An administrator, because `images:generate` is now one: it takes a
+		// `connectionId` straight from the client and renders on it, and its
+		// only caller is the connection editor's Test Generation button. What
+		// this file is about is unchanged — an on-disk path must not reach the
+		// browser in the reply or the broadcast — and it can only be reached
+		// at all by somebody the handler will still answer.
+		{ user: { id: 1, isAdmin: true } } as any,
 		{ connectionId: 1, prompt: "a knight at dusk" },
 		(event, data) => emitted.push({ event, data })
 	)
@@ -164,5 +176,53 @@ describe("images:generate — what reaches the browser", () => {
 		// one row, and would report a fact about bytes the URL may not serve.
 		expect(res.media![0].mime).toBe("image/png")
 		expect(res.media![0].kind).toBe("image")
+	})
+})
+
+describe("images:generate — who may choose the connection", () => {
+	it("refuses a non-admin, before the id is looked up", async () => {
+		const { imagesGenerate } = await import("./images")
+		const { CONNECTION_REFUSAL } = await import(
+			"$lib/server/connections/visibility"
+		)
+
+		const refused = await imagesGenerate.handler(
+			{ user: { id: 1, isAdmin: false } } as any,
+			// A real connection id — the one the admin case above renders on.
+			{ connectionId: 1, prompt: "a knight at dusk" },
+			(event, data) => emitted.push({ event, data })
+		)
+
+		expect(refused.ok).toBe(false)
+		expect(refused.error).toBe(CONNECTION_REFUSAL)
+		expect(refused.media).toBeUndefined()
+
+		// Nothing was rendered, so no compute was spent on the
+		// administrator's backend at a stranger's request.
+		expect(
+			emitted.filter((e) => e.event === "images:progress")
+		).toHaveLength(0)
+	})
+
+	it("answers the same for an id that does not exist", async () => {
+		const { imagesGenerate } = await import("./images")
+
+		const real = await imagesGenerate.handler(
+			{ user: { id: 1, isAdmin: false } } as any,
+			{ connectionId: 1, prompt: "x" },
+			() => {}
+		)
+		const invented = await imagesGenerate.handler(
+			{ user: { id: 1, isAdmin: false } } as any,
+			{ connectionId: 999_999, prompt: "x" },
+			() => {}
+		)
+
+		// The old handler said "Connection not found." for one and named the
+		// connection in a capability refusal for the other — walk the ids and
+		// the whole table falls out. Both answers are now one sentence.
+		expect(invented.error).toBe(real.error)
+		expect(invented.error).not.toMatch(/not found/i)
+		expect(JSON.stringify(invented)).not.toContain("Local A1111")
 	})
 })

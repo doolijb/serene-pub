@@ -1,4 +1,8 @@
 <script lang="ts">
+	import {
+		HISTORY_TYPE_ID,
+		type LorebookEntry
+	} from "$lib/shared/entries/types"
 	import { onDestroy, onMount, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import * as Icons from "@lucide/svelte"
@@ -149,7 +153,7 @@
 	let pendingDeleteNodeReferencedByMergeLog = $state(false)
 
 	// History entries (for optional temporal anchoring)
-	let historyEntries = $state<SelectHistoryEntry[]>([])
+	let historyEntries = $state<LorebookEntry<typeof HISTORY_TYPE_ID>[]>([])
 
 	// Create relationship
 	let connectingFromNode = $state<NarrativeNode | null>(null)
@@ -284,12 +288,13 @@
 		isConnecting = false
 	}
 
-	function handleHistoryEntriesList(
-		msg: Sockets.HistoryEntries.List.Response
-	) {
-		if (msg.lorebookId === lorebookId) {
-			historyEntries = msg.historyEntryList
-		}
+	function handleHistoryEntriesList(msg: Sockets.Entries.List.Response) {
+		// One namespace now, so a list for some *other* tab's type arrives
+		// here too — the filter is what makes that harmless.
+		if (msg.lorebookId === lorebookId && msg.typeId === HISTORY_TYPE_ID)
+			historyEntries = msg.entryList as LorebookEntry<
+				typeof HISTORY_TYPE_ID
+			>[]
 	}
 
 	function handleLorebooksBindingList(
@@ -351,12 +356,12 @@
 			"narrativeGraph:createRelationship",
 			handleNarrativeGraphCreateRelationship
 		)
-		socket.on("historyEntries:list", handleHistoryEntriesList)
+		socket.on("entries:list", handleHistoryEntriesList)
 		socket.on("lorebooks:bindingList", handleLorebooksBindingList)
 		socket.on("narrativeGraph:mergeNode", handleNarrativeGraphMergeNode)
 		socket.on("narrativeGraph:undoMerge", handleNarrativeGraphUndoMerge)
 		socket.on("vectorization:itemUpdated", handleVectorizationItemUpdated)
-		socket.emit("historyEntries:list", { lorebookId })
+		socket.emit("entries:list", { lorebookId, typeId: HISTORY_TYPE_ID })
 		socket.emit("lorebooks:bindingList", { lorebookId })
 		load()
 	})
@@ -382,7 +387,7 @@
 			"narrativeGraph:createRelationship",
 			handleNarrativeGraphCreateRelationship
 		)
-		socket.off("historyEntries:list", handleHistoryEntriesList)
+		socket.off("entries:list", handleHistoryEntriesList)
 		socket.off("lorebooks:bindingList", handleLorebooksBindingList)
 		socket.off("narrativeGraph:mergeNode", handleNarrativeGraphMergeNode)
 		socket.off("narrativeGraph:undoMerge", handleNarrativeGraphUndoMerge)

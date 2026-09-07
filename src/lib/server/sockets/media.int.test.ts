@@ -16,7 +16,7 @@ import { beforeAll, afterAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { eq, inArray } from "drizzle-orm"
 import { PNG } from "pngjs"
 import * as schema from "$lib/server/db/schema"
 import { MediaVariant } from "$lib/shared/constants/MediaVisibility"
@@ -121,9 +121,9 @@ describe("media:list", () => {
 		// under lazy derivation, not a missing thumbnail.
 		for (const m of res.media) {
 			expect(m.variants.length).toBeGreaterThanOrEqual(1)
-			expect(
-				m.variants.some((v) => v.isOriginal && v.isDisplay)
-			).toBe(true)
+			expect(m.variants.some((v) => v.isOriginal && v.isDisplay)).toBe(
+				true
+			)
 			expect(m.storedBytes).toBeGreaterThan(0)
 		}
 		expect(res.media[0].attachedTo).toEqual({
@@ -281,7 +281,11 @@ describe("media:delete", () => {
 			.where(eq(schema.characters.id, charId))
 
 		const { emit } = captureEmits()
-		await mediaDelete.handler(fakeSocket(ownerId), { mediaId: row.id }, emit)
+		await mediaDelete.handler(
+			fakeSocket(ownerId),
+			{ mediaId: row.id },
+			emit
+		)
 
 		expect(await fileRow(row.id)).toBeNull()
 		// The one operation allowed to leave a file with no representations,
@@ -342,5 +346,285 @@ describe("rev as the cache token", () => {
 				new RegExp(`^/media/${uuid}\\?v=original&r=\\d+$`)
 			)
 		}
+	})
+})
+
+/**
+ * Provenance labels, and the two things the panel decides from them: whether a
+ * file is an orphan, and how much of the user's chat history a delete would
+ * break.
+ *
+ * The session branch used to return `name: null` unconditionally, which meant
+ * every image a live session had ever generated was captioned "orphaned" —
+ * and orphan-ness is precisely the signal the panel offers for "safe to
+ * reclaim", so the mislabel pointed at exactly the wrong files.
+ */
+describe("attachment labels and orphan-ness", () => {
+	async function makeSession(name: string | null) {
+		const [s] = await db
+			.insert(schema.sessions)
+			.values({ userId: ownerId, isGroup: false, name })
+			.returning()
+		return s
+	}
+
+	async function makeSessionImage(seed: number, sessionId: number) {
+		const { createMedia } = await import("$lib/server/media")
+		const { file } = await createMedia(db, {
+			userId: ownerId,
+			sessionId,
+			bytes: png(seed)
+		})
+		return file
+	}
+
+	async function labelFor(fileId: number) {
+		const { mediaList } = await import("./media")
+		const { emit } = captureEmits()
+		const res = await mediaList.handler(fakeSocket(ownerId), {}, emit)
+		return res.media.find((m) => m.id === fileId)!
+	}
+
+	test("a live session's media reports the session, not 'orphaned'", async () => {
+		const session = await makeSession("Live Session")
+		const file = await makeSessionImage(20, session.id)
+
+		const item = await labelFor(file.id)
+		expect(item.attachedTo).toEqual({
+			type: "session",
+			id: session.id,
+			name: "Live Session"
+		})
+		// The fact the panel filters and captions on. Deriving it client-side
+		// from `name == null` is what made an unnamed session look deleted.
+		expect(item.orphaned).toBe(false)
+	})
+
+	test("an unnamed live session is still not an orphan", async () => {
+		// `sessions.name` is optional, so "no name" and "no session" are
+		// different states — collapsing them is the bug.
+		const session = await makeSession(null)
+		const file = await makeSessionImage(21, session.id)
+
+		const item = await labelFor(file.id)
+		expect(item.attachedTo?.name).toBe(`Session #${session.id}`)
+		expect(item.orphaned).toBe(false)
+	})
+
+	test("a deleted session's media IS an orphan", async () => {
+		const session = await makeSession("Doomed Session")
+		const file = await makeSessionImage(22, session.id)
+		await db
+			.delete(schema.sessions)
+			.where(eq(schema.sessions.id, session.id))
+
+		const item = await labelFor(file.id)
+		// The id survives by design (28 §2) — that is what keeps the orphan
+		// groupable and visible at all.
+		expect(item.attachedTo).toEqual({
+			type: "session",
+			id: session.id,
+			name: null
+		})
+		expect(item.orphaned).toBe(true)
+	})
+
+	test("a user-level upload has no parent, and is not an orphan", async () => {
+		const { createMedia } = await import("$lib/server/media")
+		const { file } = await createMedia(db, {
+			userId: ownerId,
+			bytes: png(23),
+			bucket: "generated"
+		})
+		const item = await labelFor(file.id)
+		expect(item.attachedTo).toBeNull()
+		expect(item.orphaned).toBe(false)
+	})
+})
+
+describe("message references", () => {
+	async function messageIn(sessionId: number) {
+		const [m] = await db
+			.insert(schema.messages)
+			.values({ sessionId, role: "assistant" })
+			.returning()
+		return m
+	}
+
+	async function session() {
+		const [s] = await db
+			.insert(schema.sessions)
+			.values({ userId: ownerId, isGroup: false, name: "Refs" })
+			.returning()
+		return s
+	}
+
+	async function listItem(fileId: number) {
+		const { mediaList } = await import("./media")
+		const { emit } = captureEmits()
+		const res = await mediaList.handler(fakeSocket(ownerId), {}, emit)
+		return res.media.find((m) => m.id === fileId)!
+	}
+
+	test("counts distinct messages, not parts, and sees block trees too", async () => {
+		const s = await session()
+		const file = await makeImage(30)
+		const a = await messageIn(s.id)
+		const b = await messageIn(s.id)
+		const c = await messageIn(s.id)
+
+		await db.insert(schema.messageParts).values([
+			// Two parts of ONE message: "2 messages" would be a lie about a
+			// single message, so the count is over distinct messages.
+			{
+				messageId: a.id,
+				ordinal: 0,
+				type: "core:image",
+				data: { assetId: file.id }
+			},
+			{
+				messageId: a.id,
+				ordinal: 1,
+				type: "core:image",
+				data: { assetId: file.id, alt: "again" }
+			},
+			{
+				messageId: b.id,
+				ordinal: 0,
+				type: "core:file",
+				data: { assetId: file.id, mime: "image/png" }
+			},
+			// The SDK's public block vocabulary (20 §6), nested inside a
+			// `group` — a plugin can emit this and the renderer draws it, so
+			// it is a real reference and the walk has to reach it.
+			{
+				messageId: c.id,
+				ordinal: 0,
+				type: "plugin:card",
+				data: {
+					blocks: [
+						{
+							kind: "group",
+							blocks: [{ kind: "image", assetId: file.id }]
+						}
+					]
+				}
+			}
+		])
+
+		expect((await listItem(file.id)).messageRefs).toBe(3)
+	})
+
+	test("an unreferenced file reports zero", async () => {
+		const file = await makeImage(31)
+		expect((await listItem(file.id)).messageRefs).toBe(0)
+	})
+
+	test("ignores an assetId on a part type nothing renders it for", async () => {
+		const s = await session()
+		const file = await makeImage(32)
+		const m = await messageIn(s.id)
+		// `MessagePartsView` only draws `data.assetId` for core:image and
+		// core:file; a plugin part carrying one of its own renders as a
+		// collapsed section, so deleting the file breaks nothing visible and
+		// counting it would overstate the damage the confirm is warning about.
+		await db.insert(schema.messageParts).values({
+			messageId: m.id,
+			ordinal: 0,
+			type: "plugin:receipt",
+			data: { assetId: file.id }
+		})
+		expect((await listItem(file.id)).messageRefs).toBe(0)
+	})
+})
+
+/**
+ * The deletion policy for message-referenced media (confirmed, then deleted,
+ * with the parts left standing).
+ *
+ * Refusing outright would make any image a session produced permanently
+ * undeletable in the one panel whose purpose is reclaiming disk; cleaning the
+ * parts would make this handler a second writer of message state and can leave
+ * `active_revisions` naming a revision with no parts. What is left is the trade
+ * 28 §2 already makes for every other pointer delete cannot clear — the
+ * reference dangles, and the user is told first.
+ */
+describe("media:delete with message references", () => {
+	async function referencedFile(seed: number, parts = 1) {
+		const [s] = await db
+			.insert(schema.sessions)
+			.values({ userId: ownerId, isGroup: false, name: "Policy" })
+			.returning()
+		const file = await makeImage(seed)
+		const ids: number[] = []
+		for (let i = 0; i < parts; i++) {
+			const [m] = await db
+				.insert(schema.messages)
+				.values({ sessionId: s.id, role: "assistant" })
+				.returning()
+			const [part] = await db
+				.insert(schema.messageParts)
+				.values({
+					messageId: m.id,
+					ordinal: 0,
+					type: "core:image",
+					data: { assetId: file.id }
+				})
+				.returning()
+			ids.push(part.id)
+		}
+		return { file, partIds: ids }
+	}
+
+	test("refuses without confirmation, and the refusal names the count", async () => {
+		const { mediaDelete } = await import("./media")
+		const { file } = await referencedFile(40, 2)
+		const { emit } = captureEmits()
+
+		await expect(
+			mediaDelete.handler(fakeSocket(ownerId), { mediaId: file.id }, emit)
+		).rejects.toThrow(/shown in 2 messages/i)
+		// Nothing was taken on the way to refusing.
+		expect(await fileRow(file.id)).not.toBeNull()
+		expect((await variantsOf(file.id)).length).toBeGreaterThan(0)
+	})
+
+	test("deletes once confirmed, and leaves the message parts standing", async () => {
+		const { mediaDelete } = await import("./media")
+		const { file, partIds } = await referencedFile(41, 1)
+		const { emit } = captureEmits()
+
+		const res = await mediaDelete.handler(
+			fakeSocket(ownerId),
+			{ mediaId: file.id, confirmMessageRefs: true },
+			emit
+		)
+		// Re-counted server-side and echoed, so the toast reports what actually
+		// happened rather than what the panel last saw.
+		expect(res.messageRefs).toBe(1)
+		expect(await fileRow(file.id)).toBeNull()
+
+		// The policy, pinned: the transcript keeps its shape. Removing the part
+		// would be the media panel writing message state, and can leave a step
+		// whose active revision has no parts at all.
+		const parts = await db
+			.select()
+			.from(schema.messageParts)
+			.where(inArray(schema.messageParts.id, partIds))
+		expect(parts).toHaveLength(1)
+		expect((parts[0].data as any).assetId).toBe(file.id)
+	})
+
+	test("an unreferenced file still deletes with no confirmation", async () => {
+		const { mediaDelete } = await import("./media")
+		const file = await makeImage(42)
+		const { emit } = captureEmits()
+		const res = await mediaDelete.handler(
+			fakeSocket(ownerId),
+			{ mediaId: file.id },
+			emit
+		)
+		expect(res.messageRefs).toBe(0)
+		expect(await fileRow(file.id)).toBeNull()
 	})
 })

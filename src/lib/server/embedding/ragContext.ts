@@ -11,9 +11,26 @@
  */
 
 import { db } from "$lib/server/db"
-import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm"
+import {
+	and,
+	asc,
+	count,
+	desc,
+	eq,
+	inArray,
+	isNotNull,
+	type SQL
+} from "drizzle-orm"
+import type { PgTable } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
+import {
+	CHARACTER_LORE_TYPE_ID,
+	DEFAULT_VECTOR_NAME,
+	HISTORY_TYPE_ID,
+	WORLD_LORE_TYPE_ID
+} from "$lib/server/utils/lorebookEntries"
 import { cosineSimilarity } from "./index"
+import { channelWhere } from "$lib/server/messages/channels"
 
 // ---------------------------------------------------------------------------
 // Context resolution
@@ -170,21 +187,155 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends any
 	: never
 export type ScopedRagCandidate = DistributiveOmit<ScopedRagItem, "score">
 
-export const RAG_CANDIDATE_FETCH_CAP = 500
+/**
+ * The per-source row cap on a candidate fetch.
+ *
+ * **A memory bound, not a relevance cutoff.** Nothing is scored at fetch time —
+ * each source query orders by `id DESC` and takes the first N — so a cap that
+ * binds discards rows by insertion order, and the best semantic match for the
+ * turn may be among the ones discarded. Raising this improves retrieval
+ * quality; it is finite only because every candidate carries its embedding into
+ * memory and the whole fetch has to fit there at once.
+ *
+ * The arithmetic. Six sources can actually reach the cap — messages, world
+ * lore, character lore, history entries, narrative nodes and narrative
+ * relationships. `character`/`persona` cannot: they are already bounded by the
+ * session's cast. Embeddings are `real[]` in Postgres but arrive in JS as a
+ * packed array of doubles, 8 bytes per dimension. Dimensions are 384/768/1024
+ * for the bundled local models (models.ts) and up to 3072 against an
+ * API-backed connection. So the worst case here is 6 x 2000 = 12,000 vectors
+ * resident at once: ~74 MB at 768d, ~98 MB at 1024d, ~295 MB at 3072d —
+ * transient, freed at the end of the turn, and only reachable by an install
+ * holding more than 2,000 embedded rows in each of six sources simultaneously.
+ * Scoring cost scales with the same product, once per query vector.
+ *
+ * When the cap does bind, the fetch says so rather than silently returning an
+ * arbitrary subset — see `ScopedRagTruncation`. The actual fix is a pgvector
+ * index, which would let SQL pick the closest rows rather than the newest and
+ * make this number stop deciding anything.
+ */
+export const RAG_CANDIDATE_FETCH_CAP = 2000
+
+/** One source whose fetch hit the cap, and how much it did not see. */
+export type ScopedRagTruncation = {
+	source: ScopedRagItem["source"]
+	/** Rows returned for this source — necessarily RAG_CANDIDATE_FETCH_CAP. */
+	fetched: number
+	/** Rows matching the same filters in total. */
+	available: number
+}
+
+export type ScopedRagFetch = {
+	candidates: ScopedRagCandidate[]
+	/**
+	 * Empty on any normal turn. An entry means that source's candidates are the
+	 * *newest* `fetched` of `available` rather than the best `fetched`, so
+	 * whatever ranks them is choosing from an arbitrary subset.
+	 */
+	truncated: ScopedRagTruncation[]
+}
+
+/**
+ * Counts what the cap left behind — and only when it left something behind.
+ *
+ * A second query per truncated source, which is why it is guarded: on a normal
+ * turn it never runs, and when it does it is cheaper than the fetch it follows
+ * because it moves no embedding columns. Reporting "at least the cap" would
+ * have cost nothing at all, but it cannot tell a lorebook twelve rows over the
+ * cap from one twelve thousand over, and that distance is the only thing the
+ * report is for.
+ */
+async function noteTruncation(
+	truncated: ScopedRagTruncation[],
+	source: ScopedRagItem["source"],
+	fetched: number,
+	table: PgTable,
+	where: SQL | undefined
+) {
+	if (fetched < RAG_CANDIDATE_FETCH_CAP) return
+	const [total] = await db.select({ n: count() }).from(table).where(where)
+	truncated.push({ source, fetched, available: total?.n ?? fetched })
+}
+
+/**
+ * The **index vocabulary**: what this module's rows are called.
+ *
+ * ⚠ There are two source vocabularies in the retrieval path and they are not
+ * the same list. This one is the vector index's, eight names, and it is what
+ * every `source` on a `ScopedRagItem` and every member of `sources` below is
+ * spelled in. The other is the ranker's five `SourceKind` budget groups
+ * (`message`**s**, `worldLore`, `characterLore`, `history`, `relationships`),
+ * which `weights.ts` matches **literally** as `sourceBudget` keys and the SDK
+ * freezes as declared member keys.
+ *
+ * **Do not reconcile them by renaming.** `historyEntry` here and `history`
+ * there is deliberate, documented at `bindings.ts` (`VECTOR_SOURCE_ALIASES`),
+ * and renaming either side would change the semantic arm's budget caps and
+ * force a registry re-projection that `drizzle/0146` says must not become a
+ * pattern. They are reconciled **at boundaries** — `BUDGET_GROUP_ALIASES` on
+ * the way into `core:task/rank-hybrid@1`, and `select()`'s
+ * `excluded_unknown_source` receipt for what still has no group. This constant
+ * is the request-side boundary, and `assertIndexSources` below is its guard.
+ *
+ * Listed rather than derived from `ScopedRagItem` because a union of object
+ * types has no runtime form; `assertIndexSources` is what keeps the two honest,
+ * since a name added to the type and not to this list fails the guard the first
+ * time a caller asks for it.
+ */
+export const RAG_INDEX_SOURCES = [
+	"message",
+	"worldLore",
+	"characterLore",
+	"historyEntry",
+	"narrativeNode",
+	"narrativeRelationship",
+	"character",
+	"persona"
+] as const
+
+export type RagIndexSource = (typeof RAG_INDEX_SOURCES)[number]
+
+/**
+ * Fail loudly on a source this module cannot fetch.
+ *
+ * The trap this closes: `include()` tests the caller's `sources` against the
+ * index vocabulary, so a caller who reasonably reached for a ranker name —
+ * `sources: ["history"]`, or `["messages"]` — matched nothing and got an empty
+ * fetch that looks exactly like a session with no indexed history. Silent, and
+ * wrong in the direction that reads as "retrieval found nothing".
+ *
+ * **Latent today, and this keeps it that way.** No shipped spec sets `sources`
+ * at all — `core:query/vector-search@1` declares no such param — so `sources`
+ * is always `undefined` here and every source is fetched. Whoever adds that
+ * param is the person this is written for, and they get a sentence naming both
+ * vocabularies instead of an empty list.
+ */
+export function assertIndexSources(sources: readonly string[]): void {
+	const unknown = sources.filter(
+		(s) => !(RAG_INDEX_SOURCES as readonly string[]).includes(s)
+	)
+	if (unknown.length === 0) return
+	throw new Error(
+		`fetchScopedCandidates: unknown source ${unknown.map((s) => `'${s}'`).join(", ")}. ` +
+			`This argument is spelled in the vector index's vocabulary ` +
+			`(${RAG_INDEX_SOURCES.join(", ")}), not in the ranker's five ` +
+			`budget groups (messages, worldLore, characterLore, history, ` +
+			`relationships). The two overlap on worldLore and characterLore ` +
+			`only, and the difference is deliberate — see RAG_INDEX_SOURCES. ` +
+			`Translate at the boundary; do not rename either side.`
+	)
+}
 
 export type ScopedRagOptions = {
 	topK?: number
-	/** Only return results from these content types */
-	sources?: Array<
-		| "message"
-		| "worldLore"
-		| "characterLore"
-		| "historyEntry"
-		| "narrativeNode"
-		| "narrativeRelationship"
-		| "character"
-		| "persona"
-	>
+	/**
+	 * Only return results from these content types.
+	 *
+	 * ⚠ The **index** vocabulary, not the ranker's budget groups — see
+	 * `RAG_INDEX_SOURCES`. A ranker name here is a caller error and
+	 * `assertIndexSources` says so rather than returning nothing.
+	 */
+	sources?: Array<RagIndexSource>
 	/** Active embedding model — items from other models are excluded */
 	modelId: string
 	/**
@@ -192,6 +343,17 @@ export type ScopedRagOptions = {
 	 * Defaults to 10.
 	 */
 	excludeRecentMessages?: number
+	/**
+	 * For messages: which channel they are drawn from (20 §7, R6).
+	 *
+	 * The semantic arm reaches the prompt, so it obeys the same rule the
+	 * history read does — an omitted channel is the session's default lane,
+	 * `main`, and a union across lanes has to be asked for by name
+	 * (`ALL_CHANNELS`). Lore, history entries and the other sources are not
+	 * lane-scoped: an entry belongs to the world rather than to one
+	 * conversation inside one session.
+	 */
+	channel?: string
 }
 
 /**
@@ -201,23 +363,37 @@ export type ScopedRagOptions = {
  * same session context within one turn (eg. RagInfillEngine.ts scoring
  * several query-message embeddings) should fetch once via this and call
  * rankScopedCandidates() per query embedding, rather than re-running the
- * whole fetch for each one. Each source query is capped at
- * RAG_CANDIDATE_FETCH_CAP rows (newest first) — bounds worst-case
- * latency/memory on a pathologically large lorebook/session; there's no
- * pgvector index backing these queries, so ranking by similarity still
- * requires scoring whatever's fetched in-process rather than letting SQL
- * pick the closest matches.
+ * whole fetch for each one.
+ *
+ * Each source query is capped at RAG_CANDIDATE_FETCH_CAP rows, newest id
+ * first. Because there is no pgvector index behind these tables, similarity
+ * cannot participate in the query at all — ranking scores whatever was
+ * fetched, in-process, after the fact. So the cap does not select the best
+ * rows, it selects the newest ones, and any source that hits it comes back in
+ * `truncated` saying how many rows it never looked at. Callers are expected to
+ * carry that into their diagnostics: an unreported cap turns a retrieval
+ * quality loss into a result that looks complete.
  */
 export async function fetchScopedCandidates(
 	context: SessionRagContext,
 	opts: Omit<ScopedRagOptions, "topK">
-): Promise<ScopedRagCandidate[]> {
+): Promise<ScopedRagFetch> {
 	const { modelId, sources, excludeRecentMessages = 10 } = opts
+	const messageChannel = channelWhere(
+		schema.sessionMessages.channel,
+		opts.channel
+	)
+
+	// The request-side boundary between the two source vocabularies. See
+	// `RAG_INDEX_SOURCES`: `include` below tests the caller's names against the
+	// *index's*, so a ranker name silently fetches nothing without this.
+	if (sources) assertIndexSources(sources)
 
 	const include = (source: ScopedRagItem["source"]) =>
 		!sources || sources.includes(source as any)
 
 	const candidates: ScopedRagCandidate[] = []
+	const truncated: ScopedRagTruncation[] = []
 
 	// Messages from this session only. Recent messages are excluded since they're
 	// already in the guaranteed context window. Cross-session context (other
@@ -226,15 +402,33 @@ export async function fetchScopedCandidates(
 	if (include("message")) {
 		let recentIds: number[] = []
 		if (excludeRecentMessages > 0) {
+			// Scoped like the fetch below: "already in the context window"
+			// is a claim about the window the history read built, and that
+			// window is one channel's.
 			const recent = await db
 				.select({ id: schema.sessionMessages.id })
 				.from(schema.sessionMessages)
-				.where(eq(schema.sessionMessages.sessionId, context.sessionId))
+				.where(
+					and(
+						eq(
+							schema.sessionMessages.sessionId,
+							context.sessionId
+						),
+						messageChannel
+					)
+				)
 				.orderBy(desc(schema.sessionMessages.id))
 				.limit(excludeRecentMessages)
 			recentIds = recent.map((r) => r.id)
 		}
 
+		const where = and(
+			eq(schema.sessionMessages.sessionId, context.sessionId),
+			eq(schema.sessionMessages.isHidden, false),
+			isNotNull(schema.sessionMessages.embedding),
+			eq(schema.sessionMessages.embeddingModel, modelId),
+			messageChannel
+		)
 		const messages = await db
 			.select({
 				id: schema.sessionMessages.id,
@@ -244,16 +438,20 @@ export async function fetchScopedCandidates(
 				embeddingModel: schema.sessionMessages.embeddingModel
 			})
 			.from(schema.sessionMessages)
-			.where(
-				and(
-					eq(schema.sessionMessages.sessionId, context.sessionId),
-					eq(schema.sessionMessages.isHidden, false),
-					isNotNull(schema.sessionMessages.embedding),
-					eq(schema.sessionMessages.embeddingModel, modelId)
-				)
-			)
+			.where(where)
 			.orderBy(desc(schema.sessionMessages.id))
 			.limit(RAG_CANDIDATE_FETCH_CAP)
+
+		// Counted against the fetch, not against what survives the recent-message
+		// exclusion below — the cap is what the DB applied, and the two numbers
+		// have to be answering the same question to be comparable.
+		await noteTruncation(
+			truncated,
+			"message",
+			messages.length,
+			schema.sessionMessages,
+			where
+		)
 
 		for (const msg of messages) {
 			if (recentIds.includes(msg.id)) continue
@@ -271,129 +469,132 @@ export async function fetchScopedCandidates(
 
 	// Lorebook content (world lore, character lore, history entries)
 	if (context.allLorebookIds.length > 0) {
-		if (include("worldLore")) {
-			const wles = await db
-				.select({
-					id: schema.worldLoreEntries.id,
-					lorebookId: schema.worldLoreEntries.lorebookId,
-					name: schema.worldLoreEntries.name,
-					content: schema.worldLoreEntries.content,
-					embedding: schema.worldLoreEntries.embedding,
-					embeddingModel: schema.worldLoreEntries.embeddingModel
-				})
-				.from(schema.worldLoreEntries)
-				.where(
-					and(
-						inArray(
-							schema.worldLoreEntries.lorebookId,
-							context.allLorebookIds
-						),
-						eq(schema.worldLoreEntries.enabled, true),
-						isNotNull(schema.worldLoreEntries.embedding),
-						eq(schema.worldLoreEntries.embeddingModel, modelId)
+		/**
+		 * The three entry sources, as one query shape.
+		 *
+		 * They read the same rows of the same table and differ only in the
+		 * declared type and the label the candidate carries, so the scan lives
+		 * here once. `enabled` and the model match are the same predicates the
+		 * three near-identical blocks applied; `IS NOT NULL` on the embedding is
+		 * now the inner join.
+		 *
+		 * ⚠ **`historyEntry` here, `history` in the budget.** The two
+		 * vocabularies are deliberately different and documented at
+		 * `bindings.ts:264-274` — the ranker matches `sourceBudget` keys
+		 * literally, so collapsing them silently drops every history candidate.
+		 */
+		const entrySources: Array<{
+			source: "worldLore" | "characterLore" | "historyEntry"
+			typeId: string
+			include: boolean
+		}> = [
+			{
+				source: "worldLore",
+				typeId: WORLD_LORE_TYPE_ID,
+				include: include("worldLore")
+			},
+			{
+				source: "characterLore",
+				typeId: CHARACTER_LORE_TYPE_ID,
+				include: include("characterLore")
+			},
+			{
+				source: "historyEntry",
+				typeId: HISTORY_TYPE_ID,
+				include: include("historyEntry")
+			}
+		]
+
+		for (const { source, typeId, include: wanted } of entrySources) {
+			if (!wanted) continue
+			const where = and(
+				inArray(
+					schema.lorebookEntries.lorebookId,
+					context.allLorebookIds
+				),
+				eq(schema.lorebookEntries.enabled, true),
+				eq(schema.lorebookEntries.typeId, typeId),
+				eq(schema.lorebookEntryVectors.vectorName, DEFAULT_VECTOR_NAME),
+				eq(schema.lorebookEntryVectors.chunkIndex, 0),
+				eq(schema.lorebookEntryVectors.model, modelId)
+			)
+			const joined = () =>
+				db
+					.select({
+						id: schema.lorebookEntries.id,
+						lorebookId: schema.lorebookEntries.lorebookId,
+						title: schema.lorebookEntries.title,
+						content: schema.lorebookEntries.content,
+						fields: schema.lorebookEntries.fields,
+						embedding: schema.lorebookEntryVectors.vector,
+						embeddingModel: schema.lorebookEntryVectors.model
+					})
+					.from(schema.lorebookEntries)
+					.innerJoin(
+						schema.lorebookEntryVectors,
+						eq(
+							schema.lorebookEntryVectors.entryId,
+							schema.lorebookEntries.id
+						)
 					)
-				)
-				.orderBy(desc(schema.worldLoreEntries.id))
+					.where(where)
+
+			const rows = await joined()
+				.orderBy(desc(schema.lorebookEntries.id))
 				.limit(RAG_CANDIDATE_FETCH_CAP)
 
-			for (const wle of wles) {
-				if (!wle.embedding) continue
-				candidates.push({
-					source: "worldLore",
-					lorebookId: wle.lorebookId,
-					id: wle.id,
-					name: wle.name,
-					content: wle.content,
-					embedding: wle.embedding,
-					embeddingModel: wle.embeddingModel
+			if (rows.length >= RAG_CANDIDATE_FETCH_CAP) {
+				const [total] = await db
+					.select({ n: count() })
+					.from(schema.lorebookEntries)
+					.innerJoin(
+						schema.lorebookEntryVectors,
+						eq(
+							schema.lorebookEntryVectors.entryId,
+							schema.lorebookEntries.id
+						)
+					)
+					.where(where)
+				truncated.push({
+					source,
+					fetched: rows.length,
+					available: total?.n ?? rows.length
 				})
 			}
-		}
 
-		if (include("characterLore")) {
-			const cles = await db
-				.select({
-					id: schema.characterLoreEntries.id,
-					lorebookId: schema.characterLoreEntries.lorebookId,
-					name: schema.characterLoreEntries.name,
-					content: schema.characterLoreEntries.content,
-					embedding: schema.characterLoreEntries.embedding,
-					embeddingModel: schema.characterLoreEntries.embeddingModel
-				})
-				.from(schema.characterLoreEntries)
-				.where(
-					and(
-						inArray(
-							schema.characterLoreEntries.lorebookId,
-							context.allLorebookIds
-						),
-						eq(schema.characterLoreEntries.enabled, true),
-						isNotNull(schema.characterLoreEntries.embedding),
-						eq(schema.characterLoreEntries.embeddingModel, modelId)
-					)
-				)
-				.orderBy(desc(schema.characterLoreEntries.id))
-				.limit(RAG_CANDIDATE_FETCH_CAP)
-
-			for (const cle of cles) {
-				if (!cle.embedding) continue
+			for (const row of rows) {
+				if (!row.embedding) continue
 				candidates.push({
-					source: "characterLore",
-					lorebookId: cle.lorebookId,
-					id: cle.id,
-					name: cle.name,
-					content: cle.content,
-					embedding: cle.embedding,
-					embeddingModel: cle.embeddingModel
-				})
-			}
-		}
-
-		if (include("historyEntry")) {
-			const hes = await db
-				.select({
-					id: schema.historyEntries.id,
-					lorebookId: schema.historyEntries.lorebookId,
-					content: schema.historyEntries.content,
-					year: schema.historyEntries.year,
-					month: schema.historyEntries.month,
-					day: schema.historyEntries.day,
-					embedding: schema.historyEntries.embedding,
-					embeddingModel: schema.historyEntries.embeddingModel
-				})
-				.from(schema.historyEntries)
-				.where(
-					and(
-						inArray(
-							schema.historyEntries.lorebookId,
-							context.allLorebookIds
-						),
-						eq(schema.historyEntries.enabled, true),
-						isNotNull(schema.historyEntries.embedding),
-						eq(schema.historyEntries.embeddingModel, modelId)
-					)
-				)
-				.orderBy(desc(schema.historyEntries.id))
-				.limit(RAG_CANDIDATE_FETCH_CAP)
-
-			for (const he of hes) {
-				if (!he.embedding) continue
-				candidates.push({
-					source: "historyEntry",
-					lorebookId: he.lorebookId,
-					id: he.id,
-					name: "",
-					content: he.content,
-					year: he.year,
-					month: he.month,
-					day: he.day,
-					embedding: he.embedding,
-					embeddingModel: he.embeddingModel
-				})
+					source,
+					lorebookId: row.lorebookId,
+					id: row.id,
+					// History has no title — it is dated, and the block's
+					// heading is the date. The empty string is what the old
+					// history query hardcoded.
+					name: source === "historyEntry" ? "" : (row.title ?? null),
+					content: row.content,
+					...(source === "historyEntry"
+						? {
+								year: row.fields?.year ?? null,
+								month: row.fields?.month ?? null,
+								day: row.fields?.day ?? null
+							}
+						: {}),
+					embedding: row.embedding,
+					embeddingModel: row.embeddingModel
+				} as ScopedRagCandidate)
 			}
 		}
 
 		if (include("narrativeNode")) {
+			const where = and(
+				inArray(
+					schema.lorebookBindings.lorebookId,
+					context.allLorebookIds
+				),
+				isNotNull(schema.lorebookBindings.embedding),
+				eq(schema.lorebookBindings.embeddingModel, modelId)
+			)
 			const nodes = await db
 				.select({
 					id: schema.lorebookBindings.id,
@@ -404,18 +605,18 @@ export async function fetchScopedCandidates(
 					embeddingModel: schema.lorebookBindings.embeddingModel
 				})
 				.from(schema.lorebookBindings)
-				.where(
-					and(
-						inArray(
-							schema.lorebookBindings.lorebookId,
-							context.allLorebookIds
-						),
-						isNotNull(schema.lorebookBindings.embedding),
-						eq(schema.lorebookBindings.embeddingModel, modelId)
-					)
-				)
+				.where(where)
 				.orderBy(desc(schema.lorebookBindings.id))
 				.limit(RAG_CANDIDATE_FETCH_CAP)
+
+			await noteTruncation(
+				truncated,
+				"narrativeNode",
+				nodes.length,
+				schema.lorebookBindings,
+				where
+			)
+
 			for (const node of nodes) {
 				if (!node.embedding) continue
 				candidates.push({
@@ -431,6 +632,14 @@ export async function fetchScopedCandidates(
 		}
 
 		if (include("narrativeRelationship")) {
+			const where = and(
+				inArray(
+					schema.narrativeRelationships.lorebookId,
+					context.allLorebookIds
+				),
+				isNotNull(schema.narrativeRelationships.embedding),
+				eq(schema.narrativeRelationships.embeddingModel, modelId)
+			)
 			const rels = await db
 				.select({
 					id: schema.narrativeRelationships.id,
@@ -446,21 +655,18 @@ export async function fetchScopedCandidates(
 					embeddingModel: schema.narrativeRelationships.embeddingModel
 				})
 				.from(schema.narrativeRelationships)
-				.where(
-					and(
-						inArray(
-							schema.narrativeRelationships.lorebookId,
-							context.allLorebookIds
-						),
-						isNotNull(schema.narrativeRelationships.embedding),
-						eq(
-							schema.narrativeRelationships.embeddingModel,
-							modelId
-						)
-					)
-				)
+				.where(where)
 				.orderBy(desc(schema.narrativeRelationships.id))
 				.limit(RAG_CANDIDATE_FETCH_CAP)
+
+			await noteTruncation(
+				truncated,
+				"narrativeRelationship",
+				rels.length,
+				schema.narrativeRelationships,
+				where
+			)
+
 			for (const rel of rels) {
 				if (!rel.embedding) continue
 				candidates.push({
@@ -480,8 +686,14 @@ export async function fetchScopedCandidates(
 		}
 	}
 
-	// Characters linked to this session
+	// Characters linked to this session. Bounded by the session's cast rather
+	// than by the cap, so truncation here would mean a cast of thousands.
 	if (include("character") && context.characterIds.length > 0) {
+		const where = and(
+			inArray(schema.characters.id, context.characterIds),
+			isNotNull(schema.characters.embedding),
+			eq(schema.characters.embeddingModel, modelId)
+		)
 		const chars = await db
 			.select({
 				id: schema.characters.id,
@@ -491,15 +703,17 @@ export async function fetchScopedCandidates(
 				embeddingModel: schema.characters.embeddingModel
 			})
 			.from(schema.characters)
-			.where(
-				and(
-					inArray(schema.characters.id, context.characterIds),
-					isNotNull(schema.characters.embedding),
-					eq(schema.characters.embeddingModel, modelId)
-				)
-			)
+			.where(where)
 			.orderBy(desc(schema.characters.id))
 			.limit(RAG_CANDIDATE_FETCH_CAP)
+
+		await noteTruncation(
+			truncated,
+			"character",
+			chars.length,
+			schema.characters,
+			where
+		)
 
 		for (const char of chars) {
 			if (!char.embedding) continue
@@ -516,6 +730,11 @@ export async function fetchScopedCandidates(
 
 	// Personas linked to this session
 	if (include("persona") && context.personaIds.length > 0) {
+		const where = and(
+			inArray(schema.personas.id, context.personaIds),
+			isNotNull(schema.personas.embedding),
+			eq(schema.personas.embeddingModel, modelId)
+		)
 		const ps = await db
 			.select({
 				id: schema.personas.id,
@@ -525,15 +744,17 @@ export async function fetchScopedCandidates(
 				embeddingModel: schema.personas.embeddingModel
 			})
 			.from(schema.personas)
-			.where(
-				and(
-					inArray(schema.personas.id, context.personaIds),
-					isNotNull(schema.personas.embedding),
-					eq(schema.personas.embeddingModel, modelId)
-				)
-			)
+			.where(where)
 			.orderBy(desc(schema.personas.id))
 			.limit(RAG_CANDIDATE_FETCH_CAP)
+
+		await noteTruncation(
+			truncated,
+			"persona",
+			ps.length,
+			schema.personas,
+			where
+		)
 
 		for (const p of ps) {
 			if (!p.embedding) continue
@@ -548,7 +769,7 @@ export async function fetchScopedCandidates(
 		}
 	}
 
-	return candidates
+	return { candidates, truncated }
 }
 
 /**
@@ -582,12 +803,15 @@ export function rankScopedCandidates(
  * single-query callers — a caller scoring multiple query embeddings
  * against the same session context in one turn should call those two
  * directly instead, fetching once and reusing the candidate set.
+ *
+ * Returning ranked items only, this drops the fetch's `truncated` report. A
+ * caller that shows its retrieval to the user wants the pair, not this.
  */
 export async function scopedRankBySimilarity(
 	queryEmbedding: number[],
 	context: SessionRagContext,
 	opts: ScopedRagOptions
 ): Promise<ScopedRagItem[]> {
-	const candidates = await fetchScopedCandidates(context, opts)
+	const { candidates } = await fetchScopedCandidates(context, opts)
 	return rankScopedCandidates(candidates, queryEmbedding, opts.topK)
 }

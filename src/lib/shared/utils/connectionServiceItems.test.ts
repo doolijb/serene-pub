@@ -166,11 +166,11 @@ describe("filterConnectionServiceItems", () => {
 
 	test("a query matching nothing returns an empty array", () => {
 		expect(
-			filterConnectionServiceItems(items, "totally-not-a-provider")
+			filterConnectionServiceItems(items, "totally-not-a-service")
 		).toEqual([])
 	})
 
-	test("a substring match finds providers regardless of position in the label", () => {
+	test("a substring match finds services regardless of position in the label", () => {
 		const result = filterConnectionServiceItems(items, "experimental")
 		// All 11 new presets carry the "(Experimental)" suffix.
 		expect(result.length).toBe(11)

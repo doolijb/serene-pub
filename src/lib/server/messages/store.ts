@@ -33,6 +33,7 @@ import {
 	type NewPart
 } from "./projectLegacy"
 import { textOf, type TextOfOptions } from "./textOf"
+import { channelWhere } from "./channels"
 
 type Db = { select: any; insert: any; update: any; delete: any }
 
@@ -179,11 +180,14 @@ async function upsertProjection(
 			target: schema.messages.id,
 			set: {
 				sessionId: message.sessionId,
-				// Channel is native/creation-time info the legacy row cannot
-				// express, so the mirror never changes it once set — a
-				// greeting seeded onto a custom channel (20 §7) stays there
-				// through every later legacy update.
-				channel: existing ? existing.channel : message.channel,
+				// Mirrored like every other field since 0200. It was pinned to
+				// `existing.channel` while the legacy row had no channel column
+				// — without that pin a greeting seeded onto a declared lane was
+				// reset to `main` by the next edit. The legacy row can express
+				// the lane now and is the single writer of it, so preserving
+				// the mirror's copy would only let the two disagree, with the
+				// prompt-facing read using the legacy one.
+				channel: message.channel,
 				kind: nativeKind ? existing.kind : message.kind,
 				version: message.version,
 				userId: message.userId,
@@ -468,17 +472,23 @@ export async function getMessage(
 	return { ...message, parts: sortParts(parts) }
 }
 
+/**
+ * One session's messages, on one channel.
+ *
+ * An omitted channel is the session's default lane, `main` — the same rule
+ * every other message read obeys (see `messages/channels.ts`). It used to
+ * mean "every lane", which is the silent union that scoping exists to
+ * prevent; `ALL_CHANNELS` is how a caller asks for that on purpose.
+ */
 export async function listMessages(
 	db: Db,
 	sessionId: number,
 	opts: { channel?: string } = {}
 ): Promise<MessageWithParts[]> {
-	const where = opts.channel
-		? and(
-				eq(schema.messages.sessionId, sessionId),
-				eq(schema.messages.channel, opts.channel)
-			)
-		: eq(schema.messages.sessionId, sessionId)
+	const where = and(
+		eq(schema.messages.sessionId, sessionId),
+		channelWhere(schema.messages.channel, opts.channel)
+	)
 	const rows = await db
 		.select()
 		.from(schema.messages)

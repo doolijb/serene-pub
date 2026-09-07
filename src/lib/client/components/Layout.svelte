@@ -18,6 +18,10 @@
 	import TagsSidebar from "./sidebars/TagsSidebar.svelte"
 	import UsersSidebar from "./sidebars/UsersSidebar.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		registerLanguageSocket,
+		setLanguage
+	} from "$lib/client/i18n/state.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { KeyboardNavigationManager } from "$lib/client/utils/keyboardNavigation"
 	import SettingsSidebar from "$lib/client/components/sidebars/SettingsSidebar.svelte"
@@ -743,7 +747,12 @@
 		// Listen for user settings
 		socket.on("userSettings:get", (message) => {
 			userSettingsCtx.settings = message.userSettings
+			// The *resolved* language, not the stored choice — the stored one
+			// may be null meaning "follow the instance default", and the
+			// renderer needs a language rather than an intent (R5).
+			setLanguage(message.userSettings.effectiveLanguage)
 		})
+		registerLanguageSocket()
 
 		// Capture all otherwise-unhandled "*:error" events (see handleAnyEvent
 		// / HANDLED_ERROR_EVENTS above for why this uses onAny rather than a
@@ -972,6 +981,7 @@
 		socket.off("users:get")
 		socket.off("systemSettings:get")
 		socket.off("userSettings:get")
+		socket.off("language:catalog")
 		socket.offAny(handleAnyEvent)
 		socket.off("error")
 		socket.off("success")

@@ -57,6 +57,7 @@ import {
 } from "@serene-pub/sdk"
 import { capabilityDefault } from "./capabilityDefaults"
 import { capabilityRefusal } from "$lib/server/pipelines/runtime/capabilityGuard"
+import { connectionIdentity, type ConnectionIdentity } from "./visibility"
 
 /**
  * What every legacy column, and every slot that named nothing, means.
@@ -149,6 +150,18 @@ export interface CapabilityProblem {
 	via?: ResolutionTier
 	/** The id that failed to resolve, for `missing`. */
 	connectionId?: number
+	/**
+	 * Which connection the message is about — for `incapable`, the only kind
+	 * where a row was actually found and judged.
+	 *
+	 * Beside the message rather than inside it. Every `message` above names no
+	 * connection on purpose (see `capabilityRefusal`), because the strings travel
+	 * through `Error.message` and `Receipt.haltReason` where nothing can redact
+	 * them; this field travels through payloads, where `withoutConnectionIdentity`
+	 * removes it for everyone who is not an administrator. `connectionId` above is
+	 * on the same list and has always been removed the same way.
+	 */
+	connection?: ConnectionIdentity
 }
 
 export type CapabilityTargetResult =
@@ -326,7 +339,12 @@ export async function resolveCapabilityTarget(
 				connectionId,
 				// The guard's own words, plus where the choice was made. The
 				// guard cannot know that: it is handed a row, not a chain.
-				message: `${refusal} It is set in ${WHERE_SET[connectionVia]}.`
+				message: `${refusal} It is set in ${WHERE_SET[connectionVia]}.`,
+				// WHICH row it was, for an administrator. The sentence above
+				// deliberately does not say — this is where the fact goes
+				// instead: a key the projection removes, rather than a name
+				// no projection could find.
+				connection: connectionIdentity(connection)
 			}
 		}
 

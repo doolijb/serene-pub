@@ -2,6 +2,7 @@
 	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { onMount, onDestroy } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { z } from "zod"
@@ -44,10 +45,17 @@
 	}
 
 	let availableOpenAIModels: any[] = $state([])
+	// OpenAI-compatible endpoints report a bare id and nothing prettier, so the
+	// id is both the stored value and the label.
+	let modelOptions = $derived(
+		availableOpenAIModels.map((m) => ({ value: m.id, label: m.id }))
+	)
 	let openAIFields: ExtraFieldData | undefined = $state()
 	let validationErrors: ValidationErrors = $state({})
 
-		const onConnectionsRefreshModels = (msg: Sockets.Connections.RefreshModels.Response) => {
+	const onConnectionsRefreshModels = (
+		msg: Sockets.Connections.RefreshModels.Response
+	) => {
 		if (msg.models) availableOpenAIModels = msg.models
 	}
 	socket.on("connections:refreshModels", onConnectionsRefreshModels)
@@ -174,29 +182,23 @@
 
 {#if connection}
 	<div class="mt-2 flex flex-col gap-1">
-		<label class="font-semibold" for="model">Model</label>
-		<select
-			id="model"
+		<Select
+			label="Model"
+			options={modelOptions}
 			bind:value={connection.model}
-			class="select bg-background border-muted w-full rounded border {validationErrors.model
-				? 'border-error-500'
-				: ''}"
-			aria-invalid={validationErrors.model ? "true" : "false"}
-			aria-describedby={validationErrors.model
-				? "model-error"
-				: undefined}
-			oninput={() => {
+			placeholder="-- Select Model --"
+			emptyMessage="No models — try Refresh Models."
+			clearable
+			required
+			invalid={!!validationErrors.model}
+			describedBy={validationErrors.model ? "model-error" : undefined}
+			onValueChange={() => {
 				if (validationErrors.model) {
 					const { model, ...rest } = validationErrors
 					validationErrors = rest
 				}
 			}}
-		>
-			<option value="">-- Select Model --</option>
-			{#each availableOpenAIModels as m}
-				<option value={m.id}>{m.id}</option>
-			{/each}
-		</select>
+		/>
 		{#if validationErrors.model}
 			<p
 				id="model-error"
@@ -231,33 +233,19 @@
 		</button>
 	</div>
 	{#if openAIFields?.prerenderPrompt}
-		<div class="mt-2 flex flex-col gap-1">
-			<label class="font-semibold" for="promptFormat">
-				Prompt Format
-			</label>
-			<select
-				id="promptFormat"
-				class="select bg-background border-muted w-full rounded border"
-				bind:value={connection.promptFormat}
-			>
-				{#each PromptFormats.options as option}
-					<option value={option.value}>{option.label}</option>
-				{/each}
-			</select>
-		</div>
+		<Select
+			class="mt-2"
+			label="Prompt Format"
+			options={PromptFormats.options}
+			bind:value={connection.promptFormat}
+		/>
 	{/if}
-	<div class="mt-2 flex flex-col gap-1">
-		<label class="font-semibold" for="tokenCounter">Token Counter</label>
-		<select
-			id="tokenCounter"
-			bind:value={connection.tokenCounter}
-			class="select bg-background border-muted w-full rounded border"
-		>
-			{#each TokenCounterOptions.options as t}
-				<option value={t.value}>{t.label}</option>
-			{/each}
-		</select>
-	</div>
+	<Select
+		class="mt-2"
+		label="Token Counter"
+		options={TokenCounterOptions.options}
+		bind:value={connection.tokenCounter}
+	/>
 	<div class="mt-2 flex flex-col gap-1">
 		<label class="font-semibold" for="baseUrl">Base URL</label>
 		<input

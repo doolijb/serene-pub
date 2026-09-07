@@ -21,10 +21,33 @@
 
 import Handlebars from "handlebars"
 import { registerContextHandlebarsHelpers } from "$lib/shared/utils/contextHandlebarsHelpers"
+import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
 
 export const CORE_TEMPLATE_ENGINE = "core:template/handlebars@1"
 
-export interface RenderContext {
+/**
+ * The run a render belongs to, when it belongs to one.
+ *
+ * A template may render through a *plugin's* engine, and a plugin's engine is a
+ * hook call in a sandbox (`engineHost.ts`). Cancelling a run stops the hooks it
+ * has in flight by grouping them on this id (`hookGrace.ts`), so without it an
+ * engine render is invisible to cancellation: the executor stops between nodes
+ * while the render keeps going, for as much as its whole 3s budget, inside a run
+ * the person already cancelled.
+ *
+ * **Optional, and legitimately absent.** Previews (`preview.ts`), the admin
+ * template editors and the parity harness render with no run at all — there is
+ * nothing to associate, rather than an association that went missing, and a
+ * render no run owns is one cancellation has no claim on. Core's own renderer
+ * ignores both fields; only the forwarding renderer reads them.
+ */
+export interface RenderRun {
+	runId?: string
+	/** Who triggered the run, for the invocation log and the live monitor. */
+	user?: string
+}
+
+export interface RenderContext extends RenderRun {
 	template: string
 	variables: Record<string, unknown>
 	/** Passed through so an engine can honour the connection's prompt format. */
@@ -45,7 +68,17 @@ const renderers = new Map<string, { render: TemplateRenderer; owner: string }>()
 function renderHandlebars(ctx: RenderContext): string {
 	const handlebars = Handlebars.create()
 	registerContextHandlebarsHelpers(handlebars, {
-		promptFormat: ctx.promptFormat ?? "vicuna"
+		// `promptFormatOf`, not `?? "vicuna"`: the block helpers hand this
+		// straight to `PromptBlockFormatter.makeBlock`, whose `default:` arm is
+		// ChatML — so an empty string here silently rewraps every block in a
+		// format nobody chose. See the helper's own note.
+		//
+		// ⚠ This fallback used to fire on **every pipeline run**, not just the
+		// ones with nothing to say: nothing supplied `promptFormat` to the
+		// render at all, so a ChatML connection got Vicuna and the receipt said
+		// otherwise. It reaches only genuine absences now — a preview with no
+		// connection in scope, an admin editing a template.
+		promptFormat: promptFormatOf(ctx.promptFormat)
 	})
 	return handlebars.compile(ctx.template)(ctx.variables)
 }

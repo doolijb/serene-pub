@@ -2,6 +2,12 @@
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { onMount, onDestroy } from "svelte"
+	import {
+		HISTORY_TYPE_ID,
+		type LorebookEntry
+	} from "$lib/shared/entries/types"
+
+	type History = LorebookEntry<typeof HISTORY_TYPE_ID>
 
 	interface Props {
 		lorebookId: number
@@ -18,14 +24,14 @@
 	}: Props = $props()
 
 	const socket = useTypedSocket()
-	let historyEntryList = $state<SelectHistoryEntry[]>([])
+	let historyEntryList = $state<History[]>([])
 	let isCreatingEntry = $state(false)
 
-	function dateValue(e: SelectHistoryEntry): number {
+	function dateValue(e: History): number {
 		return e.year * 10000 + (e.month ?? 0) * 100 + (e.day ?? 0)
 	}
 
-	function formatDate(e: SelectHistoryEntry): string {
+	function formatDate(e: History): string {
 		let s = `Yr. ${e.year}`
 		if (e.month != null) s += ` Mo. ${e.month}`
 		if (e.day != null) s += ` Day ${e.day}`
@@ -56,75 +62,69 @@
 	function handleNewEntry() {
 		if (!latestEntry || isCreatingEntry) return
 		isCreatingEntry = true
-		socket.emit("historyEntries:iterateNext", {
-			id: latestEntry.id
-		} satisfies Sockets.HistoryEntries.IterateNext.Params)
+		socket.emit("entries:iterateNext", {
+			id: latestEntry.id,
+			typeId: HISTORY_TYPE_ID
+		} satisfies Sockets.Entries.IterateNext.Params)
 	}
 
 	$effect(() => {
 		if (lorebookId) {
-			socket.emit("historyEntries:list", {
-				lorebookId
-			} satisfies Sockets.HistoryEntries.List.Params)
+			socket.emit("entries:list", {
+				lorebookId,
+				typeId: HISTORY_TYPE_ID
+			} satisfies Sockets.Entries.List.Params)
 		}
 	})
 
-	function handleHistoryEntriesList(
-		msg: Sockets.HistoryEntries.List.Response
-	) {
-		if (msg.lorebookId === lorebookId) {
-			historyEntryList = msg.historyEntryList
-		}
+	// One namespace now, so a list for some *other* tab's type arrives here
+	// too — the type filter is what makes that harmless.
+	function handleHistoryEntriesList(msg: Sockets.Entries.List.Response) {
+		if (msg.lorebookId === lorebookId && msg.typeId === HISTORY_TYPE_ID)
+			historyEntryList = msg.entryList as History[]
 	}
 
-	function handleIterateNext(
-		msg: Sockets.HistoryEntries.IterateNext.Response
-	) {
+	function handleIterateNext(msg: Sockets.Entries.IterateNext.Response) {
 		isCreatingEntry = false
-		if (msg.historyEntry) {
-			const exists = historyEntryList.some(
-				(e) => e.id === msg.historyEntry.id
-			)
-			if (!exists)
-				historyEntryList = [...historyEntryList, msg.historyEntry]
-			onOpenEntry(lorebookId, msg.historyEntry.id)
+		const entry = msg.entry as History | undefined
+		if (entry) {
+			const exists = historyEntryList.some((e) => e.id === entry.id)
+			if (!exists) historyEntryList = [...historyEntryList, entry]
+			onOpenEntry(lorebookId, entry.id)
 		}
 	}
 
-	function handleHistoryEntryCreate(
-		msg: Sockets.HistoryEntries.Create.Response
-	) {
-		if (msg.historyEntry?.lorebookId === lorebookId) {
-			const exists = historyEntryList.some(
-				(e) => e.id === msg.historyEntry.id
-			)
-			if (!exists)
-				historyEntryList = [...historyEntryList, msg.historyEntry]
-		}
+	function handleHistoryEntryCreate(msg: Sockets.Entries.Create.Response) {
+		if (
+			msg.entry?.lorebookId !== lorebookId ||
+			msg.entry?.typeId !== HISTORY_TYPE_ID
+		)
+			return
+		const entry = msg.entry as History
+		if (!historyEntryList.some((e) => e.id === entry.id))
+			historyEntryList = [...historyEntryList, entry]
 	}
 
-	function handleHistoryEntryUpdate(
-		msg: Sockets.HistoryEntries.Update.Response
-	) {
-		if (msg.historyEntry) {
-			historyEntryList = historyEntryList.map((e) =>
-				e.id === msg.historyEntry.id ? msg.historyEntry : e
-			)
-		}
+	function handleHistoryEntryUpdate(msg: Sockets.Entries.Update.Response) {
+		if (msg.entry?.typeId !== HISTORY_TYPE_ID) return
+		const entry = msg.entry as History
+		historyEntryList = historyEntryList.map((e) =>
+			e.id === entry.id ? entry : e
+		)
 	}
 
 	onMount(() => {
-		socket.on("historyEntries:list", handleHistoryEntriesList)
-		socket.on("historyEntries:iterateNext", handleIterateNext)
-		socket.on("historyEntries:create", handleHistoryEntryCreate)
-		socket.on("historyEntries:update", handleHistoryEntryUpdate)
+		socket.on("entries:list", handleHistoryEntriesList)
+		socket.on("entries:iterateNext", handleIterateNext)
+		socket.on("entries:create", handleHistoryEntryCreate)
+		socket.on("entries:update", handleHistoryEntryUpdate)
 	})
 
 	onDestroy(() => {
-		socket.off("historyEntries:list", handleHistoryEntriesList)
-		socket.off("historyEntries:iterateNext", handleIterateNext)
-		socket.off("historyEntries:create", handleHistoryEntryCreate)
-		socket.off("historyEntries:update", handleHistoryEntryUpdate)
+		socket.off("entries:list", handleHistoryEntriesList)
+		socket.off("entries:iterateNext", handleIterateNext)
+		socket.off("entries:create", handleHistoryEntryCreate)
+		socket.off("entries:update", handleHistoryEntryUpdate)
 	})
 </script>
 

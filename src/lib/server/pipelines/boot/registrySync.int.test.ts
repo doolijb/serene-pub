@@ -33,7 +33,9 @@ import { and, eq } from "drizzle-orm"
 let db: TestDb
 
 beforeAll(async () => {
-	db = await createTestDb()
+	// Skipped: this file counts what the sync inserted, and a pre-published
+	// entry type would be a row it did not insert.
+	db = await createTestDb({ skipEntryTypes: true })
 }, 60_000)
 
 describe("type registry sync", () => {

@@ -10,6 +10,7 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -44,12 +45,20 @@ describe("backfillRelationshipHistoryEntries", () => {
 			.values({ userId: user.id, name: "LB" })
 			.returning()
 		const [entryA] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id, year: 200, content: "A" })
+			.insert(schema.lorebookEntries)
+			.values(
+				historyValues([
+					{ lorebookId: lorebook.id, year: 200, content: "A" }
+				])
+			)
 			.returning()
 		const [entryB] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id, year: 300, content: "B" })
+			.insert(schema.lorebookEntries)
+			.values(
+				historyValues([
+					{ lorebookId: lorebook.id, year: 300, content: "B" }
+				])
+			)
 			.returning()
 		const [scene] = await testDb
 			.insert(schema.scenes)

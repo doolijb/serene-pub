@@ -190,7 +190,6 @@
 	const thinkingContent = $derived((msg.metadata as any)?.thinking || "")
 	const hasThinking = $derived(thinkingContent.trim().length > 0)
 
-
 	// Optional per-trigger focus note for a Narrator response (e.g. "Focus on
 	// the weather turning stormy") — set once at trigger time, see sessions.ts's
 	// narratorMessage.metadata.narratorInstructions.
@@ -286,450 +285,484 @@
 		100
 	)}{msg.content.length > 100 ? '...' : ''}"
 >
-			<!-- `flex` rather than the default inline formatting context: the
+	<!-- `flex` rather than the default inline formatting context: the
 			     avatar button is inline-block, so in a block wrapper it sat on a
 			     text baseline and left ~6px of descender space underneath. That
 			     padded every character message's header to 70px against a
 			     narrator message's 64px, for no visible reason. -->
-		<span class="sp-msg-avatar shrink-0">
-			{#if msg.isNarratorResponse}
-				<span class="sp-msg-avatar-glyph" title={narratorDisplayName} aria-hidden="true">
-					<Icons.CloudSun size="1.5em" />
-				</span>
-			{:else}
-				<!-- Avatar rendered directly (not the reusable Avatar component):
+	<span class="sp-msg-avatar shrink-0">
+		{#if msg.isNarratorResponse}
+			<span
+				class="sp-msg-avatar-glyph"
+				title={narratorDisplayName}
+				aria-hidden="true"
+			>
+				<Icons.CloudSun size="1.5em" />
+			</span>
+		{:else}
+			<!-- Avatar rendered directly (not the reusable Avatar component):
 				     Skeleton hard-sizes its avatar root, which fought the layout
 				     CSS. A plain img/glyph lets each style pack own size and shape. -->
-				<button
-					class="sp-msg-avatar-btn"
-					onclick={() => onAvatarClick(character)}
-					title="View Avatar"
-					aria-label="View avatar"
-				>
-					{#if avatarSrc(character)}
-						<img
-							class="sp-msg-avatar-img"
-							src={avatarSrc(character)}
-							alt={resolveCharacterName(character, "Unknown")}
-						/>
-					{:else}
-						<span class="sp-msg-avatar-glyph" aria-hidden="true">
-							<Icons.UserRound size="1.5em" />
-						</span>
-					{/if}
-				</button>
-			{/if}
-		</span>
-				<!-- msg-ctrl-row pins this line to exactly one control-height and
+			<button
+				class="sp-msg-avatar-btn"
+				onclick={() => onAvatarClick(character)}
+				title="View Avatar"
+				aria-label="View avatar"
+			>
+				{#if avatarSrc(character)}
+					<img
+						class="sp-msg-avatar-img"
+						src={avatarSrc(character)}
+						alt={resolveCharacterName(character, "Unknown")}
+					/>
+				{:else}
+					<span class="sp-msg-avatar-glyph" aria-hidden="true">
+						<Icons.UserRound size="1.5em" />
+					</span>
+				{/if}
+			</button>
+		{/if}
+	</span>
+	<!-- msg-ctrl-row pins this line to exactly one control-height and
 				     centers its contents, so the name's optical center lands on
 				     the same y as the "..." button's. This replaces the two `mt-1`
 				     nudges that used to fake it for the adjacent icons only. -->
-				<div class="sp-msg-identity msg-ctrl-row min-w-0 gap-1">
-					{#if msg.isNarratorResponse}
-						<span
-							class="sp-msg-name funnel-display mx-0 min-w-0 truncate px-0 text-[1.1em] font-bold"
-							title={narratorDisplayName}
-						>
-							{narratorDisplayName}
-						</span>
-					{:else}
-						<button
-							class="sp-msg-name funnel-display mx-0 min-w-0 truncate px-0 text-[1.1em] font-bold hover:underline"
-							onclick={(e) => onCharacterNameClick(msg)}
-							title={resolveCharacterName(character, "Unknown")}
-						>
-							{resolveCharacterName(character, "Unknown")}
-						</button>
-					{/if}
-					{#if isGreeting}
-						<span
-							class="text-muted inline-flex shrink-0 items-center text-xs opacity-50"
-							title="Greeting message"
-						>
-							<Icons.Handshake size={16} aria-hidden="true" />
-						</span>
-					{/if}
-					<!-- No wrapper element: EmbeddingStatusIcon renders nothing at
+	<div class="sp-msg-identity msg-ctrl-row min-w-0 gap-1">
+		{#if msg.isNarratorResponse}
+			<span
+				class="sp-msg-name funnel-display mx-0 min-w-0 truncate px-0 text-[1.1em] font-bold"
+				title={narratorDisplayName}
+			>
+				{narratorDisplayName}
+			</span>
+		{:else}
+			<button
+				class="sp-msg-name funnel-display mx-0 min-w-0 truncate px-0 text-[1.1em] font-bold hover:underline"
+				onclick={(e) => onCharacterNameClick(msg)}
+				title={resolveCharacterName(character, "Unknown")}
+			>
+				{resolveCharacterName(character, "Unknown")}
+			</button>
+		{/if}
+		{#if isGreeting}
+			<span
+				class="text-muted inline-flex shrink-0 items-center text-xs opacity-50"
+				title="Greeting message"
+			>
+				<Icons.Handshake size={16} aria-hidden="true" />
+			</span>
+		{/if}
+		<!-- No wrapper element: EmbeddingStatusIcon renders nothing at
 					     all when status is hidden/none (the common case), and a
 					     wrapper would still consume a gap-1 for an empty span. Its
 					     own root already carries inline-flex/items-center/shrink-0. -->
-					<EmbeddingStatusIcon embeddingModel={msg.embeddingModel} />
-					{#if isEditing}
-						<!-- Carries the state in words, not just colour — the
+		<EmbeddingStatusIcon embeddingModel={msg.embeddingModel} />
+		{#if isEditing}
+			<!-- Carries the state in words, not just colour — the
 						     ring around the card is the fast visual cue, this
 						     is what makes it unambiguous (and announceable). -->
-						<span
-							class="preset-tonal-warning text-warning-800-200 inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[0.7rem] font-semibold tracking-wide uppercase"
-						>
-							<Icons.Pencil size={11} aria-hidden="true" />
-							Editing
-							{#if isEditDirty}
-								<span
-									class="bg-warning-500 h-1.5 w-1.5 rounded-full"
-									title="Unsaved changes"
-									aria-label="Unsaved changes"
-								></span>
-							{/if}
-						</span>
-					{/if}
-				</div>
+			<span
+				class="preset-tonal-warning text-warning-800-200 inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[0.7rem] font-semibold tracking-wide uppercase"
+			>
+				<Icons.Pencil size={11} aria-hidden="true" />
+				Editing
+				{#if isEditDirty}
+					<span
+						class="bg-warning-500 h-1.5 w-1.5 rounded-full"
+						title="Unsaved changes"
+						aria-label="Unsaved changes"
+					></span>
+				{/if}
+			</span>
+		{/if}
+	</div>
 
-		{#if isEditing}
-			<div class="sp-msg-controls msg-ctrl-col">
-				<!-- msg-ctrl-btn-labeled, not msg-ctrl-btn: it is the same
+	{#if isEditing}
+		<div class="sp-msg-controls msg-ctrl-col">
+			<!-- msg-ctrl-btn-labeled, not msg-ctrl-btn: it is the same
 				     fixed box on mobile (so the header height contract in
 				     app.css holds) and only widens to fit the word on lg.
 				     Icon-only Save/Cancel gave the two most consequential
 				     buttons in the app the least identity. -->
-				<div class="msg-ctrl-row justify-end gap-2">
-					<button
-						class="btn msg-ctrl-btn-labeled preset-tonal-surface"
-						title="Cancel edit (Esc)"
-						aria-label="Cancel edit"
-						onclick={onCancelEditMessage}
-					>
-						<Icons.X aria-hidden="true" />
-						<span class="hidden text-sm lg:inline">Cancel</span>
-					</button>
-					<button
-						class="btn msg-ctrl-btn-labeled preset-filled-success-500"
-						title={canSaveEdit
-							? "Save changes (Ctrl+Enter)"
-							: isEditDirty
-								? "A message can't be saved empty"
-								: "No changes to save"}
-						aria-label="Save edit"
-						disabled={!canSaveEdit}
-						onclick={handleMessageUpdate}
-					>
-						<Icons.Save aria-hidden="true" />
-						<span class="hidden text-sm lg:inline">Save</span>
-					</button>
-				</div>
+			<div class="msg-ctrl-row justify-end gap-2">
+				<button
+					class="btn msg-ctrl-btn-labeled preset-tonal-surface"
+					title="Cancel edit (Esc)"
+					aria-label="Cancel edit"
+					onclick={onCancelEditMessage}
+				>
+					<Icons.X aria-hidden="true" />
+					<span class="hidden text-sm lg:inline">Cancel</span>
+				</button>
+				<button
+					class="btn msg-ctrl-btn-labeled preset-filled-success-500"
+					title={canSaveEdit
+						? "Save changes (Ctrl+Enter)"
+						: isEditDirty
+							? "A message can't be saved empty"
+							: "No changes to save"}
+					aria-label="Save edit"
+					disabled={!canSaveEdit}
+					onclick={handleMessageUpdate}
+				>
+					<Icons.Save aria-hidden="true" />
+					<span class="hidden text-sm lg:inline">Save</span>
+				</button>
 			</div>
-		{:else}
-			<div class="sp-msg-controls msg-ctrl-col">
-				<div class="msg-ctrl-row flex-wrap justify-end gap-2">
-					{#if messageControls}
-						{@render messageControls(msg)}
-					{:else}
-						<MessageControls
-							{msg}
-							{isLastMessage}
-							{canRegenerateLastMessage}
-							{editSessionMessage}
-							{hasGeneratingMessage}
-							{canControl}
-							{onEditMessage}
-							{onHideMessage}
-							{onDeleteMessage}
-							{onRegenerateMessage}
-							{onContinueMessage}
-							{onAbortMessage}
-							{onBranchMessage}
-							{onStartSummarization}
-							{menuTriggers}
-							{onFireTrigger}
-							open={openMsgControlsMenu === msg.id}
-							onOpenChange={(isOpen) =>
-								(openMsgControlsMenu = isOpen
-									? msg.id
-									: undefined)}
-						/>
-					{/if}
-				</div>
-				{#if showSwipes}
-					<div class="msg-ctrl-row justify-end gap-2">
-						{#if msg.metadata?.swipes?.currentIdx !== null && msg.metadata?.swipes?.currentIdx !== undefined && msg.metadata?.swipes?.history && msg.metadata?.swipes.history.length > 1}
-							<button
-								class="btn msg-ctrl-btn hover:preset-tonal-success"
-								title="Swipe Left"
-								aria-label="Previous swipe"
-								onclick={() => onSwipeLeft(msg)}
-								disabled={!!editSessionMessage ||
-									!msg.metadata.swipes.currentIdx ||
-									msg.metadata.swipes.history.length <= 1 ||
-									msg.isGenerating ||
-									!canControl}
-							>
-								<Icons.ChevronLeft aria-hidden="true" />
-							</button>
-							<!-- tabular-nums + a min width so stepping 9/12 -> 10/12
-							     doesn't shove the arrows sideways. -->
-							<span
-								class="text-surface-700-300 min-w-[3.5ch] text-center text-sm tabular-nums select-none"
-								aria-live="polite"
-							>
-								{(msg.metadata.swipes.currentIdx || 0) + 1}/{msg
-									.metadata.swipes.history.length}
-							</span>
-						{/if}
+		</div>
+	{:else}
+		<div class="sp-msg-controls msg-ctrl-col">
+			<div class="msg-ctrl-row flex-wrap justify-end gap-2">
+				{#if messageControls}
+					{@render messageControls(msg)}
+				{:else}
+					<MessageControls
+						{msg}
+						{isLastMessage}
+						{canRegenerateLastMessage}
+						{editSessionMessage}
+						{hasGeneratingMessage}
+						{canControl}
+						{onEditMessage}
+						{onHideMessage}
+						{onDeleteMessage}
+						{onRegenerateMessage}
+						{onContinueMessage}
+						{onAbortMessage}
+						{onBranchMessage}
+						{onStartSummarization}
+						{menuTriggers}
+						{onFireTrigger}
+						open={openMsgControlsMenu === msg.id}
+						onOpenChange={(isOpen) =>
+							(openMsgControlsMenu = isOpen ? msg.id : undefined)}
+					/>
+				{/if}
+			</div>
+			{#if showSwipes}
+				<div class="msg-ctrl-row justify-end gap-2">
+					{#if msg.metadata?.swipes?.currentIdx !== null && msg.metadata?.swipes?.currentIdx !== undefined && msg.metadata?.swipes?.history && msg.metadata?.swipes.history.length > 1}
 						<button
 							class="btn msg-ctrl-btn hover:preset-tonal-success"
-							title="Swipe Right"
-							aria-label="Next swipe"
-							onclick={() => onSwipeRight(msg)}
+							title="Swipe Left"
+							aria-label="Previous swipe"
+							onclick={() => onSwipeLeft(msg)}
 							disabled={!!editSessionMessage ||
-								!canSwipeRightVal ||
+								!msg.metadata.swipes.currentIdx ||
+								msg.metadata.swipes.history.length <= 1 ||
+								msg.isGenerating ||
 								!canControl}
 						>
-							<Icons.ChevronRight aria-hidden="true" />
+							<Icons.ChevronLeft aria-hidden="true" />
 						</button>
-					</div>
-				{:else if isLastMessage}
-					<!-- Hold the swipe row's space on the last message only. That
+						<!-- tabular-nums + a min width so stepping 9/12 -> 10/12
+							     doesn't shove the arrows sideways. -->
+						<span
+							class="text-surface-700-300 min-w-[3.5ch] text-center text-sm tabular-nums select-none"
+							aria-live="polite"
+						>
+							{(msg.metadata.swipes.currentIdx || 0) + 1}/{msg
+								.metadata.swipes.history.length}
+						</span>
+					{/if}
+					<button
+						class="btn msg-ctrl-btn hover:preset-tonal-success"
+						title="Swipe Right"
+						aria-label="Next swipe"
+						onclick={() => onSwipeRight(msg)}
+						disabled={!!editSessionMessage ||
+							!canSwipeRightVal ||
+							!canControl}
+					>
+						<Icons.ChevronRight aria-hidden="true" />
+					</button>
+				</div>
+			{:else if isLastMessage}
+				<!-- Hold the swipe row's space on the last message only. That
 					     is the one place showSwipes still toggles (it follows
 					     canRegenerateLastMessage, so it flips off during
 					     generation and back on after), and reserving it there
 					     stops the message resizing under the reader. Reserving on
 					     every message instead would add a dead row to the whole
 					     backlog to fix a pop that can no longer happen there. -->
-					<div class="msg-ctrl-row" aria-hidden="true"></div>
-				{/if}
-			</div>
-		{/if}
+				<div class="msg-ctrl-row" aria-hidden="true"></div>
+			{/if}
+		</div>
+	{/if}
 
 	<div class="sp-msg-content">
-	<!-- Extra instructions block (Narrator's optional per-trigger focus note).
+		<!-- Extra instructions block (Narrator's optional per-trigger focus note).
 	     Suppressed when parts render: the section part carries it there. -->
-	{#if hasNarratorInstructions && !partsNative}
-		<div class="mx-2 mt-2">
-			<button
-				class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
-				onclick={toggleNarratorInstructions}
-				title={isNarratorInstructionsExpanded
-					? "Collapse extra instructions"
-					: "Expand extra instructions"}
-				aria-expanded={isNarratorInstructionsExpanded}
-				aria-controls="extra-instructions-{msg.id}"
-			>
-				<Icons.Target size={16} aria-hidden="true" />
-				<span>Extra Instructions</span>
-				<Icons.ChevronDown
-					size={16}
-					aria-hidden="true"
-					class={`transition-transform ${isNarratorInstructionsExpanded ? "rotate-180" : ""}`}
-				/>
-			</button>
-			<!-- grid 0fr -> 1fr is the only way to transition to/from an auto
+		{#if hasNarratorInstructions && !partsNative}
+			<div class="mx-2 mt-2">
+				<button
+					class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
+					onclick={toggleNarratorInstructions}
+					title={isNarratorInstructionsExpanded
+						? "Collapse extra instructions"
+						: "Expand extra instructions"}
+					aria-expanded={isNarratorInstructionsExpanded}
+					aria-controls="extra-instructions-{msg.id}"
+				>
+					<Icons.Target size={16} aria-hidden="true" />
+					<span>Extra Instructions</span>
+					<Icons.ChevronDown
+						size={16}
+						aria-hidden="true"
+						class={`transition-transform ${isNarratorInstructionsExpanded ? "rotate-180" : ""}`}
+					/>
+				</button>
+				<!-- grid 0fr -> 1fr is the only way to transition to/from an auto
 			     height in pure CSS. The inner overflow-hidden wrapper is
 			     required: the track collapses to 0 but the content keeps its
 			     intrinsic height, so without it the text spills out. Content
 			     stays mounted while collapsed (rather than the old {#if})
 			     because a transition needs both endpoints to exist — hence
 			     `inert`, since a 0fr track still contains focusable content. -->
-			<div
-				id="extra-instructions-{msg.id}"
-				class="grid transition-[grid-template-rows] duration-200 ease-out"
-				style:grid-template-rows={isNarratorInstructionsExpanded
-					? "1fr"
-					: "0fr"}
-				inert={!isNarratorInstructionsExpanded}
-			>
-				<div class="overflow-hidden">
-					<div
-						class="rendered-session-message-content pb-2 text-sm opacity-80"
-					>
-						{@html renderMarkdownWithQuotedText(
-							narratorInstructionsContent
-						)}
+				<div
+					id="extra-instructions-{msg.id}"
+					class="grid transition-[grid-template-rows] duration-200 ease-out"
+					style:grid-template-rows={isNarratorInstructionsExpanded
+						? "1fr"
+						: "0fr"}
+					inert={!isNarratorInstructionsExpanded}
+				>
+					<div class="overflow-hidden">
+						<div
+							class="rendered-session-message-content pb-2 text-sm opacity-80"
+						>
+							{@html renderMarkdownWithQuotedText(
+								narratorInstructionsContent
+							)}
+						</div>
 					</div>
 				</div>
 			</div>
-		</div>
-	{/if}
+		{/if}
 
-	<!-- Thinking block (native model thinking, e.g. Ollama think: true).
+		<!-- Thinking block (native model thinking, e.g. Ollama think: true).
 	     Suppressed when parts render: the thinking part carries it there. -->
-	{#if hasThinking && !partsNative}
-		<div class="mx-2 mt-2">
-			<button
-				class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
-				onclick={toggleThinking}
-				title={isThinkingExpanded
-					? "Collapse thinking"
-					: "Expand thinking"}
-				aria-expanded={isThinkingExpanded}
-				aria-controls="thinking-{msg.id}"
-			>
-				<Icons.BrainCircuit size={16} aria-hidden="true" />
-				<span>Thinking</span>
-				<Icons.ChevronDown
-					size={16}
-					aria-hidden="true"
-					class={`transition-transform ${isThinkingExpanded ? "rotate-180" : ""}`}
-				/>
-			</button>
-			<!-- See the Extra Instructions block above for why this is a grid
+		{#if hasThinking && !partsNative}
+			<div class="mx-2 mt-2">
+				<button
+					class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
+					onclick={toggleThinking}
+					title={isThinkingExpanded
+						? "Collapse thinking"
+						: "Expand thinking"}
+					aria-expanded={isThinkingExpanded}
+					aria-controls="thinking-{msg.id}"
+				>
+					<Icons.BrainCircuit size={16} aria-hidden="true" />
+					<span>Thinking</span>
+					<Icons.ChevronDown
+						size={16}
+						aria-hidden="true"
+						class={`transition-transform ${isThinkingExpanded ? "rotate-180" : ""}`}
+					/>
+				</button>
+				<!-- See the Extra Instructions block above for why this is a grid
 			     rather than an {#if}. -->
-			<div
-				id="thinking-{msg.id}"
-				class="grid transition-[grid-template-rows] duration-200 ease-out"
-				style:grid-template-rows={isThinkingExpanded ? "1fr" : "0fr"}
-				inert={!isThinkingExpanded}
-			>
-				<div class="overflow-hidden">
-					<div
-						class="rendered-session-message-content pb-2 text-sm opacity-80"
-					>
-						{@html renderMarkdownWithQuotedText(thinkingContent)}
+				<div
+					id="thinking-{msg.id}"
+					class="grid transition-[grid-template-rows] duration-200 ease-out"
+					style:grid-template-rows={isThinkingExpanded
+						? "1fr"
+						: "0fr"}
+					inert={!isThinkingExpanded}
+				>
+					<div class="overflow-hidden">
+						<div
+							class="rendered-session-message-content pb-2 text-sm opacity-80"
+						>
+							{@html renderMarkdownWithQuotedText(
+								thinkingContent
+							)}
+						</div>
 					</div>
 				</div>
 			</div>
-		</div>
-	{/if}
+		{/if}
 
-	<!-- Padding-free wrapper whose only job is to carry the height animation —
+		<!-- Padding-free wrapper whose only job is to carry the height animation —
 	     see animateHeight, which observes the child and drives this element.
 	     Disabled while generating: during streaming the height changes on every
 	     token, and an animation would trail the text permanently instead of
 	     settling. The discrete swaps are what this is for — swiping between
 	     alternatives, entering/leaving edit, an error card replacing content. -->
-	<div
-		use:animateHeight={{
-			enabled: !msg.isGenerating,
-			scrollContainer: "#session-history"
-		}}
-	>
-		<div class="sp-msg-body flex h-fit text-left">
-			{#if msg.error}
-				{#if msg.content}
-					<div class="rendered-session-message-content mb-2">
-						{@html renderMarkdownWithQuotedText(msg.content)}
-					</div>
-				{/if}
-				<div
-					class="border-error-500 bg-error-500/10 flex w-full flex-col gap-2 rounded-lg border p-3"
-				>
-					<div class="text-error-700-300 flex items-center gap-2">
-						<Icons.AlertTriangle size={16} />
-						<span class="text-sm font-medium">
-							{msg.error.message}
-						</span>
-						{#if msg.error.code}
-							<span class="text-xs opacity-60">
-								({msg.error.code})
-							</span>
-						{/if}
-					</div>
-					<button
-						class="btn preset-filled-primary-500 btn-sm w-fit"
-						onclick={(e) => onRegenerateMessage(e, msg)}
+		<div
+			use:animateHeight={{
+				enabled: !msg.isGenerating,
+				scrollContainer: "#session-history"
+			}}
+		>
+			<div class="sp-msg-body flex h-fit text-left">
+				{#if msg.error}
+					{#if msg.content}
+						<div class="rendered-session-message-content mb-2">
+							{@html renderMarkdownWithQuotedText(msg.content)}
+						</div>
+					{/if}
+					<div
+						class="border-error-500 bg-error-500/10 flex w-full flex-col gap-2 rounded-lg border p-3"
 					>
-						<Icons.RotateCcw size={14} />
-						Retry
-					</button>
-				</div>
-			{:else if msg.content === "" && msg.isGenerating}
-				{#if msg.generationStage === "queued"}
-					<div class="flex items-center gap-2">
-						<div class="text-surface-700-300 text-sm">Queued</div>
-						<div
-							class="bg-surface-400-600 h-2 w-2 rounded-full"
-						></div>
-					</div>
-				{:else if msg.generationStage === "loading"}
-					<div class="flex items-center gap-2">
-						<div class="text-surface-700-300 text-sm">
-							Loading model…
+						<div class="text-error-700-300 flex items-center gap-2">
+							<Icons.AlertTriangle size={16} />
+							<span class="text-sm font-medium">
+								{msg.error.message}
+							</span>
+							{#if msg.error.code}
+								<span class="text-xs opacity-60">
+									({msg.error.code})
+								</span>
+							{/if}
 						</div>
-						<div
-							class="bg-surface-400-600 h-2 w-2 animate-pulse rounded-full"
-						></div>
+						<!--
+						Presence IS permission. `error.connection` is connection
+						identity, and the server removes that key from every
+						payload a non-admin receives (connections/visibility.ts),
+						so a client that renders it whenever it arrives shows it
+						only to administrators — no role check here to drift out
+						of step with the one on the server.
+
+						The sentence above names no connection by construction,
+						which is what lets it be stored and shown to anybody; this
+						is where an administrator gets back the half it left out —
+						which connection, and what the service actually said.
+					-->
+						{#if msg.error.connection?.name || msg.error.connection?.detail}
+							<pre
+								class="text-error-700-300 max-h-40 overflow-auto rounded bg-black/10 p-2 font-mono text-xs whitespace-pre-wrap">{[
+									msg.error.connection.name,
+									msg.error.connection.model
+								]
+									.filter(Boolean)
+									.join(" · ")}{msg.error.connection.detail
+									? `${msg.error.connection.name ? "\n" : ""}${msg.error.connection.detail}`
+									: ""}</pre>
+						{/if}
+						<button
+							class="btn preset-filled-primary-500 btn-sm w-fit"
+							onclick={(e) => onRegenerateMessage(e, msg)}
+						>
+							<Icons.RotateCcw size={14} />
+							Retry
+						</button>
 					</div>
-				{:else if GeneratingAnimationComponent}
-					{@render GeneratingAnimationComponent()}
-				{:else}
-					<div class="flex items-center gap-2">
-						<div class="text-surface-600-400 animate-pulse text-sm">
-							{speakerDisplayName
-								? `${speakerDisplayName} is typing...`
-								: "Typing..."}
+				{:else if msg.content === "" && msg.isGenerating}
+					{#if msg.generationStage === "queued"}
+						<div class="flex items-center gap-2">
+							<div class="text-surface-700-300 text-sm">
+								Queued
+							</div>
+							<div
+								class="bg-surface-400-600 h-2 w-2 rounded-full"
+							></div>
 						</div>
-						<div
-							class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
-						></div>
-					</div>
-				{/if}
-			{:else if isEditing}
-				<!-- One surface, not three. This used to be a rounded-xl
+					{:else if msg.generationStage === "loading"}
+						<div class="flex items-center gap-2">
+							<div class="text-surface-700-300 text-sm">
+								Loading model…
+							</div>
+							<div
+								class="bg-surface-400-600 h-2 w-2 animate-pulse rounded-full"
+							></div>
+						</div>
+					{:else if GeneratingAnimationComponent}
+						{@render GeneratingAnimationComponent()}
+					{:else}
+						<div class="flex items-center gap-2">
+							<div
+								class="text-surface-600-400 animate-pulse text-sm"
+							>
+								{speakerDisplayName
+									? `${speakerDisplayName} is typing...`
+									: "Typing..."}
+							</div>
+							<div
+								class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
+							></div>
+						</div>
+					{/if}
+				{:else if isEditing}
+					<!-- One surface, not three. This used to be a rounded-xl
 				     `bg-surface-100-900` panel nested in the rounded-lg message
 				     card, wrapping a bordered `input` textarea with a third
 				     background — three radii and three fills stacked inside
 				     each other. The panel now *is* the field: the textarea
 				     below drops its own border, radius and fill (see
 				     `edit-field`) and simply lays text on this one. -->
-				<div
-					class="edit-surface bg-surface-100-900 w-full rounded-lg px-2 pt-0.5 pb-1"
-				>
-					<MessageComposer
-						bind:markdown={editContent}
-						onSend={handleMessageUpdate}
-						onCancel={() => onCancelEditMessage()}
-						enterBehavior="newline"
-						placeholder="Edit this message…"
-						autofocus
-						textareaClasses="edit-field field-sizing-content w-full"
-					/>
-					<!-- Transient, unlike the session bar's — it only exists while
+					<div
+						class="edit-surface bg-surface-100-900 w-full rounded-lg px-2 pt-0.5 pb-1"
+					>
+						<MessageComposer
+							bind:markdown={editContent}
+							onSend={handleMessageUpdate}
+							onCancel={() => onCancelEditMessage()}
+							enterBehavior="newline"
+							placeholder="Edit this message…"
+							autofocus
+							textareaClasses="edit-field field-sizing-content w-full"
+						/>
+						<!-- Transient, unlike the session bar's — it only exists while
 					     an edit is open, so it can't become the permanent noise
 					     that hint was deliberately removed from below. -->
-					<div
-						class="text-surface-600-400 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 pt-1 text-xs"
-					>
-						<span>
-							<kbd class="kbd-hint">Ctrl</kbd>
-							+
-							<kbd class="kbd-hint">Enter</kbd>
-							to save
-						</span>
-						<span aria-hidden="true" class="opacity-40">·</span>
-						<span>
-							<kbd class="kbd-hint">Esc</kbd>
-							to cancel
-						</span>
-						{#if isEditDirty}
-							<span
-								class="text-warning-600-400 ml-auto font-medium"
-							>
-								Unsaved changes
+						<div
+							class="text-surface-600-400 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 pt-1 text-xs"
+						>
+							<span>
+								<kbd class="kbd-hint">Ctrl</kbd>
+								+
+								<kbd class="kbd-hint">Enter</kbd>
+								to save
 							</span>
-						{/if}
+							<span aria-hidden="true" class="opacity-40">·</span>
+							<span>
+								<kbd class="kbd-hint">Esc</kbd>
+								to cancel
+							</span>
+							{#if isEditDirty}
+								<span
+									class="text-warning-600-400 ml-auto font-medium"
+								>
+									Unsaved changes
+								</span>
+							{/if}
+						</div>
 					</div>
-				</div>
-			{:else if partsNative}
-				<!-- The parts-native body (20 §2): markdown, thinking,
+				{:else if partsNative}
+					<!-- The parts-native body (20 §2): markdown, thinking,
 				     sections, steps — everything typed renders from parts. -->
-				<div class="w-full">
-					<MessagePartsView
-						messageId={msg.id}
-						parts={msg.parts!}
-						activeRevisions={msg.activeRevisions ?? { "0": 0 }}
-						onContentClick={handleContentClick}
-						onAction={(fn, payload) =>
-							onBlockAction?.(fn, msg, payload)}
-					/>
-				</div>
-			{:else}
-				<!-- Click delegation only matters for the inline `<img>` tags
+					<div class="w-full">
+						<MessagePartsView
+							messageId={msg.id}
+							parts={msg.parts!}
+							activeRevisions={msg.activeRevisions ?? { "0": 0 }}
+							onContentClick={handleContentClick}
+							onAction={(fn, payload) =>
+								onBlockAction?.(fn, msg, payload)}
+						/>
+					</div>
+				{:else}
+					<!-- Click delegation only matters for the inline `<img>` tags
 			     inside the rendered markdown, which are individually
 			     cursor-pointer and already reachable/described via normal
 			     image semantics (alt text) — the div itself is a passive
 			     text container, not a single interactive control. -->
-				<!-- svelte-ignore a11y_click_events_have_key_events -->
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<div
-					class="rendered-session-message-content {msg.isGenerating &&
-					msg.content
-						? 'animate-pulse'
-						: ''}"
-					onclick={handleContentClick}
-				>
-					{@html renderMarkdownWithQuotedText(msg.content)}
-				</div>
-			{/if}
+					<!-- svelte-ignore a11y_click_events_have_key_events -->
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<div
+						class="rendered-session-message-content {msg.isGenerating &&
+						msg.content
+							? 'animate-pulse'
+							: ''}"
+						onclick={handleContentClick}
+					>
+						{@html renderMarkdownWithQuotedText(msg.content)}
+					</div>
+				{/if}
+			</div>
 		</div>
-	</div>
 	</div>
 </div>
 

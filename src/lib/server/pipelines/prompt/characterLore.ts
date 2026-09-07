@@ -14,11 +14,15 @@ import type {
 } from "$lib/server/pipelines/prompt/promptTypes"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { stripCardDecorators } from "$lib/shared/utils/characterCardDecorators"
+import {
+	CHARACTER_LORE_TYPE_ID,
+	type LorebookEntry
+} from "$lib/shared/entries/types"
 
-export function populateLorebookEntryBindings(
-	entry: SelectWorldLoreEntry | SelectCharacterLoreEntry | SelectHistoryEntry,
+export function populateLorebookEntryBindings<T extends LorebookEntry>(
+	entry: T,
 	session: BasePromptSession
-): SelectWorldLoreEntry | SelectCharacterLoreEntry | SelectHistoryEntry {
+): T {
 	// Applies regardless of whether {{char:#}} binding substitution below
 	// also applies (the early return right after this doesn't cover every
 	// entry), since decorator lines must never leak into the rendered
@@ -91,7 +95,7 @@ export function populateLorebookEntryBindings(
  * for it, narrator included.
  */
 export function isCharacterLoreEntryVisible(
-	entry: SelectCharacterLoreEntry,
+	entry: LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>,
 	session: BasePromptSession,
 	currentCharacterId: number | null
 ): boolean {
@@ -119,7 +123,9 @@ export function isCharacterLoreEntryVisible(
 
 export function attachCharacterLoreToCharacters(
 	characters: TemplateContextCharacter[],
-	includedCharacterLoreEntries: SelectCharacterLoreEntry[],
+	includedCharacterLoreEntries: LorebookEntry<
+		typeof CHARACTER_LORE_TYPE_ID
+	>[],
 	session: BasePromptSession
 ): TemplateContextCharacter[] {
 	const loreMap: Record<number, Record<string, string>> = {}
@@ -134,7 +140,14 @@ export function attachCharacterLoreToCharacters(
 		)
 		if (binding && binding.characterId) {
 			if (!loreMap[binding.characterId]) loreMap[binding.characterId] = {}
-			loreMap[binding.characterId][entry.name!] = entry.content
+			// `?? ""` and not `!`. The `title` column is nullable on the
+			// unified table where the three it replaced were `NOT NULL`, so
+			// the non-null assertion was a claim the type no longer backs.
+			// The empty string is what `toEntryRow` already produces for a
+			// title-less row of a type that declares a `title` role — the
+			// assertion's runtime behaviour, written down rather than
+			// asserted.
+			loreMap[binding.characterId][entry.name ?? ""] = entry.content
 		}
 	})
 	return characters.map((char) => {

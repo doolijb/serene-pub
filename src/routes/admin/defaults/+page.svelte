@@ -48,6 +48,9 @@
 	import * as Icons from "@lucide/svelte"
 	import { capabilityLabel, capabilityTagline } from "@serene-pub/sdk"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import Select, {
+		type SelectOption
+	} from "$lib/client/components/inputs/Select.svelte"
 	import { outputKindOf } from "$lib/shared/capabilities/samplingShape"
 	import type { ComboRow } from "$lib/shared/capabilities/combos"
 
@@ -163,6 +166,29 @@
 			rows.find((r) => samplingOptions[r.id]?.length)?.id ?? ""
 		] ?? []
 
+	/**
+	 * `""` is a listed choice and never a placeholder — "the backend uses its
+	 * own" is a real answer here, and the card says so out loud. So these lists
+	 * carry it as a row rather than leaving the picker clearable, which would
+	 * offer the same outcome with none of the wording.
+	 */
+	const samplingItems = (rows: SamplingOption[]): SelectOption[] => [
+		{ value: "", label: "Backend's own defaults" },
+		...rows.map((o) => ({ value: String(o.id), label: o.name }))
+	]
+
+	/**
+	 * The group control's rows, with `"mixed"` among them only while the cards
+	 * disagree — same reason the old markup only emitted that `<option>` then.
+	 * It is a label for a state, not a choice: `setGroupSampling` refuses it.
+	 */
+	const groupSamplingItems = (rows: ComboRow[]): SelectOption[] => [
+		...(groupSampling(rows) === "mixed"
+			? [{ value: "mixed", label: "Mixed" }]
+			: []),
+		...samplingItems(groupSamplingOptions(rows))
+	]
+
 	function setHalf(
 		capability: string,
 		half: "connection" | "sampling",
@@ -251,6 +277,7 @@
 		{@const GroupIcon = (Icons[GROUP_ICONS[group.kind] ?? "Boxes"] ??
 			Icons.Boxes) as any}
 		{@const samplingChoices = groupSamplingOptions(group.rows)}
+		{@const groupValue = groupSampling(group.rows)}
 		<section class="mb-5">
 			<header
 				class="border-surface-200-700 mb-2 flex flex-wrap items-center gap-3 border-b pb-2"
@@ -264,30 +291,26 @@
 					<!-- One control for the group: these capabilities share a
 					     sampling vocabulary, so asking per card would ask the
 					     same question three times and let the answers drift. -->
-					<label
+					<div
 						class="text-surface-600-400 flex items-center gap-2 text-xs"
 					>
-						Sampling
-						<select
-							class="select select-sm w-52"
-							value={groupSampling(group.rows)}
-							onchange={(e) =>
-								setGroupSampling(
-									group.rows,
-									e.currentTarget.value
-								)}
-						>
-							{#if groupSampling(group.rows) === "mixed"}
-								<option value="mixed">Mixed</option>
-							{/if}
-							<option value="">Backend's own defaults</option>
-							{#each samplingChoices as opt (opt.id)}
-								<option value={String(opt.id)}>
-									{opt.name}
-								</option>
-							{/each}
-						</select>
-					</label>
+						<span>Sampling</span>
+						<!-- The visible word above is the header's, so the
+						     control's own label is hidden rather than dropped:
+						     the picker still has to answer "sampling of what"
+						     when it is reached on its own. A `<label for>` on
+						     that span cannot do the job — the input's id is
+						     generated inside the component. -->
+						<Select
+							class="w-52"
+							label="Sampling"
+							labelHidden
+							options={groupSamplingItems(group.rows)}
+							value={groupValue}
+							onValueChange={(v) =>
+								setGroupSampling(group.rows, v)}
+						/>
+					</div>
 				{/if}
 			</header>
 
@@ -297,7 +320,6 @@
 					{@const current = defaults[combo.id]?.connectionId ?? null}
 					{@const eligible = hasEligible(combo.id)}
 					{@const cardSampling = samplingOptions[combo.id] ?? []}
-					{@const groupValue = groupSampling(group.rows)}
 					{@const cardValue = String(
 						defaults[combo.id]?.samplingConfigId ?? ""
 					)}
@@ -450,26 +472,26 @@
 								</button>
 								{#if openOverrides[combo.id]}
 									<div class="mt-1 flex items-center gap-2">
-										<select
-											class="select select-sm w-52"
+										<!-- A real hidden `<label>` rather than
+										     the `aria-label` this carried: the
+										     disclosure button names the field
+										     visually, and a label element is
+										     what the picker's own API takes. -->
+										<Select
+											class="w-52"
+											label={`Sampling config for ${capabilityLabel(combo.id as any)}`}
+											labelHidden
+											options={samplingItems(
+												cardSampling
+											)}
 											value={cardValue}
-											onchange={(e) =>
+											onValueChange={(v) =>
 												setHalf(
 													combo.id,
 													"sampling",
-													e.currentTarget.value
+													v
 												)}
-											aria-label={`Sampling config for ${capabilityLabel(combo.id as any)}`}
-										>
-											<option value="">
-												Backend's own defaults
-											</option>
-											{#each cardSampling as opt (opt.id)}
-												<option value={String(opt.id)}>
-													{opt.name}
-												</option>
-											{/each}
-										</select>
+										/>
 										<span
 											class="text-surface-600-400 text-xs"
 										>

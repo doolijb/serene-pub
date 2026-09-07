@@ -12,6 +12,8 @@ import {
 import { readFileSync } from "fs"
 import { join } from "path"
 import { dev } from "$app/environment"
+import { resolveUserLanguage } from "$lib/server/i18n"
+import { assertSupportedLanguage } from "./language"
 
 const DEFAULT_BACKGROUNDS_MANIFEST = "/backgrounds/defaults/manifest.json"
 
@@ -205,7 +207,14 @@ export const userSettingsGet: Handler<
 							),
 					backgroundOpacity: settings.backgroundOpacity ?? 75,
 					charaVaultIncludeNsfw:
-						settings.charaVaultIncludeNsfw ?? false
+						settings.charaVaultIncludeNsfw ?? false,
+					// Two fields, not one (R5). `language` is what this user
+					// *chose* — null meaning "follow the instance default" — and
+					// the picker needs that distinction to show "Server default"
+					// as its own option. `effectiveLanguage` is the resolved
+					// answer everything that draws the interface reads.
+					language: settings.language ?? null,
+					effectiveLanguage: (await resolveUserLanguage(userId)).code
 				}
 			}
 
@@ -603,6 +612,58 @@ export const userSettingsUpdateBackground: Handler<
 	}
 }
 
+/**
+ * Pick a UI language, or null to follow the instance default (R5).
+ *
+ * `null` is a first-class value here rather than "clear the field": it is what
+ * puts a user back under the admin's choice, so an account that never expressed
+ * a preference — and one that expressed it and then withdrew it — end in the
+ * same state. Without it, opening the picker once would silently pin someone
+ * away from the server default forever.
+ */
+export const userSettingsUpdateLanguage: Handler<
+	Sockets.UserSettings.UpdateLanguage.Params,
+	Sockets.UserSettings.UpdateLanguage.Response
+> = {
+	event: "userSettings:updateLanguage",
+	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
+		try {
+			const userId = socket.user!.id
+			if (!userId) {
+				throw new Error("User not authenticated")
+			}
+
+			// Refused rather than stored, so that "an unknown code resolves to
+			// English" stays a downgrade path for an install that lost a
+			// language, not the normal way a bad value gets in.
+			const language =
+				params.language === null
+					? null
+					: assertSupportedLanguage(params.language)
+
+			await db
+				.update(schema.userSettings)
+				.set({ language })
+				.where(eq(schema.userSettings.userId, userId))
+
+			const res: Sockets.UserSettings.UpdateLanguage.Response = {
+				success: true,
+				language,
+				effectiveLanguage: (await resolveUserLanguage(userId)).code
+			}
+			emitToUser("userSettings:updateLanguage", res)
+			await userSettingsGet.handler(socket, {}, emitToUser)
+			return res
+		} catch (error: any) {
+			console.error("Update language error:", error)
+			emitToUser("userSettings:updateLanguage:error", {
+				error: error?.message ?? "Failed to update language"
+			})
+			throw error
+		}
+	}
+}
+
 // Registration function for all user settings handlers
 export function registerUserSettingsHandlers(
 	socket: AuthenticatedSocket,
@@ -621,6 +682,7 @@ export function registerUserSettingsHandlers(
 	register(socket, userSettingsUpdateShowAllCharacterFields, emitToUser)
 	register(socket, userSettingsUpdateTheme, emitToUser)
 	register(socket, userSettingsUpdateDarkMode, emitToUser)
+	register(socket, userSettingsUpdateLanguage, emitToUser)
 	register(socket, userSettingsListBackgrounds, emitToUser)
 	register(socket, userSettingsUploadBackground, emitToUser)
 	register(socket, userSettingsDeleteBackground, emitToUser)

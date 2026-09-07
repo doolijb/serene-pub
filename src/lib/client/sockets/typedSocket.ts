@@ -238,6 +238,10 @@ export type SocketEventMap = {
 		params: Sockets.Plugins.Active.Params
 		response: Sockets.Plugins.Active.Response
 	}
+	"plugins:abort": {
+		params: Sockets.Plugins.Abort.Params
+		response: Sockets.Plugins.Abort.Response
+	}
 	"plugins:kill": {
 		params: Sockets.Plugins.Kill.Params
 		response: Sockets.Plugins.Kill.Response
@@ -253,6 +257,10 @@ export type SocketEventMap = {
 	"plugins:setPermission": {
 		params: Sockets.Plugins.SetPermission.Params
 		response: Sockets.Plugins.SetPermission.Response
+	}
+	"plugins:reviewPermissions": {
+		params: Sockets.Plugins.ReviewPermissions.Params
+		response: Sockets.Plugins.ReviewPermissions.Response
 	}
 	"plugins:unload": {
 		params: Sockets.Plugins.Unload.Params
@@ -883,18 +891,6 @@ export type SocketEventMap = {
 		params: any
 		response: any
 	}
-	historyEntryList: {
-		params: any
-		response: any
-	}
-	worldLoreEntryList: {
-		params: any
-		response: any
-	}
-	characterLoreEntryList: {
-		params: any
-		response: any
-	}
 	ollamaModelsList: {
 		params: any
 		response: any
@@ -1172,6 +1168,31 @@ export type SocketEventMap = {
 		params: Sockets.Pipelines.Run.Response
 		response: Sockets.Pipelines.Run.Response
 	}
+	// Retrieval, explained (design §9). A projection OF the receipt rather
+	// than a second read of it: `pipelines:run` already carries the raw blob,
+	// and a panel that pulled decisions out of it client-side would be a
+	// second copy of what a decision means. Owner-scoped exactly like the
+	// receipt it explains.
+	"pipelines:runExplain": {
+		params: Sockets.Pipelines.RunExplain.Params
+		response: Sockets.Pipelines.RunExplain.Response
+	}
+	"pipelines:runExplain:error": {
+		params: never
+		response: { error?: string }
+	}
+	// Everything that has ever fired in one session — the aggregate the single
+	// run's explanation cannot give, because a decision belongs to a turn.
+	// Gated twice: the session must be reachable (owner or guest) and the runs
+	// summed are the asker's own.
+	"pipelines:sessionEntryUsage": {
+		params: Sockets.Pipelines.SessionEntryUsage.Params
+		response: Sockets.Pipelines.SessionEntryUsage.Response
+	}
+	"pipelines:sessionEntryUsage:error": {
+		params: never
+		response: { error?: string }
+	}
 	"pipelines:clearOption:error": {
 		params: never
 		response: { error?: string }
@@ -1213,6 +1234,26 @@ export type SocketEventMap = {
 		response: Sockets.Pipelines.SelectConfig.Response
 	}
 	"pipelines:selectConfig:error": {
+		params: never
+		response: { error?: string }
+	}
+	// What publishing a new version did to a configuration. Read on its own
+	// event rather than with the view: the view is re-emitted by every write,
+	// and a banner that came back on each refresh could not be dismissed.
+	// A dismissal answers here too, with what is left.
+	"pipelines:configNotices": {
+		params: Sockets.Pipelines.ConfigNotices.Params
+		response: Sockets.Pipelines.ConfigNotices.Response
+	}
+	"pipelines:configNotices:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:acknowledgeConfigNotices": {
+		params: Sockets.Pipelines.AcknowledgeConfigNotices.Params
+		response: Sockets.Pipelines.AcknowledgeConfigNotices.Response
+	}
+	"pipelines:acknowledgeConfigNotices:error": {
 		params: never
 		response: { error?: string }
 	}
@@ -1442,7 +1483,7 @@ export type SocketEventMap = {
 	}
 	"pipelines:resolveReview:error": {
 		params: never
-		response: { error?: string }
+		response: { error?: string; id?: string }
 	}
 	"pipelines:reviewRequested": {
 		params: never
@@ -1980,6 +2021,28 @@ export type SocketEventMap = {
 		params: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Params
 		response: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Response
 	}
+	"systemSettings:updateDefaultLanguage": {
+		params: Sockets.SystemSettings.UpdateDefaultLanguage.Params
+		response: Sockets.SystemSettings.UpdateDefaultLanguage.Response
+	}
+	"systemSettings:updateDefaultLanguage:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"systemSettings:updateAutoTranslate": {
+		params: Sockets.SystemSettings.UpdateAutoTranslate.Params
+		response: Sockets.SystemSettings.UpdateAutoTranslate.Response
+	}
+	"systemSettings:updateAutoTranslate:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
+	// UI language events (R5)
+	"language:catalog": {
+		params: Sockets.Language.Catalog.Params
+		response: Sockets.Language.Catalog.Response
+	}
 
 	// Vectorization events
 	"vectorizationConfig:get": {
@@ -2120,6 +2183,14 @@ export type SocketEventMap = {
 		params: Sockets.UserSettings.UpdateDarkMode.Params
 		response: Sockets.UserSettings.UpdateDarkMode.Response
 	}
+	"userSettings:updateLanguage": {
+		params: Sockets.UserSettings.UpdateLanguage.Params
+		response: Sockets.UserSettings.UpdateLanguage.Response
+	}
+	"userSettings:updateLanguage:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 
 	// Lorebook events
 	"lorebooks:list": {
@@ -2199,70 +2270,50 @@ export type SocketEventMap = {
 		response: Sockets.ErrorResponse
 	}
 
-	// History Entries events
-	"historyEntries:list": {
-		params: Sockets.HistoryEntries.List.Params
-		response: Sockets.HistoryEntries.List.Response
+	// Lorebook entry events — one namespace, every declared type
+	"entries:list": {
+		params: Sockets.Entries.List.Params
+		response: Sockets.Entries.List.Response
 	}
-	"historyEntries:create": {
-		params: Sockets.HistoryEntries.Create.Params
-		response: Sockets.HistoryEntries.Create.Response
+	"entries:create": {
+		params: Sockets.Entries.Create.Params
+		response: Sockets.Entries.Create.Response
 	}
-	"historyEntries:update": {
-		params: Sockets.HistoryEntries.Update.Params
-		response: Sockets.HistoryEntries.Update.Response
+	"entries:update": {
+		params: Sockets.Entries.Update.Params
+		response: Sockets.Entries.Update.Response
 	}
-	"historyEntries:delete": {
-		params: Sockets.HistoryEntries.Delete.Params
-		response: Sockets.HistoryEntries.Delete.Response
+	// Synthesised by `register()` on a throw — the entry handlers refuse by
+	// throwing rather than by returning an error field, so a caller that is
+	// not the manager itself (the retrieval explanation's levers) has nowhere
+	// else to learn the write was refused.
+	"entries:update:error": {
+		params: never
+		response: { error?: string }
 	}
-	"historyEntries:iterateNext": {
-		params: Sockets.HistoryEntries.IterateNext.Params
-		response: Sockets.HistoryEntries.IterateNext.Response
+	"entries:delete": {
+		params: Sockets.Entries.Delete.Params
+		response: Sockets.Entries.Delete.Response
 	}
-
-	// World Lore Entries events
-	"worldLoreEntries:list": {
-		params: Sockets.WorldLoreEntries.List.Params
-		response: Sockets.WorldLoreEntries.List.Response
+	"entries:updatePositions": {
+		params: Sockets.Entries.UpdatePositions.Params
+		response: Sockets.Entries.UpdatePositions.Response
 	}
-	"worldLoreEntries:create": {
-		params: Sockets.WorldLoreEntries.Create.Params
-		response: Sockets.WorldLoreEntries.Create.Response
+	"entries:iterateNext": {
+		params: Sockets.Entries.IterateNext.Params
+		response: Sockets.Entries.IterateNext.Response
 	}
-	"worldLoreEntries:update": {
-		params: Sockets.WorldLoreEntries.Update.Params
-		response: Sockets.WorldLoreEntries.Update.Response
+	"entries:testRetrieval": {
+		params: Sockets.Entries.TestRetrieval.Params
+		response: Sockets.Entries.TestRetrieval.Response
 	}
-	"worldLoreEntries:delete": {
-		params: Sockets.WorldLoreEntries.Delete.Params
-		response: Sockets.WorldLoreEntries.Delete.Response
-	}
-	"worldLoreEntries:updatePositions": {
-		params: Sockets.WorldLoreEntries.UpdatePositions.Params
-		response: Sockets.WorldLoreEntries.UpdatePositions.Response
-	}
-
-	// Character Lore Entries events
-	"characterLoreEntries:list": {
-		params: Sockets.CharacterLoreEntries.List.Params
-		response: Sockets.CharacterLoreEntries.List.Response
-	}
-	"characterLoreEntries:create": {
-		params: Sockets.CharacterLoreEntries.Create.Params
-		response: Sockets.CharacterLoreEntries.Create.Response
-	}
-	"characterLoreEntries:update": {
-		params: Sockets.CharacterLoreEntries.Update.Params
-		response: Sockets.CharacterLoreEntries.Update.Response
-	}
-	"characterLoreEntries:delete": {
-		params: Sockets.CharacterLoreEntries.Delete.Params
-		response: Sockets.CharacterLoreEntries.Delete.Response
-	}
-	"characterLoreEntries:updatePositions": {
-		params: Sockets.CharacterLoreEntries.UpdatePositions.Params
-		response: Sockets.CharacterLoreEntries.UpdatePositions.Response
+	// The handler answers its own refusals on the channel above, with the
+	// sentence that says which one it was. This is `register()`'s synthesised
+	// fallback for a throw it did not expect — listened to so the editor stops
+	// waiting rather than spinning forever on a generic failure.
+	"entries:testRetrieval:error": {
+		params: never
+		response: { error?: string }
 	}
 
 	// Scenes events

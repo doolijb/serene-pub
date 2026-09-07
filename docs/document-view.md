@@ -66,7 +66,7 @@ A search-and-browse view of this same set of docs, reflowed for Document View â€
 
 ### Connections, Ollama Manager, KoboldCPP Manager (Admin Only)
 
-List, create, edit, and set-default for AI provider connections, plus the same download/browse/connect workflows as the standard site's Ollama and KoboldCPP managers when those are turned on. See [Connections](./connections.md).
+List, create, edit, and set-default for AI service connections, plus the same download/browse/connect workflows as the standard site's Ollama and KoboldCPP managers when those are turned on. See [Connections](./connections.md).
 
 ### System Settings (Admin Only)
 

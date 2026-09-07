@@ -5,6 +5,7 @@
 	import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { onMount, onDestroy, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { textModelOptions } from "$lib/client/components/koboldcppManager/modelKindView"
@@ -80,6 +81,11 @@
 	// has since been classified as an image model — see textModelOptions.
 	let modelSelect = $derived(
 		textModelOptions(availableModels, connection?.model)
+	)
+	// KoboldCPP identifies a managed model by its file name, so the name is
+	// both the stored value and the label.
+	let modelOptions = $derived(
+		modelSelect.options.map((m) => ({ value: m.name, label: m.name }))
 	)
 
 	function refreshModels() {
@@ -199,7 +205,10 @@
 
 	<div class="mt-4 flex flex-col gap-1">
 		<div class="flex items-center justify-between">
-			<label class="font-semibold" for="model">Model</label>
+			<!-- A span, not a label: the accessible name comes from the picker's
+			     own hidden label, and a <label for> in this header row would
+			     have to name an id the picker does not expose. -->
+			<span class="font-semibold">Model</span>
 			<button
 				type="button"
 				class="btn btn-sm preset-filled-surface-400-600"
@@ -212,17 +221,16 @@
 				/>
 			</button>
 		</div>
-		<select
-			id="model"
-			class="select w-full"
+		<Select
+			label="Model"
+			labelHidden
+			options={modelOptions}
 			bind:value={connection.model}
+			placeholder="Select a model…"
+			emptyMessage="No text models found."
+			clearable
 			disabled={!managerEnabled}
-		>
-			<option value="">Select a model…</option>
-			{#each modelSelect.options as model}
-				<option value={model.name}>{model.name}</option>
-			{/each}
-		</select>
+		/>
 		{#if modelSelect.selectedIsImageModel}
 			<p class="text-warning-700-300 text-xs">
 				This is an image model — KoboldCPP can't answer chat with it,
@@ -238,33 +246,19 @@
 	</div>
 
 	{#if !koboldCppFields?.useSession}
-		<div class="mt-2 flex flex-col gap-1">
-			<label class="font-semibold" for="promptFormat">
-				Prompt Format
-			</label>
-			<select
-				id="promptFormat"
-				class="select bg-background border-muted w-full rounded border"
-				bind:value={connection.promptFormat}
-			>
-				{#each PromptFormats.options as option}
-					<option value={option.value}>{option.label}</option>
-				{/each}
-			</select>
-		</div>
+		<Select
+			class="mt-2"
+			label="Prompt Format"
+			options={PromptFormats.options}
+			bind:value={connection.promptFormat}
+		/>
 	{/if}
-	<div class="mt-2 flex flex-col gap-1">
-		<label class="font-semibold" for="tokenCounter">Token Counter</label>
-		<select
-			id="tokenCounter"
-			bind:value={connection.tokenCounter}
-			class="select bg-background border-muted w-full rounded border"
-		>
-			{#each TokenCounterOptions.options as t}
-				<option value={t.value}>{t.label}</option>
-			{/each}
-		</select>
-	</div>
+	<Select
+		class="mt-2"
+		label="Token Counter"
+		options={TokenCounterOptions.options}
+		bind:value={connection.tokenCounter}
+	/>
 	<details class="mt-4">
 		<summary class="cursor-pointer font-semibold">
 			Advanced Settings

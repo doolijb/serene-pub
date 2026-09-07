@@ -2,13 +2,34 @@
  * The permission model — fine-grained, manifest-declared, deny-by-default.
  *
  * A plugin's manifest *declares* what it wants across three axes: system
- * capabilities (storage, network), SP Core resources, and events. Nothing is
- * ambient — a capability the manifest did not declare is simply never derived.
+ * permissions (storage, network), SP Core resources, and events. Nothing is
+ * ambient — a permission the manifest did not declare is simply never derived.
  * On top of the declaration, an **admin can deny any single permission** at the
  * plugin level; the *effective* set is `declared − admin-denied`, and every
- * capability grant the runtime hands out (the storage quota + admin override,
+ * permission grant the sandbox hands out (the storage quota + admin override,
  * the per-host fetch allowlist) is derived from the effective set, never the raw
  * manifest.
+ *
+ * **Nothing is granted until an admin has looked at it.** A declaration is a
+ * request, not a grant: the effective set is `declared − admin-denied − *not yet
+ * reviewed*`, so a plugin whose permissions no one has reviewed loads and runs
+ * with every grant-bearing permission refused — inert, not broken. It keeps the
+ * ambient stdlib, `ctx.log`, `ctx.random`, `ctx.now` and `ctx.signal`; it gets
+ * no storage, no network, no resources and no events.
+ *
+ * The review record lives in the same `adminDenied` list, as one reserved
+ * `__reviewed:…` entry per permission an admin has decided about — the key plus
+ * whatever payload was shown with it, so a raised storage quota is a new request
+ * rather than an old approval. Deliberately per-permission rather than a
+ * whole-set fingerprint, and deliberately not keyed to the bundle hash: an
+ * update that asks for nothing new carries every marker forward and needs no
+ * re-consent, while anything the plugin did not ask for before has no marker and
+ * is therefore denied until someone looks. (The bundle hash is the
+ * *other* gate, in `store.ts`: changed bytes force `enabled=false`, so new code
+ * cannot run under the old approval either.) Storing it here rather than in a
+ * column of its own is what lets every existing reader — `eventHost`,
+ * `frameHost`, `store` — inherit the gate without changing a line: they already
+ * pass `adminDenied` to `effectivePermissions`.
  *
  * A second layer — **per-user opt-in for account-affecting permissions** (the
  * resource/event kinds) and the session account-visibility view — is marked
@@ -27,7 +48,7 @@ export interface Permission {
 	label: string
 	/**
 	 * Touches the triggering user's own account/data → needs per-user opt-in
-	 * (the resource and event kinds). System capabilities do not.
+	 * (the resource and event kinds). System permissions do not.
 	 */
 	accountAffecting: boolean
 	/** Declaration payload (storage quota, network hosts, …). */
@@ -53,7 +74,7 @@ export interface PluginManifest {
 	 * produced the manifest. The two models still diverge on more than this
 	 * (transport, hook identity) — see the divergence note in project memory —
 	 * but permission-reading is made tolerant of both. An unrecognised key is
-	 * *surfaced* as a generic capability, never dropped: the audit screen must
+	 * *surfaced* as a generic permission, never dropped: the audit screen must
 	 * show everything a manifest declared, or a denial cannot target it.
 	 */
 	permissions?: DeclaredPermissions | string[]
@@ -61,7 +82,7 @@ export interface PluginManifest {
 
 const DEFAULT_STORAGE_QUOTA = 5 * 1024 * 1024
 /**
- * The band the runtime clamps any declared storage quota into (1 KB … 256 MB),
+ * The band the sandbox clamps any declared storage quota into (1 KB … 256 MB),
  * mirroring the author-side compiler's range but enforced *here* rather than
  * trusted from the manifest.
  */
@@ -76,11 +97,11 @@ export const MAX_STORAGE_QUOTA = 256 * 1024 * 1024
 export const MAX_ADMIN_STORAGE_QUOTA = 2 * 1024 * 1024 * 1024
 
 /**
- * The storage quota the runtime will actually enforce, from whatever a manifest
+ * The storage quota the sandbox will actually enforce, from whatever a manifest
  * declared. Defense-in-depth, and the single point of truth for *both* accepted
  * manifest shapes: the author-side compiler already rejects an out-of-range
  * quota, but install stores the manifest verbatim and never re-compiles it, so
- * the untrusted value is validated here, where every capability grant is
+ * the untrusted value is validated here, where every permission grant is
  * derived. Non-positive / non-finite → the safe default; anything real is
  * clamped into [MIN, MAX] so a manifest can neither break its own storage (a
  * negative quota would reject every write) nor grant itself an unbounded share
@@ -112,7 +133,7 @@ export function normalizeAdminStorageQuota(raw: unknown): number | undefined {
 
 /**
  * Fold either accepted permission shape into the object form plus the keys that
- * matched no known capability (surfaced, not discarded).
+ * matched no known permission (surfaced, not discarded).
  */
 function toDeclared(
 	permissions: DeclaredPermissions | string[] | null | undefined
@@ -137,7 +158,9 @@ function toDeclared(
 			// value (NaN, negative) folds to the default there rather than
 			// diverging between the array and object forms.
 			storage = true
-			declared.storage = { quotaBytes: Number(raw.slice("storage:".length)) }
+			declared.storage = {
+				quotaBytes: Number(raw.slice("storage:".length))
+			}
 		} else if (raw === "network") network = true
 		else if (raw.startsWith("network:")) {
 			network = true
@@ -173,9 +196,9 @@ export function declaredPermissions(
 		})
 	}
 	if (p.network) {
-		const hosts = (Array.isArray(p.network.hosts) ? p.network.hosts : []).filter(
-			(h): h is string => typeof h === "string" && h.length > 0
-		)
+		const hosts = (
+			Array.isArray(p.network.hosts) ? p.network.hosts : []
+		).filter((h): h is string => typeof h === "string" && h.length > 0)
 		if (hosts.length === 0) {
 			// A `network` request that names no host reaches nothing; surfaced so an
 			// admin still sees (and could deny) the inert declaration.
@@ -216,29 +239,106 @@ export function declaredPermissions(
 			accountAffecting: true
 		})
 	// Keys the compiled form declared but this build does not recognise. Shown
-	// so an admin sees (and can deny) every declared capability; treated
-	// conservatively as a non-account-affecting system capability for display.
+	// so an admin sees (and can deny) every declared permission; treated
+	// conservatively as a non-account-affecting system permission for display.
 	for (const key of unknown)
 		out.push({
 			key,
 			kind: "system",
-			label: `Declared capability: ${key}`,
+			label: `Declared permission: ${key}`,
 			accountAffecting: false
 		})
 	return out
 }
 
-/** The effective set: declared minus what an admin has denied. */
+/* ── consent: the install-time review gate ───────────────────────────────── */
+
+/**
+ * The reserved prefix marking one reviewed key inside `adminDenied`. A manifest
+ * *can* declare a key in this namespace (the compiled array form passes any
+ * string through, and this file surfaces rather than drops what it does not
+ * recognise) — which is why `reviewMark` prefixes unconditionally: a declared
+ * `__reviewed:x` is marked `__reviewed:__reviewed:x`, never as a review of `x`.
+ * The matching guard is on the write side, in the socket handler: a key in this
+ * namespace is not togglable, so a denial cannot be spent forging a review.
+ */
+const REVIEW_PREFIX = "__reviewed:"
+
+/**
+ * The stored marker recording that an admin has decided about one declared
+ * permission — its key **and the payload they were shown with it**.
+ *
+ * The payload matters because the key alone is not the whole request: `storage`
+ * asks for a number of bytes, and a plugin that consented at 1 MB and returns
+ * asking for 256 MB is asking for something new under an old approval. Folding
+ * the config in makes that a fresh request, and does it generically, so the same
+ * holds for any permission that grows a declaration later. It is a no-op for the
+ * ones whose payload is already in the key (`network:<host>`) or absent
+ * (resources, events).
+ */
+export function reviewMark(p: Permission | string): string {
+	if (typeof p === "string") return REVIEW_PREFIX + p
+	return p.config
+		? `${REVIEW_PREFIX}${p.key}#${JSON.stringify(p.config)}`
+		: REVIEW_PREFIX + p.key
+}
+
+/** True for a stored entry that is a review marker rather than a denial. */
+export function isReviewMark(entry: string): boolean {
+	return entry.startsWith(REVIEW_PREFIX)
+}
+
+/** The markers a full review of `declared` writes — the admin's consent act. */
+export function reviewMarks(declared: Permission[]): string[] {
+	return declared.map((p) => reviewMark(p))
+}
+
+/**
+ * Declared permissions no admin has decided about yet. These are refused (see
+ * `effectivePermissions`) and are what the admin surface reports as waiting.
+ */
+export function pendingPermissions(
+	declared: Permission[],
+	adminDenied: string[] | null | undefined
+): Permission[] {
+	const marks = new Set(adminDenied ?? [])
+	return declared.filter((p) => !marks.has(reviewMark(p)))
+}
+
+/**
+ * Is this plugin waiting on an admin? True while any declared permission is
+ * unreviewed — a fresh install, or an update that asks for something new. A
+ * plugin that declares nothing is never waiting: there is nothing to consent to.
+ */
+export function needsReview(
+	manifest: PluginManifest | null | undefined,
+	adminDenied: string[] | null | undefined
+): boolean {
+	const declared = declaredPermissions(manifest)
+	return pendingPermissions(declared, adminDenied).length > 0
+}
+
+/**
+ * The effective set: what the sandbox actually hands out.
+ *
+ * Two subtractions, not one. An admin **denial** removes a permission they
+ * looked at and said no to; the **absence of a review marker** removes one they
+ * have not looked at at all. Both are refusals, and the second is the one that
+ * makes a declaration a request rather than a grant — a plugin installed and
+ * enabled but never reviewed reaches nothing.
+ */
 export function effectivePermissions(
 	declared: Permission[],
 	adminDenied: string[] | null | undefined
 ): Permission[] {
-	const denied = new Set(adminDenied ?? [])
-	return declared.filter((p) => !denied.has(p.key))
+	const entries = new Set(adminDenied ?? [])
+	return declared.filter(
+		(p) => !entries.has(p.key) && entries.has(reviewMark(p))
+	)
 }
 
 /**
- * Storage quota (bytes) the runtime will enforce, or undefined to deny storage.
+ * Storage quota (bytes) the sandbox will enforce, or undefined to deny storage.
  * Storage must be granted (an admin can deny the `storage` key outright); when it
  * is, a valid admin override supersedes the manifest-derived quota, otherwise the
  * manifest value (author-band-clamped) stands.
@@ -282,8 +382,10 @@ export interface PermissionState {
 	kind: PermissionKind
 	label: string
 	accountAffecting: boolean
-	/** False when an admin has denied it. */
+	/** In force right now — reviewed *and* not denied. */
 	granted: boolean
+	/** Declared, but no admin has decided about it yet. Refused meanwhile. */
+	pending: boolean
 }
 
 /** The full permission picture for one plugin, for the admin UI. */
@@ -291,12 +393,13 @@ export function permissionStates(
 	manifest: PluginManifest | null | undefined,
 	adminDenied: string[] | null | undefined
 ): PermissionState[] {
-	const denied = new Set(adminDenied ?? [])
+	const entries = new Set(adminDenied ?? [])
 	return declaredPermissions(manifest).map((p) => ({
 		key: p.key,
 		kind: p.kind,
 		label: p.label,
 		accountAffecting: p.accountAffecting,
-		granted: !denied.has(p.key)
+		granted: !entries.has(p.key) && entries.has(reviewMark(p)),
+		pending: !entries.has(reviewMark(p))
 	}))
 }

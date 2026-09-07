@@ -20,7 +20,7 @@
  * only make the panel polite about a rule it cannot enforce.
  */
 import { db } from "$lib/server/db"
-import { and, eq, desc, asc, inArray } from "drizzle-orm"
+import { and, eq, desc, asc, inArray, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { Handler } from "$lib/shared/events"
 import {
@@ -46,10 +46,17 @@ import {
 import { CULL_ORIGINALS_CONFIRM } from "$lib/shared/constants/MediaCleanup"
 
 /**
- * Resolve the display name of whatever each row is grouped under, in two
+ * Resolve the display name of whatever each row is grouped under, in three
  * queries rather than one per row. The panel groups and sorts by this, so it
  * cannot be left to the client to look up — the client has no reason to be
  * holding every character in memory just to label an image.
+ *
+ * Every branch answers the SAME question: does the parent this file names still
+ * exist? A null name means it does not, and the panel reads that as "orphaned —
+ * safe to reclaim". Sessions used to be hardcoded to null here, which made
+ * every image a live session had ever generated advertise itself as reclaimable
+ * — the exact opposite of the truth, and pointed at files that are in someone's
+ * chat history right now.
  */
 async function attachmentLabels(rows: FileRow[]) {
 	const charIds = [
@@ -57,6 +64,9 @@ async function attachmentLabels(rows: FileRow[]) {
 	] as number[]
 	const personaIds = [
 		...new Set(rows.map((r) => r.personaId).filter(Boolean))
+	] as number[]
+	const sessionIds = [
+		...new Set(rows.map((r) => r.sessionId).filter(Boolean))
 	] as number[]
 
 	const characters = charIds.length
@@ -71,11 +81,24 @@ async function attachmentLabels(rows: FileRow[]) {
 				columns: { id: true, name: true }
 			})
 		: []
+	const sessions = sessionIds.length
+		? await db.query.sessions.findMany({
+				where: inArray(schema.sessions.id, sessionIds),
+				columns: { id: true, name: true }
+			})
+		: []
 
 	const charName = new Map(
 		characters.map((c) => [c.id, c.nickname || c.name])
 	)
 	const personaName = new Map(personas.map((p) => [p.id, p.name]))
+	// The ROW, not its name: `sessions.name` is optional, so an unnamed live
+	// session has a null name and a deleted one has no row — and collapsing
+	// those two into one null is what made this bug. The placeholder matches
+	// the one the vectorization queue already shows for the same reason.
+	const sessionName = new Map(
+		sessions.map((s) => [s.id, s.name || `Session #${s.id}`])
+	)
 
 	return (row: FileRow) => {
 		if (row.characterId)
@@ -94,7 +117,114 @@ async function attachmentLabels(rows: FileRow[]) {
 				name: personaName.get(row.personaId) ?? null
 			}
 		if (row.sessionId)
-			return { type: "session" as const, id: row.sessionId, name: null }
+			return {
+				type: "session" as const,
+				id: row.sessionId,
+				name: sessionName.get(row.sessionId) ?? null
+			}
+		return null
+	}
+}
+
+/**
+ * How many DISTINCT messages render each file — ONE query for the whole panel,
+ * never one per row.
+ *
+ * **Why this exists.** A message part addresses a file by id
+ * (`data.assetId`) and `deleteFile` clears nothing that points at a file, so
+ * deleting a file a message shows leaves that message rendering a broken
+ * image. Every other pointer the panel can break is cleared on delete; this one
+ * cannot be, so it has to be *shown* instead.
+ *
+ * **Both shapes are counted**, because both render:
+ *  - `core:image` / `core:file` parts, whose `data.assetId` is the file id —
+ *    written by the runtime host's media parts and attach-image/attach-file.
+ *  - `{ kind: "image", assetId }` blocks inside a part's block tree — the SDK's
+ *    public block vocabulary (20 §6), which a plugin can emit and
+ *    `MessageBlocksView` draws. Blocks nest through `group` up to depth 3, so
+ *    the walk is recursive rather than a single `->'blocks'` probe.
+ *
+ * NOT scoped to the caller's sessions. The file is theirs either way, and a
+ * warning that undercounts is worse than one that reads across a boundary that
+ * — sessions being single-owner — is not crossable in practice.
+ */
+async function messageReferenceCounts(): Promise<Map<number, number>> {
+	// Only parts that can carry a reference at all, so what comes back is the
+	// referencing set rather than every part in the instance. `data is not
+	// null` leads the predicate because the overwhelming majority of parts are
+	// markdown with no data at all, and it spares them the json calls.
+	const rows = await db
+		.select({
+			messageId: schema.messageParts.messageId,
+			type: schema.messageParts.type,
+			assetId: sql<
+				string | null
+			>`${schema.messageParts.data}->>'assetId'`,
+			blocks: sql<unknown>`case when json_typeof(${schema.messageParts.data}->'blocks') = 'array' then ${schema.messageParts.data}->'blocks' else null end`
+		})
+		.from(schema.messageParts)
+		.where(
+			sql`${schema.messageParts.data} is not null
+			    and (${schema.messageParts.data}->>'assetId' is not null
+			         or json_typeof(${schema.messageParts.data}->'blocks') = 'array')`
+		)
+
+	// Sets, not a running total: two parts of one message can name the same
+	// file, and "2 messages" would then be a lie about a single message.
+	const messagesByFile = new Map<number, Set<number>>()
+	const note = (assetId: unknown, messageId: number) => {
+		const id =
+			typeof assetId === "number"
+				? assetId
+				: typeof assetId === "string"
+					? Number(assetId)
+					: NaN
+		if (!Number.isInteger(id)) return
+		const seen = messagesByFile.get(id)
+		if (seen) seen.add(messageId)
+		else messagesByFile.set(id, new Set([messageId]))
+	}
+
+	const walkBlocks = (blocks: unknown, messageId: number, depth = 0) => {
+		if (!Array.isArray(blocks) || depth > 8) return
+		for (const block of blocks) {
+			if (!block || typeof block !== "object") continue
+			const b = block as Record<string, unknown>
+			if (b.kind === "image") note(b.assetId, messageId)
+			// `group` nests; the depth cap is a cycle guard, not the renderer's
+			// depth-3 limit — an over-deep tree the renderer would not draw is
+			// still a reference we would rather over-report than miss.
+			if (Array.isArray(b.blocks))
+				walkBlocks(b.blocks, messageId, depth + 1)
+		}
+	}
+
+	for (const row of rows) {
+		// The type gate matches the RENDERER, not the column: `MessagePartsView`
+		// only draws `data.assetId` for these two types, so a plugin part that
+		// happens to carry an `assetId` of its own is not a reference this
+		// delete would break, and counting it would overstate the damage.
+		if (
+			row.assetId != null &&
+			(row.type === "core:image" || row.type === "core:file")
+		)
+			note(row.assetId, row.messageId)
+		// The driver hands back a parsed value for a json column; a string is
+		// tolerated because that is driver-dependent, not contractual.
+		const blocks =
+			typeof row.blocks === "string" ? safeParse(row.blocks) : row.blocks
+		walkBlocks(blocks, row.messageId)
+	}
+
+	return new Map(
+		[...messagesByFile].map(([fileId, seen]) => [fileId, seen.size])
+	)
+}
+
+function safeParse(raw: string): unknown {
+	try {
+		return JSON.parse(raw)
+	} catch {
 		return null
 	}
 }
@@ -188,9 +318,15 @@ export const mediaList: Handler<
 			rows.map((r) => r.id)
 		)
 		const label = await attachmentLabels(rows)
+		// One more batched query, on the same principle as the labels above: a
+		// derived fact the panel cannot work out for itself, resolved for the
+		// whole page at once. Deliberately NOT a per-row lookup — this list is
+		// already unbounded and re-runs after every mutation.
+		const refs = await messageReferenceCounts()
 
 		const media: Sockets.ManagedMedia[] = rows.map((row) => {
 			const variants = byFile.get(row.id) ?? []
+			const attachedTo = label(row)
 			return {
 				...toClientMedia(row),
 				createdAt:
@@ -213,7 +349,12 @@ export const mediaList: Handler<
 					fidelity: v.fidelity,
 					isDisplay: v.id === row.displayVariantId
 				})),
-				attachedTo: label(row)
+				attachedTo,
+				// Named a parent that is gone — the only state the panel may
+				// read as "safe to reclaim". A file with no parent at all is a
+				// user-level upload and is emphatically not one.
+				orphaned: attachedTo !== null && attachedTo.name === null,
+				messageRefs: refs.get(row.id) ?? 0
 			}
 		})
 
@@ -322,6 +463,35 @@ export const mediaSetVisibility: Handler<
 	}
 }
 
+/**
+ * Delete a file outright.
+ *
+ * **The policy on message-referenced media: confirm, then delete, and leave the
+ * parts standing.** Chosen over refusing and over rewriting the parts, because
+ * it is the only one of the three this codebase can honour:
+ *
+ *  - *Refusing* would make any image a session ever produced permanently
+ *    undeletable, in the one panel whose entire purpose is reclaiming disk. The
+ *    only way out would be deleting the conversation, which is a far larger
+ *    loss than the one being avoided.
+ *  - *Cleaning the parts* would make this handler a second writer of message
+ *    state, and the message store is the single writer by design (see the
+ *    `messages` docblock). Worse, it cannot be done safely: removing the only
+ *    part of a step leaves `active_revisions` naming a revision with no parts —
+ *    the map invariant the store's own tests pin as a bug, not a state to
+ *    tolerate. Rewriting the part instead of removing it renders as a collapsed
+ *    JSON blob titled `core:image`, which is worse than a broken image and is
+ *    still the media panel editing someone's transcript.
+ *  - *Confirm and leave the reference dangling* is what 28 §2 already rules for
+ *    every other pointer this file cannot see — `deleteFile`'s own docblock
+ *    says a dangling pointer renders as a missing image and is tolerated on
+ *    purpose. The message part is one more such pointer; the message, its text
+ *    and its place in the transcript all survive.
+ *
+ * So the fix is not to change what delete does, but to stop it happening
+ * unaware: a referenced file needs `confirmMessageRefs`, and the refusal names
+ * the count.
+ */
 export const mediaDelete: Handler<
 	Sockets.Media.Delete.Params,
 	Sockets.Media.Delete.Response
@@ -331,6 +501,20 @@ export const mediaDelete: Handler<
 		const userId = socket.user!.id
 		const row = await getMedia(db, params.mediaId)
 		if (!row || row.userId !== userId) throw new Error("Image not found.")
+
+		// Re-counted here rather than trusted from the client: the panel's
+		// number is as old as its last `media:list`, and a session generating
+		// into the same file in the meantime is exactly the case the gate is
+		// for. The count in the refusal is therefore the true one.
+		const messageRefs = (await messageReferenceCounts()).get(row.id) ?? 0
+		if (messageRefs > 0 && params?.confirmMessageRefs !== true) {
+			const plural = messageRefs === 1 ? "message" : "messages"
+			throw new Error(
+				`This file is shown in ${messageRefs} ${plural}. Deleting it leaves ` +
+					`${messageRefs === 1 ? "that message" : "those messages"} with a broken ` +
+					`image — confirm to delete it anyway.`
+			)
+		}
 
 		// No cull invariant applies: the file is going away entirely, and
 		// `deleteFile` is the only thing allowed to leave a file with no
@@ -353,7 +537,10 @@ export const mediaDelete: Handler<
 			.set({ backgroundMediaId: null })
 			.where(eq(schema.userSettings.backgroundMediaId, row.id))
 
-		const res: Sockets.Media.Delete.Response = { mediaId: row.id }
+		const res: Sockets.Media.Delete.Response = {
+			mediaId: row.id,
+			messageRefs
+		}
 		emitToUser("media:delete", res)
 		await mediaList.handler(socket, {}, emitToUser)
 		return res

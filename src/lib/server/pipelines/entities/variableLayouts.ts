@@ -39,7 +39,10 @@
  * what `migrateContextWrappers` pins for anyone whose template is their own.
  */
 
-import { renderTemplate } from "$lib/server/pipelines/prompt/renderers"
+import {
+	renderTemplate,
+	type RenderRun
+} from "$lib/server/pipelines/prompt/renderers"
 
 /**
  * A heading and delimiters, applied to a body.
@@ -670,7 +673,14 @@ export class VariableLayoutError extends Error {}
 export async function renderVariable(
 	layouts: ResolvedLayouts | undefined,
 	key: string,
-	value: unknown
+	value: unknown,
+	/**
+	 * The run this layout is being rendered inside, when there is one. A layout
+	 * can name a plugin's engine, so this render can be a sandboxed hook call —
+	 * and cancelling the run only reaches it if it arrived with the run's id.
+	 * Absent from a preview, which is a render no run owns (`RenderRun`).
+	 */
+	run?: RenderRun
 ): Promise<string> {
 	const def = definitionByKey.get(key)
 
@@ -694,7 +704,9 @@ export async function renderVariable(
 	try {
 		return await renderTemplate(chosen.engine, {
 			template: chosen.source,
-			variables: { [key]: value }
+			variables: { [key]: value },
+			runId: run?.runId,
+			user: run?.user
 		})
 	} catch (err: any) {
 		throw new VariableLayoutError(

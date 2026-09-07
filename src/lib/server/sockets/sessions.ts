@@ -9,6 +9,11 @@ import {
 	hasNativeSteps
 } from "$lib/server/messages/store"
 import { verbRefusal } from "$lib/server/messages/verbs"
+import {
+	DEFAULT_CHANNEL,
+	channelsOf,
+	resolveChannel
+} from "$lib/server/messages/channels"
 import { and, asc, count, desc, eq, inArray, isNull, lt, or } from "drizzle-orm"
 import {
 	syncLorebookBindingsForCharacter,
@@ -32,8 +37,15 @@ import { resolveNarratorPromptConfig } from "../utils/resolveNarratorPromptConfi
 import { llmQueue } from "../utils/llmQueue"
 import {
 	broadcastToSessionUsers,
-	createSessionBroadcaster
+	createSessionBroadcaster,
+	emitToUserRedacted
 } from "./utils/broadcastHelpers"
+import {
+	CONNECTION_REFUSAL,
+	ConnectionChoiceRefused,
+	refusesConnectionWrite,
+	withoutConnectionColumns
+} from "$lib/server/connections/visibility"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import {
 	resolveCharacterName,
@@ -511,10 +523,7 @@ export const sessionsCreateHandler: Handler<
 					.select()
 					.from(schema.sessionGenreSettings)
 					.where(
-						eq(
-							schema.sessionGenreSettings.genreId,
-							preset.genreId
-						)
+						eq(schema.sessionGenreSettings.genreId, preset.genreId)
 					)
 					.limit(1)
 				if (typeSetting && !typeSetting.enabled)
@@ -557,8 +566,29 @@ export const sessionsCreateHandler: Handler<
 			}
 		}
 
+		// A session's `connection_id` is the HIGHEST-precedence tier in
+		// `resolveCapabilityTarget` — it outranks the pipeline's config and
+		// the instance default — and this insert is a bare spread of the
+		// client's `params.session`. So the row below was, until this guard, a
+		// non-admin's way to point every run in a session they own at any
+		// connection on the instance, permanently and without a review card.
+		//
+		// Refuse a real id, then strip. The strip is not belt-and-braces: the
+		// form posts `connectionId` on every create because it has the field,
+		// and for anyone but an administrator it is null — there is no picker
+		// to fill it and, on the update path, no value in their copy of the
+		// row to echo. A null is not a choice, so it is dropped in silence
+		// rather than refused.
+		if (refusesConnectionWrite(params.session, socket.user)) {
+			emitToUser("sessions:create:error", { error: CONNECTION_REFUSAL })
+			throw new ConnectionChoiceRefused()
+		}
+
 		// Remove tags from session data as it will be handled separately
-		const sessionDataWithoutTags = { ...params.session }
+		const sessionDataWithoutTags = withoutConnectionColumns(
+			{ ...params.session },
+			socket.user
+		)
 		// Field values only under names the mode declares (19 §1) — the same
 		// filter runTurn applies at supply, applied at write so the row never
 		// carries keys nothing declared.
@@ -774,7 +804,21 @@ async function getPromptSessionFromDb(sessionId: number, userId: number) {
 		where: (c, { eq }) => eq(c.id, sessionId),
 		with: {
 			sessionMessages: {
-				where: (cm, { eq }) => eq(cm.isHidden, false),
+				// One lane, not the session (20 §7). This snapshot feeds
+				// prompt construction and next-speaker selection, so an
+				// unscoped read here would put a side conversation into the
+				// prompt and let it decide whose turn it is. The trigger comes
+				// from the session's composer, which is `main`; a per-channel
+				// composer is later work and is what would pass one in.
+				//
+				// ⚠ Deliberately unlike `getSessionFromDB`, which stays
+				// unscoped: the client renders every lane and each widget
+				// filters to its own (`scopeMessages`).
+				where: (cm, { eq, and }) =>
+					and(
+						eq(cm.isHidden, false),
+						eq(cm.channel, DEFAULT_CHANNEL)
+					),
 				orderBy: (cm, { asc }) => asc(cm.id)
 			},
 			// Removed-participant rows are deliberately excluded here (unlike
@@ -808,19 +852,13 @@ async function getPromptSessionFromDb(sessionId: number, userId: number) {
 				with: {
 					lorebookBindings: {
 						with: { character: true, persona: true }
-					},
-					worldLoreEntries: true,
-					characterLoreEntries: {
-						with: {
-							lorebookBinding: {
-								with: {
-									character: true,
-									persona: true
-								}
-							}
-						}
-					},
-					historyEntries: true
+					}
+					// The three entry lists used to be loaded here and are
+					// not any more: `BasePromptSession.lorebook` never
+					// declared them, and nothing read them — every lore read
+					// goes through the host's `lorebook_entries` query, which
+					// applies the character-lore privacy rule the raw lists
+					// never did.
 				}
 			}
 		}
@@ -1167,6 +1205,38 @@ export const sessionsTriggerFunctionHandler: Handler<
 				emitToUser("sessions:triggerFunction", res)
 				return res
 			}
+			/**
+			 * Stopped on request — a third answer, not a gentler `fail`.
+			 *
+			 * Deliberately carries no `error`. The sentence would be about
+			 * whatever the abort broke on its way out, and a consumer that
+			 * reads `error` first — the session view did, which is how a
+			 * deliberate Cancel came back as a red toast — would render the
+			 * cancel as a failure all over again. The actor rides instead,
+			 * because a supersede, a person's cancel and an administrator's
+			 * kill are three different events and only the actor tells them
+			 * apart.
+			 */
+			const stoppedOnRequest = (
+				by: string
+			): Sockets.Sessions.TriggerFunction.Response => {
+				const res = {
+					sessionId: params.sessionId,
+					function: params.function,
+					cancelled: true,
+					cancelledBy: by
+				}
+				emitToUser("sessions:triggerFunction", res)
+				return res
+			}
+			/**
+			 * Who stopped this run, once it has stopped.
+			 *
+			 * Declared out here so the outer `catch` can read it: a cancel that
+			 * surfaces as a thrown error is still a cancel, and the projection
+			 * is taken in the `finally` below, which runs first.
+			 */
+			let stopped: { by: string; reason: string } | undefined
 			try {
 				const userId = socket.user!.id
 				const access = await checkSessionAccess(
@@ -1251,14 +1321,10 @@ export const sessionsTriggerFunctionHandler: Handler<
 							sessionId: schema.sessionMessages.sessionId
 						})
 						.from(schema.sessionMessages)
-						.where(
-							eq(schema.sessionMessages.id, params.messageId)
-						)
+						.where(eq(schema.sessionMessages.id, params.messageId))
 						.limit(1)
 					if (!subject || subject.sessionId !== params.sessionId)
-						return fail(
-							"That message is not part of this session."
-						)
+						return fail("That message is not part of this session.")
 				}
 
 				const { runSpec } = await import(
@@ -1305,6 +1371,14 @@ export const sessionsTriggerFunctionHandler: Handler<
 						specId,
 						runId,
 						signal: handle.controller.signal,
+						// One abort, two shapes. The signal object never crosses
+						// a boundary it cannot cross; the fact does, in the shape
+						// that boundary speaks — the adapters listen for the
+						// event above, and the executor, which only ever pauses
+						// between nodes, polls for it here. Without this second
+						// shape Cancel aborted the in-flight request and the
+						// graph walked on to the next node anyway.
+						cancelSignal: () => runRegistry.cancellation(handle),
 						sink: {
 							onProgress: (event) => {
 								// Throttled: a preview frame is a whole image, so
@@ -1347,6 +1421,11 @@ export const sessionsTriggerFunctionHandler: Handler<
 						}
 					})
 				} finally {
+					// Read before `finish`, and before anything else can look
+					// at it: one projection of the abort, used by the progress
+					// event, by the answer below and by the outer catch, so
+					// they cannot disagree about whether this run was stopped.
+					stopped = runRegistry.cancellation(handle)
 					// Always: a run left registered is a leak and a stale cancel
 					// target, and the client's progress card would never clear.
 					runRegistry.finish(runId)
@@ -1354,11 +1433,29 @@ export const sessionsTriggerFunctionHandler: Handler<
 						runId,
 						sessionId: params.sessionId,
 						done: true,
-						...(handle.controller.signal.aborted
-							? { cancelled: true }
-							: {})
+						...(stopped ? { cancelled: true } : {})
 					})
 				}
+				/**
+				 * Cancellation is decided by the ABORT, not by the receipt.
+				 *
+				 * The registry records the actor and the cause immediately
+				 * before it aborts, so a stopped handle always knows who
+				 * stopped it. The receipt only knows when the executor got as
+				 * far as polling its cancel hook — and a node that *throws* on
+				 * abort ends the run as `err` before it ever does, which is a
+				 * known SDK gap. Reading the handle rather than
+				 * `receipt.outcome` makes that gap invisible here instead of
+				 * making a person's Cancel look like a crash.
+				 *
+				 * Checked before the outcome, so a cancelled-and-also-errored
+				 * run answers as cancelled. What it does NOT do is claim the
+				 * run stopped cleanly: a run can commit a consumer's write and
+				 * then be stopped at the next node, so this says only that it
+				 * was stopped, and the client re-reads the session rather than
+				 * assuming nothing happened.
+				 */
+				if (stopped) return stoppedOnRequest(stopped.by)
 				if (receipt.outcome !== "ok") {
 					const { haltExplanation } = await import(
 						"$lib/server/pipelines/runtime/runTurn"
@@ -1378,6 +1475,11 @@ export const sessionsTriggerFunctionHandler: Handler<
 				emitToUser("sessions:triggerFunction", res)
 				return res
 			} catch (error: any) {
+				// A stopped run that came out as a throw is still a stopped
+				// run — `stopped` was projected in the `finally` above, which
+				// runs before this. Same rule as the receipt branch, applied
+				// to the other way a cancelled run can arrive.
+				if (stopped) return stoppedOnRequest(stopped.by)
 				console.error("Error in sessionsTriggerFunctionHandler:", error)
 				return fail("Failed to run the function.")
 			}
@@ -1409,9 +1511,7 @@ export const sessionsPipelinesHandler: Handler<
 				resolveFunctionSpec,
 				enabledSessionFunctions,
 				STANDARD_GENRE_ID
-			} = await import(
-				"$lib/server/pipelines/entities/sessionGenres"
-			)
+			} = await import("$lib/server/pipelines/entities/sessionGenres")
 			const [session] = await db
 				.select({ genreId: schema.sessions.genreId })
 				.from(schema.sessions)
@@ -1485,7 +1585,11 @@ export const sessionsViewHandler: Handler<
 		const res: Sockets.Sessions.View.Response = {
 			sessionId: params.sessionId,
 			panels: [],
-			modePanels: []
+			modePanels: [],
+			// The floor, replaced below once the genre is read. A caller with
+			// no access still learns that a session has one lane, which is
+			// true of every session.
+			channels: [DEFAULT_CHANNEL]
 		}
 		if (access.hasAccess) {
 			const { surfacesOf, frameSrc } = await import(
@@ -1526,6 +1630,12 @@ export const sessionsViewHandler: Handler<
 				db as any,
 				session?.genreId ?? STANDARD_GENRE_ID
 			)
+			// The session's lanes (20 §7): `main` plus whatever the genre
+			// declares. Read from the shape rather than stored on the row —
+			// a genre gains a channel by declaring one, and a session of that
+			// genre has it from that moment.
+			res.channels = channelsOf(mode?.shape)
+
 			const viewPlugin = (mode?.shape as any)?.view
 			if (typeof viewPlugin === "string") {
 				const owner = enabled.find((p) => p.pluginId === viewPlugin)
@@ -2192,6 +2302,21 @@ export const sessionsUpdateHandler: Handler<
 				)
 			}
 
+			// Owning a session is not the same as administering the instance,
+			// and `sessions.connection_id` is the highest-precedence tier in
+			// `resolveCapabilityTarget` — above the pipeline's config, above
+			// the instance default. Until this, a non-admin owner could point
+			// every run in their session at any connection on the box by id
+			// alone, which the comment below still describes as needing "no
+			// such check". Refused before the field is read, so the answer is
+			// the same sentence whether or not the id names a real row.
+			if (refusesConnectionWrite(params.session, socket.user)) {
+				emitToUser("sessions:update:error", {
+					error: CONNECTION_REFUSAL
+				})
+				throw new ConnectionChoiceRefused()
+			}
+
 			// Guests may manage characters/personas on a session (further
 			// ownership-checked below) but never session-level settings — name,
 			// scenario, lorebook, connection/sampling/prompt overrides, tags,
@@ -2204,8 +2329,13 @@ export const sessionsUpdateHandler: Handler<
 				// lorebookId needs an ownership check (lorebooks is strictly
 				// per-user) before it's accepted — everything else here is
 				// either owner-only data or a reference to an admin-managed
-				// global table (connections/samplingConfigs/promptConfigs/
+				// global table (samplingConfigs/promptConfigs/
 				// narratorPromptConfigs), which needs no such check.
+				//
+				// ⚠ `connectionId` used to be on that list and is not any
+				// more: "admin-managed" describes who may WRITE the table, and
+				// naming a row of it from here is a write to what the run
+				// resolves. It is refused above and dropped below.
 				if (params.session.lorebookId != null) {
 					const ownsLorebook = await checkLorebookOwnership(
 						params.session.lorebookId,
@@ -2280,7 +2410,14 @@ export const sessionsUpdateHandler: Handler<
 							: {}),
 						...(drafts !== undefined ? { drafts } : {}),
 						...(lorebookId !== undefined ? { lorebookId } : {}),
-						...(connectionId !== undefined ? { connectionId } : {}),
+						// Administrators only. A non-admin supplying a real id
+						// was refused above; what can still arrive here is the
+						// null their own redacted copy of the row hands back,
+						// and writing THAT would clear the connection an
+						// administrator chose for this session.
+						...(socket.user!.isAdmin && connectionId !== undefined
+							? { connectionId }
+							: {}),
 						...(samplingConfigId !== undefined
 							? { samplingConfigId }
 							: {}),
@@ -2317,7 +2454,9 @@ export const sessionsUpdateHandler: Handler<
 				return {
 					characters: new Set(
 						ccs
-							.filter((c) => !c.removedAt && c.characterId != null)
+							.filter(
+								(c) => !c.removedAt && c.characterId != null
+							)
 							.map((c) => c.characterId as number)
 					),
 					personas: new Set(
@@ -2857,9 +2996,12 @@ export const sessionsAddGuestHandler: Handler<
 			// without this their sidebar wouldn't show the new session until a
 			// manual refresh/reconnect.
 			const guestSessionsList = await buildSessionsListFor(guestUserId)
-			socket.io
-				.to(`user_${guestUserId}`)
-				.emit("sessions:list", guestSessionsList)
+			await emitToUserRedacted(
+				socket.io,
+				guestUserId,
+				"sessions:list",
+				guestSessionsList
+			)
 
 			// Broadcast updated session to all participants
 			const updatedSession = await getSessionFromDB(sessionId, userId)
@@ -2927,9 +3069,12 @@ export const sessionsRemoveGuestHandler: Handler<
 			// Push a fresh session list to the removed guest so the session
 			// disappears from their sidebar without a manual refresh.
 			const guestSessionsList = await buildSessionsListFor(guestUserId)
-			socket.io
-				.to(`user_${guestUserId}`)
-				.emit("sessions:list", guestSessionsList)
+			await emitToUserRedacted(
+				socket.io,
+				guestUserId,
+				"sessions:list",
+				guestSessionsList
+			)
 
 			// Broadcast updated session to all remaining participants
 			const updatedSession = await getSessionFromDB(sessionId, userId)
@@ -3126,6 +3271,13 @@ export const sessionsBranchHandler: Handler<
 									personaId: message.personaId,
 									characterId: message.characterId,
 									role: message.role,
+									// The branch is the same conversation, so
+									// each copy keeps its lane (20 §7). The
+									// new session has the same genre, so it
+									// has the same channels to keep them on.
+									channel: resolveChannel(
+										(message as any).channel
+									),
 									content: message.content,
 									isHidden: message.isHidden,
 									isGenerating: false, // Always set to false for copied messages
@@ -4513,10 +4665,7 @@ export const sessionMessagesCancelHandler: Handler<
 					db,
 					and(
 						eq(schema.sessionMessages.id, id),
-						eq(
-							schema.sessionMessages.sessionId,
-							params.sessionId
-						)
+						eq(schema.sessionMessages.sessionId, params.sessionId)
 					),
 					{
 						isGenerating: false,
@@ -5556,7 +5705,10 @@ export const sessionsAccountVisibilityHandler: Handler<
 		})
 		if (session?.lorebookId) {
 			res.exposed.lorebooks = await db
-				.select({ id: schema.lorebooks.id, name: schema.lorebooks.name })
+				.select({
+					id: schema.lorebooks.id,
+					name: schema.lorebooks.name
+				})
 				.from(schema.lorebooks)
 				.where(
 					and(

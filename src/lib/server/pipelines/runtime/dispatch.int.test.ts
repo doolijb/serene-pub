@@ -31,7 +31,17 @@ let seen: {
 	compiledPrompt?: unknown
 	constructedWith?: any
 	aborted?: boolean
+	attachments?: unknown
 } = {}
+/**
+ * Whether the stand-in adapter has a vision path this run.
+ *
+ * A `let` because both answers are ordinary: one adapter sends attachments
+ * today and six do not, and what dispatch does with the difference — refuse
+ * rather than send a request that quietly lost its files — is the thing under
+ * test.
+ */
+let adapterSendsAttachments = true
 let mode: "text" | "stream" | "empty" | "abort" = "text"
 let connectionForRun: any = connection
 
@@ -46,6 +56,13 @@ class FakeAdapter implements FakeTextAdapter {
 	withCompiledPrompt(p: any) {
 		this.injected = p
 		seen.compiledPrompt = p
+		return this
+	}
+	get consumesAttachments() {
+		return adapterSendsAttachments
+	}
+	withAttachments(inputs: any) {
+		seen.attachments = inputs
 		return this
 	}
 	abort() {
@@ -91,6 +108,56 @@ class FakeAdapter implements FakeTextAdapter {
 
 vi.mock("$lib/server/utils/getConnectionAdapter", () => ({
 	getConnectionAdapter: async () => ({ Adapter: FakeAdapter })
+}))
+
+/**
+ * The media store: file rows by uuid, bytes by file id.
+ *
+ * Two rows with different provenance, because provenance is what the access
+ * check reads — one belongs to this run's session, one to the user the run acts
+ * as, and one to neither. A third uuid is deliberately absent, for the dangling
+ * reference every media consumer has to have an answer for (28 §2).
+ */
+const OWNED_BY_SESSION = "11111111-1111-4111-8111-111111111111"
+const OWNED_BY_USER = "22222222-2222-4222-8222-222222222222"
+const SOMEONE_ELSES = "33333333-3333-4333-8333-333333333333"
+const DELETED_SINCE = "44444444-4444-4444-8444-444444444444"
+
+const mediaRows: Record<string, any> = {
+	[OWNED_BY_SESSION]: {
+		id: 11,
+		uuid: OWNED_BY_SESSION,
+		userId: 1,
+		sessionId: 7,
+		filename: "page.png",
+		kind: "image"
+	},
+	[OWNED_BY_USER]: {
+		id: 22,
+		uuid: OWNED_BY_USER,
+		userId: 1,
+		sessionId: null,
+		filename: null,
+		kind: "image"
+	},
+	[SOMEONE_ELSES]: {
+		id: 33,
+		uuid: SOMEONE_ELSES,
+		userId: 99,
+		sessionId: 55,
+		filename: "private.png",
+		kind: "image"
+	}
+}
+const mediaBytes: Record<number, any> = {
+	11: { bytes: Buffer.from("the page"), mime: "image/png" },
+	22: { bytes: Buffer.from("the photo"), mime: "image/jpeg" },
+	33: { bytes: Buffer.from("not yours"), mime: "image/png" }
+}
+
+vi.mock("$lib/server/media", () => ({
+	getMediaByUuid: async (_db: any, uuid: string) => mediaRows[uuid] ?? null,
+	readMedia: async (_db: any, id: number) => mediaBytes[id] ?? null
 }))
 /** What the resolver was ASKED for — tier 2 arrives in these params. */
 let resolveArgs: any = null
@@ -153,6 +220,7 @@ beforeEach(() => {
 	mode = "text"
 	sessionRow = true
 	connectionForRun = connection
+	adapterSendsAttachments = true
 })
 
 describe("dispatching a prompt built elsewhere", () => {
@@ -269,6 +337,125 @@ describe("dispatching a prompt built elsewhere", () => {
 	})
 })
 
+/**
+ * Attachments: references on a port, bytes at an adapter.
+ *
+ * The seam is here rather than in an adapter for three reasons the header of
+ * `dispatch.ts` sets out — the media module needs the database, the run's
+ * database is handed to THIS function, and a uuid a spec could name has to be
+ * checked against the run before its bytes leave the instance. Each of those is
+ * a property only testable at this level, so this is where they are asserted.
+ */
+describe("the files a request carries", () => {
+	const send = (attachments: unknown[], userId: number | undefined = 1) =>
+		dispatchGeneration({
+			db: fakeDb,
+			compiledPrompt: compiled,
+			sessionId: 7,
+			userId,
+			attachments: attachments as any
+		})
+
+	it("resolves references to bytes and hands them over in order", async () => {
+		// A ref object and a bare uuid string, because both spellings reach a
+		// media port today (`mediaParts` accepts both).
+		await send([{ uuid: OWNED_BY_SESSION }, OWNED_BY_USER])
+
+		// Order is the contract, so it is asserted on the BYTES: two entries in
+		// the wrong order have the same length and the same shape.
+		expect(seen.attachments).toEqual([
+			{
+				bytes: Buffer.from("the page"),
+				mime: "image/png",
+				filename: "page.png"
+			},
+			// No `filename` key at all rather than an undefined one: the engine
+			// prints it in refusals only when a person named the file.
+			{ bytes: Buffer.from("the photo"), mime: "image/jpeg" }
+		])
+	})
+
+	it("takes the mime from the variant that was read, not from the reference", async () => {
+		// A `MediaRef`'s `mime` describes the DISPLAY variant and is a hint; the
+		// bytes handed over are the original's, so the mime has to come back with
+		// them or the format negotiation is negotiating about the wrong file.
+		await send([{ uuid: OWNED_BY_USER, mime: "image/webp" }])
+		expect((seen.attachments as any[])[0].mime).toBe("image/jpeg")
+	})
+
+	it("hands nothing over when the request carries nothing", async () => {
+		await dispatchGeneration({
+			db: fakeDb,
+			compiledPrompt: compiled,
+			sessionId: 7,
+			userId: 1
+		})
+		expect(seen.attachments).toBeUndefined()
+	})
+
+	it("refuses a file belonging to neither this session nor this user", async () => {
+		// A uuid is unguessable, but "unguessable" is not an access rule — and
+		// this file is about to leave the instance for a third-party API.
+		await expect(send([SOMEONE_ELSES])).rejects.toThrow(
+			/belongs to neither this session nor the user/
+		)
+	})
+
+	it("refuses a reference that no longer resolves, rather than sending a request without it", async () => {
+		// Deliberately unlike the host's `mediaParts`, which SKIPS a missing row:
+		// there the images were already stored and failing would lose the whole
+		// message, while here nothing has been sent and a request that quietly
+		// went out short of a file is indistinguishable from a model ignoring it.
+		await expect(send([DELETED_SINCE])).rejects.toThrow(/no longer has/)
+		expect(seen.attachments).toBeUndefined()
+	})
+
+	it("refuses a value that is not a media reference at all", async () => {
+		await expect(send([{ data: "AAAA" }])).rejects.toThrow(
+			/carries no uuid/
+		)
+	})
+
+	it("refuses when vision is switched off on the connection", async () => {
+		// The user's own setting, in the words the connection screen used. Note
+		// the default above is NOT this: a row nobody has determined yet is
+		// judged permissively, so an untested connection still sends its files
+		// rather than looking broken out of the box.
+		connectionForRun = {
+			...connection,
+			capabilities: { overrides: { "text+image->text": false } }
+		}
+		await expect(send([{ uuid: OWNED_BY_SESSION }])).rejects.toThrow(
+			/Enable it on the connection.*would have gone out unseen/s
+		)
+		expect(seen.attachments).toBeUndefined()
+	})
+
+	it("refuses when the bound adapter has no code that sends attachments", async () => {
+		// The silent-drop guard, and the reason `consumesAttachments` exists:
+		// several connection types declare vision in the manifest because their
+		// API format has it, while their adapter class has no image code at all.
+		adapterSendsAttachments = false
+		const err: any = await send([{ uuid: OWNED_BY_SESSION }]).then(
+			() => {
+				throw new Error("expected a refusal")
+			},
+			(e) => e
+		)
+		expect(err.message).toMatch(
+			/configured adapter has no code that sends them/
+		)
+		// ...and the sentence does not say WHICH adapter. The connection type
+		// names the administrator's compute, this message reaches whoever sent
+		// the files, and it travels through `Error.message` and
+		// `Receipt.haltReason` where no projection can reach it. The type rides
+		// on the error's `connection` field instead.
+		expect(err.message).not.toMatch(/koboldcpp/i)
+		expect(err.connection).toMatchObject({ type: "koboldcpp" })
+		expect(seen.attachments).toBeUndefined()
+	})
+})
+
 describe("what dispatch refuses to hand back", () => {
 	it("returns the completion and no connection material", async () => {
 		// The security property, stated as a test because it can only ever fail
@@ -335,7 +522,7 @@ describe("the generate-text binding", () => {
 	it("takes the assemble node's output without a shim in between", async () => {
 		const r = await runWith(
 			{ sessionId: 7 },
-			{ main: compiled, blocks: [], budget: {} }
+			{ main: compiled, allocations: [], budget: {} }
 		)
 		expect(r.kind).toBe("ok")
 		expect(seen.compiledPrompt).toBe(compiled)
@@ -366,6 +553,26 @@ describe("the generate-text binding", () => {
 		await runWith({ sessionId: 7 })
 		expect(resolveArgs?.pipelineConnectionId).toBeNull()
 		expect(resolveArgs?.pipelineSamplingId).toBeNull()
+	})
+
+	it("forwards its `attachments` in-port so the files reach the adapter", async () => {
+		// The port existed before anything read it. Without this line the
+		// references would be dropped at the host and a spec that wired a page
+		// into a vision step would generate about nothing, silently.
+		const r = await runWith(
+			{ sessionId: 7, userId: 1 },
+			{
+				compiledPrompt: compiled,
+				attachments: [{ uuid: OWNED_BY_SESSION }]
+			}
+		)
+		expect(r.kind).toBe("ok")
+		expect((seen.attachments as any[])[0].bytes).toEqual(
+			Buffer.from("the page")
+		)
+		// Bytes never travel the graph: what came back is the completion, not
+		// the file that went out.
+		expect(JSON.stringify(r.value)).not.toContain("the page")
 	})
 
 	it("halts on an empty completion rather than erroring", async () => {

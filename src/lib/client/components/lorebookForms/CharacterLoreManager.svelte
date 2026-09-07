@@ -7,12 +7,30 @@
 	import { getContext, onDestroy, onMount, tick } from "svelte"
 	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 	import LoreContentField from "./LoreContentField.svelte"
+	import EntryConditionField from "./EntryConditionField.svelte"
+	import EntryFireTest from "./EntryFireTest.svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { v4 as uuid } from "uuid"
 	import { dndzone } from "svelte-dnd-action"
 	import DeleteLorebookEntryConfirmModal from "../modals/DeleteLorebookEntryConfirmModal.svelte"
 	import { Priorities } from "$lib/shared/constants/Priorities"
 	import { getCharacterLoreVisibility } from "$lib/shared/utils/characterLoreVisibility"
+	import {
+		CHARACTER_LORE_TYPE_ID,
+		type LorebookEntry,
+		type NewLorebookEntry
+	} from "$lib/shared/entries/types"
+	import {
+		ENTRY_SORT_OPTIONS,
+		compareEntriesBy,
+		entryChannel,
+		filterEntriesBySearch,
+		substituteBindings,
+		type BindingWithRelations
+	} from "./entryManager"
+
+	/** This tab's one type. It is never rendered; it addresses the namespace. */
+	type CharacterLore = LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>
 
 	interface Props {
 		lorebookId: number
@@ -33,21 +51,19 @@
 		systemSettingsCtx.settings?.vectorizationEnabled ?? false
 	)
 
-	const SORT_OPTIONS = [
-		{ value: "position-asc", label: "Position ↑" },
-		{ value: "position-desc", label: "Position ↓" },
-		{ value: "priority-desc", label: "Priority ↑" },
-		{ value: "priority-asc", label: "Priority ↓" },
-		{ value: "created-desc", label: "Date Created ↑" },
-		{ value: "created-asc", label: "Date Created ↓" },
-		{ value: "updated-desc", label: "Date Updated ↑" },
-		{ value: "updated-asc", label: "Date Updated ↓" }
-	]
+	const SORT_OPTIONS = ENTRY_SORT_OPTIONS
 
-	const DefaultCharacterEntry: InsertCharacterLoreEntry = {
+	const DefaultCharacterEntry: NewLorebookEntry<
+		typeof CHARACTER_LORE_TYPE_ID
+	> = {
+		typeId: CHARACTER_LORE_TYPE_ID,
 		name: "",
 		content: "",
 		keys: "",
+		// The absence of a condition, spelled the way the column stores it:
+		// no keys and no mode. Either one alone is a rule about nothing.
+		secondaryKeys: "",
+		selectiveLogic: null,
 		useRegex: false,
 		caseSensitive: false,
 		constant: false,
@@ -57,13 +73,8 @@
 		lorebookBindingId: null
 	}
 
-	type BindingWithRelations = SelectLorebookBinding & {
-		character?: { nickname?: string | null; name: string } | null
-		persona?: { name: string } | null
-	}
-
 	// ── Core list state ────────────────────────────────────────────
-	let characterLoreEntryList: SelectCharacterLoreEntry[] = $state([])
+	let characterLoreEntryList: CharacterLore[] = $state([])
 	let lorebookBindingList: BindingWithRelations[] = $state([])
 	let isReady = $state(false)
 	let orderBy = $state("position-asc")
@@ -72,9 +83,13 @@
 	// ── Panel mode: list → view → edit ─────────────────────────────
 	type PanelMode = "list" | "view" | "edit"
 	let panelMode = $state<PanelMode>("list")
-	let focusedEntry = $state<SelectCharacterLoreEntry | null>(null)
+	let focusedEntry = $state<CharacterLore | null>(null)
 	let editingEntry = $state<
-		(InsertCharacterLoreEntry & { _uuid?: string }) | null
+		| (NewLorebookEntry<typeof CHARACTER_LORE_TYPE_ID> & {
+				id?: number
+				_uuid?: string
+		  })
+		| null
 	>(null)
 	let isNewEntry = $state(false)
 
@@ -109,55 +124,16 @@
 	})
 
 	// ── List helpers ───────────────────────────────────────────────
-	function getSortedEntries(): SelectCharacterLoreEntry[] {
-		return characterLoreEntryList.slice().sort((a, b) => {
-			const getPinned = (e: SelectCharacterLoreEntry) =>
-				e.constant ? 1 : 0
-			const getPriority = (e: SelectCharacterLoreEntry) => e.priority || 1
-			const getCreated = (e: SelectCharacterLoreEntry) =>
-				new Date(e.createdAt || 0).getTime()
-			const getUpdated = (e: SelectCharacterLoreEntry) =>
-				new Date(e.updatedAt || 0).getTime()
-			const getPosition = (e: SelectCharacterLoreEntry) =>
-				typeof e.position === "number" ? e.position : 0
-			switch (orderBy) {
-				case "position-asc":
-					return getPosition(a) - getPosition(b)
-				case "position-desc":
-					return getPosition(b) - getPosition(a)
-				case "priority-desc":
-					if (getPinned(a) !== getPinned(b))
-						return getPinned(b) - getPinned(a)
-					return getPriority(b) - getPriority(a)
-				case "priority-asc":
-					if (getPinned(a) !== getPinned(b))
-						return getPinned(a) - getPinned(b)
-					return getPriority(a) - getPriority(b)
-				case "created-desc":
-					return getCreated(b) - getCreated(a)
-				case "created-asc":
-					return getCreated(a) - getCreated(b)
-				case "updated-desc":
-					return getUpdated(b) - getUpdated(a)
-				case "updated-asc":
-					return getUpdated(a) - getUpdated(b)
-				default:
-					return 0
-			}
-		})
-	}
-
-	let filteredEntries: SelectCharacterLoreEntry[] = $derived.by(() => {
-		const lower = search.trim().toLowerCase()
-		if (!lower) return getSortedEntries()
-		return getSortedEntries().filter((e) => {
-			return (
-				(e.name || "").toLowerCase().includes(lower) ||
-				(e.content || "").toLowerCase().includes(lower) ||
-				(e.keys || "").toLowerCase().includes(lower)
-			)
-		})
-	})
+	// Sorting, searching and `{{char:N}}` preview substitution were identical
+	// in all three managers and live in `entryManager.ts` now. What stays here
+	// is what is curated: the binding label, the visibility helper text, and
+	// what "valid" means for a *named* entry.
+	let filteredEntries: CharacterLore[] = $derived(
+		filterEntriesBySearch(
+			characterLoreEntryList.slice().sort(compareEntriesBy(orderBy)),
+			search
+		)
+	)
 
 	function getBindingLabel(bindingId: number): string {
 		const binding = lorebookBindingList.find((b) => b.id === bindingId)
@@ -188,28 +164,12 @@
 		getVisibility(editingEntry?.lorebookBindingId)
 	)
 
-	function previewContent(entry: SelectCharacterLoreEntry): string {
-		let content = entry.content || ""
-		lorebookBindingList.forEach((binding) => {
-			if (binding.characterId) {
-				content = content.replaceAll(
-					binding.binding,
-					binding.character?.nickname ||
-						binding.character?.name ||
-						binding.binding
-				)
-			} else if (binding.personaId) {
-				content = content.replaceAll(
-					binding.binding,
-					binding.persona?.name || binding.binding
-				)
-			}
-		})
-		return content
+	function previewContent(entry: CharacterLore): string {
+		return substituteBindings(entry.content, lorebookBindingList)
 	}
 
 	function entryIsValid(
-		entry: InsertCharacterLoreEntry | SelectCharacterLoreEntry,
+		entry: { name?: string | null },
 		warn = false
 	): boolean {
 		if (!entry.name?.trim()) {
@@ -227,12 +187,12 @@
 		isNewEntry = false
 	}
 
-	function viewEntry(entry: SelectCharacterLoreEntry) {
+	function viewEntry(entry: CharacterLore) {
 		focusedEntry = entry
 		panelMode = "view"
 	}
 
-	function editEntry(entry: SelectCharacterLoreEntry) {
+	function editEntry(entry: CharacterLore) {
 		focusedEntry = entry
 		editingEntry = { ...entry }
 		panelMode = "edit"
@@ -248,18 +208,9 @@
 	// ── Save / Delete ──────────────────────────────────────────────
 	function handleSave() {
 		if (!editingEntry || !entryIsValid(editingEntry, true)) return
-
-		const data = { ...editingEntry, lorebookId, _uuid: undefined }
-
-		if (isNewEntry) {
-			socket.emit("characterLoreEntries:create", {
-				characterLoreEntry: data as InsertCharacterLoreEntry
-			} satisfies Sockets.CharacterLoreEntries.Create.Params)
-		} else {
-			socket.emit("characterLoreEntries:update", {
-				characterLoreEntry: data as UpdateCharacterLoreEntry
-			} satisfies Sockets.CharacterLoreEntries.Update.Params)
-		}
+		const { _uuid, ...data } = editingEntry
+		if (isNewEntry) channel.create(data)
+		else channel.update(data as typeof data & { id: number })
 		goBack()
 	}
 
@@ -270,9 +221,7 @@
 
 	function onDeleteConfirm() {
 		showDeleteConfirmModal = false
-		socket.emit("characterLoreEntries:delete", {
-			id: deleteEntryId!
-		} satisfies Sockets.CharacterLoreEntries.Delete.Params)
+		channel.remove(deleteEntryId!)
 		if (focusedEntry?.id === deleteEntryId) goBack()
 		deleteEntryId = null
 	}
@@ -283,134 +232,57 @@
 	}
 
 	// ── Reorder ────────────────────────────────────────────────────
-	function handleUpdateReorder(entries: SelectCharacterLoreEntry[]) {
-		const positions = entries.map((e, i) => ({ id: e.id, position: i + 1 }))
-		socket.emit("characterLoreEntries:updatePositions", {
-			lorebookId,
-			positions
-		} satisfies Sockets.CharacterLoreEntries.UpdatePositions.Params)
-	}
-
-	async function handleLorebooksBindingList(
-		msg: Sockets.Lorebooks.BindingList.Response
-	) {
-		if (msg.lorebookId === lorebookId) {
-			lorebookBindingList = [
-				...msg.lorebookBindingList
-			] as BindingWithRelations[]
-		}
-		await tick()
+	function handleUpdateReorder(entries: CharacterLore[]) {
+		channel.reorder(entries.map((e, i) => ({ id: e.id, position: i + 1 })))
 	}
 
 	// ── Socket setup ───────────────────────────────────────────────
-	async function handleCharacterLoreEntriesList(
-		msg: Sockets.CharacterLoreEntries.List.Response
-	) {
-		if (msg.lorebookId === lorebookId) {
-			characterLoreEntryList = msg.characterLoreEntryList
-			if (focusedEntry) {
-				const updated = msg.characterLoreEntryList.find(
-					(e) => e.id === focusedEntry!.id
-				)
-				if (updated) focusedEntry = updated
-			}
+	const channel = entryChannel(socket, {
+		lorebookId,
+		typeId: CHARACTER_LORE_TYPE_ID,
+		vectorSource: "characterLore",
+		handlers: {
+			async onList(entries) {
+				characterLoreEntryList = entries
+				if (focusedEntry) {
+					const updated = entries.find(
+						(e) => e.id === focusedEntry!.id
+					)
+					if (updated) focusedEntry = updated
+				}
+				await tick()
+			},
+			async onBindings(bindings) {
+				lorebookBindingList = bindings
+				await tick()
+			},
+			// The background vectorization queue updates a row's
+			// `embeddingModel` directly in the database — without this the
+			// badge here only refreshes on the next explicit CRUD action.
+			onVectorized(id, embeddingModel) {
+				const target = characterLoreEntryList.find((e) => e.id === id)
+				if (target) (target as any).embeddingModel = embeddingModel
+				if (focusedEntry?.id === id)
+					(focusedEntry as any).embeddingModel = embeddingModel
+			},
+			onCreated: () =>
+				toaster.success({ title: "Character Lore Entry created" }),
+			onUpdated: () =>
+				toaster.success({ title: "Character Lore Entry updated" }),
+			onDeleted: () =>
+				toaster.success({ title: "Character Lore Entry deleted" }),
+			onReordered: () => toaster.success({ title: "Entries reordered" })
 		}
-		await tick()
-	}
-
-	function handleCharacterLoreEntriesCreate(
-		msg: Sockets.CharacterLoreEntries.Create.Response
-	) {
-		if (msg.characterLoreEntry?.lorebookId === lorebookId) {
-			toaster.success({ title: "Character Lore Entry created" })
-		}
-	}
-
-	function handleCharacterLoreEntriesUpdate(
-		msg: Sockets.CharacterLoreEntries.Update.Response
-	) {
-		if (msg.characterLoreEntry?.lorebookId === lorebookId) {
-			toaster.success({ title: "Character Lore Entry updated" })
-		}
-	}
-
-	function handleCharacterLoreEntriesDelete(
-		_msg: Sockets.CharacterLoreEntries.Delete.Response
-	) {
-		toaster.success({ title: "Character Lore Entry deleted" })
-	}
-
-	function handleCharacterLoreEntriesUpdatePositions(
-		msg: Sockets.CharacterLoreEntries.UpdatePositions.Response
-	) {
-		if (msg.success) toaster.success({ title: "Entries reordered" })
-	}
-
-	// The background vectorization queue updates a row's embeddingModel
-	// directly in the DB — without this, the badge here only ever refreshes
-	// on the next explicit CRUD action, leaving it stale until a manual refresh.
-	function handleVectorizationItemUpdated(
-		msg: Sockets.Vectorization.ItemUpdated.Response
-	) {
-		if (msg.type !== "characterLore" || msg.lorebookId !== lorebookId)
-			return
-		const target = characterLoreEntryList.find((e: any) => e.id === msg.id)
-		if (target) (target as any).embeddingModel = msg.embeddingModel
-		if (focusedEntry?.id === msg.id)
-			(focusedEntry as any).embeddingModel = msg.embeddingModel
-	}
+	})
 
 	onMount(() => {
-		socket.on("characterLoreEntries:list", handleCharacterLoreEntriesList)
-		socket.on(
-			"characterLoreEntries:create",
-			handleCharacterLoreEntriesCreate
-		)
-		socket.on(
-			"characterLoreEntries:update",
-			handleCharacterLoreEntriesUpdate
-		)
-		socket.on(
-			"characterLoreEntries:delete",
-			handleCharacterLoreEntriesDelete
-		)
-		socket.on("lorebooks:bindingList", handleLorebooksBindingList)
-		socket.on(
-			"characterLoreEntries:updatePositions",
-			handleCharacterLoreEntriesUpdatePositions
-		)
-		socket.on("vectorization:itemUpdated", handleVectorizationItemUpdated)
-
-		socket.emit("characterLoreEntries:list", {
-			lorebookId
-		} satisfies Sockets.CharacterLoreEntries.List.Params)
-		socket.emit("lorebooks:bindingList", {
-			lorebookId
-		} satisfies Sockets.Lorebooks.BindingList.Params)
+		channel.open()
 		isReady = true
 	})
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
-		socket.off("characterLoreEntries:list", handleCharacterLoreEntriesList)
-		socket.off(
-			"characterLoreEntries:create",
-			handleCharacterLoreEntriesCreate
-		)
-		socket.off(
-			"characterLoreEntries:update",
-			handleCharacterLoreEntriesUpdate
-		)
-		socket.off(
-			"characterLoreEntries:delete",
-			handleCharacterLoreEntriesDelete
-		)
-		socket.off("lorebooks:bindingList", handleLorebooksBindingList)
-		socket.off(
-			"characterLoreEntries:updatePositions",
-			handleCharacterLoreEntriesUpdatePositions
-		)
-		socket.off("vectorization:itemUpdated", handleVectorizationItemUpdated)
+		channel.close()
 	})
 </script>
 
@@ -752,7 +624,7 @@
 		<div class="flex flex-col gap-4">
 			<!-- Header -->
 			<PanelNavHeader
-				title={focusedEntry.name}
+				title={focusedEntry.name ?? ""}
 				onBack={goBack}
 				backLabel="Back"
 				headingLevel={3}
@@ -878,6 +750,16 @@
 						</span>
 					{/if}
 				</div>
+
+				<!-- Sited in the view rather than the editor: the pipeline
+				     gathers lore out of the database, so this reports on the
+				     saved row and an unsaved draft has no verdict to give. -->
+				<EntryFireTest
+					entryId={focusedEntry.id}
+					typeId={CHARACTER_LORE_TYPE_ID}
+					{lorebookId}
+					enabled={!!focusedEntry.enabled}
+				/>
 			</div>
 		</div>
 
@@ -1073,7 +955,7 @@
 
 						     Outside the `!vectorizationEnabled` gate that hides Use Regex and
 						     Case Sensitive, deliberately: recursion is a property of the
-						     keyword arm, and the keyword arm still runs with vectorization
+						     keyword mechanism, and the keyword mechanism still runs with vectorization
 						     on — an entry set to `keyword` or `both`, and every `rag` entry
 						     on an instance whose model is not loaded, goes through it.
 						     Hiding this would repeat the mistake those two are making. -->
@@ -1104,6 +986,22 @@
 								<option value="3">3 levels deep</option>
 							</select>
 						</div>
+						<!-- The entry's own condition — see `EntryConditionField`.
+
+						     Beside Recursion depth and outside the `!vectorizationEnabled`
+						     gate, for that control's stated reason: this is a property of the
+						     keyword mechanism, and the keyword mechanism still runs with vectorization on.
+						     Hiding it would repeat the mistake Use Regex and Case Sensitive
+						     are making. -->
+						<EntryConditionField
+							bind:selectiveLogic={
+								(editingEntry as any).selectiveLogic
+							}
+							bind:secondaryKeys={
+								(editingEntry as any).secondaryKeys
+							}
+							idPrefix="cle"
+						/>
 						<Switch
 							name="clePinned"
 							checked={editingEntry.constant || false}

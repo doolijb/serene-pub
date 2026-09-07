@@ -17,6 +17,38 @@ import Handlebars from "handlebars"
 import { eq } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
+import {
+	CHARACTER_LORE_TYPE_ID,
+	DEFAULT_VECTOR_NAME,
+	HISTORY_TYPE_ID,
+	WORLD_LORE_TYPE_ID,
+	entryInsert,
+	nextPosition,
+	toEntryRow,
+	type EntryTypeId,
+	type InsertLorebookEntry,
+	type LorebookEntry,
+	type NewLorebookEntry
+} from "$lib/server/utils/lorebookEntries"
+
+/**
+ * A fixture row, stated partially.
+ *
+ * `lorebookId` is required because a fixture always knows which book it is in;
+ * `id` is optional and honoured, because several suites pin ids so their
+ * assertions can name a row.
+ */
+type EntryOverrides<T extends EntryTypeId> = Partial<NewLorebookEntry<T>> & {
+	// Both server-allocated on the real write path, and both legitimately
+	// stated by a fixture: several suites pin an id so their assertions can
+	// name a row, and several pin a position so their ordering assertions mean
+	// something.
+	id?: number
+	position?: number
+}
+type SeedRow<T extends EntryTypeId> = EntryOverrides<T> & {
+	lorebookId: number
+}
 import { registerContextHandlebarsHelpers } from "$lib/shared/utils/contextHandlebarsHelpers"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 
@@ -103,22 +135,24 @@ export function makeInfillOptions(overrides: Partial<any> = {}): any {
 // ─── In-memory entry builders ───────────────────────────────────────────────
 
 export function worldLoreEntry(
-	overrides: Partial<SelectWorldLoreEntry> = {}
-): SelectWorldLoreEntry {
+	overrides: Partial<LorebookEntry<typeof WORLD_LORE_TYPE_ID>> = {}
+): LorebookEntry<typeof WORLD_LORE_TYPE_ID> {
 	const id = overrides.id ?? nextId()
 	return {
 		id,
 		lorebookId: 1,
+		typeId: WORLD_LORE_TYPE_ID,
 		name: `World Lore ${id}`,
 		category: null,
 		keys: "",
+		// No condition — the state every stored row lands in, spelled as the
+		// pair that means it: no keys, no mode. See `selectiveLogicHolds`.
+		secondaryKeys: "",
+		selectiveLogic: null,
 		useRegex: false,
 		// Null, not zero: an entry nobody has ruled on defers to the node.
 		recursionDepth: null,
 		caseSensitive: false,
-		// Added with the retrieval-strategy migration. NULL means "the default",
-		// which keeps every existing fixture on today's behaviour.
-		retrievalStrategy: null,
 		matchMode: null,
 		content: "Some world lore content.",
 		priority: 1,
@@ -136,22 +170,24 @@ export function worldLoreEntry(
 }
 
 export function characterLoreEntry(
-	overrides: Partial<SelectCharacterLoreEntry> = {}
-): SelectCharacterLoreEntry {
+	overrides: Partial<LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>> = {}
+): LorebookEntry<typeof CHARACTER_LORE_TYPE_ID> {
 	const id = overrides.id ?? nextId()
 	return {
 		id,
 		lorebookId: 1,
+		typeId: CHARACTER_LORE_TYPE_ID,
 		lorebookBindingId: null,
 		name: `Character Lore ${id}`,
 		keys: "",
+		// No condition — the state every stored row lands in, spelled as the
+		// pair that means it: no keys, no mode. See `selectiveLogicHolds`.
+		secondaryKeys: "",
+		selectiveLogic: null,
 		useRegex: false,
 		// Null, not zero: an entry nobody has ruled on defers to the node.
 		recursionDepth: null,
 		caseSensitive: false,
-		// Added with the retrieval-strategy migration. NULL means "the default",
-		// which keeps every existing fixture on today's behaviour.
-		retrievalStrategy: null,
 		matchMode: null,
 		content: "Some character lore content.",
 		priority: 1,
@@ -165,27 +201,31 @@ export function characterLoreEntry(
 		embeddingModel: null,
 		vectorizedAt: null,
 		...overrides
-	} as SelectCharacterLoreEntry
+	} as LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>
 }
 
 export function historyEntry(
-	overrides: Partial<SelectHistoryEntry> = {}
-): SelectHistoryEntry {
+	overrides: Partial<LorebookEntry<typeof HISTORY_TYPE_ID>> = {}
+): LorebookEntry<typeof HISTORY_TYPE_ID> {
 	const id = overrides.id ?? nextId()
 	return {
 		id,
 		lorebookId: 1,
+		typeId: HISTORY_TYPE_ID,
+		// History declares no `title` role, so its wire row carries none.
+		name: null,
 		year: 1000,
 		month: null,
 		day: null,
 		keys: "",
+		// No condition — the state every stored row lands in, spelled as the
+		// pair that means it: no keys, no mode. See `selectiveLogicHolds`.
+		secondaryKeys: "",
+		selectiveLogic: null,
 		useRegex: false,
 		// Null, not zero: an entry nobody has ruled on defers to the node.
 		recursionDepth: null,
 		caseSensitive: false,
-		// Added with the retrieval-strategy migration. NULL means "the default",
-		// which keeps every existing fixture on today's behaviour.
-		retrievalStrategy: null,
 		matchMode: null,
 		content: "Some history content.",
 		constant: false,
@@ -200,7 +240,7 @@ export function historyEntry(
 		embeddingModel: null,
 		vectorizedAt: null,
 		...overrides
-	} as SelectHistoryEntry
+	} as LorebookEntry<typeof HISTORY_TYPE_ID>
 }
 
 export function lorebookBinding(
@@ -340,9 +380,9 @@ export type TestLorebook = {
 		character?: SelectCharacter | null
 		persona?: SelectPersona | null
 	})[]
-	worldLoreEntries: SelectWorldLoreEntry[]
-	characterLoreEntries: SelectCharacterLoreEntry[]
-	historyEntries: SelectHistoryEntry[]
+	worldLoreEntries: LorebookEntry<typeof WORLD_LORE_TYPE_ID>[]
+	characterLoreEntries: LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>[]
+	historyEntries: LorebookEntry<typeof HISTORY_TYPE_ID>[]
 }
 
 export function buildLorebook(overrides: Partial<TestLorebook> = {}): any {
@@ -550,38 +590,201 @@ export async function insertSessionMessageRow(
 	return row
 }
 
+/**
+ * Legacy-shaped seed rows → `lorebook_entries` values, numbered in call order.
+ *
+ * ⚠ **`position` has no column default on the one table and is unique per
+ * `(lorebook_id, type_id)`**, so a fixture seeding entries into a book has to
+ * say where each one goes, and two separate calls into the same book must not
+ * both start at 1. The counter is per `(lorebook, type)` and per test file —
+ * each file gets its own module instance and its own database — so what it
+ * produces is "the order they were seeded in", which is what a fixture means.
+ * A row that states its own `position` keeps it, and so does one that states
+ * its own `id` — several suites pin ids so their assertions can name a row.
+ */
+const seedPositions = new Map<string, number>()
+const nextSeedPosition = (lorebookId: number, typeId: string): number => {
+	const key = `${lorebookId}:${typeId}`
+	const next = (seedPositions.get(key) ?? 0) + 1
+	seedPositions.set(key, next)
+	return next
+}
+
+export const worldLoreValues = (
+	rows: Array<SeedRow<typeof WORLD_LORE_TYPE_ID>>
+): InsertLorebookEntry[] =>
+	rows.map((r) => ({
+		...entryInsert({
+			typeId: WORLD_LORE_TYPE_ID,
+			position: nextSeedPosition(r.lorebookId, WORLD_LORE_TYPE_ID),
+			...r
+		}),
+		...(r.id === undefined ? {} : { id: r.id })
+	}))
+
+export const characterLoreValues = (
+	rows: Array<SeedRow<typeof CHARACTER_LORE_TYPE_ID>>
+): InsertLorebookEntry[] =>
+	rows.map((r) => ({
+		...entryInsert({
+			typeId: CHARACTER_LORE_TYPE_ID,
+			position: nextSeedPosition(r.lorebookId, CHARACTER_LORE_TYPE_ID),
+			...r
+		}),
+		...(r.id === undefined ? {} : { id: r.id })
+	}))
+
+export const historyValues = (
+	rows: Array<SeedRow<typeof HISTORY_TYPE_ID>>
+): InsertLorebookEntry[] =>
+	rows.map((r) => ({
+		...entryInsert({
+			typeId: HISTORY_TYPE_ID,
+			position: nextSeedPosition(r.lorebookId, HISTORY_TYPE_ID),
+			...r
+		}),
+		...(r.id === undefined ? {} : { id: r.id })
+	}))
+
+/**
+ * Insert entry rows in chunks, and hand back their ids.
+ *
+ * ⚠ **Chunked because one statement of a few thousand entries no longer fits
+ * on the wire.** A row is sixteen bind parameters on the one table where it was
+ * six on the three, so a fixture that seeded past the RAG fetch cap in a single
+ * `values([...])` now overflows the protocol before Postgres ever sees it. The
+ * chunk size is arbitrary and only has to be small.
+ */
+export async function seedEntries(
+	db: TestDb,
+	values: InsertLorebookEntry[],
+	chunkSize = 250
+): Promise<number[]> {
+	const ids: number[] = []
+	for (let i = 0; i < values.length; i += chunkSize) {
+		const rows = await db
+			.insert(schema.lorebookEntries)
+			.values(values.slice(i, i + chunkSize))
+			.returning({ id: schema.lorebookEntries.id })
+		ids.push(...rows.map((r) => r.id))
+	}
+	return ids
+}
+
+/**
+ * Give entries a default-space vector, the way the queue would.
+ *
+ * The `embedding`/`embeddingModel`/`vectorizedAt` columns a fixture used to set
+ * on the row itself are a row of their own now, so seeding one is a second
+ * insert rather than three more fields.
+ */
+export async function seedEntryVectors(
+	db: TestDb,
+	entryIds: number[],
+	embedding: number[],
+	model: string | null,
+	vectorizedAt: Date | null = new Date()
+) {
+	if (!entryIds.length) return
+	await db.insert(schema.lorebookEntryVectors).values(
+		entryIds.map((entryId) => ({
+			entryId,
+			vectorName: DEFAULT_VECTOR_NAME,
+			chunkIndex: 0,
+			model,
+			dims: embedding.length,
+			vector: embedding,
+			vectorizedAt
+		}))
+	)
+}
+
+/**
+ * The three entry inserters, writing rows of the declared type and handing back
+ * the shape the wire still uses.
+ *
+ * ⚠ **`position` is allocated rather than defaulted.** It is unique per
+ * `(lorebook_id, type_id)` and has no column default on the one table, so a
+ * fixture that seeds two entries into a book without saying where they go used
+ * to get two rows at `0` and now gets a constraint violation. The first free
+ * slot is the socket handlers' own allocator, so a fixture and a real create
+ * agree.
+ */
+async function insertEntryRow(
+	db: TestDb,
+	lorebookId: number,
+	typeId: string,
+	values: InsertLorebookEntry
+) {
+	const [row] = await db
+		.insert(schema.lorebookEntries)
+		.values({
+			...values,
+			position:
+				values.position ?? (await nextPosition(db, lorebookId, typeId))
+		})
+		.returning()
+	return row
+}
+
 export async function insertWorldLoreEntryRow(
 	db: TestDb,
 	lorebookId: number,
-	overrides: Partial<InsertWorldLoreEntry> = {}
+	overrides: EntryOverrides<typeof WORLD_LORE_TYPE_ID> = {}
 ) {
-	const [row] = await db
-		.insert(schema.worldLoreEntries)
-		.values({ lorebookId, name: "World Lore", ...overrides })
-		.returning()
-	return row
+	return toEntryRow(
+		await insertEntryRow(
+			db,
+			lorebookId,
+			WORLD_LORE_TYPE_ID,
+			entryInsert({
+				typeId: WORLD_LORE_TYPE_ID,
+				lorebookId,
+				name: "World Lore",
+				position: undefined as any,
+				...overrides
+			})
+		)
+	)
 }
 
 export async function insertCharacterLoreEntryRow(
 	db: TestDb,
 	lorebookId: number,
-	overrides: Partial<InsertCharacterLoreEntry> = {}
+	overrides: EntryOverrides<typeof CHARACTER_LORE_TYPE_ID> = {}
 ) {
-	const [row] = await db
-		.insert(schema.characterLoreEntries)
-		.values({ lorebookId, name: "Character Lore", ...overrides })
-		.returning()
-	return row
+	return toEntryRow(
+		await insertEntryRow(
+			db,
+			lorebookId,
+			CHARACTER_LORE_TYPE_ID,
+			entryInsert({
+				typeId: CHARACTER_LORE_TYPE_ID,
+				lorebookId,
+				name: "Character Lore",
+				position: undefined as any,
+				...overrides
+			})
+		)
+	)
 }
 
 export async function insertHistoryEntryRow(
 	db: TestDb,
 	lorebookId: number,
-	overrides: Partial<InsertHistoryEntry> = {}
+	overrides: EntryOverrides<typeof HISTORY_TYPE_ID> = {}
 ) {
-	const [row] = await db
-		.insert(schema.historyEntries)
-		.values({ lorebookId, ...overrides })
-		.returning()
-	return row
+	return toEntryRow(
+		await insertEntryRow(
+			db,
+			lorebookId,
+			HISTORY_TYPE_ID,
+			entryInsert({
+				typeId: HISTORY_TYPE_ID,
+				lorebookId,
+				position: undefined as any,
+				...overrides
+			})
+		)
+	)
 }

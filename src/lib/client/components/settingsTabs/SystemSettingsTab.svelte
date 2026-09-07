@@ -6,6 +6,8 @@
 	import { z } from "zod"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import LanguagePicker from "$lib/client/components/inputs/LanguagePicker.svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 
 	// Passphrase validation schema
 	const passphraseSchema = z
@@ -95,6 +97,10 @@
 			koboldCppBaseUrlField.trim() !==
 				(koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl ??
 					"") ||
+			// Re-syncs from context on save, same as the KoboldCPP URL above,
+			// so it self-resolves back to false without a post-save reset.
+			autoTranslateEndpointField.trim() !==
+				(systemSettingsCtx.settings?.autoTranslateEndpoint ?? "") ||
 			charaVaultEmailField.trim() !== "" ||
 			charaVaultTokenField.trim() !== ""
 	})
@@ -234,6 +240,52 @@
 		}
 		socket?.emit("systemSettings:updateContextDebuggingEnabled", {
 			enabled: event.checked
+		})
+	}
+
+	// ── Language (R5) ────────────────────────────────────────────────────────
+
+	function requireAdmin(): boolean {
+		if (userCtx.user?.isAdmin) return true
+		toaster.error({
+			title: "Access denied",
+			description: "Admin privileges required"
+		})
+		return false
+	}
+
+	function handleDefaultLanguageChange(language: string) {
+		if (!language || !requireAdmin()) return
+		socket?.emit("systemSettings:updateDefaultLanguage", { language })
+	}
+
+	// Buffered rather than emitted per keystroke: the endpoint is a URL being
+	// typed, and half of one is not a setting. `hasUnsavedChanges` above tracks
+	// it so navigating away mid-edit warns, exactly as the KoboldCPP URL does.
+	let autoTranslateEndpointField = $state("")
+	$effect(() => {
+		autoTranslateEndpointField =
+			systemSettingsCtx.settings?.autoTranslateEndpoint ?? ""
+	})
+
+	function saveAutoTranslate(next: {
+		enabled?: boolean
+		engine?: "google" | "libre"
+		endpoint?: string | null
+	}) {
+		if (!requireAdmin()) return
+		const settings = systemSettingsCtx.settings
+		socket?.emit("systemSettings:updateAutoTranslate", {
+			enabled: next.enabled ?? settings?.autoTranslateEnabled ?? false,
+			engine:
+				next.engine ??
+				((settings?.autoTranslateEngine ?? "google") as
+					| "google"
+					| "libre"),
+			endpoint:
+				next.endpoint !== undefined
+					? next.endpoint
+					: autoTranslateEndpointField.trim() || null
 		})
 	}
 
@@ -868,6 +920,102 @@
 					</Switch.Label>
 				</Switch>
 			</div>
+		</div>
+
+		<!-- Language -->
+		<div class="card preset-filled-surface-100-900 space-y-4 p-4">
+			<h3 class="text-lg font-semibold">Language</h3>
+			<p class="text-muted-foreground text-sm">
+				The language this instance is drawn in. Every user who has not
+				chosen one of their own follows this, so changing it moves them
+				— and only them; anyone with their own choice keeps it.
+			</p>
+			<LanguagePicker
+				label="Default language"
+				value={systemSettingsCtx.settings?.defaultLanguage ?? "en"}
+				describedBy="default-language-note"
+				onValueChange={handleDefaultLanguageChange}
+			/>
+			<p id="default-language-note" class="text-muted-foreground text-sm">
+				The language also decides which retrieval features apply:
+				stemming is used for the languages a stemmer exists for, and
+				trigram matching — which works for every language — for the
+				rest. See the Languages documentation page.
+			</p>
+
+			<hr class="border-surface-300-700" />
+
+			<h4 class="font-semibold">Automatic translation</h4>
+			<p class="text-muted-foreground text-sm">
+				Serene Pub ships no translated text. With this on, interface
+				strings it has no translation for are sent to the service below,
+				translated once, and cached forever. Only this app's own
+				interface strings are sent — never sessions, characters,
+				personas or lore. Off, anything untranslated stays in English.
+			</p>
+			<div class="flex items-center gap-2">
+				<Switch
+					name="enable-auto-translate"
+					checked={systemSettingsCtx.settings?.autoTranslateEnabled ??
+						false}
+					onCheckedChange={(e) =>
+						saveAutoTranslate({ enabled: e.checked })}
+				>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+					<Switch.Label class="font-semibold">
+						{systemSettingsCtx.settings?.autoTranslateEnabled
+							? "Automatic Translation Enabled"
+							: "Enable Automatic Translation"}
+					</Switch.Label>
+				</Switch>
+			</div>
+			{#if systemSettingsCtx.settings?.autoTranslateEnabled}
+				<Select
+					label="Translation service"
+					options={[
+						{
+							value: "google",
+							label: "Google Translate (no account needed)"
+						},
+						{
+							value: "libre",
+							label: "LibreTranslate (self-hostable)"
+						}
+					]}
+					value={systemSettingsCtx.settings?.autoTranslateEngine ??
+						"google"}
+					onValueChange={(v) =>
+						saveAutoTranslate({ engine: v as "google" | "libre" })}
+				/>
+				{#if systemSettingsCtx.settings?.autoTranslateEngine === "libre"}
+					<label class="label">
+						<span class="label-text font-semibold">
+							LibreTranslate URL
+						</span>
+						<input
+							class="input"
+							type="url"
+							placeholder="https://translate.example.org/translate"
+							bind:value={autoTranslateEndpointField}
+						/>
+					</label>
+					<p class="text-muted-foreground text-sm">
+						Point this at your own LibreTranslate and nothing leaves
+						your network. Leave it empty to use the public instance.
+					</p>
+					<button
+						class="btn preset-filled-primary-500 w-fit"
+						onclick={() => saveAutoTranslate({})}
+					>
+						Save URL
+					</button>
+				{/if}
+			{/if}
 		</div>
 
 		<!-- Legacy Configs -->

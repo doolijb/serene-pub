@@ -12,7 +12,8 @@ import {
 import { lorebookBindingListHandler } from "./lorebooks"
 import { withSessionTriggerLock } from "$lib/server/utils/sessionTriggerLock"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
-import { activityStore } from "$lib/server/utils/activityStore"
+import { DEFAULT_CHANNEL } from "$lib/server/messages/channels"
+import { activityError, activityStore } from "$lib/server/utils/activityStore"
 
 export const sessionsSummarizeHandler: Handler<
 	Sockets.Sessions.Summarize.Params,
@@ -110,11 +111,20 @@ export const sessionsSummarizeHandler: Handler<
 				// would queue the user's next message behind minutes of LLM
 				// calls. That is exactly the trap a minimize-first flow must
 				// not set. Same scoping as scenes:process.
+				// "All" means all of one lane (20 §7): a summary that folded a
+				// side conversation into the account of the main one would be
+				// wrong in a way nothing downstream could detect. A picked
+				// list is taken as given — the person picked those rows, lane
+				// and all.
 				const whereClause =
 					messageIds === "all"
 						? and(
 								eq(schema.sessionMessages.sessionId, sessionId),
-								eq(schema.sessionMessages.isHidden, false)
+								eq(schema.sessionMessages.isHidden, false),
+								eq(
+									schema.sessionMessages.channel,
+									DEFAULT_CHANNEL
+								)
 							)
 						: and(
 								eq(schema.sessionMessages.sessionId, sessionId),
@@ -433,10 +443,12 @@ export const sessionsSummarizeHandler: Handler<
 				// genuinely our own cancellation — and that path has already
 				// removed the activity.
 				if (abortController.signal.aborted) return null as any
+				// `activityError` rather than `err.message`: this record is
+				// served back to a non-admin by `activityStore.getFor`, and an
+				// adapter failure's words are the base URL and the model file.
 				activityStore.updateSessionSummarize(activityId, {
 					status: "error",
-					errorMessage:
-						err instanceof Error ? err.message : "Unknown error"
+					...activityError(err)
 				})
 				throw err
 			}

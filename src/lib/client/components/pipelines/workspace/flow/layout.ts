@@ -159,7 +159,7 @@ export async function layoutPipeline(
 			// when the caption says something the cards don't. A single-node
 			// chain is usually named after its node, so a label there reads
 			// as a duplicated title; it earns its place only for a route's
-			// predicate or to name a multi-node lane.
+			// predicate or to name a multi-node branch.
 			const block = blockById.get(scopeId)
 			for (const [chainKey, members] of chains) {
 				const labelId = `${scopeId}::chain::${chainKey}`

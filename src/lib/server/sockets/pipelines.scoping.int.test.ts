@@ -927,7 +927,7 @@ describe("the builder's structural payload", () => {
 			(n: any) => n.blockId === "gather"
 		)
 		// Five since 1.8.0: world and character lore split into their own
-		// lanes. Asserted as "one chain each" rather than a fixed count, so
+		// gather branches. Asserted as "one chain each" rather than a fixed count, so
 		// adding a source is a one-line change here instead of a puzzle.
 		expect(reads.length).toBeGreaterThanOrEqual(4)
 		expect(reads.every((n: any) => n.blockKind === "async")).toBe(true)
@@ -937,6 +937,9 @@ describe("the builder's structural payload", () => {
 		expect(reads.map((n: any) => n.blockChain).sort()).toEqual([
 			"cast",
 			"characterLore",
+			// Spec 1.18.0: the entity mechanism, a third way of retrieving lore —
+			// by the names the scene is using rather than by an author's keys.
+			"entities",
 			"history",
 			"historyEntries",
 			"relationshipsKnown",

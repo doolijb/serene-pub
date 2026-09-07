@@ -4,9 +4,17 @@
 	import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { onMount, onDestroy } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { z } from "zod"
+
+	const KEEP_ALIVE_UNITS = [
+		{ value: "ms", label: "ms" },
+		{ value: "s", label: "s" },
+		{ value: "m", label: "m" },
+		{ value: "h", label: "h" }
+	]
 
 	interface ExtraFieldData {
 		stream: boolean
@@ -45,10 +53,17 @@
 		CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].extraJson
 
 	let availableOllamaModels: any[] = $state([])
+	// The picker takes { value, label }; Ollama reports the id under `model`
+	// and the display name under `name`.
+	let modelOptions = $derived(
+		availableOllamaModels.map((m) => ({ value: m.model, label: m.name }))
+	)
 	let ollamaFields: ExtraFieldData | undefined = $state()
 	let validationErrors: ValidationErrors = $state({})
 
-		const onConnectionsRefreshModels = (msg: Sockets.Connections.RefreshModels.Response) => {
+	const onConnectionsRefreshModels = (
+		msg: Sockets.Connections.RefreshModels.Response
+	) => {
 		if (msg.models) availableOllamaModels = msg.models
 	}
 	socket.on("connections:refreshModels", onConnectionsRefreshModels)
@@ -185,19 +200,16 @@
 </script>
 
 {#if connection}
-	<div class="mt-2 flex flex-col gap-1">
-		<label class="font-semibold" for="model">Model</label>
-		<select
-			id="model"
-			bind:value={connection.model}
-			class="select bg-background border-muted w-full rounded border"
-		>
-			<option value="">-- Select Model --</option>
-			{#each availableOllamaModels as m}
-				<option value={m.model}>{m.name}</option>
-			{/each}
-		</select>
-	</div>
+	<Select
+		class="mt-2"
+		label="Model"
+		options={modelOptions}
+		bind:value={connection.model}
+		placeholder="-- Select Model --"
+		emptyMessage="No models — try Refresh Models."
+		clearable
+		required
+	/>
 	<div class="mt-4 flex gap-2">
 		<button
 			type="button"
@@ -221,33 +233,19 @@
 		</button>
 	</div>
 	{#if !ollamaFields?.useSession}
-		<div class="mt-2 flex flex-col gap-1">
-			<label class="font-semibold" for="promptFormat">
-				Prompt Format
-			</label>
-			<select
-				id="promptFormat"
-				class="select bg-background border-muted w-full rounded border"
-				bind:value={connection.promptFormat}
-			>
-				{#each PromptFormats.options as option}
-					<option value={option.value}>{option.label}</option>
-				{/each}
-			</select>
-		</div>
+		<Select
+			class="mt-2"
+			label="Prompt Format"
+			options={PromptFormats.options}
+			bind:value={connection.promptFormat}
+		/>
 	{/if}
-	<div class="mt-2 flex flex-col gap-1">
-		<label class="font-semibold" for="tokenCounter">Token Counter</label>
-		<select
-			id="tokenCounter"
-			bind:value={connection.tokenCounter}
-			class="select bg-background border-muted w-full rounded border"
-		>
-			{#each TokenCounterOptions.options as t}
-				<option value={t.value}>{t.label}</option>
-			{/each}
-		</select>
-	</div>
+	<Select
+		class="mt-2"
+		label="Token Counter"
+		options={TokenCounterOptions.options}
+		bind:value={connection.tokenCounter}
+	/>
 	<details class="mt-4">
 		<summary class="cursor-pointer font-semibold">
 			Advanced Settings
@@ -265,7 +263,13 @@
 		</div>
 		{#if ollamaFields}
 			<div class="mt-2 flex flex-col gap-1">
-				<label class="font-semibold" for="keepAlive">Keep Alive</label>
+				<!-- Points at the number, which is what "Keep Alive" actually
+				     labels; it used to name an id no element had. The unit
+				     picker carries its own label, hidden so the pair still
+				     reads as one field. -->
+				<label class="font-semibold" for="keepAliveNumber">
+					Keep Alive
+				</label>
 				<div class="flex items-center gap-2">
 					<input
 						id="keepAliveNumber"
@@ -274,16 +278,13 @@
 						bind:value={ollamaFields.keepAliveNumber}
 						class="input bg-background border-muted w-32 rounded border"
 					/>
-					<select
-						id="keepAliveUnit"
+					<Select
+						class="w-24"
+						label="Keep alive unit"
+						labelHidden
+						options={KEEP_ALIVE_UNITS}
 						bind:value={ollamaFields.keepAliveUnit}
-						class="select bg-background border-muted w-24 rounded border"
-					>
-						<option value="ms">ms</option>
-						<option value="s">s</option>
-						<option value="m">m</option>
-						<option value="h">h</option>
-					</select>
+					/>
 				</div>
 			</div>
 			<section class="w-full space-y-4 pt-4">

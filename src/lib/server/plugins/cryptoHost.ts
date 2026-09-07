@@ -5,7 +5,7 @@
  * Unlike the seeded `ctx.random` (deterministic, for replayable rolls), this is
  * genuine OS entropy, so it is safe for ids, nonces, and tokens — which is why
  * it is *not* seeded (a `getRandomValues` that is secretly deterministic is the
- * foot-gun the ambient prelude deliberately avoided). It is a benign capability
+ * foot-gun the ambient prelude deliberately avoided). It is a benign permission
  * (random bytes carry no authority and read no data), so it is always granted —
  * no permission, no config — but it still runs host-side and is bridged in,
  * never exposing Node's `crypto` object itself.

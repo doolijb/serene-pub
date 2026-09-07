@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest"
 import { eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
-import { RuntimeManager } from "./RuntimeManager"
+import { SandboxManager } from "./SandboxManager"
 import {
 	syncPluginEngines,
 	engineDeclarationError,
@@ -20,7 +20,7 @@ import {
 /**
  * A manifest-declared template engine, end to end: declared in the stored
  * manifest, registered as a forwarding renderer at sync, rendering through the
- * real `RuntimeManager` sandbox, and released again when the plugin is
+ * real `SandboxManager` sandbox, and released again when the plugin is
  * disabled. The registry seam (`renderTemplate`) is what the assemble step
  * calls, so what this proves is the sentence from 12 §2a: a template whose
  * `engine` names a plugin's id renders with the plugin's renderer — and
@@ -38,11 +38,11 @@ const BUNDLE = `module.exports = { hooks: {
 } }`
 
 let db: TestDb
-let mgr: RuntimeManager
+let mgr: SandboxManager
 
 beforeAll(async () => {
 	db = await createTestDb()
-	mgr = new RuntimeManager({ onInvocation: () => {} })
+	mgr = new SandboxManager({ onInvocation: () => {} })
 	await db.insert(schema.plugins).values({
 		pluginId: "acme/x",
 		name: "Acme X",

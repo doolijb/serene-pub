@@ -14,7 +14,9 @@
  *     animated WEBP, which is recognised from its container because there is no
  *     way to decode one here.
  *  4. Negotiation picks the first reachable format and passes an
- *     already-acceptable source through untouched.
+ *     already-acceptable source through untouched — untouched INCLUDING when
+ *     this build cannot decode it or it carries frames, because both are facts
+ *     about a conversion and a passthrough performs none.
  *  5. A batch preserves ORDER and isolates FAILURE — asserted by CONTENT, with
  *     the conversions deliberately differing in cost, because a length check
  *     passes on a reordered list and a cheap uniform fixture never reorders.
@@ -596,9 +598,10 @@ describe("an animated WebP is recognised from its container", () => {
 	})
 
 	test("but an accepted animated WebP still passes THROUGH untouched", async () => {
-		// The passthrough short-circuit runs before the motion check, and that
-		// is the correct order: nothing is re-encoded, so there is nothing to
-		// lose. A backend that takes WebP gets the animation intact.
+		// The passthrough short-circuit runs before the motion check — not
+		// first of everything, since the vocabulary lookup still comes ahead of
+		// it — and that is the correct order: nothing is re-encoded, so there is
+		// nothing to lose. A backend that takes WebP gets the animation intact.
 		const bytes = animatedWebp()
 		const out = await convertMediaTo({ bytes, mime: "image/webp" }, [
 			"image/webp"
@@ -668,6 +671,111 @@ describe("negotiating a preferred format", () => {
 		)
 		expect(out.code).toBe("no-converter")
 		expect(out.reason).toContain("No target formats were offered")
+	})
+})
+
+describe("the passthrough is asked before what a conversion would cost", () => {
+	// The ordering bug this pins: the source-decodability check ran ABOVE the
+	// passthrough, so a file needing no conversion was refused for a codec it
+	// was never going to use. Both remaining checks — can this build decode it,
+	// and would encoding it discard motion — are questions about CONVERTING,
+	// and the answer to "is it already what you asked for" makes them moot.
+
+	test("an accepted format this build cannot DECODE is handed straight over", async () => {
+		// `application/pdf` is `decode: false` in the table and has no converter
+		// at all. Neither fact matters to a backend that accepts PDFs.
+		const pdf = Buffer.from(
+			"%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n%%EOF\n"
+		)
+		const out = await convertMediaTo(
+			{ bytes: pdf, mime: "application/pdf" },
+			["application/pdf"]
+		)
+		expect(out.ok).toBe(true)
+		if (!out.ok) return
+		expect(out.passthrough).toBe(true)
+		expect(out.mime).toBe("application/pdf")
+		expect(out.ext).toBe("pdf")
+		// By CONTENT, not by the flag: a passthrough that quietly re-encoded
+		// would still report `passthrough: true` and hand back other bytes.
+		expect(out.bytes.equals(pdf)).toBe(true)
+		// A copy, not the caller's buffer, and no dimensions invented for a
+		// file nothing decoded.
+		expect(out.bytes).not.toBe(pdf)
+		expect([out.width, out.height]).toEqual([null, null])
+	})
+
+	test("the same undecodable source, NOT accepted, refuses exactly as before", async () => {
+		// The half of the old behaviour that was right and stays: with nothing
+		// in the list this build can reach, the decode is what to say — with
+		// the format's own advice attached, and the same `no-converter` code.
+		const heic = refusal(
+			await convertMediaTo(
+				{ bytes: Buffer.from("ftypheic"), mime: "image/heic" },
+				["image/png", "image/jpeg"]
+			)
+		)
+		expect(heic.code).toBe("no-converter")
+		expect(heic.reason).toContain("cannot be decoded by this build")
+		expect(heic.reason).toContain("Most Compatible")
+		expect(heic.targetMime).toBeNull()
+		expect(heic.considered).toEqual(["image/png", "image/jpeg"])
+
+		// And a cross-kind offer is still reported as the decode rather than as
+		// a kind mismatch, because the source check is still above the target
+		// walk — only the passthrough moved.
+		const pdf = refusal(
+			await convertMediaTo(
+				{ bytes: Buffer.from("%PDF-1.7\n"), mime: "application/pdf" },
+				["image/png"]
+			)
+		)
+		expect(pdf.code).toBe("no-converter")
+		expect(pdf.reason).toContain("cannot be decoded by this build")
+	})
+
+	test("an undecodable source with nothing offered still names the decode", async () => {
+		// The empty-list refusal stayed BELOW the source checks, so this message
+		// did not change either.
+		const out = refusal(
+			await convertMediaTo(
+				{ bytes: Buffer.from("%PDF-1.7\n"), mime: "application/pdf" },
+				[]
+			)
+		)
+		expect(out.code).toBe("no-converter")
+		expect(out.reason).toContain("cannot be decoded by this build")
+	})
+
+	test("an animated GIF whose own format is accepted passes through, frames intact", async () => {
+		// The interaction to get wrong: the motion check must not fire on a path
+		// that re-encodes nothing. Asserted on the BYTES, because a flatten to a
+		// single-frame GIF would also come back `ok` with `mime: "image/gif"`.
+		const gif = animatedGif(3)
+		const out = await convertMediaTo({ bytes: gif, mime: "image/gif" }, [
+			"image/gif"
+		])
+		expect(out.ok).toBe(true)
+		if (!out.ok) return
+		expect(out.passthrough).toBe(true)
+		expect(out.bytes.equals(gif)).toBe(true)
+		expect(await readMotion(out.bytes, "image/gif")).toMatchObject({
+			animated: true,
+			frames: 3
+		})
+	})
+
+	test("…and the same GIF asked for another format still refuses the flatten", async () => {
+		// The other side of the same byte: the passthrough moving up must not
+		// have given motion a way past. This one IS a conversion.
+		const out = refusal(
+			await convertMediaTo({ bytes: animatedGif(3), mime: "image/gif" }, [
+				"image/webp"
+			])
+		)
+		expect(out.code).toBe("animation-would-be-lost")
+		expect(out.targetMime).toBe("image/webp")
+		expect(out.reason).toContain("3 frames")
 	})
 })
 

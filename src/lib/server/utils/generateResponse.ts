@@ -10,6 +10,7 @@ import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { getUserConfigurations } from "./getUserConfigurations"
 import { resolveSampling } from "./resolveSampling"
 import { broadcastToSessionUsers } from "../sockets/utils/broadcastHelpers"
+import { ComposedError } from "$lib/server/connections/visibility"
 import { buildGraphContext } from "./graphContextFormatter"
 import { llmQueue, isQueueCancellation } from "./llmQueue"
 import {
@@ -147,7 +148,7 @@ export async function generateResponse({
 				socket.io,
 				generatingMessage.sessionId,
 				generatingMessage.id,
-				new Error(modeCheck.reason)
+				new ComposedError(modeCheck.reason)
 			)
 			return false
 		}
@@ -239,19 +240,13 @@ export async function generateResponse({
 				with: {
 					lorebookBindings: {
 						with: { character: true, persona: true }
-					},
-					worldLoreEntries: true,
-					characterLoreEntries: {
-						with: {
-							lorebookBinding: {
-								with: {
-									character: true,
-									persona: true
-								}
-							}
-						}
-					},
-					historyEntries: true
+					}
+					// The three entry lists used to be loaded here and are
+					// not any more: `BasePromptSession.lorebook` never
+					// declared them, and nothing read them — every lore read
+					// goes through the host's `lorebook_entries` query, which
+					// applies the character-lore privacy rule the raw lists
+					// never did.
 				}
 			}
 		}
@@ -262,7 +257,7 @@ export async function generateResponse({
 			socket.io,
 			generatingMessage.sessionId,
 			generatingMessage.id,
-			new Error("Session not found.")
+			new ComposedError("Session not found.")
 		)
 		return false
 	}
@@ -298,7 +293,7 @@ export async function generateResponse({
 			socket.io,
 			generatingMessage.sessionId,
 			generatingMessage.id,
-			new Error(
+			new ComposedError(
 				"No Narrator prompt config configured. Set one up under Session Prompts: Narrator in Settings."
 			)
 		)
@@ -330,13 +325,18 @@ export async function generateResponse({
 		// dangling id, or a connection that cannot do chat — and which screen
 		// fixes it. The old line said "Please set up a connection first" for all
 		// four, including to people who plainly had one set up.
+		// `ComposedError`, so the sentence survives to the row rather than being
+		// replaced by the opaque one: it is ours, and it names no connection —
+		// `resolveCapabilityTarget` puts the identity in `problem.connection`,
+		// which the projection removes for everyone who may not see it.
 		await persistGenerationErrorRow(
 			socket.io,
 			generatingMessage.sessionId,
 			generatingMessage.id,
-			new Error(
+			new ComposedError(
 				resolved.problem?.message ??
-					"No AI connection configured. Please set up a connection first."
+					"No AI connection configured. Please set up a connection first.",
+				resolved.problem?.connection
 			)
 		)
 		return false
@@ -484,7 +484,10 @@ export async function generateResponse({
 		// A preview *halts* at the pre-call substrate by design, so a non-ok
 		// outcome only means failure when it arrived without a payload.
 		if (!compiled)
-			throw new Error(
+			// Composed here, from a receipt whose `haltReason` is composed too —
+			// every sentence that can reach it names no connection by
+			// construction (`capabilityRefusal`, the three dispatchers).
+			throw new ComposedError(
 				`the pipeline could not compile this turn: ${receipt.outcome}` +
 					(receipt.haltNodeKey
 						? ` at '${receipt.haltNodeKey}'`
@@ -617,10 +620,12 @@ export async function generateResponse({
 		const updatedMsg = await db.query.sessionMessages.findFirst({
 			where: (cm, { eq }) => eq(cm.id, generatingMessage.id)
 		})
-		const response: Sockets.SessionMessages.SendPersonaMessage.Response = {
-			sessionMessage: updatedMsg!
-		}
-		socket.io.to("user_" + userId).emit("personaMessageReceived", response)
+		// `personaMessageReceived` used to be emitted here as well. Nothing has
+		// ever listened for it: it appears nowhere else in the tree, it is in
+		// neither `types.ts` nor `typedSocket.ts`, and `Layout.svelte`'s
+		// `onAny` catch-all returns early on any event that does not end in
+		// `:error`. The broadcast below carries the same row to the same
+		// person, so the emit was a second copy nobody read.
 		await broadcastToSessionUsers(
 			socket.io,
 			updatedMsg!.sessionId,

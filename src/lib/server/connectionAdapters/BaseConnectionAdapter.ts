@@ -5,9 +5,17 @@ import type {
 	AdapterActions,
 	TextGenResult
 } from "$lib/server/adapters/actions"
+import {
+	prepareAttachments,
+	type AttachmentInput,
+	type AttachmentPlan,
+	type PrepareOptions
+} from "$lib/server/adapters/attachments"
+import { adapterIo } from "$lib/shared/connectionAdapters/manifest"
+import type { AdapterIo } from "$lib/shared/connectionAdapters/io"
 import { SessionTypes } from "$lib/shared/constants/SessionTypes"
 import { PromptBlockFormatter } from "$lib/shared/utils/PromptBlockFormatter"
-import { PromptFormats } from "$lib/shared/constants/PromptFormats"
+import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
 
 export interface BasePromptSession extends SelectSession {
 	sessionCharacters?: (SelectSessionCharacter & {
@@ -54,8 +62,8 @@ export interface BasePromptSession extends SelectSession {
  *
  * A contract for the RESPONSE, not a decoding preference — it must never be
  * implemented by reaching into the user's sampling config. Each adapter
- * translates it into whatever its provider supports (a GBNF grammar, Ollama's
- * `format`, OpenAI's `response_format`, …) and ignores it when the provider
+ * translates it into whatever its service supports (a GBNF grammar, Ollama's
+ * `format`, OpenAI's `response_format`, …) and ignores it when the service
  * supports nothing of the kind.
  */
 export type ResponseFormat = "text" | "json"
@@ -124,13 +132,13 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 *
 	 * Kept as a separate property rather than widening ResponseFormat into a
 	 * union carrying a payload: "is this constrained at all" and "what shape"
-	 * are answered by different providers at different fidelities, and every
-	 * adapter already branches on the first. An adapter whose provider cannot
+	 * are answered by different services at different fidelities, and every
+	 * adapter already branches on the first. An adapter whose service cannot
 	 * take a schema ignores this and falls back to plain JSON mode — the same
 	 * graceful-degradation rule responseFormat already follows, so adding a
-	 * schema can never make a working provider worse.
+	 * schema can never make a working service worse.
 	 *
-	 * Providers split three ways: the llama.cpp family compiles it to GBNF via
+	 * Services split three ways: the llama.cpp family compiles it to GBNF via
 	 * jsonSchemaToGbnf, Ollama/OpenAI/LM Studio take JSON Schema natively, and
 	 * anything else ignores it.
 	 */
@@ -329,6 +337,99 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 */
 	async preflight(_signal?: AbortSignal): Promise<void> {}
 
+	// ── Attachments (not an action either) ──────────────────────────────────
+	//
+	// Format negotiation and limit enforcement, in the ONE place every text
+	// adapter funnels through — which is the whole reason it is here rather than
+	// in each of the seven. `attachments` is a list because interleaving is
+	// ordered, so seven copies of this would be seven chances for one of them to
+	// regroup the list and hand a model the pictures in the wrong order.
+	//
+	// Not an action, and it derives no capability: whether images may flow at all
+	// is `text+image->text` in the manifest's `supports`, resolved through the
+	// four layers. This is what happens to files that are already permitted.
+
+	/**
+	 * What this connection's TYPE declares about files: how many, how big, in
+	 * what formats.
+	 *
+	 * Read from the static manifest rather than from the instance, because these
+	 * are properties of the wire format. `undefined` means nothing is declared,
+	 * which every reader downstream treats as "no known limit".
+	 */
+	protected get io(): AdapterIo | undefined {
+		return adapterIo(this.connection?.type ?? "")
+	}
+
+	/**
+	 * The files travelling with this request, in the order they were handed over.
+	 *
+	 * Set by the substrate before dispatch — `dispatch.ts` resolves the run's
+	 * `attachments` port from media REFERENCES into these bytes and hands them
+	 * here, the same way `withCompiledPrompt` hands over a payload built
+	 * elsewhere. An adapter never resolves a reference itself: see the note on
+	 * `prepareAttachments` below for why the database must stay out of this
+	 * import graph, and `dispatch.ts` for the access check that comes with
+	 * turning a uuid into bytes.
+	 *
+	 * Empty is the overwhelming case and means exactly nothing to do.
+	 */
+	private suppliedAttachments: readonly AttachmentInput[] = []
+
+	/** Hand over the files this request carries. Returns the adapter so a
+	 *  dispatch site reads as one expression, like `withCompiledPrompt`. */
+	withAttachments(inputs: readonly AttachmentInput[]): this {
+		this.suppliedAttachments = inputs
+		return this
+	}
+
+	/** What was handed over, in order. */
+	protected get attachments(): readonly AttachmentInput[] {
+		return this.suppliedAttachments
+	}
+
+	/**
+	 * Does THIS CLASS have code that puts attachments on the wire?
+	 *
+	 * ⚠ Not a capability claim, and it must never be read as one. Whether a
+	 * connection may send images is `text+image->text` in the manifest, resolved
+	 * through the four layers, and it is deliberately per-MODEL rather than
+	 * per-class (see `HOSTED_BY` in `$lib/shared/connectionAdapters/actions`: the
+	 * class is the same whichever model is loaded). This answers the narrower,
+	 * purely mechanical question a DISPATCH has to ask before handing files over
+	 * — is there anything in here that would send them?
+	 *
+	 * The two genuinely differ today: several entries declare vision in
+	 * `supports` because their API format has it, while their adapter class has
+	 * no image code at all. Handing those files anyway would drop them
+	 * silently, and a reply about pictures the model never saw is
+	 * indistinguishable from a model ignoring them — the failure this whole area
+	 * is arranged to prevent. So `dispatch.ts` refuses on a false here rather
+	 * than sending a request that has quietly lost its attachments.
+	 */
+	get consumesAttachments(): boolean {
+		return false
+	}
+
+	/**
+	 * Negotiate formats and enforce limits for a set of attachments, in order.
+	 *
+	 * ⚠ Takes BYTES, not `MediaRef`s. Loading a ref needs the media module, which
+	 * needs the database, and dragging that into every adapter's import graph to
+	 * read four numbers is exactly the shape the lazy-adapter architecture exists
+	 * to avoid. The caller has already fetched the bytes it wants to send.
+	 *
+	 * ⚠ Conversion runs BEFORE the byte checks, and that ordering is the point —
+	 * see the header of `$lib/server/adapters/attachments`. A refusal comes back
+	 * as a VALUE, so an adapter cannot forget to look at it.
+	 */
+	protected async prepareAttachments(
+		inputs: readonly AttachmentInput[],
+		opts?: PrepareOptions
+	): Promise<AttachmentPlan> {
+		return prepareAttachments(this.io, inputs, opts)
+	}
+
 	async getContextTokenLimit(): Promise<number> {
 		// No `contextTokensEnabled` test: `sampling` arrives already resolved
 		// (resolveSampling.ts), so a key being present IS the switch being on.
@@ -352,7 +453,10 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * rather than that same delegation.
 	 */
 	private buildTextPromptFromMessages(messages: any[]): string {
-		const format = this.connection?.promptFormat || PromptFormats.VICUNA
+		// `promptFormatOf`, so a connection whose `prompt_format` column was
+		// cleared rather than unset still gets Vicuna. `?? ` here would hand
+		// `makeBlock` an empty string, whose `default:` arm is ChatML.
+		const format = promptFormatOf(this.connection?.promptFormat)
 		const blocks = messages.map((msg) =>
 			PromptBlockFormatter.makeBlock({
 				format,
@@ -360,15 +464,66 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 				content: msg.content
 			})
 		)
-		blocks.push(
-			PromptBlockFormatter.makeBlock({
-				format,
-				role: "assistant",
-				content: "",
-				includeClose: false
-			})
-		)
+		// The continuation seed — an open assistant block for the model to
+		// write into — UNLESS the last message already is one.
+		//
+		// The summarizer's array always ends on a user turn, so this is the
+		// unconditional push it has always been for that caller. What changed is
+		// that a pipeline-built payload can now arrive here (`promptTextFor`
+		// below), and an assembled session prompt already ends with the seed
+		// turn: pushing a second opener would tell the model to start a reply
+		// twice.
+		const last = messages[messages.length - 1]
+		if (last?.role !== "assistant")
+			blocks.push(
+				PromptBlockFormatter.makeBlock({
+					format,
+					role: "assistant",
+					content: "",
+					includeClose: false
+				})
+			)
 		return blocks.join("")
+	}
+
+	/**
+	 * The text-completion prompt for a payload, whatever shape it arrived in.
+	 *
+	 * A compiled prompt carries `prompt` **or** `messages`, and which one
+	 * depends on the connection's own format: split-session renders a role
+	 * array, everything else renders one string. An adapter's text-completion
+	 * branch reads `prompt` — and read it as `compiledPrompt.prompt!`, so a
+	 * payload built for a chat endpoint sent the backend `undefined`, which
+	 * generates from nothing and reads as a model fault.
+	 *
+	 * That was unreachable while the pipeline could not produce a role array at
+	 * all: the connection's format never reached the render, so every payload
+	 * was a flat string. Restoring that wire (assemble's `connection` slot) is
+	 * what makes this method necessary, and the shape it has to survive is a
+	 * connection whose format is `split_session` bound to an adapter branch that
+	 * wants text — a contradictory configuration that is nonetheless reachable,
+	 * because the format and the endpoint mode are two independent fields.
+	 *
+	 * Rebuilt through `buildTextPromptFromMessages`, which is the same
+	 * construction the summarizer has always used for exactly this: role blocks
+	 * in the connection's own format. Faithful rather than guessed — nothing
+	 * here invents a wrapper the connection did not ask for.
+	 */
+	protected promptTextFor(compiled: PromptBuilderCompiledPrompt): string {
+		if (typeof compiled.prompt === "string") return compiled.prompt
+		const messages = Array.isArray(compiled.messages)
+			? (compiled.messages as any[])
+			: []
+		if (messages.length) return this.buildTextPromptFromMessages(messages)
+		// Neither shape. `toCompiledPrompt` already refuses this on the way in,
+		// so reaching it means a caller built a payload by hand — named rather
+		// than sent as an empty string, which is the failure this whole seam
+		// exists to stop being silent.
+		throw new Error(
+			"this adapter was handed a compiled prompt carrying neither a prompt " +
+				"string nor any messages, so there is nothing to send. A payload is " +
+				"built by the pipeline and passed in through withCompiledPrompt()."
+		)
 	}
 
 	/**

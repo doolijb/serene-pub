@@ -162,8 +162,25 @@
 			/>
 		</div>
 
+		<!-- The pickers on this form stay native <select>s deliberately, and a
+		     later sweep should leave them alone. Document View is not the
+		     Skeleton surface: the root layout strips data-mode/data-theme off
+		     <html> for as long as this shell is mounted, so Skeleton's palette
+		     falls back to greyscale (--color-primary-500 resolves to
+		     oklch(0.556 0 0) here), and Combobox portals its popup to <body> —
+		     OUTSIDE .a11y-root, which is where both the mode palette and
+		     --a11y-font-scale live. Measured with inputs/Select.svelte dropped
+		     into this shell: an rgb(245,245,245) popup over the rgb(13,13,13)
+		     page, a selected row at 4.54:1 against accessible.css's stated AAA
+		     7:1 floor, and a list stuck at 14px while the page sat at 32px
+		     under this surface's own 200% text control — WCAG 1.4.4, on the
+		     surface that exists for it. Native also hands AT the platform
+		     picker, which is the strongest control here, not the weakest.
+		     Styling it for Document View would mean teaching one component two
+		     design systems, which is the drift the edit form's own capability
+		     panel documents refusing. -->
 		<div class="a11y-field">
-			<label for="a11y-conn-type">Provider Type</label>
+			<label for="a11y-conn-type">Service Type</label>
 			<select
 				id="a11y-conn-type"
 				bind:value={type}
@@ -190,7 +207,7 @@
 		<div class="a11y-field">
 			<label for="a11y-conn-api-key">API Key</label>
 			<p class="a11y-hint">
-				Only required for providers that need one (e.g. OpenAI,
+				Only required for services that need one (e.g. OpenAI,
 				Anthropic).
 			</p>
 			<input
@@ -273,7 +290,7 @@
 		</div>
 
 		<p class="a11y-hint">
-			Advanced provider-specific options (streaming, thinking, keep-alive,
+			Advanced service-specific options (streaming, thinking, keep-alive,
 			etc.) aren't available in Document View yet — use the standard site
 			for those.
 		</p>

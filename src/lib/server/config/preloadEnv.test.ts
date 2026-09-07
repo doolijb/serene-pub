@@ -462,7 +462,7 @@ describe("guards", () => {
 	 * The other half of the relative-data-dir fix, and the half that is a side
 	 * effect rather than a pure function: every reader downstream
 	 * (getAppDataDir() in utils/index.ts and in drizzle.config.ts,
-	 * RuntimeManager's storage root) takes SERENE_PUB_DATA_DIR straight from
+	 * SandboxManager's storage root) takes SERENE_PUB_DATA_DIR straight from
 	 * the environment and would resolve a relative value against whatever the
 	 * working directory is by then — which in a release is the app/ folder an
 	 * update deletes. So the resolved absolute path is written back.
@@ -491,7 +491,7 @@ describe("guards", () => {
 			process.env.SERENE_PUB_INSTALL_ROOT = root
 			delete process.env.SERENE_PUB_DATA_DIR
 			await load()
-			// RuntimeManager reads its presence as "the operator chose a data
+			// SandboxManager reads its presence as "the operator chose a data
 			// directory" and enables plugin storage on it — writing the default
 			// back would turn that on as a side effect of a path fix.
 			expect(process.env.SERENE_PUB_DATA_DIR).toBeUndefined()

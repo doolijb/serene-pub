@@ -14,6 +14,7 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -219,8 +220,8 @@ describe("narrativeGraph:updateRelationship — scoping (PGlite integration)", (
 			})
 			.returning()
 		const [foreignHistoryEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: otherLorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: otherLorebook.id }]))
 			.returning()
 
 		await expect(

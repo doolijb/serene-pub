@@ -21,6 +21,7 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
+import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 
 let db: TestDb
 let dataDir: string
@@ -115,13 +116,16 @@ beforeAll(async () => {
 		.insert(schema.lorebooks)
 		.values({ name: "PTC Lore", userId })
 		.returning()
-	await db.insert(schema.worldLoreEntries).values({
-		lorebookId: lorebook.id,
-		retrievalStrategy: "keyword",
-		name: "The Ashguard",
-		keys: "ashguard",
-		content: "Riders who patrol the ash wastes."
-	})
+	await db.insert(schema.lorebookEntries).values(
+		worldLoreValues([
+			{
+				lorebookId: lorebook.id,
+				name: "The Ashguard",
+				keys: "ashguard",
+				content: "Riders who patrol the ash wastes."
+			}
+		])
+	)
 
 	const [session] = await db
 		.insert(schema.sessions)

@@ -446,6 +446,118 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 	})
 })
 
+/**
+ * A payload built for a chat endpoint, handed to the text-completion branch.
+ *
+ * Reachable because the two facts are independent fields: the connection's
+ * `prompt_format` decides what Assemble RENDERS (a role array for
+ * `split_session`, one string otherwise), while `extraJson.useSession` decides
+ * which KoboldCPP endpoint this adapter POSTS to. A connection can be set to
+ * text completion while its format says split, and until the format reached the
+ * render at all the contradiction could not arise — every payload was a string.
+ *
+ * What this pins is that the request body never carries `prompt: undefined`.
+ * That is the shape that generates from nothing and reads as a model fault,
+ * which is the failure mode `dispatch.ts`'s own header records having shipped
+ * once already.
+ */
+describe("KoboldCppAdapter — a messages-only payload in text-completion mode", () => {
+	let fetchMock: ReturnType<typeof vi.fn>
+
+	beforeEach(() => {
+		fetchMock = vi.fn(async () => ({
+			ok: true,
+			json: async () => ({ results: [{ text: "hi" }] })
+		}))
+		vi.stubGlobal("fetch", fetchMock)
+	})
+	afterEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	function generateBody(): any {
+		const call = fetchMock.mock.calls.find((args: any[]) =>
+			String(args[0]).includes("/api/v1/generate")
+		)
+		expect(call).toBeDefined()
+		return JSON.parse((call as any)[1].body)
+	}
+
+	const messagesOnly = {
+		prompt: undefined,
+		messages: [
+			{ role: "system", content: "Stay in character." },
+			{ role: "user", content: "Bob: Where do the riders patrol?" },
+			{ role: "assistant", content: "Alice:" }
+		],
+		meta: {} as any
+	}
+
+	test("sends a real prompt string rather than undefined", async () => {
+		const adapter = makeAdapter({
+			promptFormat: "vicuna",
+			extraJson: { useSession: false, stream: false }
+		})
+		adapter.withCompiledPrompt(messagesOnly as any)
+		await adapter.generateText()
+
+		const body = generateBody()
+		expect(body.prompt).toBeTypeOf("string")
+		expect(body.prompt.length).toBeGreaterThan(0)
+	})
+
+	test("rebuilds the blocks in the connection's own format", async () => {
+		// Faithful rather than guessed: the roles are re-wrapped with the
+		// wrapper this connection asked for, not flattened into an unlabelled
+		// blob that loses who said what.
+		const adapter = makeAdapter({
+			promptFormat: "chatml",
+			extraJson: { useSession: false, stream: false }
+		})
+		adapter.withCompiledPrompt(messagesOnly as any)
+		await adapter.generateText()
+
+		const body = generateBody()
+		expect(body.prompt).toContain("<|im_start|>system")
+		expect(body.prompt).toContain("<|im_start|>user")
+		expect(body.prompt).toContain("Where do the riders patrol?")
+	})
+
+	test("does not open a second assistant turn when the payload already seeds one", async () => {
+		// An assembled session prompt ends with the seed turn — an assistant
+		// block holding just the speaker's name for the model to continue.
+		// Appending the usual empty opener after it would tell the model to
+		// start a reply twice.
+		const adapter = makeAdapter({
+			promptFormat: "vicuna",
+			extraJson: { useSession: false, stream: false }
+		})
+		adapter.withCompiledPrompt(messagesOnly as any)
+		await adapter.generateText()
+
+		const body = generateBody()
+		expect(body.prompt.match(/### Assistant:/g)?.length).toBe(1)
+		expect(body.prompt.endsWith("Alice:\n")).toBe(true)
+	})
+
+	test("a payload carrying a prompt string is still sent verbatim", async () => {
+		// The path every connection takes today, unchanged: nothing is rebuilt
+		// when there is a string to send.
+		const adapter = makeAdapter({
+			promptFormat: "vicuna",
+			extraJson: { useSession: false, stream: false }
+		})
+		adapter.withCompiledPrompt({
+			prompt: "### System:\nexactly this\n",
+			messages: [{ role: "user", content: "ignored" }],
+			meta: {} as any
+		} as any)
+		await adapter.generateText()
+
+		expect(generateBody().prompt).toBe("### System:\nexactly this\n")
+	})
+})
+
 describe("KoboldCppAdapter module exports", () => {
 	test("exports Adapter/testConnection/listModels/connectionDefaults/samplingKeyMap", () => {
 		expect(exportsDefault.Adapter).toBe(KoboldCppAdapter)

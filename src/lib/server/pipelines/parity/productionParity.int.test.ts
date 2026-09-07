@@ -31,6 +31,10 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
+import {
+	WORLD_LORE_TYPE_ID,
+	entryInsert
+} from "$lib/server/utils/lorebookEntries"
 import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import {
 	SHIPPED_VARIABLE_TEMPLATES,
@@ -102,13 +106,16 @@ beforeAll(async () => {
 		.values({ name: "Production Lore", userId })
 		.returning()
 
-	await db.insert(schema.worldLoreEntries).values({
-		lorebookId: lorebook.id,
-		retrievalStrategy: "keyword",
-		name: "The Ashguard",
-		keys: "ashguard",
-		content: "Riders who patrol the ash wastes."
-	})
+	await db.insert(schema.lorebookEntries).values(
+		entryInsert({
+			typeId: WORLD_LORE_TYPE_ID,
+			lorebookId: lorebook.id,
+			position: 1,
+			name: "The Ashguard",
+			keys: "ashguard",
+			content: "Riders who patrol the ash wastes."
+		})
+	)
 
 	const [session] = await db
 		.insert(schema.sessions)
@@ -116,14 +123,12 @@ beforeAll(async () => {
 		.returning()
 	sessionId = session.id
 
-	await db
-		.insert(schema.sessionCharacters)
-		.values({
-			sessionId,
-			characterId,
-			isActive: true,
-			visibility: "visible"
-		})
+	await db.insert(schema.sessionCharacters).values({
+		sessionId,
+		characterId,
+		isActive: true,
+		visibility: "visible"
+	})
 	await db
 		.insert(schema.sessionPersonas)
 		.values({ sessionId, personaId: persona.id })

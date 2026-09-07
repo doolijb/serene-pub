@@ -68,13 +68,13 @@ export interface ScriptApplierOptions {
 	}
 	/**
 	 * The extension-hook executor, present only when plugins are enabled and the
-	 * runtime is ready. A chain link whose type is plugin-owned
+	 * sandbox is ready. A chain link whose type is plugin-owned
 	 * (`transport: 'process'`) is routed here instead of the in-process Scripts
 	 * sandbox; both feed the same fold. Absent, such links are absorbed as a
 	 * skip — the pipeline runs exactly as it did before extensions existed.
 	 */
 	pluginDispatch?: PluginHookDispatch
-	/** The pipeline run id, threaded to the plugin runtime's invocation log. */
+	/** The pipeline run id, threaded to the plugin sandbox's invocation log. */
 	runId?: string
 	/** Who triggered the run — for the plugin log and the account-visibility view. */
 	user?: string
@@ -442,11 +442,19 @@ export function makeScriptApplier(
 		) {
 			for (let i = 0; i < conn.rows.length; i++) {
 				const row = conn.rows[i]!
+				// `via` says which SIDE supplied the guard (18 §4c), and the
+				// side is what the receipt reader needs; WHICH connection it
+				// was is identity, and this record is stored in the receipt
+				// blob that `pipelines:run` serves back to whoever owns the run
+				// — a non-admin included. So the side stays in the string and
+				// the name moves to `connectionName`, a key
+				// `withoutConnectionIdentity` has always removed.
 				const base = {
 					scriptId: row.id,
 					name: row.name,
 					typeId: row.typeId,
-					via: `connection:${conn.connectionName}`
+					via: "connection",
+					connectionName: conn.connectionName
 				}
 				if (row.typeId !== "core:script:text/stop@1") {
 					record({

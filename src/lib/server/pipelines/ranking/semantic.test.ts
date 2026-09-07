@@ -1,5 +1,5 @@
 /**
- * The semantic arm's stages, pinned one at a time.
+ * The semantic mechanism's stages, pinned one at a time.
  *
  * Each test names the property rather than the function, because the property
  * is what has to survive a rewrite. The constants are the legacy ones and are
@@ -227,7 +227,7 @@ describe("per-source budgets", () => {
 	})
 })
 
-describe("the arm end to end", () => {
+describe("the mechanism end to end", () => {
 	const run = (over: Partial<Parameters<typeof rankSemantic>[0]> = {}) =>
 		rankSemantic({
 			lists: [[c(1, { score: 1 }), c(2, { score: 0.5 })]],
@@ -265,7 +265,7 @@ describe("the arm end to end", () => {
 	})
 
 	it("orders by fused score when no similarity matrix is supplied", () => {
-		// MMR needs pairwise similarity; without it the arm degrades to plain
+		// MMR needs pairwise similarity; without it the mechanism degrades to plain
 		// relevance rather than failing or silently reordering. "Relevance"
 		// here is the *fused* score, so the list order is what decides it.
 		const r = run({ lists: [[c(2), c(1)]] })

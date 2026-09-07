@@ -5,7 +5,7 @@ import {
 	applySettingsWrite,
 	hookSettingsFor
 } from "./settingsHost"
-import { RuntimeManager } from "./RuntimeManager"
+import { SandboxManager } from "./SandboxManager"
 import type { SettingsSchema } from "@serene-pub/sdk"
 
 /**
@@ -115,7 +115,7 @@ describe("the client view", () => {
 })
 
 describe("delivery through the manager", () => {
-	let mgr: RuntimeManager
+	let mgr: SandboxManager
 	afterEach(async () => {
 		await mgr?.dispose()
 	})
@@ -123,7 +123,7 @@ describe("delivery through the manager", () => {
 	it("a hook receives resolved settings as input.settings", async () => {
 		const w = applySettingsWrite(SCHEMA, {}, { apiKey: "sk-live-123" })
 		const settings = hookSettingsFor(MANIFEST, (w as any).next)!
-		mgr = new RuntimeManager({ onInvocation: () => {} })
+		mgr = new SandboxManager({ onInvocation: () => {} })
 		mgr.register({
 			id: "p",
 			name: "Settings Test",
@@ -146,7 +146,7 @@ describe("delivery through the manager", () => {
 	})
 
 	it("a settings-free descriptor leaves the input untouched", async () => {
-		mgr = new RuntimeManager({ onInvocation: () => {} })
+		mgr = new SandboxManager({ onInvocation: () => {} })
 		mgr.register({
 			id: "q",
 			name: "No Settings",

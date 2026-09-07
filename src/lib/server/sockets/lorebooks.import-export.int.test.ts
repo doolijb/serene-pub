@@ -4,6 +4,16 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import {
+	CHARACTER_LORE_TYPE_ID,
+	WORLD_LORE_TYPE_ID,
+	entriesOfType,
+	loadBookEntries
+} from "$lib/server/utils/lorebookEntries"
+import {
+	characterLoreValues,
+	worldLoreValues
+} from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
 
@@ -30,11 +40,11 @@ vi.mock("$lib/server/utils/lorebookImportMapper", async (importOriginal) => {
 		>()
 	return {
 		...actual,
-		mapLorebookEntryToWorldLoreEntry: (entry: any, position: number) => {
+		mapImportedEntry: (entry: any, typeId: any, position: number) => {
 			if (entry?.comment === MID_REBUILD_FAILURE_MARKER) {
 				throw new Error("Forced mid-rebuild failure for test")
 			}
-			return actual.mapLorebookEntryToWorldLoreEntry(entry, position)
+			return actual.mapImportedEntry(entry, typeId, position)
 		}
 	}
 })
@@ -123,12 +133,16 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			{ name: "My Lorebook" },
 			noopEmit
 		)
-		await testDb.insert(schema.worldLoreEntries).values({
-			lorebookId: lorebook.id,
-			name: "Entry A",
-			content: "Some lore",
-			keys: "trigger"
-		})
+		await testDb.insert(schema.lorebookEntries).values(
+			worldLoreValues([
+				{
+					lorebookId: lorebook.id,
+					name: "Entry A",
+					content: "Some lore",
+					keys: "trigger"
+				}
+			])
+		)
 
 		const exported = await lorebookExportHandler.handler(
 			fakeSocket(user.id),
@@ -151,6 +165,138 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		})
 		expect(rows).toHaveLength(1)
 	})
+
+	test("an entry's condition survives export then re-import, through the real handlers", async () => {
+		const {
+			lorebooksCreateHandler,
+			lorebookExportHandler,
+			lorebookImportHandler
+		} = await import("./lorebooks")
+		const author = await makeUser("lb-condition-author")
+		const recipient = await makeUser("lb-condition-recipient")
+
+		const { lorebook } = await lorebooksCreateHandler.handler(
+			fakeSocket(author.id),
+			{ name: "Conditional Book" },
+			noopEmit
+		)
+		await testDb.insert(schema.lorebookEntries).values(
+			worldLoreValues([
+				{
+					lorebookId: lorebook.id,
+					name: "Dragon",
+					content: "A dragon of the old wars.",
+					keys: "dragon, wyrm",
+					secondaryKeys: "statue, mural",
+					// ⚠ SillyTavern spells this one `1`, not `3`.
+					selectiveLogic: "notAll",
+					matchMode: "word",
+					useRegex: false,
+					priority: 2,
+					// The row as a SillyTavern import leaves it: the whole
+					// foreign bag preserved verbatim, `match_whole_words`
+					// (which is what carries matchMode back out) and a
+					// `selectiveLogic` integer that is now **stale** — the
+					// author has since changed the mode, and the export has to
+					// state the row's mode rather than the file's.
+					extraJson: {
+						match_whole_words: true,
+						selectiveLogic: 0,
+						probability: 80
+					}
+				},
+				{
+					lorebookId: lorebook.id,
+					name: "Gate",
+					content: "A gate of black iron.",
+					keys: "gate",
+					secondaryKeys: "ash",
+					selectiveLogic: "andAll",
+					priority: 1
+				}
+			])
+		)
+
+		const exported = await lorebookExportHandler.handler(
+			fakeSocket(author.id),
+			{ id: lorebook.id },
+			noopEmit
+		)
+		const exportedData = JSON.parse(exported.blob.toString("utf-8"))
+
+		// The file states the condition in the shapes both scanners read: the
+		// spec's own `secondary_keys`/`selective`, and SillyTavern's integer.
+		const [dragonWire, gateWire] = exportedData.entries
+		expect(dragonWire.keys).toEqual(["dragon", "wyrm"])
+		expect(dragonWire.secondary_keys).toEqual(["statue", "mural"])
+		expect(dragonWire.selective).toBe(true)
+		// The row's mode, not the stale `0` still sitting in its foreign bag.
+		expect(dragonWire.extensions.selectiveLogic).toBe(1)
+		expect(dragonWire.extensions.probability).toBe(80)
+		expect(gateWire.extensions.selectiveLogic).toBe(3)
+		// ⚠ A wire name, never a type id — `core:entry/world-lore@1` must not
+		// reach a file.
+		expect(dragonWire.extensions.serenepub.entryType).toBe("world")
+
+		const restored = await lorebookImportHandler.handler(
+			fakeSocket(recipient.id),
+			{ lorebookData: exportedData },
+			noopEmit
+		)
+		expect(restored.status).toBe("created")
+
+		const matcherFacts = (e: any) => ({
+			name: e.name,
+			keys: e.keys,
+			secondaryKeys: e.secondaryKeys,
+			selectiveLogic: e.selectiveLogic,
+			matchMode: e.matchMode,
+			useRegex: e.useRegex,
+			priority: e.priority
+		})
+		const copies = entriesOfType(
+			await loadBookEntries(testDb, restored.lorebook!.id),
+			WORLD_LORE_TYPE_ID
+		).sort((a, b) => a.position - b.position)
+
+		expect(copies.map(matcherFacts)).toEqual([
+			{
+				name: "Dragon",
+				keys: "dragon, wyrm",
+				secondaryKeys: "statue, mural",
+				selectiveLogic: "notAll",
+				matchMode: "word",
+				useRegex: false,
+				priority: 2
+			},
+			{
+				name: "Gate",
+				keys: "gate",
+				secondaryKeys: "ash",
+				selectiveLogic: "andAll",
+				// Nothing in the file declares a whole-word intent for this
+				// one, so its column stays NULL — see matchModeOf.
+				matchMode: null,
+				useRegex: false,
+				priority: 1
+			}
+		])
+		// Position is per (lorebook, type) and re-allocated by the importer, so
+		// what has to survive is the *order*, which the assertion above reads
+		// in.
+		expect(copies.map((e) => e.position)).toEqual([0, 1])
+
+		// And the file is a fixed point against the row it came from: the
+		// author re-importing their own export still reports "unchanged",
+		// which it only can if a freshly rebuilt export of these rows is byte
+		// for byte what was written — the new condition keys included.
+		const reimported = await lorebookImportHandler.handler(
+			fakeSocket(author.id),
+			{ lorebookData: exportedData },
+			noopEmit
+		)
+		expect(reimported.status).toBe("unchanged")
+	}, 60_000)
 
 	test("two different users importing the same lorebook payload (shared uuid) both succeed and each keep that uuid", async () => {
 		const {
@@ -214,12 +360,16 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			{ name: "Conflict Book" },
 			noopEmit
 		)
-		await testDb.insert(schema.worldLoreEntries).values({
-			lorebookId: lorebook.id,
-			name: "Entry A",
-			content: "Original lore",
-			keys: "trigger"
-		})
+		await testDb.insert(schema.lorebookEntries).values(
+			worldLoreValues([
+				{
+					lorebookId: lorebook.id,
+					name: "Entry A",
+					content: "Original lore",
+					keys: "trigger"
+				}
+			])
+		)
 
 		const exported = await lorebookExportHandler.handler(
 			fakeSocket(user.id),
@@ -247,9 +397,12 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			noopEmit
 		)
 		expect(overwritten.lorebook.id).toBe(lorebook.id)
-		expect((overwritten.lorebook as any).worldLoreEntries[0].content).toBe(
-			"Edited lore"
-		)
+		expect(
+			entriesOfType(
+				(overwritten.lorebook as any).entries,
+				WORLD_LORE_TYPE_ID
+			)[0].content
+		).toBe("Edited lore")
 
 		const asNew = await lorebookImportResolveHandler.handler(
 			fakeSocket(user.id),
@@ -297,13 +450,17 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			personaId: persona.id,
 			binding: "{{persona:1}}"
 		})
-		await testDb.insert(schema.characterLoreEntries).values({
-			lorebookId: lorebook.id,
-			lorebookBindingId: charBinding.id,
-			name: "Char Lore",
-			content: "Lore scoped to the bound character",
-			keys: "scoped"
-		})
+		await testDb.insert(schema.lorebookEntries).values(
+			characterLoreValues([
+				{
+					lorebookId: lorebook.id,
+					lorebookBindingId: charBinding.id,
+					name: "Char Lore",
+					content: "Lore scoped to the bound character",
+					keys: "scoped"
+				}
+			])
+		)
 
 		const exported = await lorebookExportHandler.handler(
 			fakeSocket(user.id),
@@ -365,10 +522,9 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		)
 		expect(restoredPersonaBinding?.name).toBe("Restorable Persona")
 
-		const newCharEntries = await testDb.query.characterLoreEntries.findMany(
-			{
-				where: (e, { eq }) => eq(e.lorebookId, newLorebookId)
-			}
+		const newCharEntries = entriesOfType(
+			await loadBookEntries(testDb, newLorebookId),
+			CHARACTER_LORE_TYPE_ID
 		)
 		expect(newCharEntries).toHaveLength(1)
 		expect(newCharEntries[0].lorebookBindingId).toBe(
@@ -658,9 +814,10 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		)
 		expect(res.status).toBe("created")
 
-		const entries = await testDb.query.worldLoreEntries.findMany({
-			where: (e, { eq }) => eq(e.lorebookId, res.lorebook!.id)
-		})
+		const entries = entriesOfType(
+			await loadBookEntries(testDb, res.lorebook!.id),
+			WORLD_LORE_TYPE_ID
+		)
 		expect(entries).toHaveLength(1)
 		expect(entries[0].keys).toBe("trigger")
 		expect(entries[0].content).toBe("Some old-format lore")
@@ -829,12 +986,16 @@ describe("lorebooks import/export (PGlite integration)", () => {
 				characterId: character.id,
 				binding: "{{char:1}}"
 			})
-			await testDb.insert(schema.worldLoreEntries).values({
-				lorebookId: lorebook.id,
-				name: "Original Entry",
-				content: "Must survive a failed overwrite",
-				keys: "trigger"
-			})
+			await testDb.insert(schema.lorebookEntries).values(
+				worldLoreValues([
+					{
+						lorebookId: lorebook.id,
+						name: "Original Entry",
+						content: "Must survive a failed overwrite",
+						keys: "trigger"
+					}
+				])
+			)
 
 			const exported = await lorebookExportHandler.handler(
 				fakeSocket(user.id),
@@ -876,10 +1037,10 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			// The original content must still be intact — nothing partially
 			// committed despite the failure happening mid-rebuild, after the
 			// deletes had already run inside the same transaction.
-			const survivingEntries =
-				await testDb.query.worldLoreEntries.findMany({
-					where: (e, { eq }) => eq(e.lorebookId, lorebook.id)
-				})
+			const survivingEntries = entriesOfType(
+				await loadBookEntries(testDb, lorebook.id),
+				WORLD_LORE_TYPE_ID
+			)
 			expect(survivingEntries).toHaveLength(1)
 			expect(survivingEntries[0].content).toBe(
 				"Must survive a failed overwrite"

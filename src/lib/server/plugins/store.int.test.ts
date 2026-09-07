@@ -14,7 +14,12 @@ import {
 	writeInvocation,
 	removePlugin
 } from "./store"
-import { RuntimeManager, type InvocationRecord } from "./RuntimeManager"
+import { SandboxManager, type InvocationRecord } from "./SandboxManager"
+import { declaredPermissions, reviewMarks } from "./permissions"
+
+/** The decision list of a plugin whose permissions an admin has approved. */
+const approved = (manifest: unknown): string[] =>
+	reviewMarks(declaredPermissions(manifest as any))
 
 /**
  * The persistence seam against a real (in-memory) PGlite database with the
@@ -71,7 +76,9 @@ describe("plugin store", () => {
 	it("the backend dial persists (store is dumb — the manager validates)", async () => {
 		await setEnabled(db, "acme/hello", true) // hash-2 reinstall had disabled it
 		await setBackendPref(db, "acme/hello", "ses")
-		const row = (await loadEnabledPlugins(db)).find((r) => r.id === "acme/hello")
+		const row = (await loadEnabledPlugins(db)).find(
+			(r) => r.id === "acme/hello"
+		)
 		expect(row?.backend).toBe("ses")
 	})
 
@@ -85,6 +92,13 @@ describe("plugin store", () => {
 			manifest: { permissions: { storage: { quotaBytes: 4096 } } }
 		})
 		await setEnabled(db, "acme/store", true)
+		// Consent: a declared quota is a request until an admin reviews it
+		// (permissions.ts), so nothing below would derive a grant without this.
+		await setAdminDenied(
+			db,
+			"acme/store",
+			approved({ permissions: { storage: { quotaBytes: 4096 } } })
+		)
 		const find = async () =>
 			(await loadEnabledPlugins(db)).find((r) => r.id === "acme/store")
 
@@ -100,18 +114,23 @@ describe("plugin store", () => {
 
 	it("denial beats the override — a denied storage permission cannot be revived", async () => {
 		await setStorageQuotaOverride(db, "acme/store", 100 * 1024 * 1024)
-		await setAdminDenied(db, "acme/store", ["storage"])
-		const row = (await loadEnabledPlugins(db)).find((r) => r.id === "acme/store")
+		await setAdminDenied(db, "acme/store", [
+			...approved({ permissions: { storage: { quotaBytes: 4096 } } }),
+			"storage"
+		])
+		const row = (await loadEnabledPlugins(db)).find(
+			(r) => r.id === "acme/store"
+		)
 		expect(row?.storageQuotaBytes).toBeUndefined()
 	})
 
 	it("a storage-quota override reloads the live plugin and enforces the new ceiling", async () => {
 		// The end-to-end seam: an admin override → store projection → the manager's
 		// staleness swap → the storage host enforcing the NEW quota on the very next
-		// call. (RuntimeManager.test proves the copy is dropped on a quota change via
+		// call. (SandboxManager.test proves the copy is dropped on a quota change via
 		// a bundle-behaviour swap; this proves the reloaded copy honours the number.)
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sp-quota-live-"))
-		const mgr = new RuntimeManager({ dataDir: dir })
+		const mgr = new SandboxManager({ dataDir: dir })
 		try {
 			const PUT = `module.exports = { hooks: { put: function (input, ctx) {
 				try { ctx.storage.write("f", "x".repeat(input.n)); return { stored: true }; }
@@ -126,6 +145,11 @@ describe("plugin store", () => {
 				manifest: { permissions: { storage: { quotaBytes: 2048 } } }
 			})
 			await setEnabled(db, "acme/quota-live", true)
+			await setAdminDenied(
+				db,
+				"acme/quota-live",
+				approved({ permissions: { storage: { quotaBytes: 2048 } } })
+			)
 
 			// Re-project the enabled row and (re-)register — register decides
 			// staleness eagerly, so a changed quota drops the warm copy here.
@@ -168,9 +192,105 @@ describe("plugin store", () => {
 		}
 	}, 30_000)
 
+	/**
+	 * The consent gate, end to end: install → enable → run.
+	 *
+	 * An unreviewed plugin is **inert, not broken**. It loads, its hooks fire and
+	 * it computes; what it does not get is anything it had to ask for. That is the
+	 * whole point of the shape — a plugin nobody has reviewed should not silently
+	 * do what it asked to do, and should not look like a crash either.
+	 */
+	it("an unreviewed plugin runs but reaches nothing it asked for", async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sp-consent-"))
+		const mgr = new SandboxManager({ dataDir: dir })
+		try {
+			// Reports what each grant-bearing permission answered — never throws,
+			// so a refusal is a *value* and the hook itself plainly still ran.
+			const PROBE = `module.exports = { hooks: { probe: async function (input, ctx) {
+				var out = { ran: true, computed: 1 + 1, storage: null, network: null };
+				try { ctx.storage.write("f", "x"); out.storage = "granted"; }
+				catch (e) { out.storage = String((e && e.message) || e); }
+				try { await ctx.fetch("http://api.example.com/"); out.network = "granted"; }
+				catch (e) { out.network = String((e && e.message) || e); }
+				return out;
+			} } }`
+			await upsertPlugin(db, {
+				pluginId: "acme/consent",
+				name: "Consent",
+				bundleSource: PROBE,
+				bundleHash: "h-consent",
+				backends: ["quickjs"],
+				manifest: {
+					permissions: {
+						storage: { quotaBytes: 4096 },
+						network: { hosts: ["api.example.com"] }
+					}
+				}
+			})
+			await setEnabled(db, "acme/consent", true)
+
+			const reproject = async () => {
+				const row = (await loadEnabledPlugins(db)).find(
+					(r) => r.id === "acme/consent"
+				)
+				if (!row) throw new Error("plugin was not projected")
+				mgr.register(row)
+				return row
+			}
+			const probe = async () => {
+				const r = await mgr.callHook(
+					"acme/consent",
+					"probe",
+					{},
+					{
+						timeoutMs: 5000
+					}
+				)
+				if (!r.ok) throw new Error(`hook failed: ${r.reason}`)
+				return r.value as Record<string, unknown>
+			}
+
+			// Nobody has reviewed it. Both grants are absent from the descriptor…
+			const unreviewed = await reproject()
+			expect(unreviewed.storageQuotaBytes).toBeUndefined()
+			expect(unreviewed.networkHosts).toBeUndefined()
+			mgr.markReady()
+			// …and the hook still runs; it is simply refused, by name.
+			const before = await probe()
+			expect(before.ran).toBe(true)
+			expect(before.computed).toBe(2)
+			expect(before.storage).toMatch(/permission not granted/)
+			expect(before.network).toMatch(/permission not granted/)
+
+			// An admin reviews and approves. Now the same plugin has both.
+			await setAdminDenied(
+				db,
+				"acme/consent",
+				approved({
+					permissions: {
+						storage: { quotaBytes: 4096 },
+						network: { hosts: ["api.example.com"] }
+					}
+				})
+			)
+			const reviewed = await reproject()
+			expect(reviewed.storageQuotaBytes).toBe(4096)
+			expect(reviewed.networkHosts).toEqual(["api.example.com"])
+			const after = await probe()
+			expect(after.storage).toBe("granted")
+			// The network grant is real: the refusal is no longer the permission
+			// one, it is whatever the (unreachable) host answers with.
+			expect(after.network).not.toMatch(/permission not granted/)
+			expect(fs.existsSync(path.join(dir, "extensions_data"))).toBe(true)
+		} finally {
+			await mgr.dispose()
+			fs.rmSync(dir, { recursive: true, force: true })
+		}
+	}, 30_000)
+
 	it("manager invocations are written to the log table", async () => {
 		const writes: Promise<void>[] = []
-		const mgr = new RuntimeManager({
+		const mgr = new SandboxManager({
 			onInvocation: (rec: InvocationRecord) => {
 				writes.push(writeInvocation(db, rec))
 			}
@@ -186,11 +306,16 @@ describe("plugin store", () => {
 				sequential: false
 			})
 			mgr.markReady()
-			await mgr.callHook("acme/logme", "v", { n: 5 }, {
-				timeoutMs: 500,
-				user: "user-1",
-				runId: "run-xyz"
-			})
+			await mgr.callHook(
+				"acme/logme",
+				"v",
+				{ n: 5 },
+				{
+					timeoutMs: 500,
+					user: "user-1",
+					runId: "run-xyz"
+				}
+			)
 			await Promise.all(writes)
 
 			const logged = await db.select().from(pluginHookInvocations)

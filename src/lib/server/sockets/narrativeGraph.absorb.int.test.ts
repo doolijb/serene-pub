@@ -13,6 +13,10 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import {
+	characterLoreValues,
+	historyValues
+} from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { readSceneCast, writeSceneCast } from "$lib/server/utils/sceneCast"
 
@@ -348,14 +352,18 @@ describe("narrativeGraphMergeNodeHandler — absorb (PGlite integration)", () =>
 		const { user, lorebook, bound, unbound } =
 			await makeLorebookWithBoundAndUnbound("absorb-lore-user")
 		const [lore] = await testDb
-			.insert(schema.characterLoreEntries)
-			.values({
-				lorebookId: lorebook.id,
-				lorebookBindingId: unbound.id,
-				name: "Secret",
-				content: "A secret about the ghost.",
-				keys: ""
-			})
+			.insert(schema.lorebookEntries)
+			.values(
+				characterLoreValues([
+					{
+						lorebookId: lorebook.id,
+						lorebookBindingId: unbound.id,
+						name: "Secret",
+						content: "A secret about the ghost.",
+						keys: ""
+					}
+				])
+			)
 			.returning()
 
 		await narrativeGraphMergeNodeHandler.handler(
@@ -364,9 +372,12 @@ describe("narrativeGraphMergeNodeHandler — absorb (PGlite integration)", () =>
 			noopEmit
 		)
 
-		const afterLore = await testDb.query.characterLoreEntries.findFirst({
-			where: eq(schema.characterLoreEntries.id, lore.id)
-		})
+		const [afterLore] = await testDb
+			.select({
+				lorebookBindingId: schema.lorebookEntries.anchorBindingId
+			})
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, lore.id))
 		expect(afterLore?.lorebookBindingId).toBe(bound.id)
 	})
 
@@ -377,8 +388,8 @@ describe("narrativeGraphMergeNodeHandler — absorb (PGlite integration)", () =>
 		const { user, lorebook, bound, unbound } =
 			await makeLorebookWithBoundAndUnbound("absorb-scene-user")
 		const [historyEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id }]))
 			.returning()
 		const [scene] = await testDb
 			.insert(schema.scenes)
@@ -551,8 +562,8 @@ describe("narrativeGraphUndoMergeHandler (PGlite integration)", () => {
 			{ description: "trusts them" }
 		)
 		const [historyEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id }]))
 			.returning()
 		const [scene] = await testDb
 			.insert(schema.scenes)
@@ -566,14 +577,18 @@ describe("narrativeGraphUndoMergeHandler (PGlite integration)", () => {
 			mentionedCharacters: []
 		})
 		const [lore] = await testDb
-			.insert(schema.characterLoreEntries)
-			.values({
-				lorebookId: lorebook.id,
-				lorebookBindingId: unbound.id,
-				name: "Secret",
-				content: "A secret.",
-				keys: ""
-			})
+			.insert(schema.lorebookEntries)
+			.values(
+				characterLoreValues([
+					{
+						lorebookId: lorebook.id,
+						lorebookBindingId: unbound.id,
+						name: "Secret",
+						content: "A secret.",
+						keys: ""
+					}
+				])
+			)
 			.returning()
 
 		await narrativeGraphMergeNodeHandler.handler(
@@ -601,9 +616,12 @@ describe("narrativeGraphUndoMergeHandler (PGlite integration)", () => {
 		const afterScene = await readSceneCast(scene.id)
 		expect(afterScene.participantCharacters).toEqual([restoredId])
 
-		const afterLore = await testDb.query.characterLoreEntries.findFirst({
-			where: eq(schema.characterLoreEntries.id, lore.id)
-		})
+		const [afterLore] = await testDb
+			.select({
+				lorebookBindingId: schema.lorebookEntries.anchorBindingId
+			})
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, lore.id))
 		expect(afterLore?.lorebookBindingId).toBe(restoredId)
 
 		const afterSurvivor = await testDb.query.lorebookBindings.findFirst({

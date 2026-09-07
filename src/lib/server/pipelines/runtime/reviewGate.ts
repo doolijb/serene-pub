@@ -30,6 +30,13 @@ import {
 	type ReviewDecision,
 	type SettingsSchema
 } from "@serene-pub/sdk"
+import {
+	connectionsVisibleTo,
+	namesAConnection,
+	refuseConnectionChoice,
+	withoutConnectionIdentity,
+	type ConnectionSubject
+} from "$lib/server/connections/visibility"
 
 export interface PendingReview {
 	id: string
@@ -106,13 +113,46 @@ export class ReviewNotFoundError extends Error {}
  * schema the form was generated from — untouched fields keep their
  * originals, JSON fields must parse, and the binding receives the result
  * without being able to tell it from an approval (F14).
+ *
+ * ## The connection is not among the fields it can fold
+ *
+ * This is where a non-admin could redirect a run onto any connection on the
+ * instance. The provider node's input carries its resolved `connection`
+ * (`{id, kind, metadata}`); `inferSchema` made a JSON field of it like any
+ * other structure; `host.ts` re-read `refId(p.connection)` afterwards and
+ * dispatched to whatever came back. `resolveCapabilityTarget` re-judged what
+ * that connection could DO and never who was asking, so a redirect onto a
+ * capable connection succeeded in silence.
+ *
+ * Two things close it, and they are deliberately independent:
+ *
+ *  1. A non-admin's edit is applied through the schema with connection
+ *     identity REMOVED. `applyFormValues` starts from the original payload and
+ *     writes only keys the schema names, so the connection the administrator
+ *     chose survives by construction — not by a check that could be missed.
+ *  2. Supplying one anyway is refused outright, before anything is read. A
+ *     write that is quietly dropped teaches nobody anything.
  */
 export function resolveReview(
 	id: string,
 	userId: number,
 	action: ReviewDecision["action"],
-	values?: Record<string, unknown>
+	values?: Record<string, unknown>,
+	/**
+	 * Who is deciding, as of NOW — not as of when the run parked.
+	 *
+	 * Optional, and absent means non-admin, because the only default that can
+	 * be wrong in one direction is the one that grants. Read at decision time
+	 * rather than captured by `createReviewer` so that an administrator
+	 * demoted while a review sat parked decides as what they now are.
+	 */
+	viewer?: ConnectionSubject
 ): void {
+	// First, before the entry is even looked up: a refusal that had to find
+	// the review to be sure would answer differently for an id that exists.
+	if (!connectionsVisibleTo(viewer) && namesAConnection(values))
+		refuseConnectionChoice()
+
 	const p = parked.get(id)
 	// One sentence either way: a stale card after a restart and somebody
 	// else's review id both deserve "there is nothing here to decide".
@@ -121,8 +161,16 @@ export function resolveReview(
 			"That review is no longer waiting — it may have been decided " +
 				"elsewhere, or the run that asked for it has ended."
 		)
-	parked.delete(id)
 
+	// Built while the entry is still parked, because building it can fail:
+	// `applyFormValues` refuses an unparseable JSON field or a number that is
+	// not one. The invariant that keeps a refusal survivable is that an entry
+	// leaves `parked` only when its promise is settled on the very next line,
+	// with nothing between the two that can throw or await. De-parked first,
+	// a thrown edit stranded the run forever — nothing held the resolver, and
+	// `onAbort` bails on an id it can no longer find, so not even cancelling
+	// could free it. Refusing an edit now leaves the run exactly as it was:
+	// still parked, still decidable, still cancellable.
 	const decision: ReviewDecision = {
 		action,
 		by: `user:${userId}`,
@@ -130,13 +178,22 @@ export function resolveReview(
 		...(action === "edit"
 			? {
 					payload: applyFormValues(
-						p.entry.schema,
+						// The schema a non-admin was SHOWN, which is the
+						// schema their edit may write. `applyFormValues`
+						// iterates the schema and leaves every other key of
+						// the payload as it found it, so the connection is
+						// carried through untouched rather than defended.
+						connectionsVisibleTo(viewer)
+							? p.entry.schema
+							: withoutConnectionIdentity(p.entry.schema),
 						p.entry.payload,
 						values ?? {}
 					)
 				}
 			: {})
 	}
+
+	parked.delete(id)
 	p.resolve(decision)
 }
 
@@ -172,16 +229,40 @@ export function createReviewer(scope: {
 		}
 
 		return await new Promise<ReviewDecision>((resolve) => {
+			const cancelled = (): ReviewDecision => ({
+				action: "reject",
+				by: "system:cancelled",
+				at: Date.now()
+			})
+
+			// A signal that already aborted never fires `abort` again, so a
+			// listener added now would never run and the run would park on a
+			// promise nothing could settle.
+			//
+			// This was the *only* thing between a cancelled run and a permanent
+			// park while the executor's between-nodes cancel hook
+			// (`opts.cancelSignal`, 13 §3) went unwired: `checkCancel` was
+			// always false, so a node that returned rather than throwing after
+			// its adapter was aborted walked straight into the next gate
+			// carrying a dead signal. The hook is wired now — `runSpec` passes
+			// `runRegistry.cancellation`, so the run stops before it reaches
+			// another gate — which makes this the backstop rather than the
+			// mechanism. It stays: a reviewer reached through any path that
+			// does not poll a cancellation is still a promise nothing settles.
+			if (scope.signal?.aborted) {
+				resolve(cancelled())
+				return
+			}
+
 			parked.set(entry.id, { entry, resolve })
 
+			// The guard is what keeps a decided review from being "cancelled"
+			// a moment later: absent from `parked` now means settled, never
+			// merely in flight.
 			const onAbort = () => {
 				if (!parked.has(entry.id)) return
 				parked.delete(entry.id)
-				resolve({
-					action: "reject",
-					by: "system:cancelled",
-					at: Date.now()
-				})
+				resolve(cancelled())
 				pushToUser?.(scope.userId, "pipelines:reviewClosed", {
 					id: entry.id
 				})

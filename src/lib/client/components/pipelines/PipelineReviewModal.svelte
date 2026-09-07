@@ -10,8 +10,11 @@
 	 * an edited form folds back into the payload server-side (the binding
 	 * cannot tell, F14); reject halts the run — a halt, not an error.
 	 *
-	 * Reviews queue oldest-first. A card that vanishes mid-decision
-	 * (`reviewClosed`) was cancelled with its run — no ghost approvals.
+	 * Reviews queue oldest-first. A card leaves only when the server says it is
+	 * finished (`reviewClosed`) — decided here, decided in another tab, or
+	 * cancelled with its run: no ghost approvals. It deliberately survives the
+	 * click that decides it, because an edit the server refuses leaves the run
+	 * parked, and the person needs the form back to correct the field.
 	 */
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { onDestroy, onMount } from "svelte"
@@ -24,14 +27,20 @@
 	let queue = $state<Sockets.Pipelines.PendingReview[]>([])
 	let values = $state<Record<string, unknown>>({})
 	let currentId = $state<string | null>(null)
+	/** The decision in flight, if any — the card stays until the server answers. */
+	let submittingId = $state<string | null>(null)
+	/** Why the last decision on this card was refused, shown beside the form. */
+	let lastError = $state<string | null>(null)
 
 	const current = $derived(queue[0] ?? null)
+	const submitting = $derived(!!current && submittingId === current.id)
 
 	// A fresh card resets the working values to the payload's own.
 	$effect(() => {
 		if (current && current.id !== currentId) {
 			currentId = current.id
 			values = { ...current.values }
+			lastError = null
 		}
 		if (!current) currentId = null
 	})
@@ -46,14 +55,25 @@
 			: false
 	)
 
+	/**
+	 * The card outlives the click on purpose.
+	 *
+	 * An edit can be refused server-side — a JSON field that does not parse,
+	 * a number that is not one — and the run stays parked when it is. Dropping
+	 * the card here left the person with an error toast and nothing to correct
+	 * it in, so it goes when the server says it is finished
+	 * (`pipelines:reviewClosed`, the same event a cancelled run sends) and not
+	 * before.
+	 */
 	function decide(action: "approve" | "edit" | "reject") {
-		if (!current) return
+		if (!current || submitting) return
+		lastError = null
+		submittingId = current.id
 		socket.emit("pipelines:resolveReview", {
 			id: current.id,
 			action,
 			...(action === "edit" ? { values } : {})
 		})
-		queue = queue.filter((r) => r.id !== current.id)
 	}
 
 	const onRequested = (r: Sockets.Pipelines.PendingReview) => {
@@ -61,14 +81,23 @@
 	}
 	const onClosed = (msg: { id: string }) => {
 		queue = queue.filter((r) => r.id !== msg.id)
+		if (submittingId === msg.id) submittingId = null
 	}
 	const onList = (res: Sockets.Pipelines.Reviews.Response) => {
 		// Reconnect catch-up: keep arrival order, dedupe by id.
 		const known = new Set(queue.map((r) => r.id))
 		queue = [...queue, ...res.reviews.filter((r) => !known.has(r.id))]
 	}
-	const onError = (res: { error?: string }) => {
+	const onError = (res: { error?: string; id?: string }) => {
 		if (res?.error) toaster.error({ title: res.error })
+		// Errors reach every tab this person has open; only the one that asked
+		// re-enables. A server too old to name the card falls back to whatever
+		// this tab has in flight.
+		if (submittingId && (!res?.id || res.id === submittingId)) {
+			if (res?.error && submittingId === current?.id)
+				lastError = res.error
+			submittingId = null
+		}
 	}
 
 	onMount(() => {
@@ -113,10 +142,21 @@
 
 			<SchemaForm schema={current.schema as any} bind:values />
 
+			{#if lastError}
+				<p
+					class="preset-tonal-error rounded-lg p-2 text-xs"
+					role="alert"
+				>
+					{lastError} Nothing has happened yet — the run is still waiting
+					on you.
+				</p>
+			{/if}
+
 			<div class="flex items-center justify-end gap-2 pt-1">
 				<button
 					class="btn btn-sm preset-tonal-error"
 					onclick={() => decide("reject")}
+					disabled={submitting}
 					title="Halt the run — a rejection is a halt, not an error"
 				>
 					<Icons.X size={14} /> Reject
@@ -124,6 +164,7 @@
 				<button
 					class="btn btn-sm preset-filled-primary-500"
 					onclick={() => decide(dirty ? "edit" : "approve")}
+					disabled={submitting}
 					title={dirty
 						? "Continue with your edits — the pipeline receives them as if they were its own"
 						: "Continue with the payload untouched"}

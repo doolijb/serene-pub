@@ -2,14 +2,26 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { updateLegacyWhere } from "$lib/server/messages/store"
 import { and, eq } from "drizzle-orm"
+import { broadcastToSessionUsers } from "../sockets/utils/broadcastHelpers"
 import {
-	broadcastToSessionUsers,
-	broadcastToSessionUsersVaryingByRole
-} from "../sockets/utils/broadcastHelpers"
+	ComposedError,
+	type ConnectionIdentity
+} from "$lib/server/connections/visibility"
 import type { LLMQueueStatus } from "./llmQueue"
 
-const GUEST_FACING_GENERATION_ERROR_MESSAGE =
-	"Generation failed. Ask the session owner to check their connection settings."
+/**
+ * What a failure says when its own words cannot be shown.
+ *
+ * The axis is administrator-vs-everyone, not owner-vs-guest: under the 0.6
+ * ruling a non-admin owner has no more relationship to the instance's compute
+ * than a guest does, so this is what BOTH of them read. It used to say "ask the
+ * session owner to check their connection settings", which was the old axis and
+ * is now wrong advice as well as a leak — a non-admin owner has no connection
+ * settings to check.
+ */
+const OPAQUE_GENERATION_ERROR_MESSAGE =
+	"Generation failed — the service reported an error. An administrator can " +
+	"see the details."
 
 export function friendlyErrorFromUnknown(err: unknown): {
 	message: string
@@ -55,13 +67,36 @@ export async function persistGenerationStage(
 }
 
 /**
- * Round-12 audit fix (MEDIUM): the raw upstream provider error (eg. "HTTP
- * 401: Unauthorized", a KoboldCPP model-load failure with an embedded
- * response body) used to be broadcast verbatim to the whole session room,
- * including guests who have no relationship to the owner's LLM connection
- * or credentials. The stored DB row still keeps the real error — the owner
- * needs it to troubleshoot their own connection — only the guest-facing
- * broadcast is redacted.
+ * Fail a generating message, and say why — to whoever is allowed to be told.
+ *
+ * ## Why redacting the broadcast was never enough
+ *
+ * A Round-12 fix sent guests a generic sentence while the owner got the raw
+ * service text. It was right about the danger and wrong about two things.
+ *
+ * It was wrong about the AXIS: under the 0.6 ruling connections are invisible to
+ * everyone who is not an administrator, and a non-admin OWNER is on the wrong
+ * side of that line. `managedPreflight` fills these errors with the model file
+ * path and the base URL, and the owner was being handed them verbatim.
+ *
+ * And it was wrong about the MOMENT. This row is stored. `projectLegacy` re-serves
+ * it on every reload, so a redaction applied to the broadcast is undone by the
+ * next page load — the leak is not in the emit, it is in the column.
+ *
+ * ## So the shape of the row is the fix
+ *
+ * The message is the part everyone may read; the identity is a FIELD beside it,
+ * under the one key `withoutConnectionIdentity` removes. Every read path already
+ * runs that walk — `broadcastToSessionUsers` per recipient, `emitToUser` for the
+ * session load — so redaction happens on every serving of the row, first and
+ * thousandth alike, and nothing here has to know who is listening. The
+ * administrator keeps the whole diagnostic, which is what storing pre-redacted
+ * text would have destroyed forever.
+ *
+ * ⚠ A `ComposedError`'s words are ours and name nobody, so they are shown as
+ * written; anything else came back from a service and is moved into the field.
+ * Unmarked therefore degrades to a duller sentence, never to a leak — see
+ * `ComposedError`.
  */
 export async function persistGenerationErrorRow(
 	socketIo: any,
@@ -69,8 +104,27 @@ export async function persistGenerationErrorRow(
 	generatingMessageId: number,
 	err: unknown
 ) {
-	const error = friendlyErrorFromUnknown(err)
+	const raw = friendlyErrorFromUnknown(err)
+	// The server log is the administrator's, and always has been.
 	console.error("[generationStatus] generation failed:", err)
+
+	const composed = err instanceof ComposedError
+	const connection: ConnectionIdentity | undefined = composed
+		? err.connection
+		: { detail: raw.message }
+
+	// The code goes with the message it was extracted from, and only when that
+	// message is ours. `friendlyErrorFromUnknown` reads any three-digit run as a
+	// status, so on `http://192.168.1.5:5001/…` it returns "192" — an octet of a
+	// private address, not an HTTP status, and no more shareable than the
+	// sentence it came out of. An administrator reads it inside `detail` below,
+	// where the whole service message is.
+	const error = {
+		message: composed ? raw.message : OPAQUE_GENERATION_ERROR_MESSAGE,
+		...(composed && raw.code ? { code: raw.code } : {}),
+		...(connection ? { connection } : {})
+	}
+
 	const [updated] = await updateLegacyWhere(
 		db,
 		and(
@@ -84,17 +138,12 @@ export async function persistGenerationErrorRow(
 			error
 		}
 	)
-	if (updated) {
-		const guestFacing = {
-			...updated,
-			error: { message: GUEST_FACING_GENERATION_ERROR_MESSAGE }
-		}
-		await broadcastToSessionUsersVaryingByRole(
-			socketIo,
-			sessionId,
-			"sessionMessage",
-			{ sessionMessage: updated },
-			{ sessionMessage: guestFacing }
-		)
-	}
+	// One payload for everybody now, where there used to be two. The difference
+	// between what an administrator and a guest receive is made by the walk
+	// inside `broadcastToSessionUsers`, per recipient — which is the same rule,
+	// in the same place, as every other emit on the server.
+	if (updated)
+		await broadcastToSessionUsers(socketIo, sessionId, "sessionMessage", {
+			sessionMessage: updated
+		})
 }

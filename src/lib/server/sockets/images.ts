@@ -9,6 +9,7 @@ import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { buildImageRequest } from "$lib/server/imageGen/buildRequest"
 import { S } from "@serene-pub/sdk"
 import { capabilityDefault } from "$lib/server/connections/capabilityDefaults"
+import { CONNECTION_REFUSAL } from "$lib/server/connections/visibility"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import type { ImageGenProgress } from "$lib/shared/imageGen/types"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -123,6 +124,22 @@ export const imagesGenerate: Handler<
 			return res
 		}
 		if (!userId) return fail("Not authenticated.")
+
+		// Before the prompt is even looked at, and long before the row is
+		// read. This handler takes a `connectionId` STRAIGHT from the client
+		// and renders on it — the most direct "unchooseable" violation on the
+		// instance, and the one that needed no review card to reach.
+		//
+		// Its only caller is the connection editor's test button
+		// (`ImageConnectionForm`, rendered inside the admin Connections
+		// sidebar), so nothing a non-admin can legitimately do arrives here.
+		//
+		// Refusing FIRST is what keeps it from being an enumeration oracle:
+		// "Connection not found." below distinguishes a real id from an
+		// invented one, and `capabilityRefusal` under it names the connection
+		// outright. One sentence for every id, before either can speak.
+		if (!socket.user?.isAdmin) return fail(CONNECTION_REFUSAL)
+
 		if (!params.prompt?.trim()) return fail("A prompt is required.")
 
 		const connection = await db.query.connections.findFirst({

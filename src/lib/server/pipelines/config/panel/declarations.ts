@@ -14,6 +14,7 @@
 
 import { asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 import { poolKeyFor } from "$lib/server/pipelines/entities/contextTemplateDefaults"
 import {
 	WRITE_MATRIX,
@@ -49,11 +50,24 @@ const PARAM_CONTROL: Record<string, string> = {
 	// about retrieval — it renders whatever bands the declaration names, which
 	// is what lets a plugin's own share parameter render without touching it.
 	share: "share",
-	perMember: "per-member"
+	perMember: "per-member",
+	// The third of the family, and its own control because the arithmetic it
+	// implies is different: independent 0..1 strengths, drawn as one bar each,
+	// where `share` normalises to a fixed total and `perMember` has no range at
+	// all. Rendering a strength like a share would teach a reader that turning
+	// one up turns the others down.
+	strengths: "strengths"
 }
 
-/** `postHistoryInstructions` becomes `Post History Instructions`. */
-function humanizeCamel(key: string): string {
+/**
+ * `postHistoryInstructions` becomes `Post History Instructions`.
+ *
+ * Exported for the same reason `i18nText` is: `reconcileConfigs` names a culled
+ * option whose declaration is gone, and the only thing left to name it with is
+ * its address. A second spelling of "how a key becomes English" would make the
+ * notice call a setting something the panel never called it.
+ */
+export function humanizeCamel(key: string): string {
 	return key
 		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
 		.replace(/[_-]+/g, " ")
@@ -72,20 +86,20 @@ export function humanizeTypeId(typeId: string): string {
 }
 
 /**
- * The English of an `I18n`, or undefined.
+ * The display text of an `I18n`, in a language, or undefined.
  *
  * Exported because `read.ts` resolves facet headings the same way, and a second
  * copy of "how display text is read out of a declaration" is the kind of
  * duplication this layer keeps finding at the point where the two disagree.
+ *
+ * The body moved to `$lib/shared/i18n/i18nText` when language became a setting
+ * (R5) — this stayed a re-export rather than becoming an import at ten call
+ * sites, and `language` stayed optional so every one of those call sites keeps
+ * the English it already resolved. Passing a language is what a caller does
+ * once it has one to pass; see `$lib/server/i18n` for where one comes from.
  */
-export const i18nText = (v: unknown): string | undefined => {
-	if (typeof v === "string") return v
-	if (v && typeof v === "object") {
-		const en = (v as { en?: unknown }).en
-		if (typeof en === "string") return en
-	}
-	return undefined
-}
+export const i18nText = (v: unknown, language?: string): string | undefined =>
+	i18nTextIn(v, language)
 
 /**
  * Expand one slot declaration into its addressable settings.

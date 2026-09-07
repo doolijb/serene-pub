@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { isAndroidWrapper } from "$lib/server/utils"
 import { isLocalEmbeddingSupported } from "$lib/server/embedding"
+import { assertSupportedLanguage } from "./language"
 
 export const systemSettingsGet: Handler<
 	Sockets.SystemSettings.Get.Params,
@@ -317,6 +318,124 @@ export const systemSettingsUpdateAccountsEnabled: Handler<
 	}
 }
 
+/**
+ * The instance's language (R5) — the admin's setup choice, and the value every
+ * user who has not picked one of their own inherits.
+ *
+ * Changing it moves those users immediately, because they store NULL rather
+ * than a copy of this value. That is the property that makes one setup choice
+ * apply to a whole instance, and it is why the per-user column is nullable.
+ */
+export const systemSettingsUpdateDefaultLanguage: Handler<
+	Sockets.SystemSettings.UpdateDefaultLanguage.Params,
+	Sockets.SystemSettings.UpdateDefaultLanguage.Response
+> = {
+	event: "systemSettings:updateDefaultLanguage",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+			const language = assertSupportedLanguage(params.language)
+
+			await db
+				.update(schema.systemSettings)
+				.set({ defaultLanguage: language })
+				.where(eq(schema.systemSettings.id, 1))
+
+			const res: Sockets.SystemSettings.UpdateDefaultLanguage.Response = {
+				success: true,
+				language
+			}
+			emitToUser("systemSettings:updateDefaultLanguage", res)
+			await systemSettingsGet.handler(socket, {}, emitToUser)
+			return res
+		} catch (error: any) {
+			console.error("Update default language error:", error)
+			emitToUser("systemSettings:updateDefaultLanguage:error", {
+				error: error?.message ?? "Failed to update default language"
+			})
+			throw error
+		}
+	}
+}
+
+/**
+ * Whether the server may call an outside service to fill in UI strings it has
+ * no translation for, and which service (R5).
+ *
+ * Admin-only and off by default. Turning it on is a decision to send this app's
+ * *interface strings* — never session content; see `server/i18n/translate.ts`
+ * for what actually crosses the wire — to the configured engine, which on a
+ * self-hosted install is an egress the operator may specifically not want.
+ * Pairing `libre` with an endpoint of their own keeps it inside their network.
+ */
+export const systemSettingsUpdateAutoTranslate: Handler<
+	Sockets.SystemSettings.UpdateAutoTranslate.Params,
+	Sockets.SystemSettings.UpdateAutoTranslate.Response
+> = {
+	event: "systemSettings:updateAutoTranslate",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+			if (params.engine !== "google" && params.engine !== "libre") {
+				throw new Error(`Unsupported engine: ${params.engine}`)
+			}
+			const endpoint = params.endpoint?.trim() || null
+			if (endpoint !== null) {
+				// Parsed rather than pattern-matched, and http(s) only: this
+				// string becomes the target of a server-side fetch, so an
+				// unvalidated value is a request the server makes on an
+				// admin's typo — `file:` and friends most of all.
+				//
+				// ⚠ Internal and loopback addresses are deliberately **allowed**
+				// here, unlike the plugin fetch capability which blocks them.
+				// The two are not the same shape of hazard: that one executes
+				// third-party code and the address comes from a manifest, while
+				// this is an admin typing where their own LibreTranslate runs —
+				// and `http://localhost:5000/translate` is the single most
+				// likely correct value, being the whole reason the option
+				// exists. Blocking it would leave only the third-party engine,
+				// which is the outcome this setting is here to avoid.
+				let parsed: URL
+				try {
+					parsed = new URL(endpoint)
+				} catch {
+					throw new Error("Translation endpoint must be a valid URL.")
+				}
+				if (
+					parsed.protocol !== "http:" &&
+					parsed.protocol !== "https:"
+				) {
+					throw new Error(
+						"Translation endpoint must be an http or https URL."
+					)
+				}
+			}
+
+			await db
+				.update(schema.systemSettings)
+				.set({
+					autoTranslateEnabled: params.enabled,
+					autoTranslateEngine: params.engine,
+					autoTranslateEndpoint: endpoint
+				})
+				.where(eq(schema.systemSettings.id, 1))
+
+			const res: Sockets.SystemSettings.UpdateAutoTranslate.Response = {
+				success: true
+			}
+			emitToUser("systemSettings:updateAutoTranslate", res)
+			await systemSettingsGet.handler(socket, {}, emitToUser)
+			return res
+		} catch (error: any) {
+			console.error("Update auto-translate error:", error)
+			emitToUser("systemSettings:updateAutoTranslate:error", {
+				error: error?.message ?? "Failed to update auto-translation"
+			})
+			throw error
+		}
+	}
+}
+
 // Registration function for all system settings handlers
 export function registerSystemSettingsHandlers(
 	socket: any,
@@ -334,6 +453,8 @@ export function registerSystemSettingsHandlers(
 	register(socket, systemSettingsUpdateLegacyConfigsVisible, emitToUser)
 	register(socket, systemSettingsUpdateAccountsEnabled, emitToUser)
 	register(socket, systemSettingsUpdateRequireTwoFactor, emitToUser)
+	register(socket, systemSettingsUpdateDefaultLanguage, emitToUser)
+	register(socket, systemSettingsUpdateAutoTranslate, emitToUser)
 }
 
 /**

@@ -1,5 +1,5 @@
 /**
- * Plugin-declared template engines — the runtime half of 12 §2a's ruling that
+ * Plugin-declared template engines — the sandbox half of 12 §2a's ruling that
  * **core's template language is a default, not an assumption.**
  *
  * The registry (`prompt/renderers.ts`) has been shaped for this from the start:
@@ -15,7 +15,7 @@
  *     "engines": { "acme.x:template/mustache@1": "renderMustache" }
  *
  * At sync, each declared engine gets a forwarding renderer that calls the
- * plugin's exported hook through the `RuntimeManager` — permission-checked,
+ * plugin's exported hook through the `SandboxManager` — permission-checked,
  * time-boxed, output-capped, logged, like every other hook. The render seam
  * (`renderTemplate`) is async either way, so the pipeline never learns whether
  * a template rendered in-process or out.
@@ -45,7 +45,7 @@ import {
 	TemplateEngineError,
 	type RenderContext
 } from "$lib/server/pipelines/prompt/renderers"
-import type { RuntimeManager } from "./RuntimeManager"
+import type { SandboxManager } from "./SandboxManager"
 
 type Db = { select: any }
 
@@ -64,8 +64,7 @@ export const ENGINE_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
  * The engine-id grammar, same shape family as script types: namespaced,
  * one payload segment, pinned. `core:template/handlebars@1` is the exemplar.
  */
-const ENGINE_ID =
-	/^([a-z0-9][a-z0-9.-]*):template\/([a-z0-9][a-z0-9-]*)@(\d+)$/
+const ENGINE_ID = /^([a-z0-9][a-z0-9.-]*):template\/([a-z0-9][a-z0-9-]*)@(\d+)$/
 
 /**
  * The namespace a plugin's engines must live under: its manifest id with the
@@ -118,7 +117,7 @@ export function engineDeclarationError(
 const registered = new Map<string, { pluginId: string; hookName: string }>()
 
 function forwardingRenderer(
-	manager: RuntimeManager,
+	manager: SandboxManager,
 	pluginId: string,
 	engineId: string,
 	hookName: string
@@ -135,6 +134,15 @@ function forwardingRenderer(
 			{
 				timeoutMs: ENGINE_TIMEOUT_MS,
 				maxOutputBytes: ENGINE_MAX_OUTPUT_BYTES,
+				// The run this render belongs to, forwarded so cancelling that run
+				// can find this call. The grace policy groups in-flight hooks by run
+				// id and has nothing else to group by, so an engine call dispatched
+				// without it is one a cancelled run cannot reach — for as much as
+				// the whole 3s budget above, which is exactly the length of hook
+				// grace exists for. Undefined for a render no run owns (a preview,
+				// an admin template test); see `RenderRun`.
+				runId: ctx.runId,
+				user: ctx.user,
 				// Purity pins — see the header. One label per engine, a clock
 				// that never moves: the render is a function of its inputs.
 				seedLabel: `engine:${engineId}`,
@@ -167,7 +175,7 @@ function forwardingRenderer(
  */
 export async function syncPluginEngines(
 	db: Db,
-	manager: RuntimeManager
+	manager: SandboxManager
 ): Promise<void> {
 	const rows: Array<{
 		pluginId: string

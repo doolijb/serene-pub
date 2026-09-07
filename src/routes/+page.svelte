@@ -16,6 +16,13 @@
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { createViewMode } from "$lib/client/utils/viewMode.svelte"
 	import { enableAccessibility } from "$lib/client/accessibility/state.svelte"
+	import LanguagePicker from "$lib/client/components/inputs/LanguagePicker.svelte"
+	// `t()` is the incremental UI-translation seam (R5): the English source
+	// string is the key, an unwrapped string renders in English, and wrapping
+	// one is the whole cost of translating it. The Welcome step is where the
+	// sweep starts, because it is the first thing anybody reads and it is where
+	// the language is chosen.
+	import { t } from "$lib/client/i18n/state.svelte"
 
 	const homeViewMode = createViewMode("serene-pub:viewMode:home")
 
@@ -304,6 +311,36 @@
 			}
 		}
 	})
+
+	/**
+	 * The language choice, on the Welcome step (R5).
+	 *
+	 * ## Why Welcome and not a step of its own
+	 *
+	 * A wizard step has to be able to say whether it is complete, and this one
+	 * cannot: a language is always set, because the column has a default. The
+	 * only honest completion predicate would be "the user made an explicit
+	 * choice", and on every install that upgrades across this change nobody
+	 * has — so a dedicated step would re-open the whole wizard for every
+	 * existing user to ask them a question they have already been answered.
+	 *
+	 * Welcome has the opposite property: it never counts as complete, everyone
+	 * passes through it, and it is the first thing on screen. Which is also the
+	 * right place for this on its own merits — the language you read the rest of
+	 * the wizard in should be chosen before the rest of the wizard.
+	 *
+	 * **An admin's choice here is the instance's**, per R5: they are setting the
+	 * server up, so the language they pick becomes the default everyone
+	 * inherits. It writes their own setting too, so an admin who later changes
+	 * the instance default does not move themselves by surprise.
+	 */
+	function chooseWizardLanguage(language: string) {
+		if (!language) return
+		socket.emit("userSettings:updateLanguage", { language })
+		if (userCtx.user?.isAdmin) {
+			socket.emit("systemSettings:updateDefaultLanguage", { language })
+		}
+	}
 
 	// Navigation
 	function openPanel(key: string) {
@@ -965,28 +1002,54 @@
 								/>
 								<h2 class="mb-3 text-3xl font-bold">
 									{#if wizardPath === "admin-first-time"}
-										Welcome to Serene Pub!
+										{t("Welcome to Serene Pub!")}
 									{:else if wizardPath === "admin-existing"}
-										Welcome, Admin!
+										{t("Welcome, Admin!")}
 									{:else}
-										Welcome!
+										{t("Welcome!")}
 									{/if}
 								</h2>
 								<p
 									class="text-muted-foreground mx-auto max-w-sm text-base"
 								>
 									{#if wizardPath === "admin-first-time"}
-										Let's get your application set up and
-										ready to session. This only takes a few
-										minutes.
+										{t(
+											"Let's get your application set up and ready to session. This only takes a few minutes."
+										)}
 									{:else if wizardPath === "admin-existing"}
-										The application is already configured.
-										Let's get your personal account set up
-										so you can start sessionting.
+										{t(
+											"The application is already configured. Let's get your personal account set up so you can start sessionting."
+										)}
 									{:else}
-										An administrator has already set up the
-										application. Let's get your account
-										ready so you can start sessionting.
+										{t(
+											"An administrator has already set up the application. Let's get your account ready so you can start sessionting."
+										)}
+									{/if}
+								</p>
+							</div>
+
+							<!-- Language (R5). First thing on the first step:
+							     it is what the rest of the wizard is read in. -->
+							<div class="mx-auto w-full max-w-sm">
+								<LanguagePicker
+									label={t("Language")}
+									value={userSettingsCtx.settings
+										?.effectiveLanguage ?? "en"}
+									describedBy="wizard-language-note"
+									onValueChange={chooseWizardLanguage}
+								/>
+								<p
+									id="wizard-language-note"
+									class="text-muted-foreground mt-2 text-sm"
+								>
+									{#if userCtx.user?.isAdmin}
+										{t(
+											"This becomes the default for everyone on this instance. Anyone can change their own later in Settings."
+										)}
+									{:else}
+										{t(
+											"You can change this later in Settings."
+										)}
 									{/if}
 								</p>
 							</div>

@@ -251,7 +251,10 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 			// the session-template pipeline at all, so including it here was a
 			// silent no-op regardless of the Thinking/Reasoning setting.
 			requestBody = {
-				prompt: compiledPrompt.prompt,
+				// `promptTextFor`, not `compiledPrompt.prompt`: a payload built
+				// for a chat endpoint carries `messages` and no prompt string,
+				// and this used to put `undefined` on the wire.
+				prompt: this.promptTextFor(compiledPrompt),
 				max_length:
 					samplingParams.max_length ||
 					samplingParams.n_predict ||

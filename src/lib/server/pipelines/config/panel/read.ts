@@ -578,11 +578,27 @@ export async function namespaceView(
 		advanced: byNode.get(nodeKey)!.advanced
 	}))
 
-	const configRows = await db
-		.select()
-		.from(schema.pipelineConfigs)
-		.where(eq(schema.pipelineConfigs.specId, at.specId))
-		.orderBy(asc(schema.pipelineConfigs.id))
+	/**
+	 * The configurations on offer, minus the ones an administrator withdrew.
+	 *
+	 * R8: an administrator defines which configurations exist and a person
+	 * chooses among them, so `enabled` is the whole of what "the curated set"
+	 * means and this is where it is applied. Admins keep seeing the withdrawn
+	 * ones, marked, because one an admin has just switched off vanishing
+	 * entirely reads as deleted.
+	 *
+	 * The same rule `listSessionPresets` applies to the session picker, said
+	 * once per surface rather than in a shared helper only because the two read
+	 * different rows for different questions — but they must agree, and the
+	 * write path (`selectNamedConfig`) refuses what this hides.
+	 */
+	const configRows = (
+		await db
+			.select()
+			.from(schema.pipelineConfigs)
+			.where(eq(schema.pipelineConfigs.specId, at.specId))
+			.orderBy(asc(schema.pipelineConfigs.id))
+	).filter((c: any) => viewer.isAdmin === true || c.enabled !== false)
 
 	const sub = await subscription(db, at.specVersionId)
 
@@ -610,7 +626,8 @@ export async function namespaceView(
 			name: c.name,
 			isDefault: !!c.isDefault,
 			// The shipped default is immutable (one per pipeline, always
-			// present) — copies a person made are theirs to edit.
+			// present); the rest are the administrator's to edit. Nobody else
+			// owns a configuration (R8) — a person's choice is a selection.
 			readOnly: !!c.isImmutable,
 			enabled: c.enabled !== false,
 			includedActions: Array.isArray(c.includedActions)
@@ -637,6 +654,21 @@ export async function namespaceView(
 					source: chain.selectedConfig.source
 				}
 			: null,
+		/**
+		 * May this viewer change the selection, here?
+		 *
+		 * Sent because the client cannot work it out. A selection made from
+		 * inside a session is the session's and anyone who owns that session
+		 * may make it; made from anywhere else it is the *instance's*, which is
+		 * the administrator's alone — so for a non-admin outside a session
+		 * there is nothing to choose, and the picker was a live control whose
+		 * every use ended in a refusal toast.
+		 *
+		 * The same condition `selectNamedConfig` refuses on, which is the
+		 * point: this is what the server will accept, not a second opinion
+		 * about it.
+		 */
+		canSelectConfig: scope === "session" || viewer.isAdmin === true,
 		steps,
 		writeScope: scope
 	}

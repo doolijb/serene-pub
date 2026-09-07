@@ -170,3 +170,72 @@ describe("a row nothing has determined yet is judged the way it was before the c
 		)
 	})
 })
+
+describe("the refusal names the capability and never the connection", () => {
+	/**
+	 * The rule this pins is the user's: "Connections must be invisible,
+	 * unmuteable and unchooseable to non-admins."
+	 *
+	 * This one sentence used to open `"Studio" cannot do Image generation.` and
+	 * feed six sinks, four of them reachable by somebody who is not an
+	 * administrator — the draft preview's error, the three dispatch error
+	 * classes, `receipt.haltReason`, the activity cards. It travels through
+	 * `Error.message` and the SDK's `Receipt.haltReason`, both plain strings, so
+	 * nothing downstream can take a name back out of it. The name is therefore
+	 * never put in; the identity travels beside it as a field, and the
+	 * projection that has always removed that key decides who is told.
+	 */
+	const STUDIO = {
+		id: 7,
+		name: "Studio",
+		model: "sd-1.5",
+		type: CONNECTION_TYPE.OPENAI_CHAT,
+		capabilities: { resolved: { "text->image": 1 } }
+	}
+
+	test("a non-admin reads a sentence, and learns nothing from it", async () => {
+		const refusal = capabilityRefusal(STUDIO, "text->image")!
+		expect(refusal).toBeTruthy()
+		// Not blanked — it still says what is wrong and what to do about it.
+		expect(refusal).toMatch(/cannot do Image generation/i)
+		expect(refusal).toMatch(/choose one that can/i)
+		// And it identifies nobody: not the name, not the id, not the model.
+		expect(refusal).not.toContain("Studio")
+		expect(refusal).not.toContain("sd-1.5")
+		expect(refusal).not.toMatch(/\b7\b/)
+
+		// The sentence is safe wherever it lands, which is the property that
+		// matters: it goes on to be concatenated into larger strings and stored.
+		const { redactConnections } = await import(
+			"$lib/server/connections/visibility"
+		)
+		expect(
+			JSON.stringify(
+				redactConnections({ error: refusal }, { isAdmin: false })
+			)
+		).not.toContain("Studio")
+	})
+
+	test("an administrator gets the same sentence and the identity beside it", async () => {
+		const { connectionIdentity, redactConnections } = await import(
+			"$lib/server/connections/visibility"
+		)
+		const payload = {
+			error: capabilityRefusal(STUDIO, "text->image"),
+			connection: connectionIdentity(STUDIO)
+		}
+
+		const seenByAdmin = redactConnections(payload, { isAdmin: true })
+		expect(seenByAdmin.connection).toMatchObject({
+			id: 7,
+			name: "Studio",
+			model: "sd-1.5"
+		})
+
+		// Same payload, same rule, one place: the non-admin's copy has no
+		// connection at all, and their sentence is unchanged by its absence.
+		const seenByUser = redactConnections(payload, { isAdmin: false })
+		expect(seenByUser).not.toHaveProperty("connection")
+		expect(seenByUser.error).toBe(payload.error)
+	})
+})

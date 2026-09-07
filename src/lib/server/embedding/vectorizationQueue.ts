@@ -1,8 +1,8 @@
 /**
- * Background vectorization queue.
+ * The **embedding lane** — one instance of the shared queue primitives.
  *
  * Processes embedding jobs one at a time with:
- *  - Pause/resume support (paused during active session generation)
+ *  - Pause/resume support
  *  - Socket progress events for the global UI indicator
  *  - Priority groups: sessions (with their lorebooks + characters) can be moved
  *    to the front of the queue; items within a group are processed in a fixed
@@ -10,6 +10,26 @@
  *  - Model tracking: embeddingModel is written alongside each vector so RAG
  *    can filter to only compare vectors from the active model, and so rows
  *    produced by a previous model are treated as stale and re-embedded.
+ *
+ * ## What moved, and what did not
+ *
+ * The loop, the round-robin fairness, the per-item failure backoff, the
+ * progress fan-out and the promotion machinery are all in
+ * `$lib/server/indexing/lane.ts` now, shared with the annotation lane. What
+ * stays here is what is actually about *embeddings*: the staleness predicates,
+ * the pickers, the two freshness-guarded writes, and the broker that speaks for
+ * the embedding model.
+ *
+ * ⚠ **The model coupling this removes.** The old loop opened with
+ * `if (!candidateModel) break` — a check that ran before any picker, so a lane
+ * that needs no model could not exist inside it. Residency is now requested
+ * through `embeddingBroker`, and only once real work is in hand, which keeps
+ * the old "an instance with nothing to embed never pays a load cost" property
+ * while making the check a lane's own business rather than the loop's.
+ *
+ * Every exported function below keeps the name and shape its callers already
+ * use — the socket handlers, `generateResponse`, and the four existing test
+ * files — and delegates to the lane.
  */
 
 import { db } from "$lib/server/db"
@@ -28,13 +48,34 @@ import {
 } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
+	CHARACTER_LORE_TYPE_ID,
+	DEFAULT_VECTOR_NAME,
+	HISTORY_TYPE_ID,
+	WORLD_LORE_TYPE_ID
+} from "$lib/server/utils/lorebookEntries"
+import {
 	embed,
 	isModelReady,
+	isModelLoading,
 	getLoadedModelId,
 	loadConfiguredEmbeddingModel,
-	getConfiguredModelId
+	getConfiguredModelId,
+	getConfiguredEmbeddingTarget
 } from "./index"
-import { randomUUID } from "crypto"
+import {
+	IndexingLane,
+	registerLane,
+	type CompletedGroup as LaneCompletedGroup,
+	type LaneItem,
+	type LaneItemRef,
+	type LaneModelBroker,
+	type LaneWorkSource,
+	type ModelLease,
+	type PriorityGroup as LanePriorityGroup,
+	type PromotionReport
+} from "$lib/server/indexing/lane"
+import { channelWhere } from "$lib/server/messages/channels"
+import type { SessionRagContext } from "./ragContext"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -66,23 +107,12 @@ export type VectorizationProgressEvent = {
  * embedded together before moving to other groups in the queue.
  * Typically one group per session, containing the session's messages, its
  * lorebook entries, and its linked characters/personas.
+ *
+ * Re-exported from the lane primitives rather than redeclared, so the socket
+ * payloads and the queue cannot drift apart.
  */
-export type PriorityGroup = {
-	groupId: string
-	label: string
-	ownerDisplayName: string
-	sessionId?: number
-	/** All lorebook IDs associated with this group (session lorebook + character lorebooks) */
-	lorebookIds: number[]
-	characterIds: number[]
-	personaIds: number[]
-}
-
-export type CompletedGroup = PriorityGroup & {
-	completedAt: string // ISO timestamp
-}
-
-const HISTORY_MAX = 20
+export type PriorityGroup = LanePriorityGroup
+export type CompletedGroup = LaneCompletedGroup
 
 // Session messages are already bounded to MAX_CHAT_MESSAGE_LENGTH before
 // insert, so their embed() call is implicitly safe. Every other embedded
@@ -102,17 +132,44 @@ export function truncateForEmbedding(text: string): string {
 
 type EmitFn = (event: string, data: any) => void
 
-type QueueItem = {
-	label: VectorizationProgressEvent["currentItem"]
-	/** DB id of the row being embedded — carried through so processItem() can
-	 * broadcast which specific item just got a fresh vector. */
+type VectorizationItemLabel = NonNullable<
+	VectorizationProgressEvent["currentItem"]
+>
+
+/**
+ * One embedding job.
+ *
+ * The lane's `LaneItem` with this lane's label union pinned, and `id` kept as a
+ * top-level field because four existing tests and the item-updated socket
+ * payload read it there. `ref.source` is deliberately the same string as
+ * `label.type` — that vocabulary is also `RAG_INDEX_SOURCES`, which is what
+ * lets `scopedMissingVectors` name a missing row and `specific()` find it again.
+ */
+type QueueItem = Omit<LaneItem, "label" | "modelId"> & {
+	label: VectorizationItemLabel
 	id: number
-	/** Set for lorebook-scoped item types (world/character lore, history,
-	 * narrative nodes/relationships) so listeners can filter to the lorebook
-	 * they're currently viewing. */
-	lorebookId?: number
 	embeddingModel: string
+	modelId: string
+}
+
+/** `QueueItem`, assembled so `ref`, `id` and `label.type` cannot disagree. */
+function queueItem(args: {
+	type: VectorizationItemLabel["type"]
+	label: string
+	id: number
+	lorebookId?: number
+	currentModel: string
 	process: () => Promise<void>
+}): QueueItem {
+	return {
+		ref: { source: args.type, id: args.id },
+		label: { type: args.type, label: args.label },
+		id: args.id,
+		lorebookId: args.lorebookId,
+		embeddingModel: args.currentModel,
+		modelId: args.currentModel,
+		process: args.process
+	}
 }
 
 export type VectorizationItemUpdatedEvent = {
@@ -124,34 +181,241 @@ export type VectorizationItemUpdatedEvent = {
 }
 
 // ---------------------------------------------------------------------------
-// Module-level state
+// The lane
 // ---------------------------------------------------------------------------
 
-let isPaused = false
-let isRunning = false
-let shouldStop = false
-let totalCompleted = 0
-// A Set, not a single nullable slot — the old single-slot design meant
-// setProgressEmitter() from one admin's connection silently replaced
-// another's, so with 2+ admins (or, before this fix, ANY connected user —
-// see registerVectorizationHandlers) only the most recently (re)connected
-// socket ever received progress, including other users' session/lorebook/
-// character names via priorityQueue/history. Same
-// registerEmitter/unregisterEmitter shape as utils/taskQueue.ts.
-const progressEmitters = new Set<EmitFn>()
-let priorityQueue: PriorityGroup[] = []
-let completedHistory: CompletedGroup[] = []
+/**
+ * The embedding model, spoken for.
+ *
+ * **Constraint 1's seam.** The lane never calls a loader; it calls this. When
+ * the admin *Servers* pages arrive, an arbiter deciding which models may be
+ * resident together replaces this object and the loop is untouched.
+ *
+ * `peek()` is the pre-load identity — `getConfiguredModelId()` is verified
+ * byte-identical to the post-load id in both modes — so the lane can ask
+ * "is there anything to embed?" without paying a load cost for the answer.
+ */
+export const embeddingBroker: LaneModelBroker = {
+	get spec() {
+		return {
+			role: "embedding",
+			/**
+			 * Constraint 4's TTL, read where it is stored rather than copied
+			 * into a constant here. Synchronous because `spec` is a
+			 * declaration an admin surface reads; the authoritative value is
+			 * applied by `loadConfiguredEmbeddingModel()` at load time, which
+			 * is the only moment it can act on anything.
+			 */
+			ttlMinutes: lastKnownTtlMinutes
+		}
+	},
+	async peek() {
+		const modelId = await getConfiguredModelId()
+		if (!modelId)
+			return {
+				kind: "unconfigured",
+				reason: "no embedding model is configured, or embedding is switched off"
+			}
+		return { kind: "configured", modelId }
+	},
+	async request(opts): Promise<ModelLease> {
+		const loaded = getLoadedModelId()
+		if (isModelReady() && loaded) return { kind: "resident", modelId: loaded }
 
-// Per-item consecutive-failure tracking for runQueue()'s backoff below. A
-// persistently-failing item (misconfigured endpoint, one malformed row)
-// never gets marked done, so pickNextItem() hands the exact same item back
-// every iteration — without this, that's a true busy-loop hammering the
-// embedding provider at full speed. Keyed by item identity, not object
-// reference, since pickNextItem() re-queries the DB each time.
-const itemFailureCounts = new Map<string, number>()
+		if (!opts?.wait) {
+			/**
+			 * Constraint 3, at the only call site where it bites. A promotion
+			 * runs inside a turn and a first-ever local model load is a
+			 * download; waiting for it here would stall the reply for minutes.
+			 * So the load is *started* and the answer is `pending` — the lane
+			 * degrades this turn with a receipt line and the background pass
+			 * uses what this warmed.
+			 */
+			if (!isModelLoading())
+				void loadConfiguredEmbeddingModel().catch((err) => {
+					console.error(
+						"[vectorization] Failed to auto-load model:",
+						err
+					)
+				})
+			return {
+				kind: "pending",
+				modelId: null,
+				reason: "the embedding model is not resident yet — it has been requested"
+			}
+		}
 
-function itemFailureKey(item: QueueItem): string {
-	return `${item.label?.type ?? "unknown"}:${item.id}`
+		try {
+			// Mode-aware: branches on vectorizationConfigs.mode to load the
+			// local pipeline or activate the API backend, and sets the TTL
+			// from the persisted config before loading so the idle timer
+			// starts correctly.
+			await loadConfiguredEmbeddingModel()
+		} catch (err) {
+			return {
+				kind: "unavailable",
+				modelId: null,
+				reason:
+					err instanceof Error
+						? `the embedding model failed to load: ${err.message}`
+						: "the embedding model failed to load"
+			}
+		}
+		const after = getLoadedModelId()
+		if (!isModelReady() || !after)
+			return {
+				kind: "unavailable",
+				modelId: null,
+				reason: "embedding is switched off, or the backend did not come up"
+			}
+		return { kind: "resident", modelId: after }
+	}
+}
+
+/**
+ * The TTL last read out of `vectorization_configs`, so `spec` can answer
+ * synchronously.
+ *
+ * Refreshed by `refreshEmbeddingLaneTtl()` below rather than cached forever —
+ * a declaration that lies about the configured value is worse than no
+ * declaration. The number the model actually runs on is always the one
+ * `loadConfiguredEmbeddingModel()` applies; this is the reporting copy.
+ */
+let lastKnownTtlMinutes = 5
+
+/** Re-read the lane's TTL from its config. Called by the periodic scan. */
+export async function refreshEmbeddingLaneTtl(): Promise<number> {
+	try {
+		const target = await getConfiguredEmbeddingTarget()
+		if (target) lastKnownTtlMinutes = target.ttlMinutes
+	} catch {
+		// A broken API config throws here; the TTL declaration is not the
+		// place to surface that. The loader still does, on a real load.
+	}
+	return lastKnownTtlMinutes
+}
+
+/**
+ * Where the lane's work comes from.
+ *
+ * `fromGroup` and `global` are the two orders this queue has always had.
+ * `specific` is new and is what makes promotion possible without a second
+ * synchronous path: given one row's identity it returns the *same* item the
+ * background sweep would have produced for it, or `null` when the row needs no
+ * work — which is also how a promotion of forty already-fresh rows costs forty
+ * cheap queries and no embeddings.
+ */
+const embeddingWork: LaneWorkSource = {
+	async fromGroup(group, modelId) {
+		if (!modelId) return null
+		return pickFromGroup(group, modelId)
+	},
+	async global(modelId) {
+		if (!modelId) return null
+		return pickGlobalNextItem(modelId)
+	},
+	async specific(ref, modelId) {
+		if (!modelId) return null
+		switch (ref.source) {
+			case "message":
+				return pickSessionMessage(modelId, undefined, ref.id)
+			case "worldLore":
+				return pickWorldLoreEntry(modelId, undefined, ref.id)
+			case "characterLore":
+				return pickCharacterLoreEntry(modelId, undefined, ref.id)
+			case "historyEntry":
+				return pickHistoryEntry(modelId, undefined, ref.id)
+			case "narrativeNode":
+				return pickNarrativeNode(modelId, undefined, ref.id)
+			case "narrativeRelationship":
+				return pickNarrativeRelationship(modelId, undefined, ref.id)
+			case "character":
+				return pickCharacter(modelId, undefined, ref.id)
+			case "persona":
+				return pickPersona(modelId, undefined, ref.id)
+			default:
+				return null
+		}
+	}
+}
+
+/**
+ * Whether the embedding lane indexes at all.
+ *
+ * ⚠ Deliberately still `system_settings.vectorization_enabled` and not a new
+ * per-lane column. That switch is what every existing surface writes, and a
+ * second stored copy of one boolean is the dual-source drift this codebase has
+ * already recorded twice. A lane's settings live where that lane's settings
+ * already live; what is per-lane is *that they are asked for separately*.
+ */
+async function isVectorizationEnabled(): Promise<boolean> {
+	const settings = await db.query.systemSettings.findFirst({
+		columns: { vectorizationEnabled: true }
+	})
+	return settings?.vectorizationEnabled ?? false
+}
+
+export const embeddingLane = registerLane(
+	new IndexingLane({
+		key: "embedding",
+		label: "embedding",
+		model: embeddingBroker,
+		work: embeddingWork,
+		isEnabled: isVectorizationEnabled,
+		/**
+		 * Constraint 4's autostart. Always on for this lane today — there is no
+		 * stored control for it and inventing one would be a knob nothing sets
+		 * — but it is a per-lane resolver rather than a hardcoded `true` inside
+		 * the loop, which is the part that has to be true for the admin surface
+		 * to be able to set it later.
+		 */
+		autostart: async () => true,
+		progressEvent: "vectorization:progress",
+		itemEvent: {
+			name: "vectorization:itemUpdated",
+			/**
+			 * Per-item DB rows get their embedding/vectorizedAt updated inside
+			 * process(), but nothing otherwise tells connected clients which
+			 * specific item changed — the per-item "vectorized/stale" badges in
+			 * list UIs only refreshed on the next explicit CRUD action.
+			 */
+			payload: (item): VectorizationItemUpdatedEvent => ({
+				type: (item as QueueItem).label.type,
+				id: (item as QueueItem).id,
+				lorebookId: item.lorebookId,
+				embeddingModel: (item as QueueItem).embeddingModel,
+				vectorizedAt: new Date().toISOString()
+			})
+		}
+	})
+)
+
+// ---------------------------------------------------------------------------
+// Public control API
+// ---------------------------------------------------------------------------
+
+export function registerProgressEmitter(fn: EmitFn) {
+	embeddingLane.registerEmitter(fn)
+}
+
+export function unregisterProgressEmitter(fn: EmitFn) {
+	embeddingLane.unregisterEmitter(fn)
+}
+
+export function pauseVectorization() {
+	embeddingLane.pause()
+}
+
+export function resumeVectorization() {
+	embeddingLane.resume()
+}
+
+export function stopVectorization() {
+	embeddingLane.stop()
+}
+
+export function isVectorizationRunning() {
+	return embeddingLane.isRunning()
 }
 
 /** Exported so a config change that could fix a previously-failing item
@@ -159,54 +423,16 @@ function itemFailureKey(item: QueueItem): string {
  * until the next full restart — see vectorization.ts's setApiConfig/
  * setModel handlers. */
 export function clearVectorizationFailureTracking() {
-	itemFailureCounts.clear()
-}
-
-// ---------------------------------------------------------------------------
-// Public control API
-// ---------------------------------------------------------------------------
-
-export function registerProgressEmitter(fn: EmitFn) {
-	progressEmitters.add(fn)
-}
-
-export function unregisterProgressEmitter(fn: EmitFn) {
-	progressEmitters.delete(fn)
-}
-
-export function pauseVectorization() {
-	isPaused = true
-	broadcastStatus("paused")
-}
-
-export function resumeVectorization() {
-	isPaused = false
-	if (!isRunning) {
-		runQueue()
-	} else {
-		broadcastStatus("running")
-	}
-}
-
-export function stopVectorization() {
-	shouldStop = true
-	isPaused = false
-}
-
-export function isVectorizationRunning() {
-	return isRunning
+	embeddingLane.clearFailureTracking()
 }
 
 export async function startVectorizationQueue(opts?: {
 	startFromBeginning?: boolean
 }) {
-	if (isRunning) return
-	if (opts?.startFromBeginning) {
-		totalCompleted = 0
-	}
-	shouldStop = false
-	clearVectorizationFailureTracking()
-	runQueue()
+	if (embeddingLane.isRunning()) return
+	if (opts?.startFromBeginning) embeddingLane.resetCompleted()
+	embeddingLane.clearFailureTracking()
+	embeddingLane.start()
 }
 
 const PERIODIC_SCAN_INTERVAL_MS = 15 * 60 * 1000
@@ -219,16 +445,21 @@ let scanTimer: ReturnType<typeof setInterval> | null = null
  * "Start Queue" click — e.g. after a server restart with a backlog already
  * present, or content that went stale for a reason unrelated to its own
  * create/update (a model switch, say). Deliberately does NOT load the
- * embedding model itself — startVectorizationQueue() -> runQueue() only
- * loads it (via loadConfiguredEmbeddingModel(), mode-aware) once
- * pickNextItem() actually finds something to embed, so an instance with
- * nothing to do never pays any model-load cost, on this timer or at boot.
+ * embedding model itself — the lane only requests residency (via
+ * `embeddingBroker`, mode-aware) once a picker actually finds something to
+ * embed, so an instance with nothing to do never pays any model-load cost,
+ * on this timer or at boot.
  *
  * Call once at boot; the first tick runs immediately (that *is* the
  * boot-time trigger, not a separate code path) and every
  * PERIODIC_SCAN_INTERVAL_MS after. Idempotent — a second call is a no-op,
  * mirroring startVectorizationQueue()'s own isRunning guard, so this is
  * safe to call again if it's ever wired up somewhere other than boot.
+ *
+ * ⚠ Kept here rather than delegated to `IndexingLane.startPeriodicScan()`
+ * because the enabled read *is* the observable proxy this lane's own tests
+ * use for "a tick ran", and because the TTL declaration is refreshed on the
+ * same tick — a lane-generic scan has no reason to know about either.
  */
 export function startPeriodicVectorizationScan() {
 	if (scanTimer) return
@@ -238,6 +469,7 @@ export function startPeriodicVectorizationScan() {
 				columns: { vectorizationEnabled: true }
 			})
 			if (settings?.vectorizationEnabled) {
+				void refreshEmbeddingLaneTtl()
 				await startVectorizationQueue()
 			}
 		} catch (err) {
@@ -253,11 +485,11 @@ export function startPeriodicVectorizationScan() {
 // ---------------------------------------------------------------------------
 
 export function getPriorityQueue(): PriorityGroup[] {
-	return [...priorityQueue]
+	return embeddingLane.snapshotGroups()
 }
 
 export function getCompletedHistory(): CompletedGroup[] {
-	return [...completedHistory]
+	return embeddingLane.snapshotHistory()
 }
 
 /**
@@ -315,25 +547,22 @@ export async function enqueueSessionGroup(
 	})
 	const ownerDisplayName = owner?.displayName ?? owner?.username ?? "Unknown"
 
-	const group: PriorityGroup = {
-		groupId: randomUUID(),
-		label: session.name ?? `Session #${sessionId}`,
-		ownerDisplayName,
-		sessionId,
-		lorebookIds,
-		characterIds,
-		personaIds
-	}
+	// Remove any existing group for this session, then prepend.
+	const group = embeddingLane.enqueueGroup(
+		{
+			label: session.name ?? `Session #${sessionId}`,
+			ownerDisplayName,
+			sessionId,
+			lorebookIds,
+			characterIds,
+			personaIds
+		},
+		(g) => g.sessionId === sessionId
+	)
 
-	// Remove any existing group for this session, then prepend
-	priorityQueue = [
-		group,
-		...priorityQueue.filter((g) => g.sessionId !== sessionId)
-	]
-
-	if (!isRunning && !isPaused) {
-		runQueue()
-	}
+	// Force-start, as an explicit operation rather than a side effect of
+	// enqueueing (constraint 4). The lane's own guard makes it idempotent.
+	if (!embeddingLane.isPaused()) embeddingLane.start()
 
 	return group
 }
@@ -346,29 +575,22 @@ export function enqueueLorebookGroup(
 	label: string,
 	ownerDisplayName: string
 ): PriorityGroup {
-	const group: PriorityGroup = {
-		groupId: randomUUID(),
-		label,
-		ownerDisplayName,
-		lorebookIds: [lorebookId],
-		characterIds: [],
-		personaIds: []
-	}
-
 	// Remove existing standalone group for this lorebook
-	priorityQueue = [
-		group,
-		...priorityQueue.filter(
-			(g) =>
-				!(
-					g.lorebookIds.includes(lorebookId) &&
-					!g.sessionId &&
-					g.characterIds.length === 0
-				)
-		)
-	]
+	const group = embeddingLane.enqueueGroup(
+		{
+			label,
+			ownerDisplayName,
+			lorebookIds: [lorebookId],
+			characterIds: [],
+			personaIds: []
+		},
+		(g) =>
+			g.lorebookIds.includes(lorebookId) &&
+			!g.sessionId &&
+			g.characterIds.length === 0
+	)
 
-	if (!isRunning && !isPaused) runQueue()
+	if (!embeddingLane.isPaused()) embeddingLane.start()
 	return group
 }
 
@@ -390,24 +612,19 @@ export async function enqueueCharacterGroup(
 	})
 	const ownerDisplayName = owner?.displayName ?? owner?.username ?? "Unknown"
 
-	const group: PriorityGroup = {
-		groupId: randomUUID(),
-		label: name,
-		ownerDisplayName,
-		lorebookIds: char?.lorebookId ? [char.lorebookId] : [],
-		characterIds: [characterId],
-		personaIds: []
-	}
-
 	// Remove existing standalone group for this character
-	priorityQueue = [
-		group,
-		...priorityQueue.filter(
-			(g) => !(g.characterIds.includes(characterId) && !g.sessionId)
-		)
-	]
+	const group = embeddingLane.enqueueGroup(
+		{
+			label: name,
+			ownerDisplayName,
+			lorebookIds: char?.lorebookId ? [char.lorebookId] : [],
+			characterIds: [characterId],
+			personaIds: []
+		},
+		(g) => g.characterIds.includes(characterId) && !g.sessionId
+	)
 
-	if (!isRunning && !isPaused) runQueue()
+	if (!embeddingLane.isPaused()) embeddingLane.start()
 	return group
 }
 
@@ -430,27 +647,20 @@ export async function enqueuePersonaGroup(
 		: null
 	const ownerDisplayName = owner?.displayName ?? owner?.username ?? "Unknown"
 
-	const group: PriorityGroup = {
-		groupId: randomUUID(),
-		label: name,
-		ownerDisplayName,
-		lorebookIds: [],
-		characterIds: [],
-		personaIds: [personaId]
-	}
-
-	priorityQueue = [
-		group,
-		...priorityQueue.filter(
-			(g) =>
-				!(
-					g.personaIds.includes(personaId) &&
-					!g.sessionId &&
-					g.characterIds.length === 0
-				)
-		)
-	]
-	if (!isRunning && !isPaused) runQueue()
+	const group = embeddingLane.enqueueGroup(
+		{
+			label: name,
+			ownerDisplayName,
+			lorebookIds: [],
+			characterIds: [],
+			personaIds: [personaId]
+		},
+		(g) =>
+			g.personaIds.includes(personaId) &&
+			!g.sessionId &&
+			g.characterIds.length === 0
+	)
+	if (!embeddingLane.isPaused()) embeddingLane.start()
 	return group
 }
 
@@ -458,144 +668,11 @@ export function moveQueueGroup(
 	groupId: string,
 	direction: "up" | "down"
 ): void {
-	const idx = priorityQueue.findIndex((g) => g.groupId === groupId)
-	if (idx === -1) return
-
-	if (direction === "up" && idx > 0) {
-		;[priorityQueue[idx - 1], priorityQueue[idx]] = [
-			priorityQueue[idx],
-			priorityQueue[idx - 1]
-		]
-	} else if (direction === "down" && idx < priorityQueue.length - 1) {
-		;[priorityQueue[idx], priorityQueue[idx + 1]] = [
-			priorityQueue[idx + 1],
-			priorityQueue[idx]
-		]
-	}
+	embeddingLane.moveGroup(groupId, direction)
 }
 
 export function removeQueueGroup(groupId: string): void {
-	priorityQueue = priorityQueue.filter((g) => g.groupId !== groupId)
-}
-
-// ---------------------------------------------------------------------------
-// Queue runner
-// ---------------------------------------------------------------------------
-
-function broadcastStatus(
-	status: VectorizationProgressEvent["status"],
-	currentItem?: VectorizationProgressEvent["currentItem"]
-) {
-	const payload = {
-		status,
-		currentItem,
-		queued: priorityQueue.length,
-		completed: totalCompleted,
-		priorityQueue: getPriorityQueue(),
-		history: getCompletedHistory()
-	} satisfies VectorizationProgressEvent
-	for (const emit of progressEmitters) {
-		try {
-			emit("vectorization:progress", payload)
-		} catch {}
-	}
-}
-
-async function runQueue() {
-	if (isRunning) return
-	isRunning = true
-	broadcastStatus("running")
-
-	try {
-		while (!shouldStop) {
-			if (isPaused) {
-				await sleep(500)
-				continue
-			}
-
-			let item: QueueItem | null
-			if (!isModelReady()) {
-				// Peek before paying the load cost: pickNextItem() is
-				// normally keyed on the *loaded* model's identity, which is
-				// always null here — so it'd always report "nothing to do"
-				// pre-load regardless of whether a real backlog exists.
-				// getConfiguredModelId() gives the identity the model WOULD
-				// load under without loading it (verified byte-identical to
-				// the post-load id, both modes — see index.ts), so the
-				// check can run first. An instance with nothing to do never
-				// pays the model-load cost, matching this function's own
-				// long-standing intent (see startPeriodicVectorizationScan's
-				// doc comment) that the unconditional load below used to
-				// silently defeat.
-				const candidateModel = await getConfiguredModelId()
-				if (!candidateModel) break // disabled or unconfigured
-
-				const peeked = await pickNextItem(candidateModel)
-				if (!peeked) break // genuinely nothing to do — never load
-
-				// Mode-aware: branches on vectorizationConfigs.mode to load
-				// the local pipeline or activate the API backend correctly
-				// (previously always called loadEmbeddingModel() here
-				// regardless of mode, which rejected an API-mode composite
-				// model id as "Unknown embedding model" — silently masked
-				// as long as something else loaded the correct backend
-				// first, which stops being guaranteed once this is the only
-				// on-demand load path).
-				try {
-					await loadConfiguredEmbeddingModel()
-				} catch (err) {
-					console.error(
-						"[vectorization] Failed to auto-load model:",
-						err
-					)
-					break
-				}
-				if (!isModelReady()) {
-					console.warn(
-						"[vectorization] Queue stopped: vectorization disabled or embedding backend not ready"
-					)
-					break
-				}
-				// Reuse the peeked item rather than re-picking now that the
-				// model is loaded: a successful pickNextItem() call rotates
-				// the front priority group to the back (round-robin
-				// fairness) as a side effect of finding an item, not only
-				// when a group is exhausted — picking twice for what's
-				// conceptually the same "next item" would double-rotate
-				// that bookkeeping with only one item actually processed.
-				item = peeked
-			} else {
-				item = await pickNextItem()
-			}
-			if (!item) break
-
-			broadcastStatus("running", item.label)
-
-			try {
-				await processItem(item)
-				totalCompleted++
-				itemFailureCounts.delete(itemFailureKey(item))
-			} catch (err) {
-				console.error(
-					"[vectorization] Failed to embed item:",
-					item.label,
-					err
-				)
-				const key = itemFailureKey(item)
-				const failures = (itemFailureCounts.get(key) ?? 0) + 1
-				itemFailureCounts.set(key, failures)
-				// Exponential backoff, capped at 30s — since the item still
-				// isn't marked done, pickNextItem() will hand it straight
-				// back next iteration; this just stops that from being an
-				// instant, uncapped retry loop.
-				await sleep(Math.min(2000 * failures, 30_000))
-			}
-		}
-	} finally {
-		isRunning = false
-		shouldStop = false
-		broadcastStatus("idle")
-	}
+	embeddingLane.removeGroup(groupId)
 }
 
 // ---------------------------------------------------------------------------
@@ -630,45 +707,107 @@ function needsEmbedding(
 	return base
 }
 
-// Exported only so tests can exercise the round-robin fairness logic
-// directly — every real caller is runQueue() below.
-//
-// modelIdOverride lets a caller check for pending work against a model
-// that isn't loaded yet (runQueue()'s peek-before-load, using
-// getConfiguredModelId()'s pre-load candidate) — defaults to the loaded
-// model's id, the original (and still normal, once-loaded) behavior.
+/**
+ * The join onto an entry's default-space vector.
+ *
+ * A `LEFT JOIN` and not an `EXISTS`, because the staleness predicate reads the
+ * vector's own `model` and `vectorized_at`, and the pickers want the same
+ * shape as the counts.
+ */
+const defaultVectorJoin = and(
+	eq(schema.lorebookEntryVectors.entryId, schema.lorebookEntries.id),
+	eq(schema.lorebookEntryVectors.vectorName, DEFAULT_VECTOR_NAME),
+	eq(schema.lorebookEntryVectors.chunkIndex, 0)
+)!
+
+/**
+ * `needsEmbedding`, read across the join instead of down a row.
+ *
+ * Clause for clause the same predicate: no vector at all replaces
+ * `embedding IS NULL`, the vector's model replaces the row's, and the
+ * timestamp comparison is the entry's `updated_at` against the *vector's*
+ * `vectorized_at`.
+ *
+ * ⚠ A vector with a NULL `model` is deliberately **not** picked up, which is
+ * what `ne(model, current)` already did: `NULL <> 'x'` is NULL, not true. The
+ * backfill carried such vectors from rows whose `embedding_model` was NULL, and
+ * they were unpickable before this table existed for exactly the same reason.
+ */
+const entryNeedsEmbedding = (currentModel: string) =>
+	or(
+		isNull(schema.lorebookEntryVectors.entryId),
+		ne(schema.lorebookEntryVectors.model, currentModel),
+		and(
+			isNotNull(schema.lorebookEntryVectors.vectorizedAt),
+			gt(
+				schema.lorebookEntries.updatedAt,
+				schema.lorebookEntryVectors.vectorizedAt
+			)
+		)
+	)
+
+/**
+ * `writeEmbeddingIfFresh` for an entry, whose vector is a row of its own.
+ *
+ * The optimistic-concurrency guard is unchanged in meaning — the entry's
+ * `updated_at`, compared as text for the precision reason above — and it moves
+ * into the `INSERT … SELECT`'s `WHERE`, so an entry edited while `embed()` was
+ * in flight selects nothing and writes nothing.
+ *
+ * ⚠ The self-pinned `updatedAt` that `writeEmbeddingIfFresh`
+ * needs has no counterpart here, and needs none: this statement does not touch
+ * the entry row at all, so drizzle's `$onUpdate` never fires and vectorizing
+ * can no longer be mistaken for an edit. That is the circular-staleness bug the
+ * separate vector table exists to close.
+ */
+export async function writeEntryVectorIfFresh(
+	id: number,
+	capturedUpdatedAtRaw: string,
+	currentModel: string,
+	vector: number[]
+): Promise<void> {
+	if (getLoadedModelId() !== currentModel) return
+	// ⚠ The vector goes in as a Postgres array *literal*, not as a JS array:
+	// drizzle interpolates an array parameter as a record — `(1,2,3)` — and
+	// `record` does not cast to `real[]`. Every element is a finite float by
+	// construction (an embedding), so `{…}` needs no quoting; a non-finite one
+	// would be a broken embedding rather than a value to store.
+	const literal = `{${vector.map((n) => (Number.isFinite(n) ? n : 0)).join(",")}}`
+	await db.execute(sql`
+		INSERT INTO "lorebook_entry_vectors"
+			("entry_id", "vector_name", "chunk_index", "model", "dims", "vector", "vectorized_at")
+		SELECT e."id", ${DEFAULT_VECTOR_NAME}, 0, ${currentModel},
+		       ${vector.length}, ${literal}::real[], now()
+		FROM "lorebook_entries" e
+		WHERE e."id" = ${id} AND e."updated_at"::text = ${capturedUpdatedAtRaw}
+		ON CONFLICT ("entry_id", "vector_name", "chunk_index") DO UPDATE SET
+			"model" = EXCLUDED."model",
+			"model_version" = NULL,
+			"normalization" = NULL,
+			"dims" = EXCLUDED."dims",
+			"vector" = EXCLUDED."vector",
+			"source_hash" = NULL,
+			"vectorized_at" = EXCLUDED."vectorized_at"
+	`)
+}
+
+/**
+ * The lane's round-robin pick, kept as a module function for its callers.
+ *
+ * Exported only so tests can exercise the fairness logic directly — the real
+ * caller is the lane's loop, through `embeddingWork`.
+ *
+ * `modelIdOverride` lets a caller check for pending work against a model that
+ * is not resident yet (the lane's peek, using `getConfiguredModelId()`'s
+ * pre-load candidate) — it defaults to the loaded model's id, the original and
+ * still normal once-resident behaviour.
+ */
 export async function pickNextItem(
 	modelIdOverride?: string
 ): Promise<QueueItem | null> {
 	const currentModel = modelIdOverride ?? getLoadedModelId()
 	if (!currentModel) return null
-
-	// Round-robin across priority groups — one item from the front group,
-	// then rotate it to the back, rather than fully draining a group before
-	// any other group gets a single item processed. Without this, one large
-	// group (eg. a freshly bulk-imported lorebook) starves every other
-	// user's group until it finishes completely. A group is only removed
-	// (and moved to history) once pickFromGroup returns nothing for it.
-	const groupCount = priorityQueue.length
-	for (let i = 0; i < groupCount; i++) {
-		const group = priorityQueue[0]
-		const item = await pickFromGroup(group, currentModel)
-		if (item) {
-			priorityQueue.push(priorityQueue.shift()!)
-			return item
-		}
-		// Group fully processed — record in history and remove it
-		priorityQueue.shift()
-		completedHistory.unshift({
-			...group,
-			completedAt: new Date().toISOString()
-		})
-		if (completedHistory.length > HISTORY_MAX) completedHistory.pop()
-		broadcastStatus("running")
-	}
-
-	// Fall through to global sweep (keeps original priority order)
-	return pickGlobalNextItem(currentModel)
+	return (await embeddingLane.pickNext(currentModel)) as QueueItem | null
 }
 
 async function pickFromGroup(
@@ -804,7 +943,8 @@ export async function writeEmbeddingIfFresh(
 
 async function pickSessionMessage(
 	currentModel: string,
-	sessionId?: number
+	sessionId?: number,
+	onlyId?: number
 ): Promise<QueueItem | null> {
 	const staleness = needsEmbedding(
 		schema.sessionMessages.embedding,
@@ -813,9 +953,11 @@ async function pickSessionMessage(
 		schema.sessionMessages.updatedAt,
 		schema.sessionMessages.vectorizedAt
 	)
-	const where = sessionId
-		? and(eq(schema.sessionMessages.sessionId, sessionId), staleness)
-		: staleness
+	const where = and(
+		sessionId ? eq(schema.sessionMessages.sessionId, sessionId) : undefined,
+		onlyId ? eq(schema.sessionMessages.id, onlyId) : undefined,
+		staleness
+	)
 
 	const rows = await db
 		.select({
@@ -833,10 +975,11 @@ async function pickSessionMessage(
 
 	if (!rows.length) return null
 	const { id, content, updatedAtRaw } = rows[0]
-	return {
-		label: { type: "message", label: `Session message #${id}` },
+	return queueItem({
+		type: "message",
+		label: `Session message #${id}`,
 		id,
-		embeddingModel: currentModel,
+		currentModel,
 		process: async () => {
 			const vector = await embed(truncateForEmbedding(content))
 			await writeEmbeddingIfFresh(
@@ -849,7 +992,7 @@ async function pickSessionMessage(
 				vector
 			)
 		}
-	}
+	})
 }
 
 // ensureSessionMessageEmbedded() is awaited from inside runGenerateAndPersist()
@@ -989,30 +1132,44 @@ export async function ensureSessionMessageEmbedded(
 	)
 }
 
-async function pickWorldLoreEntry(
+/**
+ * The three entry pickers, as one.
+ *
+ * They read the same rows of the same table now, so what used to be three
+ * near-identical blocks is one parameterised by the declared type, the label
+ * the progress event carries, and whether the embed text is prefixed with a
+ * title. That last one is the only real difference between them, and it is what
+ * the type's `embedText` role declares: `[title, content]` for the two lore
+ * shapes, `[content]` for history, which has no title to prepend.
+ */
+async function pickEntry(
+	typeId: string,
+	labelType: VectorizationItemLabel["type"],
+	labelFor: (row: { id: number; title: string | null }) => string,
+	withTitle: boolean,
 	currentModel: string,
-	lorebookId?: number
+	lorebookId?: number,
+	onlyId?: number
 ): Promise<QueueItem | null> {
-	const staleness = needsEmbedding(
-		schema.worldLoreEntries.embedding,
-		schema.worldLoreEntries.embeddingModel,
-		currentModel,
-		schema.worldLoreEntries.updatedAt,
-		schema.worldLoreEntries.vectorizedAt
+	const where = and(
+		eq(schema.lorebookEntries.typeId, typeId),
+		lorebookId
+			? eq(schema.lorebookEntries.lorebookId, lorebookId)
+			: undefined,
+		onlyId ? eq(schema.lorebookEntries.id, onlyId) : undefined,
+		entryNeedsEmbedding(currentModel)
 	)
-	const where = lorebookId
-		? and(eq(schema.worldLoreEntries.lorebookId, lorebookId), staleness)
-		: staleness
 
 	const rows = await db
 		.select({
-			id: schema.worldLoreEntries.id,
-			content: schema.worldLoreEntries.content,
-			name: schema.worldLoreEntries.name,
-			lorebookId: schema.worldLoreEntries.lorebookId,
-			updatedAtRaw: sql<string>`${schema.worldLoreEntries.updatedAt}::text`
+			id: schema.lorebookEntries.id,
+			content: schema.lorebookEntries.content,
+			title: schema.lorebookEntries.title,
+			lorebookId: schema.lorebookEntries.lorebookId,
+			updatedAtRaw: sql<string>`${schema.lorebookEntries.updatedAt}::text`
 		})
-		.from(schema.worldLoreEntries)
+		.from(schema.lorebookEntries)
+		.leftJoin(schema.lorebookEntryVectors, defaultVectorJoin)
 		.where(where)
 		.limit(1)
 
@@ -1020,141 +1177,81 @@ async function pickWorldLoreEntry(
 	const {
 		id,
 		content,
-		name,
+		title,
 		lorebookId: rowLorebookId,
 		updatedAtRaw
 	} = rows[0]
-	const text = name ? `${name}\n${content}` : content
-	return {
-		label: { type: "worldLore", label: `World lore: ${name || id}` },
+	// `title ? title + "\n" + content : content` — the type's `embedText` role
+	// spelled out: `[title, content]` for the two lore shapes, `[content]` for
+	// history, which has no title to prepend.
+	const text = withTitle && title ? `${title}\n${content}` : content
+	return queueItem({
+		type: labelType,
+		label: labelFor({ id, title }),
 		id,
 		lorebookId: rowLorebookId,
-		embeddingModel: currentModel,
+		currentModel,
 		process: async () => {
 			const vector = await embed(truncateForEmbedding(text))
-			await writeEmbeddingIfFresh(
-				schema.worldLoreEntries,
-				schema.worldLoreEntries.id,
-				schema.worldLoreEntries.updatedAt,
+			await writeEntryVectorIfFresh(
 				id,
 				updatedAtRaw,
 				currentModel,
 				vector
 			)
 		}
-	}
+	})
 }
 
-async function pickCharacterLoreEntry(
+const pickWorldLoreEntry = (
 	currentModel: string,
-	lorebookId?: number
-): Promise<QueueItem | null> {
-	const staleness = needsEmbedding(
-		schema.characterLoreEntries.embedding,
-		schema.characterLoreEntries.embeddingModel,
+	lorebookId?: number,
+	onlyId?: number
+) =>
+	pickEntry(
+		WORLD_LORE_TYPE_ID,
+		"worldLore",
+		(r) => `World lore: ${r.title || r.id}`,
+		true,
 		currentModel,
-		schema.characterLoreEntries.updatedAt,
-		schema.characterLoreEntries.vectorizedAt
+		lorebookId,
+		onlyId
 	)
-	const where = lorebookId
-		? and(eq(schema.characterLoreEntries.lorebookId, lorebookId), staleness)
-		: staleness
 
-	const rows = await db
-		.select({
-			id: schema.characterLoreEntries.id,
-			content: schema.characterLoreEntries.content,
-			name: schema.characterLoreEntries.name,
-			lorebookId: schema.characterLoreEntries.lorebookId,
-			updatedAtRaw: sql<string>`${schema.characterLoreEntries.updatedAt}::text`
-		})
-		.from(schema.characterLoreEntries)
-		.where(where)
-		.limit(1)
-
-	if (!rows.length) return null
-	const {
-		id,
-		content,
-		name,
-		lorebookId: rowLorebookId,
-		updatedAtRaw
-	} = rows[0]
-	const text = name ? `${name}\n${content}` : content
-	return {
-		label: {
-			type: "characterLore",
-			label: `Character lore: ${name || id}`
-		},
-		id,
-		lorebookId: rowLorebookId,
-		embeddingModel: currentModel,
-		process: async () => {
-			const vector = await embed(truncateForEmbedding(text))
-			await writeEmbeddingIfFresh(
-				schema.characterLoreEntries,
-				schema.characterLoreEntries.id,
-				schema.characterLoreEntries.updatedAt,
-				id,
-				updatedAtRaw,
-				currentModel,
-				vector
-			)
-		}
-	}
-}
-
-async function pickHistoryEntry(
+const pickCharacterLoreEntry = (
 	currentModel: string,
-	lorebookId?: number
-): Promise<QueueItem | null> {
-	const staleness = needsEmbedding(
-		schema.historyEntries.embedding,
-		schema.historyEntries.embeddingModel,
+	lorebookId?: number,
+	onlyId?: number
+) =>
+	pickEntry(
+		CHARACTER_LORE_TYPE_ID,
+		"characterLore",
+		(r) => `Character lore: ${r.title || r.id}`,
+		true,
 		currentModel,
-		schema.historyEntries.updatedAt,
-		schema.historyEntries.vectorizedAt
+		lorebookId,
+		onlyId
 	)
-	const where = lorebookId
-		? and(eq(schema.historyEntries.lorebookId, lorebookId), staleness)
-		: staleness
 
-	const rows = await db
-		.select({
-			id: schema.historyEntries.id,
-			content: schema.historyEntries.content,
-			lorebookId: schema.historyEntries.lorebookId,
-			updatedAtRaw: sql<string>`${schema.historyEntries.updatedAt}::text`
-		})
-		.from(schema.historyEntries)
-		.where(where)
-		.limit(1)
-
-	if (!rows.length) return null
-	const { id, content, lorebookId: rowLorebookId, updatedAtRaw } = rows[0]
-	return {
-		label: { type: "historyEntry", label: `History entry #${id}` },
-		id,
-		lorebookId: rowLorebookId,
-		embeddingModel: currentModel,
-		process: async () => {
-			const vector = await embed(truncateForEmbedding(content))
-			await writeEmbeddingIfFresh(
-				schema.historyEntries,
-				schema.historyEntries.id,
-				schema.historyEntries.updatedAt,
-				id,
-				updatedAtRaw,
-				currentModel,
-				vector
-			)
-		}
-	}
-}
+const pickHistoryEntry = (
+	currentModel: string,
+	lorebookId?: number,
+	onlyId?: number
+) =>
+	pickEntry(
+		HISTORY_TYPE_ID,
+		"historyEntry",
+		(r) => `History entry #${r.id}`,
+		false,
+		currentModel,
+		lorebookId,
+		onlyId
+	)
 
 async function pickNarrativeNode(
 	currentModel: string,
-	lorebookId?: number
+	lorebookId?: number,
+	onlyId?: number
 ): Promise<QueueItem | null> {
 	const staleness = needsEmbedding(
 		schema.lorebookBindings.embedding,
@@ -1163,9 +1260,13 @@ async function pickNarrativeNode(
 		schema.lorebookBindings.updatedAt,
 		schema.lorebookBindings.vectorizedAt
 	)
-	const where = lorebookId
-		? and(eq(schema.lorebookBindings.lorebookId, lorebookId), staleness)
-		: staleness
+	const where = and(
+		lorebookId
+			? eq(schema.lorebookBindings.lorebookId, lorebookId)
+			: undefined,
+		onlyId ? eq(schema.lorebookBindings.id, onlyId) : undefined,
+		staleness
+	)
 
 	const rows = await db
 		.select({
@@ -1188,11 +1289,12 @@ async function pickNarrativeNode(
 		updatedAtRaw
 	} = rows[0]
 	const text = summary ? `${name}\n${summary}` : name
-	return {
-		label: { type: "narrativeNode", label: `Narrative node: ${name}` },
+	return queueItem({
+		type: "narrativeNode",
+		label: `Narrative node: ${name}`,
 		id,
 		lorebookId: rowLorebookId,
-		embeddingModel: currentModel,
+		currentModel,
 		process: async () => {
 			const vector = await embed(truncateForEmbedding(text))
 			await writeEmbeddingIfFresh(
@@ -1205,12 +1307,13 @@ async function pickNarrativeNode(
 				vector
 			)
 		}
-	}
+	})
 }
 
 async function pickNarrativeRelationship(
 	currentModel: string,
-	lorebookId?: number
+	lorebookId?: number,
+	onlyId?: number
 ): Promise<QueueItem | null> {
 	const staleness = needsEmbedding(
 		schema.narrativeRelationships.embedding,
@@ -1219,12 +1322,13 @@ async function pickNarrativeRelationship(
 		schema.narrativeRelationships.updatedAt,
 		schema.narrativeRelationships.vectorizedAt
 	)
-	const where = lorebookId
-		? and(
-				eq(schema.narrativeRelationships.lorebookId, lorebookId),
-				staleness
-			)
-		: staleness
+	const where = and(
+		lorebookId
+			? eq(schema.narrativeRelationships.lorebookId, lorebookId)
+			: undefined,
+		onlyId ? eq(schema.narrativeRelationships.id, onlyId) : undefined,
+		staleness
+	)
 
 	const rows = await db
 		.select({
@@ -1271,14 +1375,12 @@ async function pickNarrativeRelationship(
 	if (description) text += `: ${description}`
 	if (reason) text += `. ${reason}`
 
-	return {
-		label: {
-			type: "narrativeRelationship",
-			label: `Narrative relationship: ${fromName} → ${toName}`
-		},
+	return queueItem({
+		type: "narrativeRelationship",
+		label: `Narrative relationship: ${fromName} → ${toName}`,
 		id,
 		lorebookId: rowLorebookId,
-		embeddingModel: currentModel,
+		currentModel,
 		process: async () => {
 			const vector = await embed(truncateForEmbedding(text))
 			await writeEmbeddingIfFresh(
@@ -1291,12 +1393,13 @@ async function pickNarrativeRelationship(
 				vector
 			)
 		}
-	}
+	})
 }
 
 async function pickCharacter(
 	currentModel: string,
-	characterIds?: number[]
+	characterIds?: number[],
+	onlyId?: number
 ): Promise<QueueItem | null> {
 	if (characterIds !== undefined && characterIds.length === 0) return null
 
@@ -1307,10 +1410,13 @@ async function pickCharacter(
 		schema.characters.updatedAt,
 		schema.characters.vectorizedAt
 	)
-	const where =
+	const where = and(
 		characterIds && characterIds.length > 0
-			? and(inArray(schema.characters.id, characterIds), staleness)
-			: staleness
+			? inArray(schema.characters.id, characterIds)
+			: undefined,
+		onlyId ? eq(schema.characters.id, onlyId) : undefined,
+		staleness
+	)
 
 	const rows = await db
 		.select({
@@ -1326,10 +1432,11 @@ async function pickCharacter(
 	if (!rows.length) return null
 	const { id, name, description, updatedAtRaw } = rows[0]
 	const text = `${name}\n${description}`
-	return {
-		label: { type: "character", label: `Character: ${name}` },
+	return queueItem({
+		type: "character",
+		label: `Character: ${name}`,
 		id,
-		embeddingModel: currentModel,
+		currentModel,
 		process: async () => {
 			const vector = await embed(truncateForEmbedding(text))
 			await writeEmbeddingIfFresh(
@@ -1342,12 +1449,13 @@ async function pickCharacter(
 				vector
 			)
 		}
-	}
+	})
 }
 
 async function pickPersona(
 	currentModel: string,
-	personaIds?: number[]
+	personaIds?: number[],
+	onlyId?: number
 ): Promise<QueueItem | null> {
 	if (personaIds !== undefined && personaIds.length === 0) return null
 
@@ -1358,10 +1466,13 @@ async function pickPersona(
 		schema.personas.updatedAt,
 		schema.personas.vectorizedAt
 	)
-	const where =
+	const where = and(
 		personaIds && personaIds.length > 0
-			? and(inArray(schema.personas.id, personaIds), staleness)
-			: staleness
+			? inArray(schema.personas.id, personaIds)
+			: undefined,
+		onlyId ? eq(schema.personas.id, onlyId) : undefined,
+		staleness
+	)
 
 	const rows = await db
 		.select({
@@ -1377,10 +1488,11 @@ async function pickPersona(
 	if (!rows.length) return null
 	const { id, name, description, updatedAtRaw } = rows[0]
 	const text = `${name}\n${description}`
-	return {
-		label: { type: "persona", label: `Persona: ${name}` },
+	return queueItem({
+		type: "persona",
+		label: `Persona: ${name}`,
 		id,
-		embeddingModel: currentModel,
+		currentModel,
 		process: async () => {
 			const vector = await embed(truncateForEmbedding(text))
 			await writeEmbeddingIfFresh(
@@ -1393,34 +1505,7 @@ async function pickPersona(
 				vector
 			)
 		}
-	}
-}
-
-async function processItem(item: QueueItem) {
-	await item.process()
-	// Per-item DB rows get their embedding/vectorizedAt updated inside
-	// item.process(), but nothing previously told connected clients which
-	// specific item changed — the per-item "vectorized/stale" badges in list
-	// UIs only ever refreshed on the next explicit CRUD action, leaving them
-	// showing a stale state until a manual page refresh.
-	if (item.label) {
-		const payload = {
-			type: item.label.type,
-			id: item.id,
-			lorebookId: item.lorebookId,
-			embeddingModel: item.embeddingModel,
-			vectorizedAt: new Date().toISOString()
-		} satisfies VectorizationItemUpdatedEvent
-		for (const emit of progressEmitters) {
-			try {
-				emit("vectorization:itemUpdated", payload)
-			} catch {}
-		}
-	}
-}
-
-function sleep(ms: number) {
-	return new Promise((resolve) => setTimeout(resolve, ms))
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -1445,27 +1530,10 @@ export async function countUnembedded(currentModel?: string): Promise<number> {
 				schema.sessionMessages.embeddingModel
 			)
 		),
-		db.$count(
-			schema.worldLoreEntries,
-			condition(
-				schema.worldLoreEntries.embedding,
-				schema.worldLoreEntries.embeddingModel
-			)
-		),
-		db.$count(
-			schema.characterLoreEntries,
-			condition(
-				schema.characterLoreEntries.embedding,
-				schema.characterLoreEntries.embeddingModel
-			)
-		),
-		db.$count(
-			schema.historyEntries,
-			condition(
-				schema.historyEntries.embedding,
-				schema.historyEntries.embeddingModel
-			)
-		),
+		// One count for all three entry types, because they are one table. The
+		// no-current-model arm is `isNull(embedding)`'s equivalent: an entry
+		// with no default-space vector at all.
+		countUnembeddedEntries(currentModel),
 		db.$count(
 			schema.lorebookBindings,
 			condition(
@@ -1495,16 +1563,316 @@ export async function countUnembedded(currentModel?: string): Promise<number> {
 	return counts.reduce((sum, n) => sum + Number(n), 0)
 }
 
+async function countUnembeddedEntries(currentModel?: string): Promise<number> {
+	const [row] = await db
+		.select({ n: sql<number>`count(*)` })
+		.from(schema.lorebookEntries)
+		.leftJoin(schema.lorebookEntryVectors, defaultVectorJoin)
+		.where(
+			currentModel
+				? entryNeedsEmbedding(currentModel)
+				: isNull(schema.lorebookEntryVectors.entryId)
+		)
+	return Number(row?.n ?? 0)
+}
+
+// ---------------------------------------------------------------------------
+// Eager promotion — the query-time half
+// ---------------------------------------------------------------------------
+
+/**
+ * How many rows one eager promotion may name.
+ *
+ * The *scan* bound, above the lane's own item bound. Both exist because they
+ * fail differently: naming ten thousand rows is expensive before a single one
+ * is indexed, and indexing ten thousand rows is expensive after. Whatever the
+ * scan leaves out is still picked up by the background sweep, which is the
+ * whole point of promoting into the queue rather than beside it.
+ */
+export const PROMOTION_SCAN_CAP = 60
+
+/**
+ * The rows a session's semantic arm would search, that have no current vector.
+ *
+ * **The same scope and the same staleness identities the arm itself uses** —
+ * `fetchScopedCandidates`'s filters (in-scope lorebooks, `enabled`, the
+ * session's own channel, the recent window excluded) crossed with this file's
+ * `needsEmbedding` / `entryNeedsEmbedding`. That is what makes the answer
+ * *"missing from what this query will look at"* rather than *"unembedded
+ * somewhere"*: `sourceHash`-equivalent staleness distinguishes a stale vector
+ * from an absent one, and both are equally invisible to a search keyed on the
+ * loaded model.
+ *
+ * **Ordered lore first, messages last, and that ordering is load-bearing.**
+ * The lane's item bound cuts the tail, so whatever is at the front is what a
+ * turn actually gets. A lorebook is tens of rows and each one is a candidate
+ * the ranker may choose; a transcript is thousands of rows that the recent
+ * window already carries verbatim, and letting a message backlog eat the bound
+ * would starve the lore it exists for.
+ */
+export async function scopedMissingVectors(
+	context: SessionRagContext,
+	currentModel: string,
+	opts: {
+		limit?: number
+		excludeRecentMessages?: number
+		channel?: string
+	} = {}
+): Promise<LaneItemRef[]> {
+	const limit = Math.max(0, opts.limit ?? PROMOTION_SCAN_CAP)
+	if (limit === 0) return []
+	const refs: LaneItemRef[] = []
+	const room = () => limit - refs.length
+
+	const push = (source: string, rows: Array<{ id: number }>) => {
+		for (const row of rows) refs.push({ source, id: row.id })
+	}
+
+	/**
+	 * Read defensively rather than destructured. A context is assembled
+	 * elsewhere and this runs inside a turn, so a field that is not there has to
+	 * mean "no rows of that kind in scope" — the governing rule's *subtracts a
+	 * signal* — rather than an exception on the reply path.
+	 */
+	const lorebookIds = context.allLorebookIds ?? []
+	const characterIds = context.characterIds ?? []
+	const personaIds = context.personaIds ?? []
+	const sessionId = Number.isFinite(context.sessionId)
+		? context.sessionId
+		: undefined
+
+	if (lorebookIds.length > 0) {
+		const entryTypes: Array<[string, string]> = [
+			[WORLD_LORE_TYPE_ID, "worldLore"],
+			[CHARACTER_LORE_TYPE_ID, "characterLore"],
+			[HISTORY_TYPE_ID, "historyEntry"]
+		]
+		for (const [typeId, source] of entryTypes) {
+			if (room() <= 0) break
+			push(
+				source,
+				await db
+					.select({ id: schema.lorebookEntries.id })
+					.from(schema.lorebookEntries)
+					.leftJoin(schema.lorebookEntryVectors, defaultVectorJoin)
+					.where(
+						and(
+							inArray(
+								schema.lorebookEntries.lorebookId,
+								lorebookIds
+							),
+							eq(schema.lorebookEntries.enabled, true),
+							eq(schema.lorebookEntries.typeId, typeId),
+							entryNeedsEmbedding(currentModel)
+						)
+					)
+					.orderBy(desc(schema.lorebookEntries.id))
+					.limit(room())
+			)
+		}
+
+		if (room() > 0)
+			push(
+				"narrativeNode",
+				await db
+					.select({ id: schema.lorebookBindings.id })
+					.from(schema.lorebookBindings)
+					.where(
+						and(
+							inArray(
+								schema.lorebookBindings.lorebookId,
+								lorebookIds
+							),
+							needsEmbedding(
+								schema.lorebookBindings.embedding,
+								schema.lorebookBindings.embeddingModel,
+								currentModel,
+								schema.lorebookBindings.updatedAt,
+								schema.lorebookBindings.vectorizedAt
+							)
+						)
+					)
+					.orderBy(desc(schema.lorebookBindings.id))
+					.limit(room())
+			)
+
+		if (room() > 0)
+			push(
+				"narrativeRelationship",
+				await db
+					.select({ id: schema.narrativeRelationships.id })
+					.from(schema.narrativeRelationships)
+					.where(
+						and(
+							inArray(
+								schema.narrativeRelationships.lorebookId,
+								lorebookIds
+							),
+							needsEmbedding(
+								schema.narrativeRelationships.embedding,
+								schema.narrativeRelationships.embeddingModel,
+								currentModel,
+								schema.narrativeRelationships.updatedAt,
+								schema.narrativeRelationships.vectorizedAt
+							)
+						)
+					)
+					.orderBy(desc(schema.narrativeRelationships.id))
+					.limit(room())
+			)
+	}
+
+	if (room() > 0 && characterIds.length > 0)
+		push(
+			"character",
+			await db
+				.select({ id: schema.characters.id })
+				.from(schema.characters)
+				.where(
+					and(
+						inArray(schema.characters.id, characterIds),
+						needsEmbedding(
+							schema.characters.embedding,
+							schema.characters.embeddingModel,
+							currentModel,
+							schema.characters.updatedAt,
+							schema.characters.vectorizedAt
+						)
+					)
+				)
+				.limit(room())
+		)
+
+	if (room() > 0 && personaIds.length > 0)
+		push(
+			"persona",
+			await db
+				.select({ id: schema.personas.id })
+				.from(schema.personas)
+				.where(
+					and(
+						inArray(schema.personas.id, personaIds),
+						needsEmbedding(
+							schema.personas.embedding,
+							schema.personas.embeddingModel,
+							currentModel,
+							schema.personas.updatedAt,
+							schema.personas.vectorizedAt
+						)
+					)
+				)
+				.limit(room())
+		)
+
+	if (room() > 0 && sessionId !== undefined) {
+		const messageChannel = channelWhere(
+			schema.sessionMessages.channel,
+			opts.channel
+		)
+		const excludeRecent = opts.excludeRecentMessages ?? 10
+		let floorId = 0
+		if (excludeRecent > 0) {
+			// The recent window is already in the prompt verbatim, so a vector
+			// for it buys the turn nothing — scoped exactly like the fetch's
+			// own exclusion, which is one channel's.
+			const recent = await db
+				.select({ id: schema.sessionMessages.id })
+				.from(schema.sessionMessages)
+				.where(
+					and(
+						eq(schema.sessionMessages.sessionId, sessionId),
+						messageChannel
+					)
+				)
+				.orderBy(desc(schema.sessionMessages.id))
+				.limit(excludeRecent)
+			floorId = recent.length ? (recent[recent.length - 1]!.id ?? 0) : 0
+		}
+		push(
+			"message",
+			await db
+				.select({ id: schema.sessionMessages.id })
+				.from(schema.sessionMessages)
+				.where(
+					and(
+						eq(schema.sessionMessages.sessionId, sessionId),
+						eq(schema.sessionMessages.isHidden, false),
+						messageChannel,
+						floorId > 0
+							? sql`${schema.sessionMessages.id} < ${floorId}`
+							: undefined,
+						needsEmbedding(
+							schema.sessionMessages.embedding,
+							schema.sessionMessages.embeddingModel,
+							currentModel,
+							schema.sessionMessages.updatedAt,
+							schema.sessionMessages.vectorizedAt
+						)
+					)
+				)
+				.orderBy(desc(schema.sessionMessages.id))
+				.limit(room())
+		)
+	}
+
+	return refs
+}
+
+/**
+ * Index what this query is about to search and is missing, then let it run.
+ *
+ * ⚠ **Awaited from inside a turn**, so it is bounded twice and cannot hang:
+ * the scan above caps how much can be named, and the lane caps how much is
+ * indexed and for how long. A promotion that cannot complete — the lane off,
+ * the model not resident, either bound reached — comes back as a report rather
+ * than an exception or a stall, and the caller puts it on the receipt.
+ */
+export async function promoteScopedVectors(
+	context: SessionRagContext,
+	currentModel: string,
+	opts: {
+		scanLimit?: number
+		maxItems?: number
+		timeoutMs?: number
+		excludeRecentMessages?: number
+		channel?: string
+	} = {}
+): Promise<PromotionReport> {
+	let refs: LaneItemRef[]
+	try {
+		refs = await scopedMissingVectors(context, currentModel, {
+			limit: opts.scanLimit,
+			excludeRecentMessages: opts.excludeRecentMessages,
+			channel: opts.channel
+		})
+	} catch (err) {
+		/**
+		 * ⚠ The scan itself must not reach the turn.
+		 *
+		 * `promote()` is already contracted never to reject; this closes the
+		 * half above it. A failed scan means the search runs over whatever is
+		 * already indexed and the receipt says why it might be less — which is
+		 * the rule: an unavailable mechanism subtracts a signal, it never halts.
+		 */
+		console.error("[vectorization] Missing-vector scan failed:", err)
+		return {
+			requested: 0,
+			processed: 0,
+			remaining: 0,
+			boundHit: false,
+			reason: "the missing-vector scan failed"
+		}
+	}
+	return embeddingLane.promote({
+		refs,
+		maxItems: opts.maxItems,
+		timeoutMs: opts.timeoutMs
+	})
+}
+
 // ---------------------------------------------------------------------------
 // Auto-enqueue helpers — called by socket handlers after content saves
 // ---------------------------------------------------------------------------
-
-async function isVectorizationEnabled(): Promise<boolean> {
-	const settings = await db.query.systemSettings.findFirst({
-		columns: { vectorizationEnabled: true }
-	})
-	return settings?.vectorizationEnabled ?? false
-}
 
 export async function autoEnqueueLorebook(
 	lorebookId: number,

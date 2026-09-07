@@ -11,6 +11,27 @@
  */
 import { afterEach, describe, expect, test, vi } from "vitest"
 
+/**
+ * ⚠ Budget, not a flake. This file times out in the full parallel sweep while
+ * passing alone, and the cause is TRANSFORM cost, not work this test does:
+ * measured alone it is 3.78s wall, of which 2.21s is transform, against the
+ * unit project's 5s `testTimeout` — ~70% of the budget consumed with zero
+ * contention, so any parallel load tips it over.
+ *
+ * The cost is the three `await import("./koboldcpp")` calls below. That module
+ * transitively pulls the auth stack and both KoboldCPP managers, and the
+ * per-test `resetModules` (see afterEach) means the graph is re-evaluated each
+ * time — which is exactly what the test is for: it asserts against the two
+ * downstream modules' REAL exported registerEmitter/unregisterEmitter, so
+ * mocking them away to go fast would delete the assertion.
+ *
+ * Deliberately NOT renamed to `*.int.test.ts` to inherit the int project's 60s.
+ * That project's timeout exists for tests that build a real PGlite database,
+ * and this one mocks `$lib/server/db` precisely so it does not — filing it
+ * there would make the partition mean "slow" instead of "integration".
+ */
+vi.setConfig({ testTimeout: 30_000 })
+
 // koboldcpp.ts transitively imports $lib/server/auth, which needs
 // getCryptoSecretKey() from this module at import time — a bare `{db:{}}`
 // stub (used elsewhere for pure-function tests) breaks that, so it's

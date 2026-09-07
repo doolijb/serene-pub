@@ -20,8 +20,13 @@ import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { spec, compile, run, slot } from "@serene-pub/sdk"
 import * as C from "@serene-pub/contracts"
 import * as schema from "$lib/server/db/schema"
+import { eq } from "drizzle-orm"
+import {
+	characterLoreValues,
+	worldLoreValues
+} from "$lib/server/pipelines/testing/fixtures"
 
-// Embedding readiness is instance state the host reads, so the arm-selection
+// Embedding readiness is instance state the host reads, so the mechanism-selection
 // tests toggle it here rather than passing a flag along a data edge.
 let modelReady = false
 vi.mock("$lib/server/embedding", () => ({
@@ -63,41 +68,47 @@ beforeAll(async () => {
 		.returning()
 	sessionId = session.id
 
-	await db.insert(schema.worldLoreEntries).values([
-		{
-			lorebookId,
-			name: "The Ashguard",
-			keys: "ashguard, banner",
-			content: "An order of oathbound riders."
-		},
-		{
-			lorebookId,
-			name: "Silverwood",
-			keys: "silverwood",
-			content: "A forest nobody has mentioned."
-		},
-		{
-			lorebookId,
-			name: "Standing Orders",
-			keys: "",
-			constant: true,
-			content: "Always remember the oath."
-		},
-		{
-			lorebookId,
-			name: "Retired Fact",
-			keys: "ashguard",
-			enabled: false,
-			content: "Something switched off."
-		},
-		{
-			lorebookId,
-			name: "Vector Only",
-			keys: "ashguard",
-			retrievalStrategy: "rag",
-			content: "Belongs to the other arm."
-		}
-	])
+	await db.insert(schema.lorebookEntries).values(
+		worldLoreValues([
+			{
+				lorebookId,
+				name: "The Ashguard",
+				keys: "ashguard, banner",
+				content: "An order of oathbound riders."
+			},
+			{
+				lorebookId,
+				name: "Silverwood",
+				keys: "silverwood",
+				content: "A forest nobody has mentioned."
+			},
+			{
+				lorebookId,
+				name: "Standing Orders",
+				keys: "",
+				constant: true,
+				content: "Always remember the oath."
+			},
+			{
+				lorebookId,
+				name: "Retired Fact",
+				keys: "ashguard",
+				enabled: false,
+				content: "Something switched off."
+			},
+			{
+				lorebookId,
+				// ⚠ The name is historical: it was seeded
+				// `retrievalStrategy: "rag"` — *findable by meaning* — and the
+				// column is gone (migration 0204). It is kept because the two
+				// assertions below are about this entry surviving, and renaming
+				// it would hide which entry they are about.
+				name: "Vector Only",
+				keys: "ashguard",
+				content: "Belongs to the other mechanism."
+			}
+		])
+	)
 
 	await db.insert(schema.sessionMessages).values([
 		{
@@ -149,23 +160,65 @@ describe("lore retrieval in a pipeline", () => {
 		expect(reasons).toMatch(/no key matched in the last 10 messages/)
 	})
 
-	it("a rag entry falls back to keyword when this instance has no embeddings", async () => {
-		// Availability is false in the binding until the vector arm is bound, so
-		// "Vector Only" is findable rather than silently unreachable.
+	it("finds an entry the vector mechanism would want, with no model loaded", async () => {
+		// This read "a rag entry falls back to keyword", and the fallback it
+		// named is gone with the column that asked for it (migration 0204).
+		// What it was really guarding is unchanged and is why it stays: the
+		// level-0 install, with nothing configured, must still find everything
+		// a level-1 install would — the plan's §4 structural property, that
+		// discovery degrades with setup and selection never does.
 		const lore = (await execute()).nodes.find((n) => n.nodeKey === "lore")!
 		const names = (lore.output as any).hits.map((h: any) => h.payload.name)
 		expect(names).toContain("Vector Only")
 	})
 
-	it("the same entry is handled by the other arm once embeddings exist", async () => {
-		modelReady = true
-		const lore = (await execute()).nodes.find((n) => n.nodeKey === "lore")!
-		const names = (lore.output as any).hits.map((h: any) => h.payload.name)
-		expect(names).not.toContain("Vector Only")
+	/**
+	 * ⚠ **This asserted that the entry left, and its leaving was the incident.**
+	 *
+	 * It read *"the same entry is handled by the other mechanism once embeddings
+	 * exist"*, and checked that "Vector Only" stopped appearing here. There was
+	 * no other mechanism: `core:query/vector-search@1` was wired into no shipped spec
+	 * until respond 1.19.0 and ships off even now, so what the entry was handed
+	 * to was nothing at all. And `rag` is what nearly every entry was — the
+	 * default for an undecided one, and the default of the lore nodes'
+	 * `retrievalMode` besides — so this was lore disappearing from prompts the
+	 * moment somebody loaded an embedding model. Neither of those defaults
+	 * exists now: 0203 culled the node mode and 0204 the per-entry column, so
+	 * there is one behaviour for every entry and this is what it must be.
+	 *
+	 * The plan's second governing rule is written about that: *an unavailable
+	 * mechanism subtracts a signal; it never reroutes, disables a path, or
+	 * excludes a candidate. Adding a model may only add matches.* So the same
+	 * fixture now asserts the opposite, which is the property rather than the
+	 * symptom.
+	 */
+	it("keeps every entry it found when embeddings become available", async () => {
+		const before = (await execute()).nodes.find((n) => n.nodeKey === "lore")!
+		const found = (before.output as any).hits.map(
+			(h: any) => h.payload.name
+		)
+		expect(found).toContain("Vector Only")
 
-		const skipped = (lore.output as any).skipped as any[]
-		expect(skipped.map((s) => s.reason).join(" ")).toMatch(/vector search/)
-		modelReady = false
+		modelReady = true
+		try {
+			const after = (await execute()).nodes.find(
+				(n) => n.nodeKey === "lore"
+			)!
+			const names = (after.output as any).hits.map(
+				(h: any) => h.payload.name
+			)
+			for (const name of found)
+				expect(
+					names,
+					`loading an embedding model removed "${name}" from the ` +
+						`keyword mechanism's results`
+				).toContain(name)
+		} finally {
+			// ⚠ Restored in `finally`, because a failure here used to leave the
+			// flag on and take the next two tests down with it — a cascade that
+			// hides which assertion actually broke.
+			modelReady = false
+		}
 	})
 
 	it("says why vector search did not run, in the run's own diagnostics", async () => {
@@ -271,22 +324,24 @@ describe("character lore is only visible to whoever it belongs to", () => {
 			.values({ lorebookId, binding: "{{char:2}}" })
 			.returning()
 
-		await db.insert(schema.characterLoreEntries).values([
-			{
-				lorebookId,
-				lorebookBindingId: binding.id,
-				name: "Ash's secret",
-				keys: "secret",
-				content: "Ash opened the lower gate."
-			},
-			{
-				lorebookId,
-				lorebookBindingId: npc.id,
-				name: "The gatekeeper",
-				keys: "gate",
-				content: "Nobody remembers who hired them."
-			}
-		])
+		await db.insert(schema.lorebookEntries).values(
+			characterLoreValues([
+				{
+					lorebookId,
+					lorebookBindingId: binding.id,
+					name: "Ash's secret",
+					keys: "secret",
+					content: "Ash opened the lower gate."
+				},
+				{
+					lorebookId,
+					lorebookBindingId: npc.id,
+					name: "The gatekeeper",
+					keys: "gate",
+					content: "Nobody remembers who hired them."
+				}
+			])
+		)
 	})
 
 	const readAs = async (currentCharacterId: number | null) => {
@@ -326,5 +381,199 @@ describe("character lore is only visible to whoever it belongs to", () => {
 		expect(
 			rows.filter((r) => r.source === "worldLore").length
 		).toBeGreaterThan(0)
+	})
+})
+
+/**
+ * What a candidate says it was, so a receipt can be read months later.
+ *
+ * A receipt records decisions and never content, so the explanation panel reads
+ * the entry rows **live** for titles and keys. Rename an entry after its run and
+ * the panel put the new title against the old decision with nothing saying so.
+ * The fix is a fingerprint of the scored row on each candidate — `entrySourceHash`,
+ * the annotation lane's own `source_hash` recipe, borrowed rather than reinvented.
+ *
+ * ⚠ This is the half the projection's unit tests cannot reach. There both sides
+ * of the comparison are computed from one literal, so they agree by
+ * construction; here the run computes it from a row the **host read** produced
+ * and the check computes it from the **stored columns** the socket reads, which
+ * is the pairing that has to hold in production. `keys` is `text[]` in the
+ * database and a comma-joined string by the time a candidate carries it, and a
+ * fingerprint taken on the wrong side of that would have called every entry
+ * edited, forever, on the first panel open.
+ */
+describe("a candidate records what it was, not just that it was", () => {
+	let book: number
+	let scoped: number
+	let ashguardId: number
+
+	const stored = () =>
+		db
+			.select()
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, ashguardId))
+			.limit(1)
+			.then((r: any[]) => r[0])
+
+	const liveHash = async () => {
+		const { entrySourceHash } = await import("$lib/server/annotations")
+		return entrySourceHash(await stored())
+	}
+
+	const lore = async () => {
+		const receipt = await run(retrieval(), {
+			input: {
+				text: "tell me about the ashguard",
+				sessionScope: { sessionId: scoped }
+			},
+			seed: "seed:fingerprint",
+			bindings: coreBindings(),
+			host: createHost(db as any, { sessionId: scoped, userId })
+		})
+		expect(receipt.outcome).toBe("ok")
+		return (receipt.nodes.find((n) => n.nodeKey === "lore")!.output ??
+			{}) as any
+	}
+
+	beforeAll(async () => {
+		// Its own book and session: the suite above asserts an exact
+		// `considered` of 5 and these tests edit rows, so sharing either would
+		// make one file's assertions depend on another's mutations.
+		const [lorebook] = await db
+			.insert(schema.lorebooks)
+			.values({ name: "Fingerprint Lore", userId })
+			.returning()
+		book = lorebook.id
+
+		const [session] = await db
+			.insert(schema.sessions)
+			.values({ userId, isGroup: false, lorebookId: book })
+			.returning()
+		scoped = session.id
+
+		const rows = await db
+			.insert(schema.lorebookEntries)
+			.values(
+				worldLoreValues([
+					{
+						lorebookId: book,
+						name: "The Ashguard",
+						keys: "ashguard, banner",
+						content: "An order of oathbound riders."
+					},
+					{
+						lorebookId: book,
+						name: "Silverwood",
+						keys: "silverwood",
+						content: "A forest nobody has mentioned."
+					}
+				])
+			)
+			.returning()
+		ashguardId = rows.find((r: any) => r.title === "The Ashguard")!.id
+
+		await db.insert(schema.sessionMessages).values([
+			{
+				sessionId: scoped,
+				role: "user",
+				content: "The ashguard rode under a torn banner."
+			}
+		])
+	}, 60_000)
+
+	it("carries a fingerprint on every candidate it publishes", async () => {
+		const out = await lore()
+		const hit = out.hits.find((h: any) => h.payload.name === "The Ashguard")
+		expect(hit.payload.fingerprint).toEqual(expect.any(String))
+		// The annotation lane's short digest, not a full sha256 — one recipe.
+		expect(hit.payload.fingerprint).toHaveLength(16)
+	})
+
+	it("agrees with the hash a later reader computes from the stored row", async () => {
+		// ⚠ The load-bearing one. The run hashes what the host read handed it;
+		// the panel hashes the columns. If those two ever disagree — about how
+		// keys are spelled, about which column is the title — every row reads
+		// as edited and the states stop meaning anything.
+		const out = await lore()
+		const hit = out.hits.find((h: any) => h.payload.name === "The Ashguard")
+		expect(hit.payload.fingerprint).toBe(await liveHash())
+	})
+
+	it("gives the entries it declined one too", async () => {
+		// The rows a reader most often asks about — "why did this not come in"
+		// — travel as three fields and would otherwise be the only ones the
+		// explanation could not date.
+		const out = await lore()
+		const skip = out.skipped.find((s: any) => s.id !== ashguardId)
+		expect(skip.fingerprint).toEqual(expect.any(String))
+		expect(skip.reason).toBeTruthy()
+	})
+
+	it("does the same on the lane the shipped pipeline actually runs", async () => {
+		// ⚠ `lorebook-triggers` is the node the tests above use and **not** the
+		// one a reply runs: `respond` wires `world-lore`, `character-lore` and
+		// `history-entries`, which filter one shared scan to their own source.
+		// Both go through the same helper, and pinning only the unshipped one
+		// would leave the path every user is on uncovered.
+		const receipt = await run(
+			compile(
+				spec("core:spec/world-lore-turn", { version: "1.0.0" })
+					.input("input", C.userMessage.v1())
+					.query("world", ($) =>
+						C.worldLore.v1({ scope: $.input.sessionScope })
+					)
+					.build()
+			),
+			{
+				input: {
+					text: "tell me about the ashguard",
+					sessionScope: { sessionId: scoped }
+				},
+				seed: "seed:fingerprint-world",
+				bindings: coreBindings(),
+				host: createHost(db as any, { sessionId: scoped, userId })
+			}
+		)
+		expect(receipt.outcome).toBe("ok")
+		const out = receipt.nodes.find((n) => n.nodeKey === "world")!
+			.output as any
+		const hit = out.hits.find((h: any) => h.id === ashguardId)
+		expect(hit.payload.fingerprint).toBe(await liveHash())
+		const skip = out.skipped.find((s: any) => s.id !== ashguardId)
+		expect(skip.fingerprint).toEqual(expect.any(String))
+	})
+
+	it.each([
+		["a retitled entry", { title: "The Ashguard Gate" }],
+		["a rekeyed entry", { keys: ["ashguard", "portcullis"] }],
+		["a rewritten entry", { content: "An order of oathbound riders, once." }]
+	])("stops matching the record for %s", async (_what, edit) => {
+		const before = await lore()
+		const recorded = before.hits.find(
+			(h: any) => h.id === ashguardId
+		).payload.fingerprint
+		expect(recorded).toBe(await liveHash())
+
+		const original = await stored()
+		await db
+			.update(schema.lorebookEntries)
+			.set(edit as any)
+			.where(eq(schema.lorebookEntries.id, ashguardId))
+		try {
+			// The receipt is untouched by an edit made after it — which is the
+			// point — so the drift shows up as the live hash moving away from
+			// the one the run wrote down.
+			expect(await liveHash()).not.toBe(recorded)
+		} finally {
+			await db
+				.update(schema.lorebookEntries)
+				.set({
+					title: original.title,
+					keys: original.keys,
+					content: original.content
+				})
+				.where(eq(schema.lorebookEntries.id, ashguardId))
+		}
+		expect(await liveHash()).toBe(recorded)
 	})
 })

@@ -34,7 +34,7 @@ export const RELATIONSHIP_VISIBILITIES = [
  * the entry described, so it is gone; a wrong direction is now discarded
  * (parseCharacterPerspectives, `wrongSource`). Making the wrong direction
  * unemittable in the first place is what keeps that stricter rule from costing
- * anything on providers that honour the schema.
+ * anything on services that honour the schema.
  *
  * What it does NOT buy, and must not be claimed: a grammar masks tokens, not
  * meaning. It forces the `from` LABEL to be the subject; it cannot force the
@@ -83,7 +83,7 @@ export function buildPerspectiveSchema(subjectName: string): JsonSchemaNode {
 					properties: {
 						// A single-element enum rather than `const`: identical
 						// meaning, and materially better support across the
-						// providers that consume this schema natively.
+						// services that consume this schema natively.
 						from: { type: "string", enum: [subjectName] },
 						to: { type: "string" },
 						type: { type: "string" },

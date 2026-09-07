@@ -14,6 +14,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
+import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -65,8 +66,8 @@ describe("scenes:create — historyEntryId scoping (PGlite integration)", () => 
 			.values({ name: "Victim's Book", userId: victim.id })
 			.returning()
 		const [victimHistoryEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: victimLorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: victimLorebook.id }]))
 			.returning()
 
 		await expect(
@@ -94,8 +95,8 @@ describe("scenes:create — historyEntryId scoping (PGlite integration)", () => 
 			.values({ name: "Owner's Book", userId: owner.id })
 			.returning()
 		const [historyEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id }]))
 			.returning()
 
 		const res = await sceneCreateHandler.handler(

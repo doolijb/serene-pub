@@ -8,6 +8,7 @@ import {
 	isWildcardAllowed
 } from "$lib/server/sockets/originAllowlist"
 import { startPeriodicVectorizationScan } from "$lib/server/embedding/vectorizationQueue"
+import { startPeriodicAnnotationScan } from "$lib/server/annotations/queue"
 
 // .env loading lives in $lib/server/config/preloadEnv, which runs before the
 // server framework reads its own configuration. It used to be a dotenv.config()
@@ -127,6 +128,12 @@ export async function attachSocketServer(httpServer: HttpServer) {
 	// loadConfiguredEmbeddingModel(), mode-aware) once it actually finds
 	// something to embed. See vectorizationQueue.ts's own doc comment.
 	startPeriodicVectorizationScan()
+
+	// The second lane's sweep. Same shape, its own model (none), its own TTL
+	// and its own autostart — see `indexing/lane.ts`. The annotation lane is
+	// model-free and unconditional, so this is what keeps a lorebook's names
+	// indexed on an install that has configured nothing at all.
+	startPeriodicAnnotationScan()
 
 	// Fire-and-forget: warms the local-embedding support probe (a cached,
 	// one-time dynamic import attempt — see embedding/index.ts) so it's

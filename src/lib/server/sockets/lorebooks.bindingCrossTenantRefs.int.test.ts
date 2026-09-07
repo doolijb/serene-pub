@@ -13,6 +13,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
+import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -64,8 +65,8 @@ describe("lorebooks:createBinding — cross-tenant FK validation (PGlite integra
 		const ownLorebook = await makeLorebook(user.id, "Own Book")
 		const otherLorebook = await makeLorebook(user.id, "Other Book")
 		const [foreignHistoryEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: otherLorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: otherLorebook.id }]))
 			.returning()
 		const [foreignScene] = await testDb
 			.insert(schema.scenes)
@@ -97,8 +98,8 @@ describe("lorebooks:createBinding — cross-tenant FK validation (PGlite integra
 		const ownLorebook = await makeLorebook(user.id, "Own Book 2")
 		const otherLorebook = await makeLorebook(user.id, "Other Book 2")
 		const [foreignEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: otherLorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: otherLorebook.id }]))
 			.returning()
 
 		await expect(
@@ -150,8 +151,8 @@ describe("lorebooks:createBinding — cross-tenant FK validation (PGlite integra
 		const user = await makeUser("binding-create-samebook-user")
 		const lorebook = await makeLorebook(user.id, "Same Book")
 		const [historyEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id }]))
 			.returning()
 		const [scene] = await testDb
 			.insert(schema.scenes)
@@ -228,8 +229,8 @@ describe("lorebooks:updateBinding — cross-tenant FK validation (PGlite integra
 		const lorebook = await makeLorebook(user.id, "Update Own Book")
 		const otherLorebook = await makeLorebook(user.id, "Update Other Book")
 		const [foreignHistoryEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: otherLorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: otherLorebook.id }]))
 			.returning()
 		const [foreignScene] = await testDb
 			.insert(schema.scenes)
@@ -270,8 +271,8 @@ describe("lorebooks:updateBinding — cross-tenant FK validation (PGlite integra
 		const user = await makeUser("binding-update-samebook-user")
 		const lorebook = await makeLorebook(user.id, "Update Same Book")
 		const [historyEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id }]))
 			.returning()
 		const [scene] = await testDb
 			.insert(schema.scenes)

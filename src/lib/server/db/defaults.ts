@@ -1165,7 +1165,7 @@ export async function sync() {
 		// Servers (plan 26 §2)
 		//
 		// The instance's own network identity — a stable anchor for
-		// instance-scoped, non-model-provider settings (tunnels). Exactly one
+		// instance-scoped, non-model-service settings (tunnels). Exactly one
 		// row, seeded here.
 		//
 		// Matched on `slug`, never on `id`, per the seedKey rule documented at

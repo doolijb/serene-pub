@@ -18,6 +18,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
+import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
 
@@ -79,16 +80,24 @@ describe("pickNextItem — round-robin fairness across priority groups (PGlite i
 		// One never-embedded world lore entry each — needsEmbedding() stays
 		// true for both across every pick below, since nothing here ever
 		// calls item.process() to actually write a vector back.
-		await testDb.insert(schema.worldLoreEntries).values({
-			lorebookId: lorebookA.id,
-			name: "A entry",
-			content: "content a"
-		})
-		await testDb.insert(schema.worldLoreEntries).values({
-			lorebookId: lorebookB.id,
-			name: "B entry",
-			content: "content b"
-		})
+		await testDb.insert(schema.lorebookEntries).values(
+			worldLoreValues([
+				{
+					lorebookId: lorebookA.id,
+					name: "A entry",
+					content: "content a"
+				}
+			])
+		)
+		await testDb.insert(schema.lorebookEntries).values(
+			worldLoreValues([
+				{
+					lorebookId: lorebookB.id,
+					name: "B entry",
+					content: "content b"
+				}
+			])
+		)
 
 		// getLoadedModelIdMock still returns null here, so these enqueue
 		// calls' own background runQueue() trigger is a no-op.

@@ -9,10 +9,21 @@
  * createdAt/etc. are already excluded.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
+import {
+	CHARACTER_LORE_TYPE_ID,
+	HISTORY_TYPE_ID,
+	WORLD_LORE_TYPE_ID,
+	type LorebookEntry
+} from "$lib/shared/entries/types"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
+import {
+	characterLoreValues,
+	historyValues,
+	worldLoreValues
+} from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -57,27 +68,30 @@ async function makeLorebook(userId: number) {
 	return lorebook
 }
 
-describe("worldLoreEntries:update — position exclusion (PGlite integration)", () => {
+describe("entries:update — world lore position exclusion (PGlite integration)", () => {
 	test("ignores a client-supplied position while applying other fields", async () => {
-		const { updateWorldLoreEntryHandler } = await import(
-			"./worldLoreEntries"
-		)
+		const { updateEntryHandler } = await import("./entries")
 		const user = await makeUser("world-lore-position-user")
 		const lorebook = await makeLorebook(user.id)
 		const [entry] = await testDb
-			.insert(schema.worldLoreEntries)
-			.values({
-				lorebookId: lorebook.id,
-				name: "Entry",
-				content: "x",
-				position: 3
-			})
+			.insert(schema.lorebookEntries)
+			.values(
+				worldLoreValues([
+					{
+						lorebookId: lorebook.id,
+						name: "Entry",
+						content: "x",
+						position: 3
+					}
+				])
+			)
 			.returning()
 
-		const res = await updateWorldLoreEntryHandler.handler(
+		const res = await updateEntryHandler.handler(
 			fakeSocket(user.id),
 			{
-				worldLoreEntry: {
+				entry: {
+					typeId: WORLD_LORE_TYPE_ID,
 					id: entry.id,
 					name: "Renamed",
 					position: 999
@@ -86,25 +100,26 @@ describe("worldLoreEntries:update — position exclusion (PGlite integration)", 
 			noopEmit
 		)
 
-		expect(res.worldLoreEntry.name).toBe("Renamed")
-		expect(res.worldLoreEntry.position).toBe(3)
+		expect(res.entry.name).toBe("Renamed")
+		expect(res.entry.position).toBe(3)
 	})
 })
 
-describe("historyEntries:update — position exclusion (PGlite integration)", () => {
+describe("entries:update — history position exclusion (PGlite integration)", () => {
 	test("ignores a client-supplied position while applying other fields", async () => {
-		const { updateHistoryEntryHandler } = await import("./historyEntries")
+		const { updateEntryHandler } = await import("./entries")
 		const user = await makeUser("history-position-user")
 		const lorebook = await makeLorebook(user.id)
 		const [entry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id, position: 2 })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id, position: 2 }]))
 			.returning()
 
-		const res = await updateHistoryEntryHandler.handler(
+		const res = await updateEntryHandler.handler(
 			fakeSocket(user.id),
 			{
-				historyEntry: {
+				entry: {
+					typeId: HISTORY_TYPE_ID,
 					id: entry.id,
 					year: 1999,
 					position: 999
@@ -113,32 +128,40 @@ describe("historyEntries:update — position exclusion (PGlite integration)", ()
 			noopEmit
 		)
 
-		expect(res.historyEntry.year).toBe(1999)
-		expect(res.historyEntry.position).toBe(2)
+		// The brand at work: `res.entry` is the union of every declared shape,
+		// so reading a date off it needs the narrowing the type id already
+		// justifies.
+		expect((res.entry as LorebookEntry<typeof HISTORY_TYPE_ID>).year).toBe(
+			1999
+		)
+		expect(res.entry.position).toBe(2)
 	})
 })
 
-describe("characterLoreEntries:update — position exclusion (PGlite integration)", () => {
+describe("entries:update — character lore position exclusion (PGlite integration)", () => {
 	test("ignores a client-supplied position while applying other fields", async () => {
-		const { updateCharacterLoreEntryHandler } = await import(
-			"./characterLoreEntries"
-		)
+		const { updateEntryHandler } = await import("./entries")
 		const user = await makeUser("character-lore-position-user")
 		const lorebook = await makeLorebook(user.id)
 		const [entry] = await testDb
-			.insert(schema.characterLoreEntries)
-			.values({
-				lorebookId: lorebook.id,
-				name: "Entry",
-				content: "x",
-				position: 4
-			})
+			.insert(schema.lorebookEntries)
+			.values(
+				characterLoreValues([
+					{
+						lorebookId: lorebook.id,
+						name: "Entry",
+						content: "x",
+						position: 4
+					}
+				])
+			)
 			.returning()
 
-		const res = await updateCharacterLoreEntryHandler.handler(
+		const res = await updateEntryHandler.handler(
 			fakeSocket(user.id),
 			{
-				characterLoreEntry: {
+				entry: {
+					typeId: CHARACTER_LORE_TYPE_ID,
 					id: entry.id,
 					name: "Renamed",
 					position: 999
@@ -147,7 +170,7 @@ describe("characterLoreEntries:update — position exclusion (PGlite integration
 			noopEmit
 		)
 
-		expect(res.characterLoreEntry.name).toBe("Renamed")
-		expect(res.characterLoreEntry.position).toBe(4)
+		expect(res.entry.name).toBe("Renamed")
+		expect(res.entry.position).toBe(4)
 	})
 })

@@ -163,6 +163,25 @@ vi.mock("$lib/server/utils/tokenCrypto", () => ({
 }))
 
 /**
+ * Every template render, with the context it was handed.
+ *
+ * A pass-through wrapper rather than a stub: what is under test is what the
+ * render is TOLD, not what it returns, and a stub would also have to reproduce
+ * Handlebars for the prompt assertions above to keep meaning anything.
+ */
+let renderCtx: any[] = []
+vi.mock("$lib/server/pipelines/prompt/renderers", async (orig) => {
+	const actual = (await orig()) as any
+	return {
+		...actual,
+		renderTemplate: async (engineId: string, ctx: any) => {
+			renderCtx.push({ engineId, ...ctx })
+			return await actual.renderTemplate(engineId, ctx)
+		}
+	}
+})
+
+/**
  * The loader, stubbed at the one entry point the image path calls.
  *
  * `preflightLog` records the ORDER of preflight and render, which is the
@@ -300,6 +319,7 @@ beforeEach(() => {
 	lastWherePair = [undefined, undefined]
 	preflightLog = []
 	preflightFails = false
+	renderCtx = []
 	koboldCppSettings = { koboldCppManagerBaseUrl: SECRET_URL }
 	connectionsById = { 1: imageConnection, 2: textConnection }
 	samplingById = { 10: imageSampling }
@@ -465,12 +485,27 @@ describe("dispatchImage — resolving the target", () => {
 		expect(seen.req.steps).toBe(30)
 	})
 
-	it("refuses a connection that cannot draw, naming the capability", async () => {
-		// The human name, never `text->image`: somebody who switched "Image
-		// generation" off has no way to connect the id back to the toggle.
-		await expect(dispatch({ connectionId: 2 })).rejects.toThrow(
-			/"Local Kobold" cannot do Image generation/
+	it("refuses a connection that cannot draw, naming the capability and not the connection", async () => {
+		// The human name of the CAPABILITY, never `text->image`: somebody who
+		// switched "Image generation" off has no way to connect the id back to
+		// the toggle they touched.
+		// Caught rather than asserted through `rejects.toThrow`, because the
+		// interesting half is what the message does NOT say and a matcher that
+		// is handed the Error rather than the string passes whatever it is
+		// given.
+		const err: any = await dispatch({ connectionId: 2 }).then(
+			() => {
+				throw new Error("expected a refusal")
+			},
+			(e) => e
 		)
+		expect(err.message).toMatch(/cannot do Image generation/)
+		// And never the name of the CONNECTION. Connections are invisible to
+		// non-admins, and this sentence becomes `Receipt.haltReason` — a plain
+		// string nothing downstream can redact. The row it was about rides on
+		// the thrown error's `connection` field, which the projection removes.
+		expect(err.message).not.toContain("Local Kobold")
+		expect(err.connection).toMatchObject({ name: "Local Kobold" })
 	})
 
 	it("accepts a text-typed connection whose capabilities say it draws", async () => {
@@ -645,5 +680,87 @@ describe("dispatchImage — one render at a time per connection", () => {
 			dispatch({ connectionId: 4 })
 		])
 		expect(maxConcurrent).toBe(2)
+	})
+})
+
+/**
+ * The same dispatch, reached the way a run reaches it.
+ *
+ * Here rather than beside the host's other tests because the property is only
+ * visible at the far end: the run has to survive the scope, the call payload
+ * and the adapter's own progress callback, and asserting it on the object the
+ * host builds would pass just as happily with an id nothing carried through.
+ */
+describe("dispatchImage — reached through the host", () => {
+	const node = {
+		key: "render",
+		typeId: "core:provider/generate-image",
+		typeVersion: 1,
+		kind: "provider"
+	}
+
+	const callHost = async (scope: any, payload: any = {}) => {
+		const { createHost } = await import("./host")
+		const host = createHost(fakeDb as any, scope)
+		return await host.call!(
+			{ prompt: "a knight at dusk", ...payload },
+			node as any
+		)
+	}
+
+	it("stamps the run its progress came from on the event the sink gets", async () => {
+		const events: any[] = []
+		await callHost({
+			runId: "run-9f2",
+			sessionId: 3,
+			userId: 7,
+			sink: { onProgress: (e: any) => events.push(e) }
+		})
+
+		// The value the SINK received, not the one the host assembled. This was
+		// `runId: ""` until the scope carried a run, and a progress event a
+		// client cannot name is one it cannot cancel and cannot clear — which
+		// went unnoticed because the one socket listening today overwrites
+		// `runId` with its own after spreading the event through.
+		expect(events).toHaveLength(1)
+		expect(events[0]).toMatchObject({
+			runId: "run-9f2",
+			nodeKey: "render",
+			stage: "sampling"
+		})
+	})
+
+	it("sends no progress at all when the host cannot name the run", async () => {
+		// The deliberate other half. `runSpec` always names the run, so this is
+		// a host wired by hand — and for one of those, silence is better than an
+		// event stamped with an id that identifies nothing, which would open a
+		// progress card nobody can stop and nobody can dismiss.
+		const events: any[] = []
+		await callHost({
+			sessionId: 3,
+			userId: 7,
+			sink: { onProgress: (e: any) => events.push(e) }
+		})
+		expect(events).toEqual([])
+	})
+
+	it("hands the prompts-slot render the run, so a plugin engine stays cancellable", async () => {
+		// Inert today: the slot is pinned to core's engine, which ignores both
+		// `RenderRun` fields. It stops being inert the moment a prompts slot
+		// names a plugin's engine — that render is a sandboxed hook call, and
+		// cancellation only reaches it through the id its hooks are grouped
+		// under.
+		await callHost(
+			{ runId: "run-9f2", sessionId: 3, userId: 7 },
+			{ prompts: { positive: "{{prompt}}, cinematic lighting" } }
+		)
+
+		expect(seen.req.prompt).toBe("a knight at dusk, cinematic lighting")
+		expect(renderCtx).toHaveLength(1)
+		expect(renderCtx[0]).toMatchObject({
+			runId: "run-9f2",
+			user: "7",
+			template: "{{prompt}}, cinematic lighting"
+		})
 	})
 })

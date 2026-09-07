@@ -20,8 +20,20 @@
  *         whole design.
  */
 
-/** The five things the context is built from. A slider exists per entry here. */
-export type SourceKind =
+/**
+ * A **band**: what kind of content a candidate is, and whose budget share pays
+ * for it. The five things the context is built from; a slider exists per entry
+ * here.
+ *
+ * ⚠ **Not the vector index's `source`.** That vocabulary is the index's own —
+ * `message`, `historyEntry`, `narrativeNode` — and is reconciled to these five
+ * at the ranker's in-port (`BUDGET_GROUP_ALIASES`), never merged with them.
+ * Merging the two is what silently dropped six of eight sources at ranking.
+ *
+ * ⚠ **Nor the SDK's `Band`**, which is a connection's capability grade. The
+ * name is qualified here for that reason; see NOMENCLATURE §7 and §10.
+ */
+export type RetrievalBand =
 	| "messages"
 	| "worldLore"
 	| "characterLore"
@@ -42,12 +54,92 @@ export type SourceKind =
 export interface SignalWeights {
 	keyword: number
 	nameMatch: number
+	/**
+	 * Two questions under one name, split by source (bug 16), and the split is
+	 * deliberate rather than a leftover — see `scoreSignals`.
+	 *
+	 * ⚠ **The world-lore half changed measure and this weight moved with it.**
+	 * It used to be `entityCooccurrenceSignal` — a binary substring test asking
+	 * whether the entry's own title or keys contain a cast name, so `Al` fired
+	 * on `Alchemy` and one shared entity scored the same as twelve. It is now
+	 * the rarity-weighted, word-boundary, two-sided overlap `evidence()`
+	 * computes for admission: what the conversation named, intersected with
+	 * what this entry names, discounted by how many entries name the same thing.
+	 *
+	 * That measure saturates — ~0.63 for one rare shared entity, ~0.86 for two
+	 * (design §13.10) — so inherited at the old 0.2 its live range would have
+	 * been about [0.13, 0.17], **narrower** than the crude `{0, 0.2}` it
+	 * replaces. Grading without re-weighting makes a signal more correct and
+	 * less influential at once, so world lore's weight is sized for the measure
+	 * that runs: 0.35, the anchor `entity-search`'s own strength uses.
+	 *
+	 * Character lore stays at 0.2 because its measurement did not change: it
+	 * still asks whether the entry's bound character spoke in the guaranteed
+	 * window, which is a fact about the scene rather than about the entry.
+	 */
 	entityCooccurrence: number
 	tfidf: number
 	lastRefRecency: number
 	recency: number
 	sceneAffinity: number
 	density: number
+	/**
+	 * How much an embedding thinks this entry is *about* what is being said.
+	 *
+	 * The fourth mechanism, and the only one that needs a model. Produced by
+	 * `core:query/vector-search@1` as a **score component** rather than as an
+	 * ordering: the mechanism attaches a cosine and stamps no `presetScore`, so an
+	 * entry two mechanisms found keeps the keyword mechanism's signals and gains this one
+	 * and the two compound by addition. Fusing them would be the mistake
+	 * `core:task/concat-candidates@1` exists to avoid.
+	 *
+	 * Non-zero in the shipped lore bands, unlike `proximity` — because the
+	 * *mechanism* ships off (`vector-search.maxEntries` is 0) and nothing carries the
+	 * signal until somebody turns it on. Zeroing both would make raising the cap
+	 * do nothing, which is the trap every two-switch feature sets.
+	 */
+	semantic: number
+	/**
+	 * How well a description the scene used matches one of this entry's names.
+	 *
+	 * The fifth mechanism's weight, produced by `core:query/entity-link@1`:
+	 * *"the captain"* → *Captain Vell*, *"the order"* → *The Ashguard Riders*.
+	 * Neither reference shares a character with its target, so keys, trigrams
+	 * and the gazetteer all miss them — and they are the references people
+	 * actually write.
+	 *
+	 * ⚠ **Sized to sit strictly below `nameMatch`, and that is a rule rather
+	 * than a preference.** Invented proper nouns are where embeddings are least
+	 * reliable — "Vell" has no learned meaning, so its vector is assembled from
+	 * subword fragments and Vell, Vall and Vela cluster — so *exact and trigram
+	 * matching own invented names; entity vectors own descriptive references*,
+	 * and a vector link must never outrank an entry whose title literally
+	 * occurred. `nameMatch` is 0.25 and a link's similarity cannot exceed 1, so
+	 * 0.2 keeps that true at every value the mechanism can produce.
+	 *
+	 * Non-zero in the shipped lore bands for `semantic`'s reason: the *mechanism*
+	 * ships off (`entity-link.maxLinks` is 0), and a feature whose cap and whose
+	 * weight both ship at zero is one where raising the cap appears to do
+	 * nothing. One switch, not two.
+	 */
+	entityVector: number
+	/**
+	 * How tightly an entry's matched keys clustered in the window.
+	 *
+	 * Two keys matching adjacent is stronger evidence than the same two
+	 * matching twenty words apart — "the Ashguard rode" is about the Ashguard
+	 * riding, and the same two words either side of a paragraph break are two
+	 * unrelated sentences. `keywordSignal` cannot tell them apart: it counts
+	 * *how many* keys matched and never *where*.
+	 *
+	 * **0 in every shipped set**, which is what makes the signal inert until
+	 * somebody weights it — the `admitThreshold` convention, applied to a
+	 * signal rather than to a threshold. The number itself is computed
+	 * unconditionally, because it comes out of the key walk that was happening
+	 * anyway and a signal nothing can see the value of is a signal nobody can
+	 * decide to weight.
+	 */
+	proximity: number
 	/** Added per step of the entry's `priority` field, lore only today. */
 	priorityBonus: number
 }
@@ -58,7 +150,7 @@ export interface SignalWeights {
  * Canonical **here**, in the surviving half, rather than in
  * `KeywordInfillEngine` where it started. It was defined there and *also*
  * hardcoded as a literal `0.15` in `LORE_SIGNALS` below — one number with two
- * definitions, so the keyword arm and the semantic arm could drift apart while
+ * definitions, so the keyword mechanism and the semantic mechanism could drift apart while
  * both looked deliberate. The legacy engines now import it from here, which is
  * the direction that leaves nothing to move when they are deleted.
  *
@@ -76,10 +168,19 @@ const NO_SIGNALS: SignalWeights = {
 	recency: 0,
 	sceneAffinity: 0,
 	density: 0,
+	proximity: 0,
+	semantic: 0,
+	entityVector: 0,
 	priorityBonus: 0
 }
 
-/** `KeywordInfillEngine:1120` (world lore) and `:1184` (character lore). */
+/**
+ * `KeywordInfillEngine:1120` (world lore) and `:1184` (character lore).
+ *
+ * ⚠ **No longer one set for both**, and the reason is `entityCooccurrence`:
+ * that weight is now sized for the measure its source runs, and the two sources
+ * run different measures (bug 16). Everything else is still shared.
+ */
 const LORE_SIGNALS: SignalWeights = {
 	...NO_SIGNALS,
 	keyword: 0.35,
@@ -87,11 +188,20 @@ const LORE_SIGNALS: SignalWeights = {
 	entityCooccurrence: 0.2,
 	tfidf: 0.1,
 	lastRefRecency: 0.1,
+	semantic: 0.3,
+	entityVector: 0.2,
 	priorityBonus: PRIORITY_SCORE_BONUS
 }
 
-export const DEFAULT_SIGNAL_WEIGHTS: Record<SourceKind, SignalWeights> = {
-	worldLore: LORE_SIGNALS,
+export const DEFAULT_SIGNAL_WEIGHTS: Record<RetrievalBand, SignalWeights> = {
+	/**
+	 * 0.35 on `entityCooccurrence`, not 0.2 — the graded overlap's live range
+	 * would otherwise be narrower than the binary signal it replaces. The
+	 * argument is on `SignalWeights.entityCooccurrence`; the measurement is in
+	 * `scoreSignals`.
+	 */
+	worldLore: { ...LORE_SIGNALS, entityCooccurrence: 0.35 },
+	/** 0.2, unchanged: character lore's question is presence, and it did not move. */
 	characterLore: LORE_SIGNALS,
 	/** `:1239`. Note history carries no `priorityBonus` today. */
 	history: {
@@ -100,7 +210,9 @@ export const DEFAULT_SIGNAL_WEIGHTS: Record<SourceKind, SignalWeights> = {
 		recency: 0.2,
 		tfidf: 0.1,
 		sceneAffinity: 0.1,
-		lastRefRecency: 0.1
+		lastRefRecency: 0.1,
+		semantic: 0.3,
+		entityVector: 0.2
 	},
 	/** `:1277`. */
 	messages: {
@@ -122,6 +234,17 @@ export const DEFAULT_SIGNAL_WEIGHTS: Record<SourceKind, SignalWeights> = {
 // ── (ii) Retrieval parameters ───────────────────────────────────────────────
 
 export type MatchMode = "substring" | "word" | "regex"
+
+/** How the entry side of the vocabulary overlap is read. See `lexicalScoring`. */
+export type LexicalScoring = "overlap" | "balanced"
+
+export const LEXICAL_SCORING: readonly LexicalScoring[] = [
+	"overlap",
+	"balanced"
+]
+
+export const isLexicalScoring = (v: unknown): v is LexicalScoring =>
+	typeof v === "string" && (LEXICAL_SCORING as readonly string[]).includes(v)
 
 export interface RetrievalParams {
 	/**
@@ -163,6 +286,106 @@ export interface RetrievalParams {
 	 * not to whoever wrote the lorebook.
 	 */
 	maxRecursionDepth: number
+	/**
+	 * How much non-key evidence admits an entry no keyword matched.
+	 *
+	 * The scan's admission rule was `pinned || keyword > 0 || nameMatch > 0`,
+	 * and every other signal is computed *before* it — so tf-idf and entity
+	 * co-occurrence could only reorder what the author's keys had already let
+	 * in. That one condition is what forces a lorebook to be hand-indexed:
+	 * "the Riders", "them" and "the order" are all the Ashguard, and only the
+	 * author writing each of them down makes the entry fire. The rule is now
+	 *
+	 *     pinned ∨ keyword > 0 ∨ nameMatch > 0 ∨ evidence ≥ admitThreshold
+	 *
+	 * with `evidence` from `ranking/entities.ts` — proper nouns and rarity-
+	 * weighted vocabulary, no embedding model involved.
+	 *
+	 * **0 is off**, the same convention `maxRecursionDepth` uses, and it is the
+	 * shipped default: this changes what reaches the model, so it is turned on
+	 * rather than arrived at. Reading 0 as "every score clears zero, so admit
+	 * everything" is the one meaning it cannot have.
+	 */
+	admitThreshold: number
+	/**
+	 * How strongly each kind of evidence counts — 1 is full, 0 switches that
+	 * kind off.
+	 *
+	 * Strengths rather than shares, because `evidence()` combines them as a
+	 * noisy-or rather than a sum: with a sum, whichever term got the smaller
+	 * share could never admit anything by itself, and the design lists tf-idf
+	 * as an admitting source rather than a tie-breaker. See the note there.
+	 *
+	 * A parameter rather than a literal for the reason everything else in this
+	 * file is one — but deliberately **not** declared on the node. The panel
+	 * gets one control, `admitThreshold`, because the question somebody has is
+	 * "how readily should this bring things in", and a weight per evidence term
+	 * asks them to calibrate a scale before they can answer it.
+	 */
+	admitWeights: { entity: number; vocabulary: number }
+	/**
+	 * How the vocabulary overlap is read, on both sides.
+	 *
+	 * `overlap` is today: a term's weight is added once per occurrence in the
+	 * entry, so a repeated word counts linearly and a long entry accumulates
+	 * more of them. Lorebook entries vary wildly in length, which is the case
+	 * that reading handles worst — twelve near-identical entries end up ordered
+	 * by how many times each happened to repeat itself.
+	 *
+	 * `balanced` is BM25 over the same inputs: term saturation and length
+	 * normalisation on the document side, so a long entry stops winning for
+	 * being long and a repeated term stops counting linearly — and the **same
+	 * saturation on the conversation side**, so a word the session cannot stop
+	 * saying stops multiplying whatever it lands on. That last half is Okapi's
+	 * `k3` term and it is not optional here: `balanced` also takes its rarity
+	 * over the entry pool rather than over the messages, which leaves a
+	 * stopword genuinely rare in a pool of short `keys + title` documents. See
+	 * `lexicalSignal`.
+	 *
+	 * `overlap` is the shipped default, on the `admitThreshold` convention:
+	 * this changes the *order* lore reaches the model in, so it is turned on
+	 * rather than arrived at on upgrade.
+	 */
+	lexicalScoring: LexicalScoring
+	/**
+	 * How much a fuzzy, character-trigram hit on a key is worth, 0 being off.
+	 *
+	 * Word-boundary matching is not merely imprecise for unsegmented scripts —
+	 * Japanese, Chinese and Thai have no spaces for "whole word" to mean
+	 * anything against — so trigrams are not a nicety there, they are the only
+	 * thing that works. Everywhere else they absorb inflection and typos:
+	 * `riders` fires a key written `rider`, `Ashgaurd` fires `Ashguard`.
+	 *
+	 * A strength rather than a boolean, because a fuzzy hit is genuinely weaker
+	 * evidence than an exact one and the useful question is *how much weaker*.
+	 * An exact match always counts 1 whatever this is, so raising it can only
+	 * add matches — the plan's second governing rule, in one line of
+	 * arithmetic.
+	 *
+	 * **0 is off and is the shipped default.** Trigrams are the universal path
+	 * by design, but switching them on changes which entries reach the model,
+	 * and that is a thing somebody turns on rather than a thing that happens to
+	 * them.
+	 */
+	trigramFolding: number
+	/**
+	 * How much a term in an entry's title counts against the same term among
+	 * its keys.
+	 *
+	 * **1 is neutral, not off**, and the difference matters: the two fields are
+	 * concatenated into one bag today, so 1 is arithmetically what already
+	 * happens rather than a feature switched off. Above 1 a match in the title
+	 * outranks the same word buried in the keys, which is the ordinary case for
+	 * an entry *about* the thing being discussed against one that merely lists
+	 * it.
+	 *
+	 * ⚠ The other field is the **keys**, not the content. The scored text is
+	 * the author's index (`keys + name`) and widening it to the body would
+	 * change the ordering of every keyed book in the app — deliberately out of
+	 * scope, and noted where the admission gate reads a wider text for its own
+	 * reasons (`keywordQuery.entryText`).
+	 */
+	titleWeight: number
 }
 
 export const DEFAULT_RETRIEVAL: RetrievalParams = {
@@ -170,13 +393,23 @@ export const DEFAULT_RETRIEVAL: RetrievalParams = {
 	guaranteedMessages: 10,
 	contextThresholdPercent: 0.8,
 	matchMode: "substring",
-	maxRecursionDepth: 0
+	maxRecursionDepth: 0,
+	admitThreshold: 0,
+	lexicalScoring: "overlap",
+	trigramFolding: 0,
+	titleWeight: 1,
+	// Both at full strength. Neither is picked as more trustworthy than the
+	// other by default — they answer different questions and the noisy-or lets
+	// each one answer on its own. Turning one down is how an install says
+	// "names only" or "words only", which is a real thing to want and not a
+	// calibration nobody can perform.
+	admitWeights: { entity: 1, vocabulary: 1 }
 }
 
 // ── (ii-b) Semantic retrieval ───────────────────────────────────────────────
 
 /**
- * The nine numbers the RAG arm runs on, every one of them a constant today.
+ * The nine numbers the RAG mechanism runs on, every one of them a constant today.
  *
  * `RagInfillEngine` carries these as module-level `const`s, and one of them
  * already has a `TODO: make configurable in a future pass` next to it. They are
@@ -197,7 +430,7 @@ export interface SemanticParams {
 	recentWindow: number
 	/**
 	 * Rank-fusion constant. 60 is the value from the original RRF paper and the
-	 * value both arms already use — named here rather than repeated, because two
+	 * value both mechanisms already use — named here rather than repeated, because two
 	 * fusions with different k silently rank differently.
 	 */
 	rrfK: number
@@ -245,6 +478,65 @@ export const DEFAULT_SEMANTIC: SemanticParams = {
 	defaultSourceBudget: 20
 }
 
+// ── (ii-c) Mechanism weights ────────────────────────────────────────────────
+
+/**
+ * How much each *way of finding* an entry counts, over the nine signals.
+ *
+ * A fourth kind of number, and it earns its own section because it is neither a
+ * signal weight nor a share. The nine signal weights are the right data at the
+ * wrong altitude — nobody thinks in "tf-idf", and a reader who wants less
+ * guessing and more literal matching would have to know which four of the nine
+ * to move and which way. These three group them by the mechanism that produced
+ * the evidence:
+ *
+ *   · **keyword** — `keyword`, `tfidf`, `proximity`  → "these words appeared"
+ *   · **semantic** — `semantic`                      → "this is about that"
+ *   · **name** — `nameMatch`, `entityCooccurrence`,
+ *     `entityVector`                                 → "this is called that"
+ *
+ * The other five are **structural**, and deliberately unscaled: `recency`,
+ * `lastRefRecency`, `sceneAffinity`, `density` and the priority bonus answer
+ * *"does this matter now"* rather than *"did we find it"*. An entry does not
+ * become less recent because somebody turned keyword matching down.
+ *
+ * ⚠ **Not the same axis as `GroupWeights.share`, and they sit on one screen.**
+ * A share divides the token budget between sources, so raising one lowers the
+ * others. These decide how much a mechanism contributes to one entry's score:
+ * they are independent, all three may be 1 at once, and turning one up takes
+ * nothing from anything. That is why the declaration uses a different control
+ * type rather than a share with normalisation switched off.
+ *
+ * **1 is neutral, not maximum.** Multiplying by one is arithmetically what
+ * already happened, so the defaults reproduce today's scoring exactly; 0
+ * switches a mechanism off entirely, which is the readable way to say "keys
+ * only".
+ */
+export interface MechanismWeights {
+	keyword: number
+	semantic: number
+	name: number
+}
+
+export const DEFAULT_MECHANISMS: MechanismWeights = {
+	keyword: 1,
+	semantic: 1,
+	name: 1
+}
+
+/** Which mechanism each signal belongs to. Absent means structural — unscaled. */
+export const SIGNAL_MECHANISM: Partial<
+	Record<keyof SignalWeights, keyof MechanismWeights>
+> = {
+	keyword: "keyword",
+	tfidf: "keyword",
+	proximity: "keyword",
+	semantic: "semantic",
+	nameMatch: "name",
+	entityCooccurrence: "name",
+	entityVector: "name"
+}
+
 // ── (iii) Group importance ──────────────────────────────────────────────────
 
 /**
@@ -270,9 +562,9 @@ export const DEFAULT_SEMANTIC: SemanticParams = {
  */
 export interface GroupWeights {
 	/** Relative importance. Normalised, so only the ratios matter. */
-	share: Record<SourceKind, number>
+	share: Record<RetrievalBand, number>
 	/** Most entries a source may contribute. `KeywordInfillEngine:56`. */
-	maxEntries: Record<SourceKind, number>
+	maxEntries: Record<RetrievalBand, number>
 	/**
 	 * Fewest entries a source keeps when space is tight, whatever its share.
 	 *
@@ -283,15 +575,27 @@ export interface GroupWeights {
 	 * a different amount of readable session on every turn. Entries is what the
 	 * user means: *keep the last six messages*.
 	 *
-	 * Per source for the same reason `share` and `maxEntries` are: world lore
-	 * and character lore had one floor between them, so "always keep a couple
-	 * of character-lore entries" could not be said at all.
-	 *
 	 * These are floors, not reservations — `select` fills them in score order
 	 * and stops at `availableTokens`. Floors that sum past the window are the
 	 * one way this could produce a prompt too big to send, so they lose.
+	 *
+	 * ## ⚠ Only `messages` is reachable now — ruling R6
+	 *
+	 * *"Per-source floors are removed everywhere except recent conversation,
+	 * which keeps its guaranteed share. Lore competes on score alone."* The
+	 * declaration on `core:task/rank-hybrid@1` names one band, `rankingParamsFrom`
+	 * reads one key out of whatever a stored value holds, and migration 0201
+	 * rewrites the values already stored. So no lore floor can be set.
+	 *
+	 * **The map keeps its five keys and `select` keeps honouring all of them**,
+	 * and that is not an oversight. A floor is the one mechanism that could
+	 * quietly re-admit a candidate the ranker excluded, which is exactly what
+	 * R1's clairvoyance filter must not allow — so `select` proves a floor
+	 * cannot resurrect an `ineligible` candidate, and that proof needs a lore
+	 * floor to exist for the test to construct. Removing the shape would remove
+	 * the guard along with the feature.
 	 */
-	minEntries: Record<SourceKind, number>
+	minEntries: Record<RetrievalBand, number>
 }
 
 export const DEFAULT_GROUPS: GroupWeights = {
@@ -313,11 +617,10 @@ export const DEFAULT_GROUPS: GroupWeights = {
 		relationships: 0
 	},
 	// Six messages is what `core:query/session-history@1` used to guarantee under
-	// its own `minInclude`, moved here so every source's floor is one control.
-	// The others start at zero: a floor is a promise to spend budget on
-	// something whether or not it scored, and promising that for lore by
-	// default would push conversation out of a small window on installs that
-	// never asked for it.
+	// its own `minInclude`. The others are zero and — since R6 — unreachable:
+	// a floor is a promise to spend budget on something whether or not it
+	// scored, which is the opposite of what a ranker is for, and it is the one
+	// route by which an excluded entry could come back in.
 	minEntries: {
 		messages: 6,
 		worldLore: 0,
@@ -330,7 +633,9 @@ export const DEFAULT_GROUPS: GroupWeights = {
 // ── The whole surface ───────────────────────────────────────────────────────
 
 export interface RankingParams {
-	signals: Record<SourceKind, SignalWeights>
+	signals: Record<RetrievalBand, SignalWeights>
+	/** How much each retrieval mechanism's signals count. See `MechanismWeights`. */
+	mechanisms: MechanismWeights
 	retrieval: RetrievalParams
 	semantic: SemanticParams
 	groups: GroupWeights
@@ -338,6 +643,7 @@ export interface RankingParams {
 
 export const DEFAULT_RANKING: RankingParams = {
 	signals: DEFAULT_SIGNAL_WEIGHTS,
+	mechanisms: DEFAULT_MECHANISMS,
 	retrieval: DEFAULT_RETRIEVAL,
 	semantic: DEFAULT_SEMANTIC,
 	groups: DEFAULT_GROUPS
@@ -357,9 +663,28 @@ export function withDefaults(
 	return {
 		signals: {
 			...DEFAULT_SIGNAL_WEIGHTS,
-			...((partial.signals ?? {}) as Record<SourceKind, SignalWeights>)
+			...((partial.signals ?? {}) as Record<RetrievalBand, SignalWeights>)
 		},
-		retrieval: { ...DEFAULT_RETRIEVAL, ...(partial.retrieval ?? {}) },
+		// Merged per key, unlike `signals` above, and the difference is that
+		// there is nothing here to be silently inherited *wrongly*: three
+		// independent multipliers, each meaning the same thing on its own, so a
+		// caller naming one means "change this one" rather than "switch the
+		// other two off". `sourceBudget` and `minEntries` take the same reading.
+		mechanisms: {
+			...DEFAULT_MECHANISMS,
+			...(partial.mechanisms ?? {})
+		},
+		retrieval: {
+			...DEFAULT_RETRIEVAL,
+			...(partial.retrieval ?? {}),
+			// Nested like `sourceBudget` below: naming one half of the
+			// admission split means "change this one", not "drop the other to
+			// undefined" — which the evidence sum would read as `NaN`.
+			admitWeights: {
+				...DEFAULT_RETRIEVAL.admitWeights,
+				...(partial.retrieval?.admitWeights ?? {})
+			}
+		},
 		semantic: {
 			...DEFAULT_SEMANTIC,
 			...(partial.semantic ?? {}),
@@ -414,15 +739,15 @@ type DeepPartial<T> = {
 export function allocateBudgets(
 	groups: GroupWeights,
 	availableTokens: number
-): Record<SourceKind, number> {
-	const active = (Object.keys(groups.share) as SourceKind[]).filter(
+): Record<RetrievalBand, number> {
+	const active = (Object.keys(groups.share) as RetrievalBand[]).filter(
 		(k) => groups.share[k] > 0
 	)
 	const total = active.reduce((sum, k) => sum + groups.share[k], 0)
 
 	const out = Object.fromEntries(
-		(Object.keys(groups.share) as SourceKind[]).map((k) => [k, 0])
-	) as Record<SourceKind, number>
+		(Object.keys(groups.share) as RetrievalBand[]).map((k) => [k, 0])
+	) as Record<RetrievalBand, number>
 	if (total <= 0 || availableTokens <= 0) return out
 
 	for (const k of active)

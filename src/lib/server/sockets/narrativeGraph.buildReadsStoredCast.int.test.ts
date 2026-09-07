@@ -44,6 +44,7 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 import type { GraphBuilderScene } from "$lib/server/utils/graphBuilder"
 import { releaseDataDir } from "$lib/server/utils/testDb"
@@ -165,8 +166,10 @@ async function seedLorebook(label: string) {
 	}
 
 	const [historyEntry] = await testDb
-		.insert(schema.historyEntries)
-		.values({ lorebookId: lorebook.id, year: 1, content: "" })
+		.insert(schema.lorebookEntries)
+		.values(
+			historyValues([{ lorebookId: lorebook.id, year: 1, content: "" }])
+		)
 		.returning()
 
 	const [scene] = await testDb
@@ -238,12 +241,16 @@ describe("the graph build reads cast from scene_characters", () => {
 	test("direct history entries still carry no cast of their own", async () => {
 		const { user, lorebook } = await seedLorebook("direct-entry")
 		const [entry] = await testDb
-			.insert(schema.historyEntries)
-			.values({
-				lorebookId: lorebook.id,
-				year: 2,
-				content: "Aria was promoted."
-			})
+			.insert(schema.lorebookEntries)
+			.values(
+				historyValues([
+					{
+						lorebookId: lorebook.id,
+						year: 2,
+						content: "Aria was promoted."
+					}
+				])
+			)
 			.returning()
 
 		await runBuild(user.id, lorebook.id)

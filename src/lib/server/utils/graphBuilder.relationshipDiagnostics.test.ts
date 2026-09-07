@@ -214,7 +214,7 @@ describe("field-name tolerance, widened from a real model's output", () => {
 		// stance the entry describes, and a wrong guess records a relationship
 		// the subject never held, carrying a plausible reason and description
 		// that make it very hard to spot later. `from` is pinned to the subject
-		// at the decoder (buildPerspectiveSchema), so on a provider that
+		// at the decoder (buildPerspectiveSchema), so on a service that
 		// honours the schema this case cannot arise at all; this is the
 		// backstop for those that cannot.
 		const result = await build(

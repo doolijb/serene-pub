@@ -1,0 +1,1044 @@
+/**
+ * The `entries:*` namespace — one door for every lorebook entry type.
+ *
+ * `worldLoreEntries:*`, `characterLoreEntries:*` and `historyEntries:*` were
+ * three copies of one file. They differed in six places and agreed everywhere
+ * else, and every one of the six is now a question put to the type's own
+ * declaration rather than a branch on which namespace was called:
+ *
+ *   · **which column is the title** — the `title` field role, absent on history
+ *   · **which column is the anchor, and under whose policy** — the `anchor`
+ *     field role, absent on both world lore and history
+ *   · **which fields the row carries, and what they default to** — the declared
+ *     `fields` schema
+ *   · **what a list is ordered by** — a type declaring an `order` field role has
+ *     authored sequence, so its list comes back in `position` order
+ *   · **where a new row lands** — appended for an ordered type, first free slot
+ *     otherwise
+ *   · **whether "the next one" means anything** — `entries:iterateNext` refuses
+ *     for a type with no `order` field role
+ *
+ * ⚠ `typeId` is not decoration on these payloads: **every read and every write
+ * is scoped by it**, so a world lore id presented to a history update finds no
+ * row rather than being edited through the wrong shape. That is the guard the
+ * three separate namespaces got from having three separate tables, kept.
+ *
+ * Two deliberate unifications, where the three files had drifted apart:
+ *
+ *  1. **`syncLorebookBindings` runs for every type.** World and character lore
+ *     called it on create/update/delete; history never did, so a `{{char:N}}`
+ *     token typed into a history entry minted no binding until the next edit of
+ *     some *other* entry in the same book. The scan reads content and has never
+ *     cared which shape it came out of.
+ *  2. **The create/update/delete acks are emitted for every type.** Only
+ *     history emitted its own, so the two lore managers had listeners wired to
+ *     an event the server never sent.
+ */
+
+import { db } from "$lib/server/db"
+import * as schema from "$lib/server/db/schema"
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	gte,
+	inArray,
+	isNull,
+	lte,
+	or,
+	sql
+} from "drizzle-orm"
+import type { Handler } from "$lib/shared/events"
+import { lorebookBindingListHandler, syncLorebookBindings } from "./lorebooks"
+import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
+import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
+import { bandOfType, entryDeclaration } from "$lib/server/entries/declarations"
+// Imported, never copied: session access is owner-OR-guest and every handler
+// that decided that for itself got it wrong in one direction or the other.
+import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
+import {
+	DEFAULT_VECTOR_NAME,
+	ENTRY_TYPE_IDS,
+	HISTORY_TYPE_ID,
+	entryInsert,
+	inBookOfType,
+	isEntryTypeId,
+	loadDefaultVectors,
+	mergeFields,
+	nextPosition,
+	parkingFloor,
+	splitUpdate,
+	toEntryRow,
+	type EntryTypeId,
+	type LorebookEntry
+} from "$lib/server/utils/lorebookEntries"
+
+/**
+ * A payload's `typeId`, refused if it is not one this build declares.
+ *
+ * The column is a foreign key into the type registry, so an unknown id would
+ * fail at the database anyway — but it would fail as a constraint violation
+ * several frames later, and a read would simply return nothing at all. Refusing
+ * here is the difference between "History entry not found" and an error naming
+ * what was actually wrong.
+ */
+function assertTypeId(typeId: unknown): EntryTypeId {
+	if (!isEntryTypeId(typeId))
+		throw new Error(
+			`Unknown entry type '${String(typeId)}'. The declared types are ` +
+				`${ENTRY_TYPE_IDS.join(", ")}.`
+		)
+	return typeId
+}
+
+/** `WHERE id = … AND type_id = …` — the scoping every single-row op needs. */
+const entryOfType = (id: number, typeId: string) =>
+	and(
+		eq(schema.lorebookEntries.id, id),
+		eq(schema.lorebookEntries.typeId, typeId)
+	)
+
+/**
+ * ⚠ Two list orders, preserved rather than unified.
+ *
+ * History has always come back in `position` order — its list is an authored
+ * sequence and the manager renders it as one — while the two lore lists came
+ * back in `id` order and are re-sorted client-side by whichever key the toolbar
+ * picked. The `order` field role is what says which a type is, so this is the
+ * declaration answering rather than the namespace; unifying them would be a
+ * visible reordering of a list nobody asked to reorder.
+ */
+const listOrder = (typeId: string) =>
+	entryDeclaration(typeId)?.roles.order
+		? asc(schema.lorebookEntries.position)
+		: asc(schema.lorebookEntries.id)
+
+/**
+ * Every row of one type in one lorebook, in the wire shape.
+ *
+ * The vectors are loaded and sent because they always were: the relations this
+ * replaces selected every column, `embedding` included, and the manager reads
+ * `embeddingModel` off the row to show whether an entry is vectorized.
+ */
+export async function listEntryRows(
+	lorebookId: number,
+	typeId: EntryTypeId
+): Promise<LorebookEntry[]> {
+	const rows = await db
+		.select()
+		.from(schema.lorebookEntries)
+		.where(inBookOfType(lorebookId, typeId))
+		.orderBy(listOrder(typeId))
+	const vectors = await loadDefaultVectors(
+		db,
+		rows.map((r) => r.id)
+	)
+	return rows.map((r) => toEntryRow(r, vectors.get(r.id)))
+}
+
+/**
+ * Drop the entry's **content** vector.
+ *
+ * The legacy update nulled `embedding`/`embeddingModel`/`vectorizedAt` on the
+ * row so the vectorizer would pick it up again and RAG would stop matching
+ * against a vector of text that no longer exists. Deleting the row is the same
+ * statement in the shape the vectors live in now.
+ *
+ * ⚠ **Scoped to `core:vec/default@1`, and that is the point of a named space.**
+ * It used to delete every name an entry had, on the reasoning that the content
+ * they were all computed over had changed — true while `default` was the only
+ * space, and false the moment a second one exists whose input is *not* the
+ * content. `core:vec/entity@1` embeds the entry's **names**, and the whole
+ * argument for a separate space is that the two invalidate independently:
+ * rewriting a body must not re-embed the names, and renaming must re-embed them
+ * without touching the content vector. Its own freshness triple is what decides
+ * that, so a blanket delete here would throw away work this statement cannot
+ * know had gone stale — and would make every body edit pay for a re-embedding
+ * of every name.
+ *
+ * Behaviour is unchanged for every install that has one: `default` is the only
+ * space the vectorizer writes, so this deletes exactly what it deleted before.
+ */
+async function clearEntryVectors(entryId: number) {
+	await db
+		.delete(schema.lorebookEntryVectors)
+		.where(
+			and(
+				eq(schema.lorebookEntryVectors.entryId, entryId),
+				eq(schema.lorebookEntryVectors.vectorName, DEFAULT_VECTOR_NAME)
+			)
+		)
+}
+
+/** The entry plus its lorebook's name and owner, for the ownership checks. */
+async function findOwnedEntry(id: number, typeId: string) {
+	const [row] = await db
+		.select({
+			entry: schema.lorebookEntries,
+			lorebookName: schema.lorebooks.name,
+			lorebookUserId: schema.lorebooks.userId
+		})
+		.from(schema.lorebookEntries)
+		.innerJoin(
+			schema.lorebooks,
+			eq(schema.lorebooks.id, schema.lorebookEntries.lorebookId)
+		)
+		.where(entryOfType(id, typeId))
+	return row
+}
+
+/** The lorebook, if this user owns it. */
+async function findOwnedBook(lorebookId: number, userId: number) {
+	return db.query.lorebooks.findFirst({
+		where: (l, { and, eq }) =>
+			and(eq(l.id, lorebookId), eq(l.userId, userId)),
+		columns: { id: true, name: true, userId: true }
+	})
+}
+
+/**
+ * A client-supplied anchor must name a binding in the *same* lorebook.
+ *
+ * Without this an entry could be linked to a binding row from another lorebook
+ * (including another user's), permanently pinning that foreign binding as "in
+ * use" for `syncLorebookBindings`' auto-create tracking.
+ */
+async function assertAnchorInBook(
+	bindingId: number | null | undefined,
+	lorebookId: number
+) {
+	if (bindingId == null) return
+	const binding = await db.query.lorebookBindings.findFirst({
+		where: eq(schema.lorebookBindings.id, bindingId),
+		columns: { lorebookId: true }
+	})
+	if (!binding || binding.lorebookId !== lorebookId)
+		throw new Error("Lorebook binding not found.")
+}
+
+/**
+ * Apply the column half and the merged `fields` half of an update.
+ *
+ * ⚠ **A payload that names nothing is a real case, not a client bug** — the
+ * scoping suites send `{ id, typeId, lorebookId }`, and `lorebookId` is stripped
+ * by the relocation guard. The legacy statement always had the three embedding
+ * columns to null, so it never met an empty `SET`; this one would, and drizzle
+ * refuses one. Re-reading is the honest answer: an update that names no field
+ * changes no field.
+ */
+async function applyEntryUpdate(
+	id: number,
+	typeId: string,
+	columns: Record<string, any>,
+	fields: Record<string, unknown>
+) {
+	const set = {
+		...columns,
+		...(Object.keys(fields).length ? { fields: mergeFields(fields) } : {})
+	}
+	if (!Object.keys(set).length)
+		return db
+			.select()
+			.from(schema.lorebookEntries)
+			.where(entryOfType(id, typeId))
+	return db
+		.update(schema.lorebookEntries)
+		.set(set)
+		.where(entryOfType(id, typeId))
+		.returning()
+}
+
+/**
+ * Everything a write does after the row lands: bindings, the vectorizer, and
+ * the two lists a client is holding.
+ *
+ * One function because all three namespaces did all of it, in the same order,
+ * with one of them quietly skipping the first step.
+ */
+async function afterWrite(
+	socket: any,
+	emitToUser: ((event: string, data: any) => void) | undefined,
+	lorebookId: number,
+	typeId: EntryTypeId,
+	lorebookName: string,
+	opts: { enqueue?: boolean } = {}
+) {
+	await syncLorebookBindings({ lorebookId })
+	if (opts.enqueue !== false)
+		autoEnqueueLorebook(lorebookId, lorebookName, "").catch(console.error)
+
+	/**
+	 * Entity annotations, persisted on write (design §13.4).
+	 *
+	 * After `syncLorebookBindings`, and the order is load-bearing: the
+	 * vocabulary this extracts against is built from the bindings, so running it
+	 * first would annotate against the names as they were before this write
+	 * minted or renamed one.
+	 *
+	 * **Queued, exactly as the vectorizer above and for the same reason:** a
+	 * write should not wait on derived data, and nothing is lost if the pass
+	 * does not land — every row carries the triple `(extractorVersion,
+	 * sourceHash, gazetteerHash)` and the entity mechanism promotes whatever does not
+	 * match to the front of that same queue before it reads. This is the fast
+	 * path, not the correctness one.
+	 *
+	 * It goes on the annotation lane rather than running as a detached
+	 * `annotateLorebook` promise so that both halves of *"new and stale content
+	 * gets queued automatically"* meet in one place: a write enqueues, a query
+	 * promotes, and one loop decides the order.
+	 */
+	enqueueLorebookAnnotation(lorebookId, lorebookName)
+
+	if (!emitToUser) return
+	const bindingListResult = await lorebookBindingListHandler.handler(
+		socket,
+		{ lorebookId },
+		emitToUser
+	)
+	emitToUser("lorebookBindingList", bindingListResult)
+
+	// The list handler emits its own response; the return value is discarded
+	// deliberately, so there is exactly one `entries:list` on the wire per write.
+	await entryListHandler.handler(socket, { lorebookId, typeId }, emitToUser)
+}
+
+export const entryListHandler: Handler<
+	Sockets.Entries.List.Params,
+	Sockets.Entries.List.Response
+> = {
+	event: "entries:list",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const typeId = assertTypeId(params.typeId)
+
+		const book = await findOwnedBook(params.lorebookId, userId)
+		if (!book) throw new Error("Lorebook not found.")
+
+		const res = {
+			lorebookId: params.lorebookId,
+			typeId,
+			entryList: await listEntryRows(params.lorebookId, typeId)
+		}
+		emitToUser("entries:list", res)
+		return res
+	}
+}
+
+export const createEntryHandler: Handler<
+	Sockets.Entries.Create.Params,
+	Sockets.Entries.Create.Response
+> = {
+	event: "entries:create",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const typeId = assertTypeId(params.entry?.typeId)
+
+		// A raw client payload may never set these. A forged
+		// vectorizedAt/embedding would make `vectorizationQueue.ts`'s staleness
+		// check treat the entry as already current, permanently skipping real
+		// embedding; a forged `position` collides with the unique constraint the
+		// allocator below exists to respect.
+		const {
+			id: _id,
+			createdAt: _createdAt,
+			updatedAt: _updatedAt,
+			vectorizedAt: _vectorizedAt,
+			embedding: _embedding,
+			embeddingModel: _embeddingModel,
+			position: _position,
+			...safeInsert
+		} = params.entry as Record<string, any>
+		const data: Record<string, any> = { ...safeInsert, typeId }
+		if (typeof data.name === "string") data.name = data.name.trim()
+		data.content =
+			typeof data.content === "string" ? data.content.trim() : ""
+
+		const book = await findOwnedBook(data.lorebookId, userId)
+		if (!book)
+			throw new Error(
+				"Lorebook not found or you do not have permission to create an entry."
+			)
+
+		await assertAnchorInBook(data.lorebookBindingId, data.lorebookId)
+
+		// Advisory lock scoped to lorebookId — without it, two concurrent
+		// creates read the same free position and the second one raises a
+		// unique violation, since `position` is unique per (lorebook, type).
+		// Same fix, same reason, as resolveOrCreateBinding's already-fixed race.
+		const [newEntry] = await db.transaction(async (tx) => {
+			await tx.execute(
+				sql`select pg_advisory_xact_lock(${data.lorebookId})`
+			)
+			return tx
+				.insert(schema.lorebookEntries)
+				.values(
+					entryInsert({
+						...(data as any),
+						position: await allocatePosition(
+							tx,
+							data.lorebookId,
+							typeId
+						)
+					})
+				)
+				.returning()
+		})
+
+		const entry = toEntryRow(newEntry)
+		if (emitToUser) emitToUser("entries:create", { entry })
+		await afterWrite(
+			socket,
+			emitToUser,
+			newEntry.lorebookId,
+			typeId,
+			book.name
+		)
+
+		return { entry }
+	}
+}
+
+/**
+ * Where a new row of this type lands.
+ *
+ * ⚠ Two allocators, preserved rather than unified. A type with an `order` field
+ * role
+ * has an authored sequence, so a new row is **appended** past the last one; one
+ * without takes the **first free slot**, which is what reuses the hole a delete
+ * left. Unifying them would drop a new dated entry into the middle of the list
+ * after any deletion.
+ */
+async function allocatePosition(
+	tx: any,
+	lorebookId: number,
+	typeId: EntryTypeId
+): Promise<number> {
+	if (!entryDeclaration(typeId)?.roles.order)
+		return nextPosition(tx, lorebookId, typeId)
+	const [last] = await tx
+		.select({ position: schema.lorebookEntries.position })
+		.from(schema.lorebookEntries)
+		.where(inBookOfType(lorebookId, typeId))
+		.orderBy(desc(schema.lorebookEntries.position))
+		.limit(1)
+	return (last?.position ?? -1) + 1
+}
+
+export const updateEntryHandler: Handler<
+	Sockets.Entries.Update.Params,
+	Sockets.Entries.Update.Response
+> = {
+	event: "entries:update",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const typeId = assertTypeId(params.entry?.typeId)
+
+		const existing = await findOwnedEntry(params.entry.id, typeId)
+		if (!existing || existing.lorebookUserId !== userId)
+			throw new Error("Entry not found or access denied.")
+
+		// `lorebookId` is deliberately excluded — ownership is verified against
+		// the entry's *current* lorebook above, so a client-supplied replacement
+		// would let a user relocate their own entry into a lorebook they do not
+		// own with no re-validation. `position` is excluded too: the real
+		// reorder UI goes through the separately IDOR-checked updatePositions
+		// batch handler, and this singular update must not let a raw client set
+		// an arbitrary or colliding value.
+		const {
+			id: _id,
+			typeId: _typeId,
+			lorebookId: _lorebookId,
+			createdAt: _createdAt,
+			updatedAt: _updatedAt,
+			vectorizedAt: _vectorizedAt,
+			embedding: _embedding,
+			embeddingModel: _embeddingModel,
+			position: _position,
+			...updateData
+		} = params.entry as Record<string, any>
+
+		if (typeof updateData.name === "string")
+			updateData.name = updateData.name.trim()
+		if (typeof updateData.content === "string")
+			updateData.content = updateData.content.trim()
+
+		// Client-supplied, and this path can also *change* which binding an
+		// entry is anchored to — so the same cross-lorebook check as on create.
+		if (
+			Object.prototype.hasOwnProperty.call(
+				updateData,
+				"lorebookBindingId"
+			)
+		)
+			await assertAnchorInBook(
+				updateData.lorebookBindingId,
+				existing.entry.lorebookId
+			)
+
+		// ⚠ `fields` is merged, never replaced: `graphed` and `isCompleted` are
+		// machine-written by the graph builder and the summarizer concurrently
+		// with a user editing `content`, and a whole-object jsonb write from
+		// either side clobbers the other.
+		const { columns, fields } = splitUpdate(typeId, updateData)
+		const [updatedRow] = await applyEntryUpdate(
+			params.entry.id,
+			typeId,
+			columns,
+			fields
+		)
+		// The legacy update nulled the row's embedding so the queue would
+		// re-vectorize it; the vectors are rows of their own now.
+		await clearEntryVectors(params.entry.id)
+
+		const entry = toEntryRow(updatedRow)
+		if (emitToUser) emitToUser("entries:update", { entry })
+		await afterWrite(
+			socket,
+			emitToUser,
+			existing.entry.lorebookId,
+			typeId,
+			existing.lorebookName ?? ""
+		)
+
+		return { entry }
+	}
+}
+
+export const deleteEntryHandler: Handler<
+	Sockets.Entries.Delete.Params,
+	Sockets.Entries.Delete.Response
+> = {
+	event: "entries:delete",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const typeId = assertTypeId(params.typeId)
+
+		const existing = await findOwnedEntry(params.id, typeId)
+		if (!existing || existing.lorebookUserId !== userId)
+			throw new Error("Entry not found or access denied.")
+
+		await db
+			.delete(schema.lorebookEntries)
+			.where(entryOfType(params.id, typeId))
+
+		const res = { success: "Entry deleted successfully." }
+		if (emitToUser) emitToUser("entries:delete", res)
+		await afterWrite(
+			socket,
+			emitToUser,
+			existing.entry.lorebookId,
+			typeId,
+			existing.lorebookName ?? "",
+			// Nothing new to embed — the row is gone.
+			{ enqueue: false }
+		)
+
+		return res
+	}
+}
+
+export const updateEntryPositionsHandler: Handler<
+	Sockets.Entries.UpdatePositions.Params,
+	Sockets.Entries.UpdatePositions.Response
+> = {
+	event: "entries:updatePositions",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const typeId = assertTypeId(params.typeId)
+
+		const book = await findOwnedBook(params.lorebookId, userId)
+		if (!book) throw new Error("Lorebook not found or access denied.")
+
+		// Every id in the request must belong to THIS lorebook and THIS type —
+		// without it, owning any lorebook was enough to reposition (and thus
+		// write to) another user's entries by id.
+		const ids = params.positions.map((p) => p.id)
+		const rows = await db
+			.select({
+				id: schema.lorebookEntries.id,
+				lorebookId: schema.lorebookEntries.lorebookId
+			})
+			.from(schema.lorebookEntries)
+			.where(
+				and(
+					inArray(schema.lorebookEntries.id, ids),
+					eq(schema.lorebookEntries.typeId, typeId)
+				)
+			)
+		if (
+			rows.length !== ids.length ||
+			rows.some((r) => r.lorebookId !== params.lorebookId)
+		)
+			throw new Error("Access denied to some entries.")
+
+		await reorderEntries(params.positions)
+
+		const res = { success: "Entry positions updated successfully." }
+		if (emitToUser) {
+			emitToUser("entries:updatePositions", res)
+			await entryListHandler.handler(
+				socket,
+				{ lorebookId: params.lorebookId, typeId },
+				emitToUser
+			)
+		}
+
+		return res
+	}
+}
+
+/**
+ * Renumber a set of entries, in one transaction, in two passes.
+ *
+ * ⚠ **The transaction is the point, not a tidiness.** `position` is unique per
+ * `(lorebook_id, type_id)`, and a reorder is a permutation: it has to land as
+ * one unit or the list is left half-renumbered. The updates are also not issued
+ * concurrently — `Promise.all` over one connection is not parallelism here.
+ *
+ * ⚠ **And the transaction is not enough on its own.** The constraint is a
+ * plain, non-deferrable `UNIQUE`, so it is enforced as each index tuple lands
+ * rather than at COMMIT, and a straight 1..n rewrite duplicates a position
+ * partway through a finished state that has none — A→3 collides with C before
+ * C→1 vacates it. So the rows are **parked** in a free range below everything
+ * first and then **placed** at their finals:
+ *
+ *  · the parked values are distinct and all ≤ `parkingFloor`, which sits under
+ *    every live position *and* every requested final, so no park collides;
+ *  · by the time a final is written, every affected row is out of the positive
+ *    range, so a final can only collide with an *unaffected* row or with another
+ *    final — which is exactly the state being invalid, and rightly refused.
+ *
+ * The constraint therefore still holds at every instant, and a genuine
+ * permutation no longer needs it relaxed to get through.
+ */
+export async function reorderEntries(
+	updates: ReadonlyArray<{ id: number; position: number }>
+) {
+	if (!updates.length) return
+	await db.transaction(async (tx) => {
+		// Derived from the rows rather than taken from the caller: the parking
+		// range is only free if it is measured against the group the rows
+		// actually live in, and a caller that was wrong about that would park
+		// on top of somebody.
+		const groups = await tx
+			.selectDistinct({
+				lorebookId: schema.lorebookEntries.lorebookId,
+				typeId: schema.lorebookEntries.typeId
+			})
+			.from(schema.lorebookEntries)
+			.where(
+				inArray(
+					schema.lorebookEntries.id,
+					updates.map((u) => u.id)
+				)
+			)
+		if (!groups.length) return
+
+		const floor = await parkingFloor(
+			tx,
+			or(...groups.map((g) => inBookOfType(g.lorebookId, g.typeId)))!,
+			updates.map((u) => u.position)
+		)
+
+		for (const [i, u] of updates.entries())
+			await tx
+				.update(schema.lorebookEntries)
+				.set({ position: floor - i })
+				.where(eq(schema.lorebookEntries.id, u.id))
+
+		for (const u of updates)
+			await tx
+				.update(schema.lorebookEntries)
+				.set({ position: u.position })
+				.where(eq(schema.lorebookEntries.id, u.id))
+	})
+}
+
+/**
+ * The next sibling of an ordered entry.
+ *
+ * A type that declares no `order` field role has no notion of a "next" one, and
+ * this
+ * refuses rather than inventing one. For a type that does, the arithmetic is
+ * still a calendar day — history is the only ordered type there is, and a
+ * second one would want a **named policy**, the way the anchor field role does,
+ * rather than a branch here.
+ */
+export const iterateNextEntryHandler: Handler<
+	Sockets.Entries.IterateNext.Params,
+	Sockets.Entries.IterateNext.Response
+> = {
+	event: "entries:iterateNext",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const typeId = assertTypeId(params.typeId)
+
+		if (!entryDeclaration(typeId)?.roles.order)
+			throw new Error(
+				`'${typeId}' declares no order, so it has no next entry.`
+			)
+
+		const existing = await findOwnedEntry(params.id, typeId)
+		if (!existing || existing.lorebookUserId !== userId)
+			throw new Error("Entry not found or access denied.")
+
+		const from = toEntryRow(existing.entry) as LorebookEntry<
+			typeof HISTORY_TYPE_ID
+		>
+		const { year, month, day } = nextDate(from)
+		const position = existing.entry.position + 1
+
+		// Shift every entry already at or past the target position forward by
+		// one — otherwise the new entry and whatever was already there share a
+		// position, with ambiguous ordering until someone fixes it by hand.
+		//
+		// ⚠ **`SET position = position + 1` cannot do that in one statement.**
+		// `lorebook_entries_position_uq` is a plain, non-deferrable `UNIQUE`, so
+		// it is enforced as each index tuple lands: over a contiguous run the
+		// shift is unique at the end of the statement and duplicated during it,
+		// and the constraint rejects the finished state on the way to producing
+		// it. So the run is parked below every live position first and then
+		// placed at its finals — two `C - position` reflections, each injective
+		// and each landing in a range nothing else occupies.
+		const [newRow] = await db.transaction(async (tx) => {
+			const inBook = inBookOfType(existing.entry.lorebookId, typeId)
+			// Every final is ≥ `position`, and `position` is one past a row that
+			// is itself in this group, so the finals are all above the floor and
+			// only the live rows bound it.
+			const floor = await parkingFloor(tx, inBook)
+
+			// Park: a row at `x ≥ position` goes to `floor - (x - position)`, so
+			// the run lands at `floor` and below — free by construction, and in
+			// reverse order, which is what keeps it injective.
+			await tx
+				.update(schema.lorebookEntries)
+				.set({
+					position: sql`${floor + position} - ${schema.lorebookEntries.position}`
+				})
+				.where(
+					and(inBook, gte(schema.lorebookEntries.position, position))
+				)
+
+			// Place: the same reflection back, one slot further along. `≤ floor`
+			// selects exactly the rows just parked — the floor is one under the
+			// group's minimum, so nothing live can be there. Their targets start
+			// at `position + 1`, leaving the slot the new row wants empty.
+			await tx
+				.update(schema.lorebookEntries)
+				.set({
+					position: sql`${floor + position + 1} - ${schema.lorebookEntries.position}`
+				})
+				.where(and(inBook, lte(schema.lorebookEntries.position, floor)))
+
+			return tx
+				.insert(schema.lorebookEntries)
+				.values(
+					entryInsert({
+						typeId,
+						lorebookId: existing.entry.lorebookId,
+						// Blank: the point is a fresh entry on the next date.
+						keys: "",
+						content: "",
+						useRegex: from.useRegex,
+						caseSensitive: from.caseSensitive,
+						// Carried with its two neighbours: the new row is a
+						// sibling of this one, and inheriting two of the three
+						// match settings would be the odd one out rather than a
+						// decision.
+						recursionDepth: from.recursionDepth,
+						extraJson: from.extraJson || {},
+						year,
+						month,
+						day,
+						position
+					})
+				)
+				.returning()
+		})
+
+		const entry = toEntryRow(newRow)
+		if (emitToUser) {
+			emitToUser("entries:iterateNext", { entry })
+			await entryListHandler.handler(
+				socket,
+				{ lorebookId: existing.entry.lorebookId, typeId },
+				emitToUser
+			)
+		}
+
+		return { entry }
+	}
+}
+
+/** One day on, Gregorian, leap years included. */
+function nextDate(from: {
+	year: number
+	month: number | null
+	day: number | null
+}) {
+	let year = from.year ?? 1
+	let month = from.month ?? 1
+	let day = (from.day ?? 1) + 1
+
+	const daysInMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+	if (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0))
+		daysInMonth[1] = 29
+
+	if (day > daysInMonth[month - 1]) {
+		day = 1
+		month += 1
+		if (month > 12) {
+			month = 1
+			year += 1
+		}
+	}
+	return { year, month, day }
+}
+
+/**
+ * "Would this entry fire?" — asked in the editor, answered by a real turn.
+ *
+ * The six steps this replaces were: save, open a session, send a message, find
+ * the run in the admin pipelines area, open its receipt, read the retrieval
+ * panel. Every one of those steps existed to *manufacture a turn*, because a
+ * retrieval decision only exists for one — the panel says so itself. This
+ * manufactures the turn instead, and asks it one question.
+ *
+ * ⚠ **It reads the stored row, not the editor's draft.** The pipeline gathers
+ * lore out of the database, so an unsaved edit cannot be tested and pretending
+ * otherwise would report a verdict about text the run never saw. The client
+ * offers this from the *view* of a saved entry for exactly that reason.
+ *
+ * Three things it deliberately does not do:
+ *
+ *  1. **It records nothing.** `skipReceipt`, for `promptTokenCount`'s reason:
+ *     this is a question somebody asks repeatedly while editing one entry, and
+ *     a run row per ask buries the run history that the receipt reader exists
+ *     to search. Nothing effectful runs either — `preview` halts at the
+ *     pre-call substrate, so no message is written and nothing is sent.
+ *  2. **It invents no vocabulary.** The answer is one `Pipelines.RetrievalRow`,
+ *     projected by the same `explainRetrieval` the receipt's panel reads, so
+ *     "excluded_share_cap" means here what it means there. A second projection
+ *     would be a second definition of what a decision is.
+ *  3. **It does not guess the outcome from silence.** No row means no mechanism
+ *     reported on this entry at all, and that is returned as an absence with
+ *     the run's own notes beside it rather than as "it did not fire".
+ */
+export const testEntryRetrievalHandler: Handler<
+	Sockets.Entries.TestRetrieval.Params,
+	Sockets.Entries.TestRetrieval.Response
+> = {
+	event: "entries:testRetrieval",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const typeId = assertTypeId(params.typeId)
+
+		/**
+		 * One channel, always answered.
+		 *
+		 * A refusal comes back as `error` on the event itself rather than as a
+		 * throw, following `sessions:promptTokenCount` — the whole point of
+		 * this surface is that "no" arrives with a reason, and `register()`'s
+		 * synthesised `:error` carries the generic sentence instead of the
+		 * specific one.
+		 */
+		const answer = (
+			part: Omit<
+				Sockets.Entries.TestRetrieval.Response,
+				"id" | "typeId" | "sessionId"
+			>
+		) => {
+			const res: Sockets.Entries.TestRetrieval.Response = {
+				id: params.id,
+				typeId,
+				sessionId: params.sessionId,
+				...part
+			}
+			if (emitToUser) emitToUser("entries:testRetrieval", res)
+			return res
+		}
+
+		// A payload naming no conversation is a question with half its subject
+		// missing, and the access check below would otherwise reach the
+		// database with an undefined id.
+		if (typeof params.sessionId !== "number")
+			return answer({
+				error: "Pick a conversation to test this entry against."
+			})
+
+		// ⚠ **Two checks, and neither stands in for the other.** This runs a
+		// pipeline against a session on behalf of a caller who named an entry,
+		// so both objects have to be theirs to name: the entry by the file's
+		// own ownership rule, the session by the shared owner-OR-guest one that
+		// `triggerGenerateMessage` learned to apply the hard way.
+		const owned = await findOwnedEntry(params.id, typeId)
+		if (!owned || owned.lorebookUserId !== userId)
+			return answer({ error: "Entry not found or access denied." })
+
+		const access = await checkSessionAccess(params.sessionId, userId)
+		if (!access.hasAccess)
+			return answer({
+				// The same sentence a missing session gets, so an inaccessible
+				// one stays indistinguishable from one that is not there.
+				error: "Session not found or access denied."
+			})
+
+		const [session] = await db
+			.select({ lorebookId: schema.sessions.lorebookId })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, params.sessionId))
+			.limit(1)
+		if (!session)
+			return answer({ error: "Session not found or access denied." })
+
+		// Answered here rather than by running the turn: retrieval reads the
+		// session's own lorebook, so an entry in a different one is not a "no",
+		// it is a question that cannot be asked. Running anyway would spend a
+		// full turn to report an absence with no reason attached — which is the
+		// exact failure this surface exists to remove.
+		if (session.lorebookId !== owned.entry.lorebookId)
+			return answer({
+				error:
+					"That conversation reads a different lorebook, so this entry " +
+					"can never fire in it. Pick a conversation bound to this lorebook."
+			})
+
+		/**
+		 * Whose turn, and what was last said.
+		 *
+		 * Both read the way the comparison tool reads them (`comparePrompts`):
+		 * a test has to pick somebody, and the first active character is who
+		 * the app would pick for a plain reply. Nothing is drafted — the
+		 * question is whether the entry fires against the conversation **as it
+		 * stands**, so unlike `promptTokenCount` there is no draft message to
+		 * splice in.
+		 */
+		const [speaker] = await db
+			.select({ characterId: schema.sessionCharacters.characterId })
+			.from(schema.sessionCharacters)
+			.where(
+				and(
+					eq(schema.sessionCharacters.sessionId, params.sessionId),
+					eq(schema.sessionCharacters.isActive, true),
+					isNull(schema.sessionCharacters.removedAt)
+				)
+			)
+			.orderBy(asc(schema.sessionCharacters.position))
+			.limit(1)
+		const [last] = await db
+			.select({ content: schema.sessionMessages.content })
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, params.sessionId))
+			.orderBy(desc(schema.sessionMessages.id))
+			.limit(1)
+
+		const { runTurn } = await import(
+			"$lib/server/pipelines/runtime/runTurn"
+		)
+		let receipt: any
+		try {
+			receipt = await runTurn({
+				db,
+				sessionId: params.sessionId,
+				userId,
+				currentCharacterId: speaker?.characterId ?? null,
+				text: last?.content ?? "",
+				preview: true,
+				skipReceipt: true
+			})
+		} catch (error) {
+			console.error("Error in testEntryRetrievalHandler:", error)
+			return answer({
+				error: `The turn could not be run: ${
+					error instanceof Error ? error.message : String(error)
+				}`
+			})
+		}
+
+		// A preview always halts — that is what it is — so the outcome cannot
+		// tell success from failure. The payload can: no preview report means
+		// the run gave up before it ever reached the pre-call substrate, and
+		// the honest answer is which node gave up and why.
+		if (!receipt?.preview)
+			return answer({
+				error:
+					`The turn could not be compiled: ${receipt?.outcome}` +
+					(receipt?.haltNodeKey
+						? ` at '${receipt.haltNodeKey}'`
+						: "") +
+					(receipt?.haltReason ? ` — ${receipt.haltReason}` : "")
+			})
+
+		const { explainRetrieval } = await import("./pipelines")
+		const { entrySourceHash } = await import("$lib/server/annotations")
+
+		const band = bandOfType(typeId)
+		const row = owned.entry
+		const explanation = explainRetrieval(
+			receipt,
+			// One entry, because one entry was asked about. The fingerprint is
+			// over the same three columns the run hashed, so the projection's
+			// drift check agrees with itself rather than calling a row edited
+			// between reading it and scoring it.
+			new Map([
+				[
+					`${band}:${row.id}`,
+					{
+						id: row.id,
+						typeId: row.typeId,
+						title: row.title,
+						keys: Array.isArray(row.keys) ? row.keys : [],
+						constant: !!row.constant,
+						enabled: !!row.enabled,
+						fingerprint: entrySourceHash(row)
+					}
+				]
+			]),
+			{
+				// ⚠ `entriesRead: false` **is** the honest value with a
+				// one-entry map: the map is not a reading of the lorebook, and
+				// a projection told otherwise would report every other row as a
+				// deleted entry. Nothing is lost — provenance is meaningless on
+				// a run that happened a moment ago against the live rows.
+				entriesRead: false,
+				// The default cap trims the tail of a long list for a panel
+				// that renders all of it. This reads one row out and discards
+				// the rest, so a cap here would only be a way to lose the row
+				// that was asked about in a large lorebook.
+				limit: Number.MAX_SAFE_INTEGER
+			}
+		)
+
+		const mine = explanation.rows.filter(
+			(r) => r.source === band && r.id === row.id
+		)
+		return answer({
+			// Two gather branches can both decide the same candidate. "Did it
+			// fire" is answered by whether *any* of them let it in, so an
+			// inclusion wins over a rejection of the same row.
+			row: mine.find((r) => r.outcome === "included") ?? mine[0],
+			ranked: explanation.ranked,
+			notes: explanation.notes,
+			warnings: explanation.warnings
+		})
+	}
+}
+
+export function registerEntryHandlers(
+	socket: any,
+	emitToUser: (event: string, data: any) => void,
+	register: (
+		socket: any,
+		handler: Handler<any, any>,
+		emitToUser: (event: string, data: any) => void
+	) => void
+) {
+	register(socket, entryListHandler, emitToUser)
+	register(socket, createEntryHandler, emitToUser)
+	register(socket, updateEntryHandler, emitToUser)
+	register(socket, deleteEntryHandler, emitToUser)
+	register(socket, updateEntryPositionsHandler, emitToUser)
+	register(socket, iterateNextEntryHandler, emitToUser)
+	register(socket, testEntryRetrievalHandler, emitToUser)
+}

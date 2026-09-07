@@ -270,7 +270,7 @@ function ordered(ids: CapabilityId[], canonical: string[]): CapabilityId[] {
 function leversFor(id: CapabilityId, resolved: CapabilitySet): CapabilityId[] {
 	if (isTransformId(id)) return []
 	const out: CapabilityId[] = []
-	// "Native" is each provider's OWN top band, not a shared number: `grammar`
+	// "Native" is each service's OWN top band, not a shared number: `grammar`
 	// tops out at 1 and `json_schema` at 2, and comparing either against a
 	// literal would credit the wrong lever — or none at all.
 	for (const via of EMULATABLE_VIA[id as FeatureId] ?? [])

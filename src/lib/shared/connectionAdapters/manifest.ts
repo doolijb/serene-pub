@@ -80,12 +80,31 @@
 
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import type { AdapterCapabilities } from "@serene-pub/sdk"
+import { cap, mib, type AdapterIo } from "./io"
 
 export interface AdapterManifestEntry {
 	/** The `CONNECTION_TYPE` value this describes. */
 	id: string
 	/** What this wire protocol can express, and what is on by default. */
 	capabilities: AdapterCapabilities
+	/**
+	 * HOW MANY files, HOW BIG, and in WHICH FORMATS — the cardinality half.
+	 *
+	 * A separate field from `capabilities` because it answers a separate
+	 * question, and because the transform vocabulary above genuinely cannot
+	 * carry it: `text+image->text` is a set of KINDS, and a set has no
+	 * multiplicity — `[image, image] -> [text]` says nothing more than
+	 * `[image] -> [text]` does. Counts and byte caps therefore ride alongside
+	 * the grades rather than inside them. See `./io` for the shape and for the
+	 * rule that matters most about it:
+	 *
+	 * ⚠ **absent means NO KNOWN LIMIT, never zero.** Which is why almost every
+	 * entry below has no `io` block at all, and why that is the correct state
+	 * rather than an unfinished one: a cap nobody published is a cap that must
+	 * not be invented, because a guessed one refuses work the backend would have
+	 * taken and does it with an authoritative-sounding message.
+	 */
+	io?: AdapterIo
 }
 
 /**
@@ -97,6 +116,34 @@ export interface AdapterManifestEntry {
  * generation degrades to `none` because nothing fakes a picture. A single
  * hardcoded pessimism would have to be wrong for one of them, which is why
  * `unproven` is a flag carrying an `until` and not a grade of its own.
+ *
+ * ## Why exactly one entry has an `io` block
+ *
+ * Because exactly one of these nine backends publishes per-request file and byte
+ * limits. That is not an omission to be tidied up later — it is the rule in
+ * `./io` being followed: **absent means no known limit, and a guessed cap is
+ * worse than none**, because it refuses work the backend would have accepted and
+ * does so with a message that sounds like it came from the service.
+ *
+ * The three shapes of "nothing declared", so the next reader can tell them apart:
+ *
+ *   - **OPENAI_CHAT** is twenty-four services behind one wire format. OpenAI's
+ *     own numbers are published, and they are not OpenRouter's, Groq's, or a
+ *     vLLM instance somebody is running on a workstation. A number here would be
+ *     right for one preset and wrong for twenty-three; per-service limits belong
+ *     to the preset layer (`PRESET_CAPABILITIES`) the day somebody sources them.
+ *   - **OLLAMA, KOBOLDCPP, KOBOLDCPP_MANAGED, LLAMACPP_COMPLETION, LM_STUDIO**
+ *     point at a process on somebody's own machine. There is no published cap to
+ *     find, and the real constraint is that machine's VRAM.
+ *   - **A1111 and KOBOLDCPP_MANAGED_IMAGE** have no `out` block, and that one is
+ *     a considered decision rather than a gap. KoboldCPP does return a single
+ *     image whatever `n_iter` asks for — but `A1111Adapter` already declares
+ *     `batch: true` on the grounds that whether a batch arrives "depends on the
+ *     backend, and the result says which happened rather than this claiming to
+ *     know in advance", and it reports `batch` as ignored when the count comes
+ *     back short. Declaring `out.image.maxFiles = 1` would contradict that in the
+ *     one file that cannot tell the two backends apart, and it would pre-refuse
+ *     batching on AUTOMATIC1111, Forge and SD.Next, which genuinely honour it.
  */
 export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 	/**
@@ -143,6 +190,11 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 	 * `responseSchema` set on an Anthropic connection is silently ignored today.
 	 * Declaring the gap turns that silence into a refusal at bind time with a
 	 * sentence naming the capability.
+	 *
+	 * ⚠ The ONE entry with an `io` block, and its loneliness is the point: these
+	 * are the only per-request file and byte limits any of the nine backends
+	 * publishes in a form worth quoting back to a user. See the block itself for
+	 * each number's source, and `./io` for why the other eight declare nothing.
 	 */
 	[CONNECTION_TYPE.ANTHROPIC]: {
 		id: CONNECTION_TYPE.ANTHROPIC,
@@ -161,6 +213,129 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				"tools",
 				"streaming"
 			]
+		},
+		io: {
+			in: {
+				image: {
+					/**
+					 * Anthropic's vision documentation gives TWO numbers: up to
+					 * 100 images per request on the 200k-context models, and up
+					 * to 600 on the others. The tighter one is declared, because
+					 * this layer is per API FORMAT and there is no per-model
+					 * limit layer to hold the looser figure — the 200k models are
+					 * the ones a connection is overwhelmingly pointed at, and a
+					 * cap that is too generous fails at the service while one
+					 * that is too tight refuses work here.
+					 *
+					 * ⚠ claude.ai's 20-images-per-message limit is deliberately
+					 * NOT declared. This adapter speaks the Messages API; the web
+					 * app's own limit is not a property of the wire format and
+					 * declaring it would refuse 80 images the API accepts.
+					 *
+					 * ⚠ DIMENSIONS are not declared either, for want of anywhere
+					 * to put them, and the gap is recorded here rather than
+					 * papered over. The vision docs give two rules: no image may
+					 * exceed 8000x8000 px, and once a request carries more than 20
+					 * image or document blocks, every image in it must be within
+					 * 2000x2000 px. Their own suggested workaround is to resize so
+					 * neither dimension exceeds 2000 px, or to keep the request to
+					 * 20 blocks or fewer. Dimensions are neither a count nor a byte
+					 * size, `AdapterIo` has no field for them, and inventing one to
+					 * hold a single service's rule would be worse than saying so.
+					 */
+					maxFiles: cap(
+						100,
+						"Anthropic vision docs: up to 100 images per API request on 200k-context models"
+					),
+					/**
+					 * ⚠ On the BASE64-ENCODED size. The docs say it in those
+					 * words — "10 MB (base64-encoded) when using the Claude API
+					 * directly" — so this is not a limit on the file: base64 is
+					 * four characters per three bytes, which puts the effective
+					 * ceiling at 7.5MiB of actual image. The number is declared as
+					 * published and `prepareAttachments` applies the adapter's
+					 * `transport` to it, so the arithmetic lives in one place
+					 * rather than being pre-multiplied into a figure that no
+					 * longer matches its own citation.
+					 *
+					 * The 5MB figure on the same page is the Bedrock and Vertex
+					 * row; this entry speaks to the API directly.
+					 *
+					 * Binary MB rather than 10,000,000, deliberately. The
+					 * documentation says "10 MB" without saying which, and the two
+					 * readings differ by 5%: reading it as the larger risks one
+					 * request the service rejects with its own message naming the
+					 * real limit, while reading it as the smaller refuses files
+					 * the service would have accepted — which is the failure this
+					 * whole file is arranged to avoid.
+					 */
+					maxBytesPerFile: cap(
+						mib(10),
+						"Anthropic vision docs: maximum 10MB per image, measured base64-encoded"
+					),
+					// The published list, as format-table entries rather than as
+					// hand-spelled strings.
+					//
+					// ⚠ GIF and WebP are accepted but ANIMATION IS NOT: the docs
+					// say "animations are unsupported, and only the first frame is
+					// used". That is not a reason to refuse one — the request is
+					// valid and the model does see the first frame — so it stays a
+					// note rather than a rule. The format table already tracks
+					// `animated`, so telling a user their clip will be read as a
+					// still is a UI job whenever there is a picker to say it in.
+					accepts: [
+						"image/jpeg",
+						"image/png",
+						"image/gif",
+						"image/webp"
+					],
+					// OURS, not Anthropic's — the order to convert TOWARD when a
+					// file is in none of the accepted formats. WebP first because
+					// it is the smallest at equal quality and the byte caps above
+					// are the binding constraint; PNG next for a lossless source;
+					// JPEG after it. GIF is accepted but never preferred: every
+					// encoder in this build writes a single frame, so choosing GIF
+					// as a target buys nothing and loses colour depth. An
+					// already-accepted file passes through untouched regardless of
+					// this order.
+					prefers: ["image/webp", "image/png", "image/jpeg"]
+				},
+				document: {
+					/**
+					 * PDF and nothing else. The Messages API takes a `document`
+					 * content block of `application/pdf`; the other document
+					 * formats in the vocabulary (docx, epub, rtf, …) are not
+					 * accepted and this build cannot convert them either, so a
+					 * refusal here names the file rather than the API returning
+					 * one about a base64 blob.
+					 */
+					accepts: ["application/pdf"],
+					// Measured the same way every byte cap here is — on what is
+					// sent, which for this API is base64. The per-PDF figure and
+					// the whole-request figure are the same 32MB, so this cap can
+					// never be the one that binds: a PDF large enough to reach it
+					// has already broken the request limit it is encoded into.
+					maxBytesPerFile: cap(
+						mib(32),
+						"Anthropic PDF support docs: maximum 32MB per PDF"
+					)
+					// No `maxFiles`: the documented limit on a PDF is 100 PAGES,
+					// which is not a file count and cannot be checked without a
+					// document engine this build does not carry. Left undeclared
+					// rather than approximated — see `./io`.
+				}
+			},
+			/**
+			 * The whole-request cap, which binds where the per-file caps do not:
+			 * four 9MB images each pass a 10MB per-image check and together break
+			 * this one.
+			 */
+			maxRequestBytes: cap(
+				mib(32),
+				"Anthropic API docs: maximum 32MB total request size"
+			)
+			// No `out` block. Anthropic returns text; it renders nothing, so there
+			// is no output file count to cap.
 		}
 	},
 
@@ -433,3 +608,15 @@ export const PRESET_CAPABILITIES: Record<
 export const adapterCapabilities = (
 	type: string
 ): AdapterCapabilities | undefined => ADAPTER_MANIFEST[type]?.capabilities
+
+/**
+ * The declared file counts, byte caps and format lists for a connection type.
+ *
+ * `undefined` for a type with no block, which every reader must treat as "no
+ * known limit" rather than as "no files allowed" — see `./io`, where that rule
+ * is implemented once in `withinCap` so no call site has to remember it. Both
+ * adapter base classes resolve their own limits through this, and
+ * `$lib/server/adapters/attachments` is where they are enforced.
+ */
+export const adapterIo = (type: string): AdapterIo | undefined =>
+	ADAPTER_MANIFEST[type]?.io

@@ -13,6 +13,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
+import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -69,8 +70,8 @@ describe("narrativeGraph:createNode — historyEntryId scoping (PGlite integrati
 			.values({ name: "Victim's Book", userId: victim.id })
 			.returning()
 		const [victimHistoryEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: victimLorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: victimLorebook.id }]))
 			.returning()
 
 		await expect(
@@ -97,8 +98,8 @@ describe("narrativeGraph:createNode — historyEntryId scoping (PGlite integrati
 			.values({ name: "Owner's Book", userId: owner.id })
 			.returning()
 		const [historyEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id }]))
 			.returning()
 
 		const res = await narrativeGraphCreateNodeHandler.handler(
@@ -132,8 +133,8 @@ describe("narrativeGraph:applyProposal — sceneId/historyEntryId scoping (PGlit
 			.values({ name: "Victim's Book", userId: victim.id })
 			.returning()
 		const [victimHistoryEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: victimLorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: victimLorebook.id }]))
 			.returning()
 
 		await expect(
@@ -176,8 +177,8 @@ describe("narrativeGraph:applyProposal — sceneId/historyEntryId scoping (PGlit
 			.values({ name: "Victim's Book 2", userId: victim.id })
 			.returning()
 		const [victimHistoryEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: victimLorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: victimLorebook.id }]))
 			.returning()
 		const [victimScene] = await testDb
 			.insert(schema.scenes)
@@ -238,8 +239,8 @@ describe("narrativeGraph:applyProposal — sceneId/historyEntryId scoping (PGlit
 			.values({ name: "Owner's Book", userId: owner.id })
 			.returning()
 		const [historyEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id }]))
 			.returning()
 
 		const res = await narrativeGraphApplyProposalHandler.handler(

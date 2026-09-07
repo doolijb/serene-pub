@@ -21,6 +21,15 @@ import {
 import type { Handler } from "$lib/shared/events"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import {
+	CHARACTER_LORE_TYPE_ID,
+	HISTORY_TYPE_ID,
+	WORLD_LORE_TYPE_ID,
+	fieldIsTrue,
+	historyDateOf,
+	inBookOfType,
+	mergeFields
+} from "$lib/server/utils/lorebookEntries"
+import {
 	buildGraphFromScenes,
 	GraphParseError,
 	type GraphBuilderScene,
@@ -33,7 +42,7 @@ import {
 	resolveCapabilityTarget,
 	TEXT_CAPABILITY
 } from "$lib/server/connections/capabilityTarget"
-import { activityStore } from "$lib/server/utils/activityStore"
+import { activityError, activityStore } from "$lib/server/utils/activityStore"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
 import {
 	syncLorebookBindingsForCharacter,
@@ -137,14 +146,14 @@ export const narrativeGraphListHandler: Handler<
 			}),
 			// History entries with content, no scenes, not yet graphed
 			db
-				.select({ id: schema.historyEntries.id })
-				.from(schema.historyEntries)
+				.select({ id: schema.lorebookEntries.id })
+				.from(schema.lorebookEntries)
 				.where(
 					and(
-						eq(schema.historyEntries.lorebookId, params.lorebookId),
-						eq(schema.historyEntries.graphed, false),
+						inBookOfType(params.lorebookId, HISTORY_TYPE_ID),
+						eq(fieldIsTrue("graphed"), false),
 						gt(
-							sql`length(trim(${schema.historyEntries.content}))`,
+							sql`length(trim(${schema.lorebookEntries.content}))`,
 							0
 						),
 						notExists(
@@ -154,7 +163,7 @@ export const narrativeGraphListHandler: Handler<
 								.where(
 									eq(
 										schema.scenes.historyEntryId,
-										schema.historyEntries.id
+										schema.lorebookEntries.id
 									)
 								)
 						)
@@ -162,13 +171,13 @@ export const narrativeGraphListHandler: Handler<
 				),
 			// All history entries with content and no scenes — for replace-mode preflight
 			db
-				.select({ id: schema.historyEntries.id })
-				.from(schema.historyEntries)
+				.select({ id: schema.lorebookEntries.id })
+				.from(schema.lorebookEntries)
 				.where(
 					and(
-						eq(schema.historyEntries.lorebookId, params.lorebookId),
+						inBookOfType(params.lorebookId, HISTORY_TYPE_ID),
 						gt(
-							sql`length(trim(${schema.historyEntries.content}))`,
+							sql`length(trim(${schema.lorebookEntries.content}))`,
 							0
 						),
 						notExists(
@@ -178,7 +187,7 @@ export const narrativeGraphListHandler: Handler<
 								.where(
 									eq(
 										schema.scenes.historyEntryId,
-										schema.historyEntries.id
+										schema.lorebookEntries.id
 									)
 								)
 						)
@@ -299,32 +308,26 @@ export const narrativeGraphBuildHandler: Handler<
 				where: eq(schema.scenes.lorebookId, params.lorebookId),
 				orderBy: asc(schema.scenes.id),
 				with: {
+					// The date is a declared field now, so the row carries
+					// `fields` and `historyDateOf` reads it out.
 					historyEntry: {
-						columns: {
-							id: true,
-							year: true,
-							month: true,
-							day: true
-						}
+						columns: { id: true, fields: true }
 					}
 				}
 			}),
 			// History entries with content but no scenes (direct entries)
 			db
 				.select({
-					id: schema.historyEntries.id,
-					year: schema.historyEntries.year,
-					month: schema.historyEntries.month,
-					day: schema.historyEntries.day,
-					content: schema.historyEntries.content,
-					graphed: schema.historyEntries.graphed
+					id: schema.lorebookEntries.id,
+					fields: schema.lorebookEntries.fields,
+					content: schema.lorebookEntries.content
 				})
-				.from(schema.historyEntries)
+				.from(schema.lorebookEntries)
 				.where(
 					and(
-						eq(schema.historyEntries.lorebookId, params.lorebookId),
+						inBookOfType(params.lorebookId, HISTORY_TYPE_ID),
 						gt(
-							sql`length(trim(${schema.historyEntries.content}))`,
+							sql`length(trim(${schema.lorebookEntries.content}))`,
 							0
 						),
 						notExists(
@@ -334,7 +337,7 @@ export const narrativeGraphBuildHandler: Handler<
 								.where(
 									eq(
 										schema.scenes.historyEntryId,
-										schema.historyEntries.id
+										schema.lorebookEntries.id
 									)
 								)
 						)
@@ -386,7 +389,7 @@ export const narrativeGraphBuildHandler: Handler<
 		// In extend mode, only process direct entries not yet graphed
 		const filteredDirectEntries =
 			mode === "extend"
-				? rawDirectEntries.filter((e) => !e.graphed)
+				? rawDirectEntries.filter((e) => !e.fields?.graphed)
 				: rawDirectEntries
 
 		if (
@@ -546,7 +549,12 @@ export const narrativeGraphBuildHandler: Handler<
 					name: s.name,
 					summary: s.summary ? resolveBindings(s.summary) : s.summary,
 					historyEntryId: s.historyEntryId ?? null,
-					historyEntry: s.historyEntry ?? null,
+					historyEntry: s.historyEntry
+						? {
+								id: s.historyEntry.id,
+								...historyDateOf(s.historyEntry)
+							}
+						: null,
 					participantCharacters: cast.participantCharacters,
 					mentionedCharacters: cast.mentionedCharacters,
 					sessionId: s.sessionId ?? null,
@@ -561,12 +569,7 @@ export const narrativeGraphBuildHandler: Handler<
 				name: null,
 				summary: resolveBindings(he.content),
 				historyEntryId: he.id,
-				historyEntry: {
-					id: he.id,
-					year: he.year,
-					month: he.month,
-					day: he.day
-				},
+				historyEntry: { id: he.id, ...historyDateOf(he) },
 				sourceHistoryEntryId: he.id,
 				// No stored cast — Phase 1's extract branch derives it.
 				participantCharacters: null,
@@ -718,13 +721,21 @@ export const narrativeGraphBuildHandler: Handler<
 		// the cast, and the extraction prompt's one line saying so is routinely
 		// ignored. Names that already match a bound character never reach the
 		// filter — see resolveNameRefs.
-		const worldLore = await db
-			.select({
-				name: schema.worldLoreEntries.name,
-				category: schema.worldLoreEntries.category
-			})
-			.from(schema.worldLoreEntries)
-			.where(eq(schema.worldLoreEntries.lorebookId, params.lorebookId))
+		const worldLore = (
+			await db
+				.select({
+					name: schema.lorebookEntries.title,
+					fields: schema.lorebookEntries.fields
+				})
+				.from(schema.lorebookEntries)
+				.where(inBookOfType(params.lorebookId, WORLD_LORE_TYPE_ID))
+		).map((e) => ({
+			// `title` is nullable on the one table and `name` was NOT NULL on
+			// the three; a world lore row cannot reach here without one, since
+			// the socket namespace trims and requires it.
+			name: e.name ?? "",
+			category: (e.fields?.category as string | null) ?? null
+		}))
 
 		let latestSceneSnapshot: GraphBuilderResumeState | undefined
 		// For the run receipt: which calls ran, so the pipeline page's run list
@@ -924,11 +935,20 @@ export const narrativeGraphBuildHandler: Handler<
 				// Save the pre-scene snapshot so the user can retry from this exact scene
 				if (latestSceneSnapshot)
 					buildResumeStates.set(resumeKey, latestSceneSnapshot)
+				// Through `activityError` like every other terminalising write
+				// here, even though `GraphParseError` is a `ComposedError`
+				// whose own message survives it unchanged — so that no write
+				// on this path is the one that reads `err.message` directly.
+				// The truncation sentence is composed here and overrides it.
 				activityStore.update(activityId, {
 					status: "error",
-					errorMessage: err.truncated
-						? "The model ran out of response tokens before finishing the graph. Increase Max Response Tokens in your sampling config and try again."
-						: err.message,
+					...activityError(err),
+					...(err.truncated
+						? {
+								errorMessage:
+									"The model ran out of response tokens before finishing the graph. Increase Max Response Tokens in your sampling config and try again."
+							}
+						: {}),
 					errorRaw: err.raw
 				})
 				return {
@@ -938,12 +958,12 @@ export const narrativeGraphBuildHandler: Handler<
 				}
 			}
 			// Unexpected error (network failure, DB error, etc.) — show in modal rather than a generic toast
+			// `activityError` rather than `err.message`: this record is served
+			// back to a non-admin by `activityStore.getFor`, and an adapter
+			// failure's words are the base URL and the model file.
 			activityStore.update(activityId, {
 				status: "error",
-				errorMessage:
-					err instanceof Error
-						? err.message
-						: "An unexpected error occurred."
+				...activityError(err)
 			})
 			return {
 				proposal: { nodes: [], relationships: [] },
@@ -1193,10 +1213,18 @@ export const narrativeGraphApplyProposalHandler: Handler<
 		}
 		if (referencedHistoryEntryIds.size > 0) {
 			const historyEntryIds = [...referencedHistoryEntryIds]
-			const historyEntriesFound = await db.query.historyEntries.findMany({
-				where: (h, { inArray }) => inArray(h.id, historyEntryIds),
-				columns: { id: true, lorebookId: true }
-			})
+			const historyEntriesFound = await db
+				.select({
+					id: schema.lorebookEntries.id,
+					lorebookId: schema.lorebookEntries.lorebookId
+				})
+				.from(schema.lorebookEntries)
+				.where(
+					and(
+						inArray(schema.lorebookEntries.id, historyEntryIds),
+						eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
+					)
+				)
 			if (
 				historyEntriesFound.length !== historyEntryIds.length ||
 				historyEntriesFound.some((h) => h.lorebookId !== lorebookId)
@@ -1502,11 +1530,14 @@ export const narrativeGraphApplyProposalHandler: Handler<
 					.update(schema.scenes)
 					.set({ graphed: false })
 					.where(eq(schema.scenes.lorebookId, lorebookId))
-				// Reset history entries graphed status too
+				// Reset history entries graphed status too.
+				// ⚠ Merged into `fields`, never written over it — the
+				// summarizer's `isCompleted` lives in the same object and a
+				// whole-object write from here would erase it.
 				await tx
-					.update(schema.historyEntries)
-					.set({ graphed: false })
-					.where(eq(schema.historyEntries.lorebookId, lorebookId))
+					.update(schema.lorebookEntries)
+					.set({ fields: mergeFields({ graphed: false }) })
+					.where(inBookOfType(lorebookId, HISTORY_TYPE_ID))
 			}
 			await tx
 				.update(schema.scenes)
@@ -1518,15 +1549,16 @@ export const narrativeGraphApplyProposalHandler: Handler<
 						isNotNull(schema.scenes.summary)
 					)
 				)
-			// Mark direct history entries (with content, no scenes) as graphed
+			// Mark direct history entries (with content, no scenes) as graphed.
+			// ⚠ Merged, for the same reason as the reset above.
 			await tx
-				.update(schema.historyEntries)
-				.set({ graphed: true })
+				.update(schema.lorebookEntries)
+				.set({ fields: mergeFields({ graphed: true }) })
 				.where(
 					and(
-						eq(schema.historyEntries.lorebookId, lorebookId),
+						inBookOfType(lorebookId, HISTORY_TYPE_ID),
 						gt(
-							sql`length(trim(${schema.historyEntries.content}))`,
+							sql`length(trim(${schema.lorebookEntries.content}))`,
 							0
 						),
 						notExists(
@@ -1536,7 +1568,7 @@ export const narrativeGraphApplyProposalHandler: Handler<
 								.where(
 									eq(
 										schema.scenes.historyEntryId,
-										schema.historyEntries.id
+										schema.lorebookEntries.id
 									)
 								)
 						)
@@ -1586,14 +1618,14 @@ export const narrativeGraphApplyProposalHandler: Handler<
 				columns: { id: true }
 			}),
 			db
-				.select({ id: schema.historyEntries.id })
-				.from(schema.historyEntries)
+				.select({ id: schema.lorebookEntries.id })
+				.from(schema.lorebookEntries)
 				.where(
 					and(
-						eq(schema.historyEntries.lorebookId, lorebookId),
-						eq(schema.historyEntries.graphed, false),
+						inBookOfType(lorebookId, HISTORY_TYPE_ID),
+						eq(fieldIsTrue("graphed"), false),
 						gt(
-							sql`length(trim(${schema.historyEntries.content}))`,
+							sql`length(trim(${schema.lorebookEntries.content}))`,
 							0
 						),
 						notExists(
@@ -1603,20 +1635,20 @@ export const narrativeGraphApplyProposalHandler: Handler<
 								.where(
 									eq(
 										schema.scenes.historyEntryId,
-										schema.historyEntries.id
+										schema.lorebookEntries.id
 									)
 								)
 						)
 					)
 				),
 			db
-				.select({ id: schema.historyEntries.id })
-				.from(schema.historyEntries)
+				.select({ id: schema.lorebookEntries.id })
+				.from(schema.lorebookEntries)
 				.where(
 					and(
-						eq(schema.historyEntries.lorebookId, lorebookId),
+						inBookOfType(lorebookId, HISTORY_TYPE_ID),
 						gt(
-							sql`length(trim(${schema.historyEntries.content}))`,
+							sql`length(trim(${schema.lorebookEntries.content}))`,
 							0
 						),
 						notExists(
@@ -1626,7 +1658,7 @@ export const narrativeGraphApplyProposalHandler: Handler<
 								.where(
 									eq(
 										schema.scenes.historyEntryId,
-										schema.historyEntries.id
+										schema.lorebookEntries.id
 									)
 								)
 						)
@@ -1753,9 +1785,17 @@ export const narrativeGraphUpdateNodeHandler: Handler<
 			if (n.historyEntryId === null) {
 				fields.historyEntryId = null
 			} else {
-				const historyEntry = await db.query.historyEntries.findFirst({
-					where: eq(schema.historyEntries.id, n.historyEntryId)
-				})
+				const [historyEntry] = await db
+					.select({
+						lorebookId: schema.lorebookEntries.lorebookId
+					})
+					.from(schema.lorebookEntries)
+					.where(
+						and(
+							eq(schema.lorebookEntries.id, n.historyEntryId),
+							eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
+						)
+					)
 				if (
 					!historyEntry ||
 					historyEntry.lorebookId !== existing.lorebookId
@@ -1797,7 +1837,7 @@ export const narrativeGraphDeleteNodeHandler: Handler<
 		// to be graph-only and non-destructive, since the binding survived
 		// with lorebookBindingId just set null. Post-merge, deleting the
 		// row necessarily detaches any bound character/persona from the
-		// lorebook and nulls any characterLoreEntries that referenced it
+		// lorebook and nulls any character-lore entries that referenced it
 		// (via that FK's onDelete: set null).
 		const existing = await db.query.lorebookBindings.findFirst({
 			where: eq(schema.lorebookBindings.id, params.id)
@@ -1926,9 +1966,17 @@ export const narrativeGraphUpdateRelationshipHandler: Handler<
 			if (r.historyEntryId === null) {
 				fields.historyEntryId = null
 			} else {
-				const historyEntry = await db.query.historyEntries.findFirst({
-					where: eq(schema.historyEntries.id, r.historyEntryId)
-				})
+				const [historyEntry] = await db
+					.select({
+						lorebookId: schema.lorebookEntries.lorebookId
+					})
+					.from(schema.lorebookEntries)
+					.where(
+						and(
+							eq(schema.lorebookEntries.id, r.historyEntryId),
+							eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
+						)
+					)
 				if (
 					!historyEntry ||
 					historyEntry.lorebookId !== existing.lorebookId
@@ -2039,9 +2087,15 @@ export const narrativeGraphCreateRelationshipHandler: Handler<
 			throw new Error("To-node not found.")
 
 		if (historyEntryId != null) {
-			const historyEntry = await db.query.historyEntries.findFirst({
-				where: eq(schema.historyEntries.id, historyEntryId)
-			})
+			const [historyEntry] = await db
+				.select({ lorebookId: schema.lorebookEntries.lorebookId })
+				.from(schema.lorebookEntries)
+				.where(
+					and(
+						eq(schema.lorebookEntries.id, historyEntryId),
+						eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
+					)
+				)
 			if (!historyEntry || historyEntry.lorebookId !== lorebookId) {
 				throw new Error("History entry not found.")
 			}
@@ -2099,9 +2153,15 @@ export const narrativeGraphCreateNodeHandler: Handler<
 		// different user's lorebook — same check updateNode already requires
 		// for this exact field.
 		if (historyEntryId != null) {
-			const historyEntry = await db.query.historyEntries.findFirst({
-				where: eq(schema.historyEntries.id, historyEntryId)
-			})
+			const [historyEntry] = await db
+				.select({ lorebookId: schema.lorebookEntries.lorebookId })
+				.from(schema.lorebookEntries)
+				.where(
+					and(
+						eq(schema.lorebookEntries.id, historyEntryId),
+						eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
+					)
+				)
 			if (!historyEntry || historyEntry.lorebookId !== lorebookId) {
 				throw new Error("History entry not found.")
 			}
@@ -2738,24 +2798,28 @@ export const narrativeGraphMergeNodeHandler: Handler<
 			// 4. Reassign character-lore entries (onDelete: "set null" —
 			// without this, private lore attached to the absorbed row goes
 			// permanently unbound/invisible the moment it's deleted).
-			const reassignedLoreEntries =
-				await tx.query.characterLoreEntries.findMany({
-					where: eq(
-						schema.characterLoreEntries.lorebookBindingId,
-						absorbedId
-					),
-					columns: { id: true }
-				})
+			const reassignedLoreEntries = await tx
+				.select({ id: schema.lorebookEntries.id })
+				.from(schema.lorebookEntries)
+				.where(
+					and(
+						eq(schema.lorebookEntries.anchorBindingId, absorbedId),
+						eq(
+							schema.lorebookEntries.typeId,
+							CHARACTER_LORE_TYPE_ID
+						)
+					)
+				)
 			const reassignedCharacterLoreEntryIds = reassignedLoreEntries.map(
 				(e) => e.id
 			)
 			if (reassignedCharacterLoreEntryIds.length > 0) {
 				await tx
-					.update(schema.characterLoreEntries)
-					.set({ lorebookBindingId: survivorId })
+					.update(schema.lorebookEntries)
+					.set({ anchorBindingId: survivorId })
 					.where(
 						inArray(
-							schema.characterLoreEntries.id,
+							schema.lorebookEntries.id,
 							reassignedCharacterLoreEntryIds
 						)
 					)
@@ -3011,11 +3075,11 @@ export const narrativeGraphUndoMergeHandler: Handler<
 			// Move reassigned character-lore entries back to the recreated row.
 			if (log.reassignedCharacterLoreEntryIds.length > 0) {
 				await tx
-					.update(schema.characterLoreEntries)
-					.set({ lorebookBindingId: inserted.id })
+					.update(schema.lorebookEntries)
+					.set({ anchorBindingId: inserted.id })
 					.where(
 						inArray(
-							schema.characterLoreEntries.id,
+							schema.lorebookEntries.id,
 							log.reassignedCharacterLoreEntryIds
 						)
 					)

@@ -102,6 +102,18 @@ export const startupTasks: StartupTask[] = [
 						"this build until it is resolved:\n" +
 						report.conflict
 				)
+			if (report.entryProjection) {
+				// A constraint with no way to see what violates it is worse
+				// than no constraint, so the audit's findings are said out loud
+				// rather than left in a report nobody reads.
+				const { describeEntryProjection } = await import(
+					"$lib/server/pipelines/boot/entryProjection"
+				)
+				for (const line of describeEntryProjection(
+					report.entryProjection
+				))
+					console.warn(`[entries] ${line}`)
+			}
 		}
 	},
 	{

@@ -73,7 +73,7 @@
 	<p>Admin access required.</p>
 {:else}
 	<p>
-		Connections tell Serene Pub how to reach an AI provider. A connection is
+		Connections tell Serene Pub how to reach an AI service. A connection is
 		not used by anything until it is registered for something — nothing is
 		picked automatically. Registering one for chat here is the common case;
 		the full list of capabilities is on the

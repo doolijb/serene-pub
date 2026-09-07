@@ -4,13 +4,13 @@ Serene Pub walks you through a short setup wizard the first time you sign in, th
 
 ## Overview
 
-The very first screen you see in Serene Pub (the app's home route) is a step-by-step wizard. It appears automatically whenever any required piece of your setup is missing — a connection to an AI provider, a character, a persona, or a first session — and walks you through fixing that one thing at a time.
+The very first screen you see in Serene Pub (the app's home route) is a step-by-step wizard. It appears automatically whenever any required piece of your setup is missing — a connection to an AI service, a character, a persona, or a first session — and walks you through fixing that one thing at a time.
 
 Once every required step is complete, the exact same screen switches to a normal home dashboard showing your characters and recent sessions. There's no separate "setup mode" you have to exit; the page just notices you're done and changes what it shows. If you later delete your only character or persona, or the wizard otherwise detects something incomplete, this same screen will show the relevant step again the next time you land on it.
 
 The wizard adapts to who you are:
 
-- The **first admin** to set up a brand-new server sees the full wizard, including connecting an AI provider.
+- The **first admin** to set up a brand-new server sees the full wizard, including connecting an AI service.
 - An **admin logging in after the server is already configured** sees a shorter welcome message but still gets the connection/summarization/RAG steps if those aren't done yet.
 - **Non-admin users** never see the connection, summarization, or RAG steps at all — those are server-wide settings an admin controls. Non-admins only go through Welcome, Persona, Character, and Create Session. See [Users and Accounts](./users-and-accounts.md) for how admin vs. non-admin roles work.
 
@@ -24,7 +24,7 @@ The wizard opens with a simple welcome screen and a single **Get Started** butto
 
 This step never counts as "complete" on its own — it's just an entry point. Clicking **Get Started** moves you to the next step.
 
-## Connecting to an AI Provider
+## Connecting to an AI Service
 
 This step is only shown to admins (non-admins skip straight from Welcome to the Character step, since a shared connection is already configured for the server). It's the first thing an admin must set up, because nothing else in the app works without an active AI connection.
 
@@ -145,8 +145,8 @@ Summarization, RAG, persona, and character can all be explicitly skipped with a 
 
 ### What non-admin users see
 
-Because connecting an AI provider, enabling summarization, and configuring RAG are all server-wide settings, they only ever appear for admin accounts. A non-admin user's wizard is just four steps: Welcome, Persona, Character, Create Session. Everything else about how the wizard behaves — auto-skipping, step indicators, the dashboard hand-off — works identically for admins and non-admins alike.
+Because connecting an AI service, enabling summarization, and configuring RAG are all server-wide settings, they only ever appear for admin accounts. A non-admin user's wizard is just four steps: Welcome, Persona, Character, Create Session. Everything else about how the wizard behaves — auto-skipping, step indicators, the dashboard hand-off — works identically for admins and non-admins alike.
 
 ### Android differences
 
-On the Android app build, the AI Provider step's **KoboldCPP — Easy** and **Ollama — Easy** cards aren't offered at all — only **Manual Setup** is shown, taking you straight to the Connections panel. See [Android App](./android.md) for the full list of Android-specific limitations.
+On the Android app build, the AI Service step's **KoboldCPP — Easy** and **Ollama — Easy** cards aren't offered at all — only **Manual Setup** is shown, taking you straight to the Connections panel. See [Android App](./android.md) for the full list of Android-specific limitations.

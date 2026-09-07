@@ -7,9 +7,9 @@ import type { TestDb } from "$lib/server/utils/testDb"
 
 /**
  * The admin socket API against a real (in-memory) DB. Exercised with the
- * runtime flag OFF (the default), so this proves the management/persistence
+ * sandbox flag OFF (the default), so this proves the management/persistence
  * path — install, enable, the dial, uninstall, logs, and admin gating — which
- * is exactly what an admin uses to prepare plugins before the runtime is on.
+ * is exactly what an admin uses to prepare plugins before the sandbox is on.
  */
 
 let testDb: TestDb
@@ -35,7 +35,10 @@ const userSocket = { user: { id: 2, isAdmin: false } } as any
 
 function collector() {
 	const events: { event: string; data: any }[] = []
-	return { emit: (event: string, data: any) => events.push({ event, data }), events }
+	return {
+		emit: (event: string, data: any) => events.push({ event, data }),
+		events
+	}
 }
 
 const BUNDLE = "module.exports = { hooks: { v: (i) => i.n } }"
@@ -57,7 +60,7 @@ describe("plugin admin socket API", () => {
 			c.emit
 		)
 		let list = await h.pluginsList.handler(adminSocket, {}, c.emit)
-		expect(list.runtimeEnabled).toBe(false) // flag off in this test
+		expect(list.sandboxEnabled).toBe(false) // flag off in this test
 		const row = list.plugins.find((p) => p.pluginId === "acme/x")
 		expect(row).toMatchObject({
 			name: "Acme X",
@@ -74,7 +77,9 @@ describe("plugin admin socket API", () => {
 			c.emit
 		)
 		list = await h.pluginsList.handler(adminSocket, {}, c.emit)
-		expect(list.plugins.find((p) => p.pluginId === "acme/x")?.enabled).toBe(true)
+		expect(list.plugins.find((p) => p.pluginId === "acme/x")?.enabled).toBe(
+			true
+		)
 
 		// the dial
 		await h.pluginsSetBackend.handler(
@@ -83,7 +88,9 @@ describe("plugin admin socket API", () => {
 			c.emit
 		)
 		list = await h.pluginsList.handler(adminSocket, {}, c.emit)
-		expect(list.plugins.find((p) => p.pluginId === "acme/x")?.backend).toBe("ses")
+		expect(list.plugins.find((p) => p.pluginId === "acme/x")?.backend).toBe(
+			"ses"
+		)
 
 		// sequential
 		await h.pluginsSetSequential.handler(
@@ -92,7 +99,9 @@ describe("plugin admin socket API", () => {
 			c.emit
 		)
 		list = await h.pluginsList.handler(adminSocket, {}, c.emit)
-		expect(list.plugins.find((p) => p.pluginId === "acme/x")?.sequential).toBe(true)
+		expect(
+			list.plugins.find((p) => p.pluginId === "acme/x")?.sequential
+		).toBe(true)
 
 		// logs (none yet)
 		const logs = await h.pluginsLogs.handler(adminSocket, {}, c.emit)
@@ -109,7 +118,9 @@ describe("plugin admin socket API", () => {
 			c.emit
 		)
 		list = await h.pluginsList.handler(adminSocket, {}, c.emit)
-		expect(list.plugins.find((p) => p.pluginId === "acme/x")).toBeUndefined()
+		expect(
+			list.plugins.find((p) => p.pluginId === "acme/x")
+		).toBeUndefined()
 	})
 
 	test("reinstalling changed bytes disables until re-enabled (SHA-pin)", async () => {
@@ -117,18 +128,34 @@ describe("plugin admin socket API", () => {
 		const c = collector()
 		await h.pluginsInstall.handler(
 			adminSocket,
-			{ pluginId: "acme/y", name: "Y", bundleSource: BUNDLE, backends: ["quickjs"] },
+			{
+				pluginId: "acme/y",
+				name: "Y",
+				bundleSource: BUNDLE,
+				backends: ["quickjs"]
+			},
 			c.emit
 		)
-		await h.pluginsSetEnabled.handler(adminSocket, { pluginId: "acme/y", enabled: true }, c.emit)
+		await h.pluginsSetEnabled.handler(
+			adminSocket,
+			{ pluginId: "acme/y", enabled: true },
+			c.emit
+		)
 		// re-install with different bytes
 		await h.pluginsInstall.handler(
 			adminSocket,
-			{ pluginId: "acme/y", name: "Y", bundleSource: BUNDLE + "\n// changed", backends: ["quickjs"] },
+			{
+				pluginId: "acme/y",
+				name: "Y",
+				bundleSource: BUNDLE + "\n// changed",
+				backends: ["quickjs"]
+			},
 			c.emit
 		)
 		const list = await h.pluginsList.handler(adminSocket, {}, c.emit)
-		expect(list.plugins.find((p) => p.pluginId === "acme/y")?.enabled).toBe(false)
+		expect(list.plugins.find((p) => p.pluginId === "acme/y")?.enabled).toBe(
+			false
+		)
 	})
 
 	test("admin views permissions and denial drops the grant", async () => {
@@ -150,21 +177,49 @@ describe("plugin admin socket API", () => {
 			},
 			c.emit
 		)
-		const perms = await h.pluginsPermissions.handler(
+		// Fresh install: everything it asked for is *pending*, and therefore
+		// refused. The declaration is visible (an admin has to be able to see
+		// what was asked) but nothing is in force.
+		const asked = await h.pluginsPermissions.handler(
 			adminSocket,
 			{ pluginId: "acme/perm" },
 			c.emit
 		)
-		expect(perms.permissions.map((p) => p.key).sort()).toEqual([
+		expect(asked.permissions.map((p) => p.key).sort()).toEqual([
 			"network:x.com",
 			"storage"
 		])
-		expect(perms.permissions.find((p) => p.key === "storage")?.granted).toBe(true)
+		expect(asked.permissions.every((p) => p.pending && !p.granted)).toBe(
+			true
+		)
+		expect(asked.storage?.granted).toBe(false)
+		expect(asked.storage?.declaredBytes).toBe(2048)
+		expect(asked.storage?.effectiveBytes).toBe(null)
+		const listed = await h.pluginsList.handler(adminSocket, {}, c.emit)
+		expect(
+			listed.plugins.find((p) => p.pluginId === "acme/perm")?.needsReview
+		).toBe(true)
+
+		// The consent act puts what is still ticked into force.
+		const perms = await h.pluginsReviewPermissions.handler(
+			adminSocket,
+			{ pluginId: "acme/perm" },
+			c.emit
+		)
+		expect(perms.permissions.every((p) => !p.pending)).toBe(true)
+		expect(
+			perms.permissions.find((p) => p.key === "storage")?.granted
+		).toBe(true)
 		// storage facts ride along for the override control
 		expect(perms.storage?.granted).toBe(true)
 		expect(perms.storage?.declaredBytes).toBe(2048)
 		expect(perms.storage?.effectiveBytes).toBe(2048)
 		expect(perms.storage?.overrideBytes).toBe(null)
+		const reviewed = await h.pluginsList.handler(adminSocket, {}, c.emit)
+		expect(
+			reviewed.plugins.find((p) => p.pluginId === "acme/perm")
+				?.needsReview
+		).toBe(false)
 
 		// deny storage → not granted anymore
 		const after = await h.pluginsSetPermission.handler(
@@ -172,8 +227,12 @@ describe("plugin admin socket API", () => {
 			{ pluginId: "acme/perm", key: "storage", granted: false },
 			c.emit
 		)
-		expect(after.permissions.find((p) => p.key === "storage")?.granted).toBe(false)
-		expect(after.permissions.find((p) => p.key === "network:x.com")?.granted).toBe(true)
+		expect(
+			after.permissions.find((p) => p.key === "storage")?.granted
+		).toBe(false)
+		expect(
+			after.permissions.find((p) => p.key === "network:x.com")?.granted
+		).toBe(true)
 		// storage denied → facts reflect it (no enforced quota)
 		expect(after.storage?.granted).toBe(false)
 		expect(after.storage?.effectiveBytes).toBe(null)
@@ -184,7 +243,77 @@ describe("plugin admin socket API", () => {
 			{ pluginId: "acme/perm", key: "storage", granted: true },
 			c.emit
 		)
-		expect(regranted.permissions.find((p) => p.key === "storage")?.granted).toBe(true)
+		expect(
+			regranted.permissions.find((p) => p.key === "storage")?.granted
+		).toBe(true)
+	})
+
+	/**
+	 * The review record shares the `adminDenied` list with the denials, so the
+	 * write path has to be the thing that keeps them apart: a denial must never
+	 * be spendable as a forged review. Both guards are asserted here because a
+	 * manifest can name any key at all in the compiled array form.
+	 */
+	test("a permission write cannot forge a review, or invent a key", async () => {
+		const h = await import("./plugins")
+		const c = collector()
+		await h.pluginsInstall.handler(
+			adminSocket,
+			{
+				pluginId: "acme/forge",
+				name: "Forge",
+				bundleSource: BUNDLE,
+				backends: ["quickjs"],
+				// Declares storage, plus a "capability" shaped like storage's marker.
+				manifest: { permissions: ["storage", "__reviewed:storage"] }
+			},
+			c.emit
+		)
+		// Denying the marker-shaped key would write "__reviewed:storage" into the
+		// list — a review of the real storage permission. It is refused.
+		const forged = await h.pluginsSetPermission.handler(
+			adminSocket,
+			{
+				pluginId: "acme/forge",
+				key: "__reviewed:storage",
+				granted: false
+			},
+			c.emit
+		)
+		expect(
+			forged.permissions.find((p) => p.key === "storage")?.pending
+		).toBe(true)
+		expect(
+			forged.permissions.find((p) => p.key === "storage")?.granted
+		).toBe(false)
+		expect(forged.storage?.granted).toBe(false)
+
+		// A key the manifest never declared is not writable either.
+		const invented = await h.pluginsSetPermission.handler(
+			adminSocket,
+			{
+				pluginId: "acme/forge",
+				key: "network:evil.example",
+				granted: true
+			},
+			c.emit
+		)
+		expect(invented.permissions.map((p) => p.key)).not.toContain(
+			"network:evil.example"
+		)
+
+		// And the ordinary path still works: deciding a declared key reviews it.
+		const decided = await h.pluginsSetPermission.handler(
+			adminSocket,
+			{ pluginId: "acme/forge", key: "storage", granted: true },
+			c.emit
+		)
+		expect(
+			decided.permissions.find((p) => p.key === "storage")
+		).toMatchObject({
+			granted: true,
+			pending: false
+		})
 	})
 
 	test("admin sets and clears a per-plugin storage-quota override", async () => {
@@ -199,6 +328,12 @@ describe("plugin admin socket API", () => {
 				backends: ["quickjs"],
 				manifest: { permissions: { storage: { quotaBytes: 2048 } } }
 			},
+			c.emit
+		)
+		// Consent first: an override tunes a grant, it does not create one.
+		await h.pluginsReviewPermissions.handler(
+			adminSocket,
+			{ pluginId: "acme/quota" },
 			c.emit
 		)
 		// set an override above the author ceiling (a trusted admin act)
@@ -232,10 +367,31 @@ describe("plugin admin socket API", () => {
 	test("non-admins are refused", async () => {
 		const h = await import("./plugins")
 		const c = collector()
-		await expect(h.pluginsList.handler(userSocket, {}, c.emit)).rejects.toThrow(
-			/admin/i
-		)
+		await expect(
+			h.pluginsList.handler(userSocket, {}, c.emit)
+		).rejects.toThrow(/admin/i)
 		expect(c.events.some((e) => e.event === "error")).toBe(true)
+	})
+
+	test("the cooperative stop is guarded exactly like the forced one", async () => {
+		const h = await import("./plugins")
+		// Asking somebody else's extension to stop mid-call is a sandbox
+		// intervention however politely it is done, so it is admin-only on the
+		// same footing as the kill beside it.
+		await expect(
+			h.pluginsAbort.handler(userSocket, { callId: 1 }, collector().emit)
+		).rejects.toThrow(/admin/i)
+
+		const c = collector()
+		const res = await h.pluginsAbort.handler(
+			adminSocket,
+			{ callId: 1 },
+			c.emit
+		)
+		// Flag off in this suite: nothing runs, so there is nothing to signal —
+		// and the monitor is refreshed either way, as the kill does.
+		expect(res).toEqual({ aborted: false, active: [] })
+		expect(c.events.some((e) => e.event === "plugins:active")).toBe(true)
 	})
 
 	test("the log table records real invocations (via the manager onInvocation)", async () => {

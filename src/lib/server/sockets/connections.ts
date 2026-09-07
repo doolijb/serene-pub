@@ -31,6 +31,7 @@ import type {
 	CapabilitySet
 } from "@serene-pub/sdk"
 import { adapterCapabilities } from "$lib/shared/connectionAdapters/manifest"
+import { normalizeConnectionPreset } from "$lib/shared/connectionAdapters/presetSlug"
 import { capabilityRefusal } from "$lib/server/pipelines/runtime/capabilityGuard"
 import {
 	capabilityColumn,
@@ -201,8 +202,20 @@ export const connectionsCreate: Handler<
 		// holds the SLUG — a numeric preset `value` landing here would key
 		// nothing in PRESET_CAPABILITIES while reading like a real slug forever
 		// after. NULL is the honest answer for a custom endpoint.
+		//
+		// The rule itself now lives in `normalizeConnectionPreset`, shared with
+		// `connectionsUpdate`, which had no sanitation at all and so persisted
+		// values this line had always rejected. `?? null` because create's
+		// answer to "nothing said" is the column default rather than "leave it
+		// alone" — there is nothing to leave.
+		//
+		// The normalizer's `notice` is dropped here on purpose: `Create.Response`
+		// has no channel for one, no client can currently produce a claim that
+		// earns one (the picker sends a slug off the very list this validates
+		// against, or nothing), and adding one is the create-surface work that is
+		// a separate task.
 		data.preset =
-			typeof data.preset === "string" && data.preset ? data.preset : null
+			normalizeConnectionPreset(data.preset, data.type).preset ?? null
 		// Resolved at write time and cached on the row: the picker reads every
 		// connection against every slot, and resolving there would mean loading
 		// an adapter module per row (see connections/resolve.ts).
@@ -264,6 +277,36 @@ export const connectionsUpdate: Handler<
 		// same mechanism would eat `overrides` the moment a toggle UI exists.
 		const { capabilities: _serverOwned, ...editable } =
 			params.connection as Record<string, unknown>
+
+		// `preset` is the other payload field that is not simply the client's to
+		// state, and until this it was the one nobody checked: create has coerced
+		// it since the column landed, update passed it straight to `.set()`, so an
+		// update stored what a create would have thrown away. It does not merely
+		// sit there either — the `resolveConnectionCapabilities` call below caches
+		// a capability set computed FROM it, and that cache is what the config
+		// picker and the bind guard read.
+		//
+		// Read the row first rather than judging `updated` afterwards: by then the
+		// bad value is stored and the cache is already built on it. The stored row
+		// is also the only thing that can answer a PARTIAL payload's two open
+		// questions — which type the preset is about to sit on, and which preset a
+		// bare type change is about to strand.
+		const stored = await db.query.connections.findFirst({
+			where: (c, { eq }) => eq(c.id, id),
+			columns: { type: true, preset: true }
+		})
+		const nextType =
+			typeof editable.type === "string" ? editable.type : stored?.type
+		const preset = normalizeConnectionPreset(
+			// The payload's claim where it made one, and the STORED slug where it
+			// did not: changing only `type` strands the preset just as surely as
+			// sending a stale pair does, and nothing else would notice.
+			"preset" in editable ? editable.preset : stored?.preset,
+			nextType
+		)
+		if (preset.preset !== undefined) editable.preset = preset.preset
+		else delete editable.preset
+
 		const updateData = withEncryptedApiKey(editable as any)
 		const [updated] = await db
 			.update(schema.connections)
@@ -296,7 +339,12 @@ export const connectionsUpdate: Handler<
 			emitToUser
 		)
 		const res: Sockets.Connections.Update.Response = {
-			connection: getResult.connection ?? updated
+			connection: getResult.connection ?? updated,
+			// Only when something was actually discarded. A save is still a
+			// success — the row is written and the ack carries it — so this rides
+			// alongside rather than replacing it, and the clients say it out loud
+			// instead of letting a preset vanish quietly.
+			...(preset.notice ? { notice: preset.notice } : {})
 		}
 		emitToUser("connections:update", res)
 		await user(socket, {}, emitToUser)

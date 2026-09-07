@@ -24,11 +24,22 @@ import {
 	normaliseTfidf
 } from "$lib/server/pipelines/ranking/keywordQuery"
 import {
-	eligibleFor,
-	armNote,
-	fuseRanks
+	fuseRanks,
+	disjointOrderings
 } from "$lib/server/pipelines/ranking/strategy"
 import { select } from "$lib/server/pipelines/ranking/select"
+import {
+	entityDocFreq,
+	entityRarity,
+	entitySearch,
+	DEFAULT_ENTITY_WEIGHT
+} from "$lib/server/pipelines/ranking/entitySearch"
+import {
+	linkNote,
+	rankEntityLinks,
+	type EntityLinkHit
+} from "$lib/server/pipelines/ranking/entityLink"
+import { buildScanWindow } from "$lib/server/pipelines/ranking/signals"
 import {
 	rankSemantic,
 	mergeWindows
@@ -37,12 +48,17 @@ import { queryWindows } from "$lib/server/pipelines/ranking/ragQuery"
 import {
 	DEFAULT_SIGNAL_WEIGHTS,
 	PRIORITY_SCORE_BONUS,
+	isLexicalScoring,
 	withDefaults,
+	type MechanismWeights,
 	type SignalWeights,
-	type SourceKind
+	type RetrievalBand
 } from "$lib/server/pipelines/ranking/weights"
 import { allocate, render } from "$lib/server/pipelines/prompt/assemble"
-import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
+import {
+	CORE_TEMPLATE_ENGINE,
+	type RenderRun
+} from "$lib/server/pipelines/prompt/renderers"
 import { resolveContextInput } from "$lib/server/pipelines/prompt/promptFields"
 import { processMessages } from "$lib/server/pipelines/prompt/messages"
 import { resolvePostHistoryContext } from "$lib/server/pipelines/prompt/postHistory"
@@ -56,6 +72,7 @@ import {
 	type JsonDraft
 } from "$lib/server/utils/summarizer/templates"
 import { parseSummaryOutput } from "$lib/server/utils/summarizer/parser"
+import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
 
 /** Not built yet, and saying so plainly beats failing like a bug. */
 const notYet = (what: string, where: string) => async () =>
@@ -90,6 +107,33 @@ function retrievalParamsFrom(params: any) {
 		retrieval.maxRecursionDepth = params.maxRecursionDepth
 	if (typeof params.matchMode === "string")
 		retrieval.matchMode = params.matchMode
+	// The admission gate's one control. Read here rather than declared and
+	// left — the whole point of this seam is that a number a panel accepted
+	// reaches the code that acts on it, and this file is where the last two
+	// dead retrieval controls were found not doing that.
+	if (
+		typeof params.admitThreshold === "number" &&
+		Number.isFinite(params.admitThreshold)
+	)
+		retrieval.admitThreshold = params.admitThreshold
+	// The three lexical-quality controls, read here for the reason above it.
+	// `isLexicalScoring` and not `typeof === "string"`: this is a stored value
+	// off a row, and an unrecognised one has to fall through to the default
+	// rather than reach `keywordQuery` as a mode nothing implements — where it
+	// would be read as "not balanced" and silently mean the default anyway,
+	// with no way to tell that from somebody having chosen it.
+	if (isLexicalScoring(params.lexicalScoring))
+		retrieval.lexicalScoring = params.lexicalScoring
+	if (
+		typeof params.trigramFolding === "number" &&
+		Number.isFinite(params.trigramFolding)
+	)
+		retrieval.trigramFolding = params.trigramFolding
+	if (
+		typeof params.titleWeight === "number" &&
+		Number.isFinite(params.titleWeight)
+	)
+		retrieval.titleWeight = params.titleWeight
 	return Object.keys(retrieval).length ? { retrieval } : {}
 }
 
@@ -114,18 +158,21 @@ const SIGNAL_FIELDS: Array<[param: string, signal: keyof SignalWeights]> = [
 	["signalRecency", "recency"],
 	["signalSceneAffinity", "sceneAffinity"],
 	["signalDensity", "density"],
+	["signalProximity", "proximity"],
+	["signalSemantic", "semantic"],
+	["signalEntityVector", "entityVector"],
 	["signalPriorityBonus", "priorityBonus"]
 ]
 
 function signalsFrom(
 	params: any
-): Partial<Record<SourceKind, SignalWeights>> | null {
+): Partial<Record<RetrievalBand, SignalWeights>> | null {
 	const carried = SIGNAL_FIELDS.filter(
 		([param]) => params[param] && typeof params[param] === "object"
 	)
 	if (!carried.length) return null
-	const signals: Partial<Record<SourceKind, SignalWeights>> = {}
-	for (const source of Object.keys(DEFAULT_SIGNAL_WEIGHTS) as SourceKind[]) {
+	const signals: Partial<Record<RetrievalBand, SignalWeights>> = {}
+	for (const source of Object.keys(DEFAULT_SIGNAL_WEIGHTS) as RetrievalBand[]) {
 		const set = { ...DEFAULT_SIGNAL_WEIGHTS[source] }
 		for (const [param, signal] of carried) {
 			const v = params[param][source]
@@ -136,17 +183,77 @@ function signalsFrom(
 	return signals
 }
 
+/**
+ * The three mechanism strengths, `mechanismWeights` → `RankingParams.mechanisms`.
+ *
+ * Read key by key rather than passed through, because the stored value is JSON
+ * off a row and a missing or non-numeric member must fall back to 1 — neutral —
+ * rather than to `undefined`, which the score would multiply into `NaN` and
+ * silently zero every candidate. `withDefaults` merges what comes back over
+ * `DEFAULT_MECHANISMS`, so an absent field is *not* the same as a zero.
+ *
+ * Negative is clamped for the reason `admitThreshold` and `trigramFolding` are:
+ * a mechanism worth less than nothing would let a match *subtract* from a score,
+ * and the plan's second governing rule is that adding a mechanism may only add
+ * matches.
+ */
+function mechanismsFrom(params: any): Partial<MechanismWeights> | null {
+	const raw = params?.mechanismWeights
+	if (!raw || typeof raw !== "object") return null
+	const out: Partial<MechanismWeights> = {}
+	for (const key of ["keyword", "semantic", "name"] as const) {
+		const v = raw[key]
+		if (typeof v === "number" && Number.isFinite(v)) out[key] = Math.max(0, v)
+	}
+	return Object.keys(out).length ? out : null
+}
+
 function rankingParamsFrom(params: any) {
 	if (!params || typeof params !== "object") return {}
 	const out: Record<string, unknown> = {}
 	const groups: Record<string, unknown> = {}
 	if (params.share) groups.share = params.share
 	if (params.maxEntries) groups.maxEntries = params.maxEntries
-	if (params.minEntries) groups.minEntries = params.minEntries
+	/**
+	 * ⚠ **`messages` only, whatever the stored object holds** — ruling R6.
+	 *
+	 * The declaration names one band now, so nothing can *write* a lore floor.
+	 * A config seeded before R6 still holds the five-key object it was given,
+	 * though, and migration 0201 rewrites those — this reads one key so that the
+	 * removal does not depend on a migration having run. A floor is the one
+	 * mechanism that can re-admit a candidate the ranker turned down, so "it
+	 * probably got cleaned up" is not a good enough answer.
+	 */
+	if (params.minEntries && typeof params.minEntries === "object") {
+		const messages = params.minEntries.messages
+		if (typeof messages === "number" && Number.isFinite(messages))
+			groups.minEntries = { messages }
+	}
 	if (Object.keys(groups).length) out.groups = groups
 	const signals = signalsFrom(params)
 	if (signals) out.signals = signals
+	const mechanisms = mechanismsFrom(params)
+	if (mechanisms) out.mechanisms = mechanisms
 	return out
+}
+
+/**
+ * The allocation precedence, read separately from everything above.
+ *
+ * Not part of `rankingParamsFrom` because it is not part of `RankingParams`,
+ * deliberately: `select`'s own docblock argues that a switch between two
+ * implementations of one function does not belong beside the weights it is
+ * choosing between. This seam is where the declaration meets the call, which is
+ * exactly what `retrievalParamsFrom` is for the lore lanes.
+ *
+ * `=== true` rather than truthiness. A config value is JSON that came off a
+ * row, and every other reading of `"false"` or `0` in that position turns the
+ * inversion **on** — which is the one direction a misread must not go, because
+ * a default-off control that switches itself on during an upgrade changes what
+ * reaches the model on an install that never asked.
+ */
+function scoreLedFrom(params: any): boolean {
+	return params?.scoreLedAllocation === true
 }
 
 /**
@@ -179,6 +286,113 @@ function contextBudgetFrom(input: any) {
 }
 
 /**
+ * ⚠ **`castEntityNames` was here and is gone** — plan phase 3.
+ *
+ * It built the bare-string cast list `entityCooccurrenceSignal` matched by
+ * substring, and it carried a careful argument for keeping *aliases out*: the
+ * signal returned 1 on the first hit, so a name short enough to fall inside an
+ * ordinary word made it fire on nearly everything, and every name added raised
+ * the false-positive rate for all of them.
+ *
+ * That argument was about the matcher, and the matcher changed. `castEntityRefs`
+ * below matches on word boundaries and resolves each hit to a row, so `Al` does
+ * not fire on `Alchemy` and a character's name, nickname and absorbed aliases
+ * are one entity rather than four — which is why it can carry the aliases the
+ * old list could not. It is a strict superset of what this returned, so the
+ * scoring signal loses no cast member by reading it instead.
+ *
+ * The `absorbedAliases` caution that shaped the old list still holds and is now
+ * satisfied rather than avoided: `session_cast` carries that column, so both
+ * halves of the union its schema note makes mandatory reach this seam.
+ */
+
+/**
+ * The cast, with the row each name belongs to — the gazetteer's first tier.
+ *
+ * **The only cast input the keyword mechanism has**, since plan phase 3 retired the
+ * bare-string list beside it. It feeds the admission gate *and* the entity
+ * scoring signal, which is the point: one vocabulary, matched one way, so the
+ * two cannot disagree about whether the scene named somebody. It matches on a
+ * word boundary and carries the row id, so a character's name and her nickname
+ * are one entity instead of two and the count of distinct shared entities means
+ * what it says.
+ *
+ * ⚠ **Aliases are in, and the union is why they could not be before.** Two of
+ * the three exclusions still stand — no fuzzy matching, no reaching past the
+ * session's cast — but the third was never about aliases being risky. It was
+ * that `characters.aliases` / `personas.aliases` ride on the cast rows while the
+ * other half, `lorebook_bindings.absorbedAliases`, did not reach this seam, and
+ * that column's schema note makes reading **both** mandatory: feeding one side
+ * would let an absorbed identity resolve while the name it was merged into did
+ * not. `session_cast` carries `absorbedAliases` now, so both halves are here.
+ * The word boundary in `compileMatcher` retires the other old argument — "Al"
+ * does not fire on "Alchemy" — so nothing is left in the way.
+ *
+ */
+function castEntityRefs(cast: any): Array<{
+	name: string
+	ref: { kind: "character" | "persona" | "entry"; id: number }
+}> {
+	const out: Array<{
+		name: string
+		ref: { kind: "character" | "persona"; id: number }
+	}> = []
+	const add = (
+		name: unknown,
+		ref: { kind: "character" | "persona"; id: number }
+	) => {
+		const trimmed = typeof name === "string" ? name.trim() : ""
+		if (trimmed && Number.isFinite(ref.id)) out.push({ name: trimmed, ref })
+	}
+	const list = (value: unknown): unknown[] =>
+		Array.isArray(value) ? value : []
+	for (const cc of cast?.sessionCharacters ?? []) {
+		const id = cc?.character?.id
+		if (id == null) continue
+		const ref = { kind: "character" as const, id }
+		add(cc?.character?.name, ref)
+		add(cc?.character?.nickname, ref)
+		for (const alias of list(cc?.character?.aliases)) add(alias, ref)
+		for (const alias of list(cc?.absorbedAliases)) add(alias, ref)
+	}
+	for (const cp of cast?.sessionPersonas ?? []) {
+		const id = cp?.persona?.id
+		if (id == null) continue
+		const ref = { kind: "persona" as const, id }
+		add(cp?.persona?.name, ref)
+		for (const alias of list(cp?.persona?.aliases)) add(alias, ref)
+		for (const alias of list(cp?.absorbedAliases)) add(alias, ref)
+	}
+	return out
+}
+
+/**
+ * The declined entries, each carrying what it said when it was declined.
+ *
+ * A candidate reaches the receipt with its whole row on `payload`, so its
+ * fingerprint (`host.ts` `toLoreEntry`) travels for free. A **skip** is three
+ * fields — id, source, reason — and travels with none, which would have left
+ * exactly the rows a reader most often asks about ("why did this not come in")
+ * as the only ones the explanation could not date. So it is copied across here,
+ * from the pool the scan was handed, rather than by asking `keywordQuery` to
+ * carry a field it has no use for.
+ *
+ * Absent when the pool has no such row — a skip whose entry the read withheld —
+ * and absent reads downstream as *nothing claimed*, never as *unchanged*.
+ */
+function withFingerprints(skipped: any[], entries: any[] | null | undefined) {
+	const fingerprintOf = new Map<string, string>()
+	for (const e of entries ?? [])
+		if (typeof e?.fingerprint === "string")
+			fingerprintOf.set(`${e.source}:${e.id}`, e.fingerprint)
+	if (!fingerprintOf.size) return skipped
+	return skipped.map((s: any) => {
+		const fingerprint = fingerprintOf.get(`${s?.source}:${s?.id}`)
+		return fingerprint ? { ...s, fingerprint } : s
+	})
+}
+
+/**
  * One lorebook scan, filtered to a single source.
  *
  * Shared by the world-lore and character-lore queries. Both read the same rows
@@ -192,7 +406,7 @@ function contextBudgetFrom(input: any) {
  */
 async function loreFor(source: string, input: any, ctx: any) {
 	const params = withDefaults(retrievalParamsFrom(input?.params))
-	const [entries, messages, embedding] = await Promise.all([
+	const [entries, messages, embedding, cast] = await Promise.all([
 		ctx.read("lorebook_entries", {
 			sessionId: input?.scope?.sessionId,
 			currentCharacterId: input?.scope?.currentCharacterId ?? null
@@ -201,29 +415,37 @@ async function loreFor(source: string, input: any, ctx: any) {
 			sessionId: input?.scope?.sessionId,
 			limit: input?.limit ?? 100
 		}),
-		ctx.read("embedding_status", {})
+		ctx.read("embedding_status", {}),
+		// The cast is read for its names alone — see `castEntityRefs`. A
+		// session that no longer exists reads as `null` here and scores the
+		// signal 0 for every entry, which is what an empty cast means anyway.
+		ctx.read("session_cast", { sessionId: input?.scope?.sessionId })
 	])
 
 	const result = keywordQuery({
 		entries: entries ?? [],
 		messages: messages ?? [],
-		entityNames: input?.entityNames ?? [],
+		entityRefs: castEntityRefs(cast),
 		retrieval: params.retrieval,
-		// The node's mode is a default for entries that did not choose, read
-		// off the raw params rather than `withDefaults` — that function fills
-		// the ranking shape, and this is not part of it.
-		defaultStrategy: input?.params?.retrievalMode,
-		availability: {
-			vectorSearchAvailable: embedding?.available ?? false
-		},
-		countTokens: (text: string) => roughTokens(text)
+		// ⚠ Nothing about retrieval *routing* is handed to the scan any more.
+		// The node's `retrievalMode` went in migration 0203 and the per-entry
+		// `retrieval_strategy` column in 0204, and `availability` went with the
+		// second because reading it was the gate's only purpose here. Every
+		// mechanism runs; one this install cannot run subtracts its signal and
+		// says so in `diagnostics` below, which is why `embedding` is still read.
+		// The run's tokenizer, not this binding's opinion of one. A candidate
+		// counted here is spent against a budget by the ranker and allocated
+		// over by Assemble, and all three have to be measuring in the same
+		// units — see `TaskCtx.countTokens`.
+		countTokens: (text: string) => ctx.countTokens(text)
 	})
 
 	const mine = normaliseTfidf(result.candidates).filter(
 		(c: any) => c.source === source
 	)
-	const mineSkipped = (result.skipped ?? []).filter(
-		(s: any) => s.source === source
+	const mineSkipped = withFingerprints(
+		(result.skipped ?? []).filter((s: any) => s.source === source),
+		entries
 	)
 	return ok({
 		main: mine,
@@ -245,12 +467,108 @@ async function loreFor(source: string, input: any, ctx: any) {
 			windowChars: result.diagnostics.windowChars,
 			considered: mine.length + mineSkipped.length,
 			matched: mine.length,
+			// The admission gate's own line. `admittedByEvidence` counts the
+			// whole scan rather than this source's share of it — the scan is
+			// shared and the filter is this node's, so a per-source count would
+			// need the gate to record which source each admission belonged to
+			// for a number nothing distinguishes today.
+			admitThreshold: result.diagnostics.admitThreshold,
+			admittedByEvidence: result.diagnostics.admittedByEvidence,
+			entities: result.diagnostics.entities,
+			extractorVersion: result.diagnostics.extractorVersion,
 			// Named in the result so "why did RAG not run" is answerable from
 			// the receipt rather than from the embedding settings screen.
 			vectorSearch: embedding?.available
 				? `available (${embedding.model})`
 				: (embedding?.reason ?? "unavailable")
 		}
+	})
+}
+
+/**
+ * The two names a history entry answers to.
+ *
+ * `lorebook_entries` publishes `history`; the vector index publishes
+ * `historyEntry`, and that spelling is load-bearing rather than cosmetic — the
+ * semantic ranker matches `sourceBudget` keys literally and the SDK declares
+ * them as frozen member keys, so renaming either vocabulary is a registry
+ * re-projection. They are reconciled here instead, at the one place the two
+ * have to agree: without it a vector hit never finds its lore row, and a
+ * history entry withheld by the lore read reads here as "not lore, nothing to
+ * honour" and is published anyway.
+ *
+ * ⚠ That is now the *only* thing this mapping decides, and today nothing
+ * withholds a history row — `lorebook_entries` withholds character lore alone —
+ * so the `historyEntry` line has no observable effect until something does.
+ * It is kept rather than trimmed because the thing that will is named in the
+ * plan: phase 7's clairvoyance filter excludes on knowledge, for every source.
+ * Its second reader, `entityVectorArm`'s pool, keys off the same two
+ * vocabularies.
+ */
+const VECTOR_SOURCE_ALIASES: Record<string, string> = {
+	historyEntry: "history"
+}
+
+/**
+ * Which sources `lorebook_entries` is authoritative for, in its own spelling.
+ *
+ * A hit from one of these that has no row in that read was *withheld* by it —
+ * character lore belonging to someone other than the speaker, today — and
+ * absence is the answer rather than the absence of one. Everything else
+ * (messages, graph nodes, cast rows) has no lore row to find and no strategy to
+ * honour.
+ */
+const LORE_SOURCES = new Set(["worldLore", "characterLore", "history"])
+
+/**
+ * The index's spelling for a source, as the budget group that pays for it.
+ *
+ * `select` allocates against the five bands; the vector mechanism's
+ * candidates carry the vector index's own vocabulary, and only `worldLore` and
+ * `characterLore` happen to be spelled the same in both. Without this, a
+ * semantic-mechanism spec — `vector-search → rank-semantic → rank-hybrid`, the shape
+ * the RAG parity harness and the SDK use-cases document — reached the ranker
+ * with every message, history entry and relationship in a spelling no group
+ * owned, and `select` dropped the lot as `excluded_unknown_source`. Assemble
+ * keys its `worldLore` / `history` / `characterLore` sections off the same five
+ * names, so a survivor would have rendered nowhere either.
+ *
+ * ⚠ Applied at the entry to `rank-hybrid` and nowhere earlier. `rank-semantic`
+ * matches `sourceBudget` keys against the *index* vocabulary literally
+ * (`weights.ts DEFAULT_SEMANTIC`), a `S.json` in-port makes it legal to wire
+ * after `core:task/merge-candidates@1`, and the documented semantic chain has
+ * no merge node at all — so the merge is neither early enough nor reliably
+ * present. Ranking is the last node before the budget, and the first that has
+ * to know about it.
+ *
+ * ⚠ Deliberately three entries, not six. `narrativeNode`, `character` and
+ * `persona` have no band to map onto — inventing one is a budget-share
+ * decision, not a spelling fix — so they keep being excluded, now visibly, with
+ * a reason on the receipt. The original spelling survives on the candidate's
+ * `payload`, which is the vector hit as it arrived.
+ *
+ * Separate from `VECTOR_SOURCE_ALIASES` although they agree on `historyEntry`
+ * today. That one answers "which lore row is this hit", and is read against a
+ * `lorebook_entries` result and `LORE_SOURCES`; this one answers "which budget
+ * pays for it". Folding them together would mean the three sources above join
+ * the lore-row lookup the moment somebody settles their budget group, which is
+ * an unrelated question with a different right answer.
+ */
+const BUDGET_GROUP_ALIASES: Record<string, string> = {
+	message: "messages",
+	historyEntry: "history",
+	narrativeRelationship: "relationships"
+}
+
+/**
+ * Nothing to do for the keyword mechanism: its candidates already carry budget
+ * vocabulary, and none of the three keys above is a band spelling, so a
+ * mixed pool off the merge passes through unchanged.
+ */
+function toBudgetGroups(candidates: any[]): any[] {
+	return candidates.map((c: any) => {
+		const group = BUDGET_GROUP_ALIASES[c?.source]
+		return group === undefined ? c : { ...c, source: group }
 	})
 }
 
@@ -375,7 +693,18 @@ function pickSpeaker(strategy: string) {
 	}
 }
 
-export function coreBindings(): Bindings {
+/**
+ * @param run Which run these bindings are executing for.
+ *
+ * Only the two rendering nodes read it, and only so a template that names a
+ * *plugin's* engine renders as a hook call cancelling the run can find (see
+ * `RenderRun`). It is a parameter rather than something read off `ctx` because
+ * the SDK's `TaskCtx` carries no run id — a Task is told its inputs and nothing
+ * about the machine around it — so `runTurn` supplies it at the one place that
+ * has both the run and the binding table. Absent for a caller with no run: the
+ * parity harness, `boundTypeIds`, and a test poking one binding directly.
+ */
+export function coreBindings(run: RenderRun = {}): Bindings {
 	const bindings: Bindings = {
 		// ── Inputs ──────────────────────────────────────────────────────────
 		// An Input node does not fetch; it names what the trigger already
@@ -416,10 +745,10 @@ export function coreBindings(): Bindings {
 		},
 
 		/**
-		 * The keyword arm. Reads rows, matches strings, reaches no network
-		 * (16 §1) — vector similarity is the other arm's job.
+		 * The keyword mechanism. Reads rows, matches strings, reaches no network
+		 * (16 §1) — vector similarity is the other mechanism's job.
 		 *
-		 * `hits` carries the candidates and `skipped` carries what this arm
+		 * `hits` carries the candidates and `skipped` carries what this mechanism
 		 * declined *and why*. The second is not diagnostics decoration: today a
 		 * disabled entry, an entry set to `rag`, and an entry whose keys simply
 		 * did not match all present identically as absent lore, which is three
@@ -443,7 +772,7 @@ export function coreBindings(): Bindings {
 
 		"core:query/lorebook-triggers@1": async (input: any, ctx: any) => {
 			const params = withDefaults(retrievalParamsFrom(input?.params))
-			const [entries, messages, embedding] = await Promise.all([
+			const [entries, messages, embedding, cast] = await Promise.all([
 				ctx.read("lorebook_entries", {
 					sessionId: input?.scope?.sessionId,
 					currentCharacterId: input?.scope?.currentCharacterId ?? null
@@ -452,29 +781,32 @@ export function coreBindings(): Bindings {
 					sessionId: input?.scope?.sessionId,
 					limit: input?.limit ?? 100
 				}),
-				ctx.read("embedding_status", {})
+				ctx.read("embedding_status", {}),
+				// See the other keyword mechanism: read for its names alone.
+				ctx.read("session_cast", {
+					sessionId: input?.scope?.sessionId
+				})
 			])
 
 			const result = keywordQuery({
 				entries: entries ?? [],
 				messages: messages ?? [],
-				entityNames: input?.entityNames ?? [],
+				entityRefs: castEntityRefs(cast),
 				retrieval: params.retrieval,
-				availability: {
-					// Read from the instance rather than assumed, because it
-					// decides whether a `rag` entry falls back to keyword — and
-					// getting that silently wrong presents as a lorebook problem
-					// and sends the user to the wrong screen.
-					vectorSearchAvailable: embedding?.available ?? false
-				},
-				countTokens: (text: string) => roughTokens(text)
+				// ⚠ No `availability` either — see the other keyword mechanism.
+				// `embedding` is still read, and read for the diagnostics line
+				// below alone: what this mechanism found must not depend on whether a
+				// model is loaded, and the surest way to hold that is to hand it
+				// nothing to branch on.
+				// See the note on the other keyword mechanism: one instrument.
+				countTokens: (text: string) => ctx.countTokens(text)
 			})
 
 			const candidates = normaliseTfidf(result.candidates)
 			return ok({
 				main: candidates,
 				hits: candidates,
-				skipped: result.skipped,
+				skipped: withFingerprints(result.skipped ?? [], entries),
 				diagnostics: {
 					...result.diagnostics,
 					// Named in the result so "why did RAG not run" is answerable
@@ -488,27 +820,59 @@ export function coreBindings(): Bindings {
 		},
 
 		/**
-		 * The vector arm.
+		 * The vector mechanism.
 		 *
 		 * Takes a query vector — produced by the embed Provider, because a Query
 		 * may not reach a model (16 §1) — and asks the host for semantically
 		 * near candidates. Cosine ranking happens host-side so candidate vectors
 		 * never travel along a data edge; what arrives here is an id, a score and
 		 * the text.
+		 *
+		 * ## It contributes a **signal**, not an ordering
+		 *
+		 * Its candidates carry `signals.semantic` and no `presetScore`, and that
+		 * one line is the difference between the mechanism adding to the ranker and
+		 * replacing it. `select`'s `scoreOf` prefers `presetScore` over the
+		 * weighted sum, so a mechanism that stamped its raw cosine there and was wired
+		 * into `rank-hybrid` would order the whole pool by cosine and make all
+		 * ten signal weights inert — which is exactly what
+		 * `core:task/merge-candidates@1` did to the three lore lanes until spec
+		 * 1.17.0, and is why `core:task/concat-candidates@1` exists.
+		 *
+		 * Nothing that legitimately reads `presetScore` loses anything by its
+		 * absence: `merge-candidates` and `rank-semantic` both fuse **ranks**,
+		 * not scores, and both stamp their own result on the way out. So the
+		 * documented semantic chain — `vector-search → rank-semantic →
+		 * rank-hybrid` — is untouched, and the shape that was silently broken
+		 * (`vector-search → rank-hybrid`) is the one that now works.
 		 */
 		"core:query/vector-search@1": async (input: any, ctx: any) => {
-			const embedding = await ctx.read("embedding_status", {})
-			if (!embedding?.available)
-				return ok({
+			/**
+			 * ⚠ **0 is off, and is the shipped default** — the
+			 * `maxRecursionDepth` / `admitThreshold` convention, and the same
+			 * one the entity mechanism uses. Returned before the reads rather than
+			 * after them: a mechanism nobody asked for should cost nothing, not a
+			 * candidate fetch it then throws away.
+			 */
+			const maxEntries = Math.max(
+				0,
+				Number(input?.params?.maxEntries) || 0
+			)
+			const off = (reason: string) =>
+				ok({
 					main: [],
 					lists: [],
 					hits: [],
 					similarity: [],
 					skipped: [],
-					diagnostics: {
-						vectorSearch: embedding?.reason ?? "unavailable"
-					}
+					diagnostics: { vectorSearch: reason, truncated: [] }
 				})
+			if (maxEntries === 0)
+				return off("off — no entries requested (maxEntries is 0)")
+
+			const embedding = await ctx.read("embedding_status", {})
+			if (!embedding?.available)
+				return off(embedding?.reason ?? "unavailable")
 
 			const [entries, result] = await Promise.all([
 				ctx.read("lorebook_entries", {
@@ -527,61 +891,118 @@ export function coreBindings(): Bindings {
 				})
 			])
 
-			// Strategy is a property of the entry, so eligibility is applied to
-			// what came back rather than pushed into the query — the host does
-			// retrieval, not policy.
-			const bySource = new Map(
-				(entries ?? []).map((e: any) => [`${e.source}:${e.id}`, e])
+			// The lore read is the *visible* set, so intersecting against it is
+			// what keeps the two mechanisms answering to one visibility rule. It is
+			// applied to what came back rather than pushed into the query,
+			// because the host does retrieval and not policy.
+			//
+			// A set rather than a map since migration 0204: the entry rows were
+			// looked up to read `retrieval_strategy` off them, and membership is
+			// the only question left.
+			const visible = new Set(
+				(entries ?? []).map((e: any) => `${e.source}:${e.id}`)
 			)
 			const skipped: any[] = []
 			const excluded = new Set<string>()
 			const isEligible = (hit: any) => {
-				const key = `${hit.source}:${hit.id}`
+				const source = VECTOR_SOURCE_ALIASES[hit.source] ?? hit.source
+				const key = `${source}:${hit.id}`
 				if (excluded.has(key)) return false
-				const entry: any = bySource.get(key)
-				// A hit with no matching lore row is a message or a graph node,
-				// which has no strategy to honour and is always eligible.
-				if (
-					entry &&
-					!eligibleFor(
-						entry,
-						"vector",
-						{ vectorSearchAvailable: true },
-						// The vector arm answers to the same node default the
-						// keyword arm does; leaving it out here would make the
-						// two arms disagree about what an undecided entry is.
-						input?.params?.retrievalMode
-					)
-				) {
+				if (!visible.has(key)) {
+					// A hit with no lore row at all is a message, a graph node
+					// or a cast row: nothing to honour, always eligible.
+					if (!LORE_SOURCES.has(source)) return true
+					// ⚠ A lore row the read declined to return, on the other
+					// hand, is a decision — `lorebook_entries` withholds
+					// character lore that is not the speaker's own. Reading
+					// that absence as "not lore" published every character's
+					// private self-knowledge through this mechanism whoever was
+					// speaking, because the host filters and the vector index
+					// does not.
 					excluded.add(key)
 					skipped.push({
 						id: hit.id,
 						source: hit.source,
-						reason: armNote(
-							entry,
-							"vector",
-							{ vectorSearchAvailable: true },
-							input?.params?.retrievalMode
-						).replace(
-							"matched by vector",
-							"handled by the keyword scan"
-						)
+						reason: "not visible to the current speaker"
 					})
 					return false
 				}
+				// ⚠ **Visibility is the only exclusion this mechanism may make.**
+				// There was a second one here: the entry's own
+				// `retrieval_strategy`, which kept a `keyword` entry out of
+				// this mechanism with a model loaded and a cosine of 1. Migration
+				// 0204 dropped the column and the check with it — a mechanism
+				// switched off for a candidate is the exclusion the plan's
+				// second governing rule forbids, whoever set the switch.
+				//
+				// So an entry the read returned is eligible, full stop. Do not
+				// add a third branch: a per-entry mechanism preference belongs
+				// on the score as a weight, where it subtracts a contribution
+				// and leaves the candidate where every other mechanism and the
+				// receipt can still see it. See `ranking/strategy.ts`.
 				return true
 			}
+
+			/**
+			 * The best cosine any of the query vectors gave this row.
+			 *
+			 * `result.candidates` is the *union* of the per-vector lists with
+			 * the first occurrence kept, so a hit's own `score` is its
+			 * similarity to whichever vector happened to rank it first — an
+			 * arbitrary choice when the mechanism produces an ordering to be fused
+			 * downstream, and the wrong number when it produces a *signal*.
+			 * "How close is this entry to anything the scene is currently
+			 * saying" is a maximum, not a first.
+			 *
+			 * Built from `lists`, which is what carries the per-vector scores;
+			 * a row absent from every list keeps its own score.
+			 */
+			const bestScore = new Map<string, number>()
+			for (const list of result?.lists ?? [])
+				for (const hit of list ?? []) {
+					const key = `${hit.source}:${hit.id}`
+					const score = Number(hit.score)
+					if (!Number.isFinite(score)) continue
+					const seen = bestScore.get(key)
+					if (seen === undefined || score > seen)
+						bestScore.set(key, score)
+				}
 
 			const toCandidate = (hit: any) => ({
 				id: hit.id,
 				source: hit.source,
-				tokens: roughTokens(hit.content ?? ""),
-				signals: {},
-				// Kept for the merge's ordering, not for the weighted sum: a
-				// cosine score and a keyword score are not on one scale.
-				presetScore: hit.score,
+				// The vector mechanism builds candidates itself rather than through
+				// keywordQuery, so it is the one place the two mechanisms could have
+				// gone on measuring differently.
+				tokens: ctx.countTokens(hit.content ?? ""),
+				/**
+				 * ⚠ **The cosine lands here and no longer on `presetScore`.**
+				 *
+				 * It used to be both: a `signals: {}` and a `presetScore:
+				 * hit.score`, described as "kept for the merge's ordering, not
+				 * for the weighted sum". The merge does not read it — both
+				 * `merge-candidates` and `rank-semantic` fuse *ranks* and stamp
+				 * their own score on the way out — so the only consumer it ever
+				 * had was `select`'s `scoreOf`, which prefers `presetScore` over
+				 * the weighted sum. A `vector-search → rank-hybrid` chain
+				 * therefore ordered the entire pool by raw cosine with all ten
+				 * signal weights inert, silently, and that is the shape the
+				 * shipped reply pipeline now uses.
+				 *
+				 * As a signal it *adds* instead: an entry the keyword scan also
+				 * found keeps its keyword signals and gains this one, so two
+				 * mechanisms agreeing outrank either alone without a fusion step
+				 * to reconcile two incomparable scales.
+				 */
+				signals: {
+					semantic:
+						bestScore.get(`${hit.source}:${hit.id}`) ??
+						(Number.isFinite(Number(hit.score))
+							? Number(hit.score)
+							: 0)
+				},
 				priority: hit.priority ?? 1,
-				payload: hit
+				payload: { ...hit, foundBy: "vector-search" }
 			})
 
 			// One ranked list per query vector, each filtered independently so a
@@ -597,12 +1018,30 @@ export function coreBindings(): Bindings {
 			// something was filtered.
 			const fusedAll = result?.candidates ?? []
 			const keptIndices: number[] = []
-			const fusedOrder = fusedAll.filter((hit: any, index: number) => {
+			const eligible = fusedAll.filter((hit: any, index: number) => {
 				if (!isEligible(hit)) return false
 				keptIndices.push(index)
 				return true
 			})
-			const flat = fusedOrder.map(toCandidate)
+			/**
+			 * ⚠ **The cap bounds `main`/`hits` and nothing else**, and the two
+			 * things it deliberately leaves alone are the reason it can.
+			 *
+			 * `lists` are the per-query orderings `core:task/rank-semantic@1`
+			 * fuses; cutting them would change *which* entries that fusion sees
+			 * rather than how many this mechanism hands to a ranker. And `similarity`
+			 * stays indexed against the whole eligible fused order — which is
+			 * the order `rrfMerge(lists)` produces, by construction — so the
+			 * chain that reads both keeps them lined up.
+			 *
+			 * `hits` is then a **prefix** of that order, so `similarity[i][j]`
+			 * still describes `hits[i]` and `hits[j]` for everything the cap
+			 * kept. Truncating the matrix as well would have looked tidier and
+			 * quietly desynchronised it from `lists`, and an off-by-one in a
+			 * similarity matrix diversifies against the wrong candidates
+			 * silently and only when something was cut.
+			 */
+			const flat = eligible.slice(0, maxEntries).map(toCandidate)
 			const matrix: number[][] = keptIndices.map((r) =>
 				keptIndices.map((c) => result?.similarity?.[r]?.[c] ?? 0)
 			)
@@ -611,15 +1050,546 @@ export function coreBindings(): Bindings {
 				main: flat,
 				hits: flat,
 				lists,
-				// Indexed against `hits`, by construction rather than by
-				// convention: the projection above is what makes that true.
+				// Indexed against the eligible fused order — the order
+				// `rrfMerge(lists)` reproduces — of which `hits` is a prefix.
+				// The projection above is what makes that true rather than
+				// conventional.
 				similarity: matrix,
 				skipped,
 				diagnostics: {
 					vectorSearch: `available (${embedding.model})`,
+					maxEntries,
 					queries: lists.length,
 					considered: (result?.candidates ?? []).length,
-					matched: flat.length
+					matched: flat.length,
+					/** Eligible hits the cap turned away, so a low cap is visible. */
+					overCap: Math.max(0, eligible.length - flat.length),
+					/**
+					 * Which sources the candidate fetch could not read whole.
+					 *
+					 * `considered` above counts what this mechanism ranked; it says
+					 * nothing about what was never fetched. The candidate query
+					 * is capped per source and orders by id rather than by
+					 * similarity — no pgvector index — so a listed source
+					 * offered its newest `fetched` rows out of `available`, and
+					 * the turn's best match may be in the remainder. Empty on
+					 * any normal turn, and reported rather than inferred
+					 * because a truncated retrieval and a complete one produce
+					 * results that look exactly alike.
+					 */
+					truncated: result?.truncated ?? [],
+					/**
+					 * What the eager index pass did before this search ran.
+					 *
+					 * Lifted explicitly, not splatted: this mechanism's `diagnostics`
+					 * is assembled here from named host fields, and a slow turn
+					 * or a partially-covered scope has to be explicable rather
+					 * than merely true.
+					 */
+					indexing: result?.indexing
+				}
+			})
+		},
+
+		/**
+		 * The entity mechanism — design §13.5, and the third peer of keyword and
+		 * vector.
+		 *
+		 * It retrieves on *what the scene is naming*: the entities of the recent
+		 * window, intersected with the entities every lorebook entry and every
+		 * earlier message was annotated with. No keys, no embedding model, no
+		 * network — §11's zero-cost path holds.
+		 *
+		 * ## Why it is a peer and not a signal
+		 *
+		 * The improved overlap already feeds *admission* inside the keyword
+		 * scan (`admitThreshold`), and it could have stopped there. It does not,
+		 * because plan Part 5 rules NER *"a first-class strategy on the same
+		 * footing, over messages as well as entries"* and the message half is
+		 * unreachable from inside a scan that only reads a window. This is the
+		 * first retrieval over conversation history in the product.
+		 *
+		 * ## Two out-ports, budgeted apart
+		 *
+		 * `main`/`hits` are lore candidates, in their entries' own bands.
+		 * `messages` is the transcript half, in the `messages` band, and the
+		 * shipped spec deliberately does **not** wire it into `rank` — nothing
+		 * renders a ranked message today (`assemble` builds the transcript from
+		 * `lines`), so budget spent there would buy nothing. See the note in
+		 * `respond.ts`.
+		 *
+		 * ## The privacy gate is the lore read's, not a second one
+		 *
+		 * The visible entry ids come from `ctx.read("lorebook_entries")`, which
+		 * has already withheld character lore belonging to someone other than
+		 * the speaker. The entity read is handed those ids and annotates exactly
+		 * them — so this mechanism answers to the same visibility rule the other two
+		 * do, by construction rather than by a rule restated a third time.
+		 */
+		"core:query/entity-search@1": async (input: any, ctx: any) => {
+			const params = input?.params ?? {}
+			const maxEntries = Math.max(0, Number(params.maxEntries) || 0)
+			const maxMessages = Math.max(0, Number(params.maxMessages) || 0)
+
+			/**
+			 * ⚠ **0 is off, in both halves** — the `maxRecursionDepth` /
+			 * `admitThreshold` convention. Returning early rather than
+			 * returning everything and letting the cap bite: this mechanism annotates
+			 * as a side effect of running, and an install that has not asked
+			 * for it should pay nothing at all, not even the write.
+			 */
+			if (maxEntries === 0 && maxMessages === 0)
+				return ok({
+					main: [],
+					hits: [],
+					messages: [],
+					skipped: [],
+					diagnostics: {
+						maxEntries,
+						maxMessages,
+						entities: [],
+						reason: "off — no entries or messages requested"
+					}
+				})
+
+			const scanDepth = Math.max(
+				1,
+				Number(params.scanDepth) || withDefaults({}).retrieval.scanDepth
+			)
+			const entityWeight =
+				params.entityWeight === undefined ||
+				params.entityWeight === null
+					? DEFAULT_ENTITY_WEIGHT
+					: Math.max(0, Number(params.entityWeight) || 0)
+
+			const [entries, messages] = await Promise.all([
+				ctx.read("lorebook_entries", {
+					sessionId: input?.scope?.sessionId,
+					currentCharacterId: input?.scope?.currentCharacterId ?? null
+				}),
+				ctx.read("session_messages", {
+					sessionId: input?.scope?.sessionId,
+					limit: input?.limit ?? 100
+				})
+			])
+
+			const rows: any[] = entries ?? []
+			const history: any[] = messages ?? []
+			/**
+			 * The oldest message the prompt already carries verbatim.
+			 *
+			 * Retrieval stops there. Everything from here on is in the window
+			 * `process-messages` renders, so returning one would spend the
+			 * budget twice on one span — the same exclusion the vector mechanism
+			 * makes with `excludeRecentMessages`. Negative ids are the
+			 * uncommitted draft, which belongs to no row.
+			 */
+			const inPrompt = history
+				.map((m: any) => Number(m?.id))
+				.filter((id: number) => Number.isFinite(id) && id > 0)
+			const beforeId = inPrompt.length ? Math.min(...inPrompt) : undefined
+
+			const index = await ctx.read("entity_annotations", {
+				sessionId: input?.scope?.sessionId,
+				entryIds: rows.map((e: any) => e.id),
+				// What the scene is about *now*, which is the guaranteed
+				// window's question rather than the whole history's — see
+				// `keywordQuery`, which builds its evidence profile the same
+				// way and from the same default depth.
+				window: buildScanWindow(history, scanDepth).raw,
+				maxMessages,
+				beforeId
+			})
+
+			const keysOf = new Map<number, string[]>(
+				(index?.entries ?? []).map((e: any) => [e.id, e.keys ?? []])
+			)
+			const rarities = entityRarity(
+				entityDocFreq(keysOf.values()),
+				rows.length
+			)
+
+			const byId = new Map<number, any>(rows.map((e: any) => [e.id, e]))
+			const loreHits = entitySearch({
+				entities: index?.entities ?? [],
+				pool: rows.map((e: any) => ({
+					id: e.id as number,
+					source: e.source as RetrievalBand,
+					keys: keysOf.get(e.id) ?? [],
+					priority: e.priority ?? 1
+				})),
+				rarities,
+				signalWeights: DEFAULT_SIGNAL_WEIGHTS,
+				entityWeight
+			}).slice(0, maxEntries)
+
+			const toCandidate = (hit: any, row: any) => ({
+				id: hit.id,
+				source: hit.source,
+				tokens: ctx.countTokens(row?.content ?? ""),
+				/**
+				 * The measurement, in the vocabulary it belongs to — and read
+				 * by the receipt rather than by `select`, which prefers
+				 * `presetScore`. Both are here on purpose: the score is sized
+				 * by this mechanism's own weight (§13.10 — the graded term's live
+				 * range at the lore band's 0.2 would be narrower than the
+				 * binary signal it improves on), and the signal is what says
+				 * *what was measured* when somebody asks why this entry is in
+				 * their prompt.
+				 */
+				signals: { entityCooccurrence: hit.evidence },
+				presetScore: hit.score,
+				priority: row?.priority ?? 1,
+				position: row?.position ?? 0,
+				payload: {
+					...(row ?? {}),
+					foundBy: "entity-search",
+					sharedEntities: hit.shared
+				}
+			})
+
+			const candidates = loreHits.map((hit) =>
+				toCandidate(hit, byId.get(hit.id as number))
+			)
+
+			/**
+			 * The transcript half.
+			 *
+			 * Scored with the **entries'** rarities, never the messages' own —
+			 * §13.8, measured: rarity over a short conversation makes nearly
+			 * every word look rare, and an entry about a pewterers' guild
+			 * scored as high as the faction the scene was about on "of",
+			 * "with" and "long". Rarity is a property of the collection being
+			 * searched, and the entry pool is the one that has one.
+			 */
+			const messageHits = entitySearch<number>({
+				entities: index?.entities ?? [],
+				pool: (index?.messages ?? []).map((m: any) => ({
+					id: m.id as number,
+					source: "messages" as RetrievalBand,
+					keys: m.keys ?? []
+				})),
+				rarities,
+				signalWeights: DEFAULT_SIGNAL_WEIGHTS,
+				entityWeight
+			}).slice(0, maxMessages)
+
+			const messageById = new Map<number, any>(
+				(index?.messages ?? []).map((m: any) => [m.id, m])
+			)
+			const messageCandidates = messageHits.map((hit) => {
+				const row = messageById.get(hit.id)
+				return {
+					id: hit.id,
+					source: "messages",
+					tokens: ctx.countTokens(row?.content ?? ""),
+					signals: { entityCooccurrence: hit.evidence },
+					presetScore: hit.score,
+					payload: {
+						id: hit.id,
+						content: row?.content ?? "",
+						foundBy: "entity-search",
+						sharedEntities: hit.shared
+					}
+				}
+			})
+
+			return ok({
+				main: candidates,
+				hits: candidates,
+				messages: messageCandidates,
+				skipped: [],
+				diagnostics: {
+					maxEntries,
+					maxMessages,
+					entityWeight,
+					scanDepth,
+					/**
+					 * The surface forms, not the keys: a receipt saying the
+					 * scene is about "the Ashguard" is readable and one saying
+					 * `entry:41` is an id nobody asked about.
+					 */
+					entities: (index?.entities ?? []).map((e: any) => e.text),
+					extractorVersion: index?.extractorVersion,
+					/** Which vocabulary produced them — §13.3's third identity. */
+					gazetteerHash: index?.gazetteerHash,
+					considered: rows.length,
+					matched: candidates.length,
+					messagesFound: messageCandidates.length,
+					...(index?.diagnostics ?? {})
+				}
+			})
+		},
+
+
+		/**
+		 * The mention detector — the query half of the entity-vector space.
+		 *
+		 * What the scene refers to **by describing it** rather than by naming
+		 * it: *"the captain"*, *"the order"*, *"that bridge"*. A Query rather
+		 * than a Task because the answer depends on the world's own vocabulary —
+		 * a lower-case authored name like *"the ashguard"* has to be dropped
+		 * here, since the exact matcher owns it and offering it to a vector
+		 * linker as well is the first half of *"do not let entity vectors
+		 * override an exact match"*.
+		 *
+		 * ## This node carries the mechanism's one switch
+		 *
+		 * `maxMentions` is **0 by default and that is off** — the
+		 * `maxRecursionDepth` / `admitThreshold` convention. It is on the
+		 * *first* node of the chain deliberately: switched off, this returns
+		 * before it reads anything, `embed-text` is handed no texts and makes
+		 * no model call, and `entity-link` returns before its own read. A mechanism
+		 * nobody asked for costs nothing at all — not a message read and not an
+		 * embedding, which is the cost the semantic mechanism's switch position
+		 * cannot avoid and this one can.
+		 *
+		 * Its sibling `entity-link.maxLinks` is therefore a **ceiling and not a
+		 * second switch**, and ships non-zero: a feature where two controls both
+		 * default to off is one where turning the first one on appears to do
+		 * nothing.
+		 */
+		"core:query/mention-spans@1": async (input: any, ctx: any) => {
+			const params = input?.params ?? {}
+			const maxMentions = Math.max(0, Number(params.maxMentions) || 0)
+			if (maxMentions === 0)
+				return ok({
+					main: [],
+					mentions: [],
+					texts: [],
+					diagnostics: {
+						maxMentions,
+						reason: "off — no mentions requested (maxMentions is 0)"
+					}
+				})
+
+			const scanDepth = Math.max(
+				1,
+				Number(params.scanDepth) || withDefaults({}).retrieval.scanDepth
+			)
+			const found = await ctx.read("mention_spans", {
+				sessionId: input?.scope?.sessionId,
+				scanDepth,
+				limit: maxMentions
+			})
+
+			const mentions: any[] = found?.mentions ?? []
+			return ok({
+				main: mentions,
+				mentions,
+				/**
+				 * The strings, in the same order, for the embed Provider.
+				 *
+				 * A port of its own rather than letting the Provider reach into
+				 * the objects: `embed-text` takes `texts`, and index alignment
+				 * between what was embedded and what it described is the whole
+				 * contract between these two nodes.
+				 */
+				texts: mentions.map((m: any) => m.text),
+				diagnostics: {
+					maxMentions,
+					scanDepth,
+					extractorVersion: found?.extractorVersion,
+					/** Which vocabulary decided what was already a name. */
+					gazetteerHash: found?.gazetteerHash,
+					found: mentions.length,
+					/** Dropped because an authored name already owned the span. */
+					claimed: found?.diagnostics?.claimed ?? 0,
+					mentionsFound: mentions.map((m: any) => m.text)
+				}
+			})
+		},
+
+		/**
+		 * The entity-vector mechanism — mention → name linking (retrieval plan phase 4).
+		 *
+		 * A second named vector space holding one vector per **name**, queried
+		 * with the descriptions the scene used. *"The captain"* finds Captain
+		 * Vell; *"the order"* finds The Ashguard Riders. Neither shares a
+		 * character with its target, so keys, trigrams and the gazetteer all
+		 * miss them — and they are the references people actually write.
+		 *
+		 * ## It may only reorder. It may never admit.
+		 *
+		 * ⚠ **The pool is the candidates that arrive on the `candidates`
+		 * in-port**, and this returns that same list with a signal attached to
+		 * whatever linked. That is the enforcement of *"a link is a score
+		 * contribution, never an admission on its own"*, put where a refactor
+		 * cannot lose it: there is no id this node can emit that some other
+		 * mechanism did not already produce.
+		 *
+		 * It matters because of what a wrong link is. Invented proper nouns are
+		 * where embeddings are least reliable — "Vell" has no learned meaning,
+		 * so its vector comes from subword fragments and Vell, Vall and Vela
+		 * cluster — and a confident wrong link is worse than a miss, because it
+		 * injects wrong lore at high confidence into a fixed budget where it
+		 * displaces right lore. Constrained to reordering, the same wrong link
+		 * costs a position and a line in the receipt that names it.
+		 *
+		 * ## Ruling R4: no threshold anywhere
+		 *
+		 * Links rank; they do not gate. What bounds the mechanism is a **count** —
+		 * `maxLinks` over links ranked by match quality — never a similarity
+		 * cutoff, because *"is 0.62 a match"* has no answer that survives
+		 * changing the encoder.
+		 *
+		 * ## Wired first into the concat, with the raw list behind it
+		 *
+		 * `core:task/concat-candidates@1` keeps the **first** occurrence of a
+		 * `source:id`, so this node's enriched copies win and the unenriched
+		 * `lore.candidates` behind them is a pure fallback. Every way this mechanism
+		 * can produce nothing — switched off, no embedding model, an error the
+		 * executor recovered as empty — therefore lands on exactly the list the
+		 * ranker would have seen without it. The governing rule holds by
+		 * construction rather than by a `try`.
+		 */
+		"core:query/entity-link@1": async (input: any, ctx: any) => {
+			const params = input?.params ?? {}
+			const maxLinks = Math.max(0, Number(params.maxLinks) || 0)
+			const mentions: any[] = Array.isArray(input?.mentions)
+				? input.mentions
+				: []
+			const vectors: any[] = Array.isArray(input?.vectors)
+				? input.vectors.filter(Array.isArray)
+				: []
+			const pool: any[] = Array.isArray(input?.candidates)
+				? input.candidates
+				: []
+
+			/**
+			 * ⚠ **Empty means "the ranker sees `lore.candidates` unchanged"**,
+			 * not "the ranker sees nothing" — see the wiring note above. So
+			 * every off state returns before any read, and none of them can
+			 * cost a candidate.
+			 */
+			const off = (reason: string) =>
+				ok({
+					main: [],
+					candidates: [],
+					links: [],
+					diagnostics: {
+						maxLinks,
+						mentions: mentions.length,
+						linked: 0,
+						entityLink: reason
+					}
+				})
+			if (maxLinks === 0) return off("off — no links requested (maxLinks is 0)")
+			// ⚠ Two states with one symptom, and the note has to admit it. The
+			// mechanism's switch is `mention-spans`' `maxMentions`, which ships at 0, so
+			// an empty mention list is *usually* "the mechanism is off" and not "the
+			// scene described nothing" — and this node cannot tell them apart from
+			// an empty array. Naming only the second reads as a false negative on
+			// every default install, now that the receipt renders this line.
+			if (!mentions.length)
+				return off(
+					"nothing to link — no descriptions were found in the window, " +
+						"or the mention scan is switched off"
+				)
+			// Index alignment is the contract between this and the embed
+			// Provider, and a short list means the model returned fewer vectors
+			// than texts — pairing them by position anyway would attach one
+			// mention's meaning to another's word.
+			if (vectors.length !== mentions.length)
+				return off(
+					vectors.length === 0
+						? // Both reachable, and neither is an error: `auto` reads
+							// an unavailable model as an absence, and `off` on
+							// the embed node declines to call one at all.
+							"nothing was embedded — no embedding model is loaded, or embedding is switched off"
+						: `the embedder returned ${vectors.length} vectors for ${mentions.length} mentions`
+				)
+			if (!pool.length) return off("no candidates to rank")
+
+			const embedding = await ctx.read("embedding_status", {})
+			if (!embedding?.available) return off(embedding?.reason ?? "unavailable")
+
+			/**
+			 * The searchable ids, taken off the pool rather than read again.
+			 *
+			 * This is also the privacy gate, and it is the *same* one: the
+			 * candidates were produced by mechanisms whose lore read already withheld
+			 * character lore belonging to somebody other than the speaker, so
+			 * re-deriving visibility here would be a second implementation of
+			 * that rule, free to disagree with the first.
+			 */
+			const byId = new Map<number, any>()
+			for (const candidate of pool) {
+				const id = Number(candidate?.id)
+				if (!Number.isFinite(id)) continue
+				if (!LORE_SOURCES.has(String(candidate?.source))) continue
+				if (!byId.has(id)) byId.set(id, candidate)
+			}
+			if (!byId.size) return off("no lore candidates to link against")
+
+			const found = await ctx.read("entity_link", {
+				sessionId: input?.scope?.sessionId,
+				entryIds: [...byId.keys()],
+				mentions: mentions.map((m: any) => ({
+					text: String(m?.text ?? ""),
+					position: Number(m?.position) || 0
+				})),
+				vectors
+			})
+
+			const links = rankEntityLinks(
+				(found?.hits ?? []) as EntityLinkHit[],
+				maxLinks
+			)
+			const linkOf = new Map(links.map((l) => [l.entryId, l]))
+
+			/**
+			 * The whole pool, with the linked ones enriched.
+			 *
+			 * `signals` is copied rather than written into: the mechanisms upstream
+			 * still hold these objects — `concat-candidates` says so in its own
+			 * note — and mutating one here would change what a previous node's
+			 * receipt says it produced.
+			 */
+			const candidates = pool.map((candidate: any) => {
+				const id = Number(candidate?.id)
+				const link = Number.isFinite(id) ? linkOf.get(id) : undefined
+				if (!link) return candidate
+				return {
+					...candidate,
+					signals: {
+						...(candidate?.signals ?? {}),
+						entityVector: link.score
+					},
+					payload: {
+						...(candidate?.payload ?? {}),
+						/**
+						 * The sentence a reader gets. A vector link does not
+						 * explain itself the way a keyword hit does — the entry
+						 * simply appears higher — so the link travels as text
+						 * and a wrong one is visible and correctable rather
+						 * than lore arriving for no reason.
+						 */
+						entityLinks: [linkNote(link)]
+					}
+				}
+			})
+
+			return ok({
+				main: candidates,
+				candidates,
+				links: links.map((l) => ({
+					id: l.entryId,
+					mention: l.mention,
+					name: l.name,
+					kind: l.nameKind,
+					score: l.score,
+					note: linkNote(l)
+				})),
+				diagnostics: {
+					maxLinks,
+					entityLink: `available (${embedding.model})`,
+					mentions: mentions.length,
+					considered: byId.size,
+					linked: links.length,
+					/** Readable, and the reason this mechanism is auditable at all. */
+					matched: links.map((l) => linkNote(l)),
+					...(found?.diagnostics ?? {})
 				}
 			})
 		},
@@ -710,15 +1680,23 @@ export function coreBindings(): Bindings {
 		"core:task/turn-manual@1": pickSpeaker("manual"),
 		"core:task/turn-none@1": pickSpeaker("none"),
 		/**
-		 * Fuse the two arms into one ordering.
+		 * Fuse the two mechanisms into one ordering.
 		 *
 		 * Reciprocal-rank fusion, **not an average**: keyword scores are a
 		 * weighted sum in roughly [0, 1.5] and vector scores are cosine in
-		 * [-1, 1], so averaging would hand every turn to whichever arm happened
+		 * [-1, 1], so averaging would hand every turn to whichever mechanism happened
 		 * to be more generous — and nobody could tell which (DECOMPOSITION §4).
 		 *
-		 * An entry both arms found outranks one either found alone, which is what
+		 * An entry both mechanisms found outranks one either found alone, which is what
 		 * `both` is asking for: agreement between independent signals is evidence.
+		 *
+		 * ⚠ Which is also the precondition. Handed **disjoint** orderings there
+		 * is no agreement to measure, the fused score is each entry's position
+		 * in its own list, and the `presetScore` stamped below then overrides
+		 * every signal weight in `select`. That is a wiring mistake rather than
+		 * a data state, so it is named on the receipt — see the note on
+		 * `disjoint` below, and `core:task/concat-candidates@1` for what such a
+		 * pipeline meant.
 		 */
 		"core:task/merge-candidates@1": async (input: any) => {
 			const orderings: any[][] = (input?.sources ?? []).filter(
@@ -743,7 +1721,150 @@ export function coreBindings(): Bindings {
 				}
 			}))
 
-			return ok({ main: candidates, candidates })
+			/**
+			 * ⚠ Two or more mechanisms, and not one entry in common.
+			 *
+			 * Reported rather than refused, and the line between them is who
+			 * would be punished. A halt here would take down a plugin or a
+			 * user-authored spec mid-turn over a wiring choice that still
+			 * produces candidates; the receipt is where a wiring question
+			 * belongs, and this node's whole value is that it says how each
+			 * candidate was found.
+			 *
+			 * It is not a stylistic complaint. Fusion's premise is that two
+			 * mechanisms ranked the *same* pool, so agreement is evidence. With
+			 * nothing in common every fused score is one list position, the
+			 * `presetScore` above overrides the weighted signal sum in
+			 * `select`, and the ordering that reaches the prompt is whatever
+			 * order the producers happened to emit. That is exactly what the
+			 * shipped reply pipeline did to its three lore lanes until spec
+			 * 1.17.0, and `core:task/concat-candidates@1` is the node it
+			 * wanted.
+			 */
+			const disjoint = disjointOrderings(orderings)
+			const diagnostics = {
+				orderings: orderings.length,
+				fused: candidates.length,
+				/**
+				 * Entries more than one ordering produced — the fusion's whole
+				 * subject, and the number that is zero when it had none.
+				 */
+				agreed: fused.filter(
+					(f) => f.ranks.filter((r) => r !== undefined).length > 1
+				).length,
+				disjoint,
+				...(disjoint
+					? {
+							warning:
+								`${orderings.filter((o) => o.length > 0).length} orderings ` +
+								`reached this merge and none of them share an entry. ` +
+								`Rank fusion needs mechanisms that ranked the same pool; on ` +
+								`disjoint lists it degrades to concatenation with a ` +
+								`fabricated score, and the score it stamps overrides ` +
+								`every signal weight downstream. Wire ` +
+								`core:task/concat-candidates@1 instead.`
+						}
+					: {})
+			}
+
+			return ok({ main: candidates, candidates, diagnostics })
+		},
+
+		/**
+		 * Several candidate lists, end to end.
+		 *
+		 * **Concatenation is not fusion**, and keeping them as two nodes is the
+		 * whole point of this one. `core:task/merge-candidates@1` above stamps a
+		 * reciprocal-rank `presetScore` on everything it passes through, which
+		 * `select` prefers over the weighted signal sum — correct when two mechanisms
+		 * ranked one pool and have to be reconciled, and wrong when several
+		 * disjoint lanes are simply being handed on, because then the "fused"
+		 * score is nothing but each entry's position in its own list.
+		 *
+		 * So this stamps no score. What arrives at `core:task/rank-hybrid@1`
+		 * carries its signals and its source, which is what the ranker needs to
+		 * score it and what the share bands need to budget between lanes.
+		 *
+		 * Repeats drop, first occurrence winning, keyed `source:id` — the three
+		 * lore tables have independent identity sequences, so an id alone would
+		 * let a world-lore row settle a history row.
+		 *
+		 * ## Repeats drop, but their **signals** do not
+		 *
+		 * First-occurrence-wins is right about the candidate and wrong about the
+		 * measurements on it, and the difference is what makes several mechanisms into
+		 * one score. The keyword scan and the semantic mechanism measure *different
+		 * things* about the same entry: one says its keys fired, the other says
+		 * it is about what is being discussed. Dropping the second copy whole
+		 * would throw the second measurement away, and an entry two independent
+		 * mechanisms found would score exactly as if only the first had — which
+		 * is the opposite of what the retrieval plan asks for, where *"agreement
+		 * across mechanisms compounds by addition and needs no fusion step"*.
+		 *
+		 * So a duplicate contributes any signal key the kept copy **does not
+		 * already carry**, and nothing else. First-wins holds per key as well as
+		 * per candidate, which is what keeps this additive rather than
+		 * order-dependent:
+		 *
+		 *   · a keyed entry the semantic mechanism also found keeps every keyword
+		 *     signal and gains `semantic`, because no other lane produces it;
+		 *   · the entity mechanism's `entityCooccurrence` is **not** merged onto a
+		 *     candidate the keyword scan already measured, because that mechanism
+		 *     sizes it against its own weight (§13.10) and the keyword scan has
+		 *     already answered the same question against the band's. Its lane
+		 *     position said the same thing before this existed; now the rule
+		 *     says it rather than the ordering implying it.
+		 */
+		"core:task/concat-candidates@1": async (input: any) => {
+			const orderings: any[][] = (input?.sources ?? []).filter(
+				Array.isArray
+			)
+			const at = new Map<string, any>()
+			const candidates: any[] = []
+			let duplicates = 0
+			/** Candidates a later lane added a measurement to. */
+			let enriched = 0
+			for (const list of orderings)
+				for (const candidate of list) {
+					const key = `${candidate?.source}:${candidate?.id}`
+					const kept = at.get(key)
+					if (kept) {
+						duplicates++
+						let added = false
+						for (const [signal, value] of Object.entries(
+							candidate?.signals ?? {}
+						)) {
+							if (signal in kept.signals) continue
+							kept.signals[signal] = value
+							added = true
+						}
+						if (added) enriched++
+						continue
+					}
+					// Copied, because the merge above writes into `signals` and
+					// the mechanisms hand out objects they may still be holding — the
+					// vector mechanism keeps its own `hits` array pointing at these.
+					const own = { ...candidate, signals: { ...candidate?.signals } }
+					at.set(key, own)
+					candidates.push(own)
+				}
+
+			return ok({
+				main: candidates,
+				candidates,
+				diagnostics: {
+					sources: orderings.map((list) => list.length),
+					duplicates,
+					/**
+					 * How many entries more than one mechanism found *and* measured
+					 * differently. Zero with one lane wired, zero when the extra
+					 * mechanisms are off, and the number that says the mechanisms are
+					 * compounding when they are on.
+					 */
+					enriched,
+					kept: candidates.length
+				}
+			})
 		},
 
 		/**
@@ -765,11 +1886,11 @@ export function coreBindings(): Bindings {
 		},
 
 		/**
-		 * The semantic arm's nine stages.
+		 * The semantic mechanism's nine stages.
 		 *
 		 * Pure, and separate from `rank-hybrid` on purpose: this ranks *within* the
-		 * vector arm — fusing its per-query lists, diversifying, capping each
-		 * source — and hands one ordered list on. Combining the arms is the
+		 * vector mechanism — fusing its per-query lists, diversifying, capping each
+		 * source — and hands one ordered list on. Combining the mechanisms is the
 		 * merge's job, and selecting against a budget is the hybrid ranker's.
 		 * Doing all three in one node would make each of them unswappable.
 		 */
@@ -793,13 +1914,34 @@ export function coreBindings(): Bindings {
 					similarity: w.similarity,
 					messageOrder,
 					params: params.semantic,
-					// The same per-tier bonus the keyword arm applies, so an
+					// The same per-tier bonus the keyword mechanism applies, so an
 					// author's High tier means one thing across both modes.
 					priorityBonus: PRIORITY_SCORE_BONUS
 				})
 			)
 
-			const candidates = mergeWindows(ranked.map((r) => r.candidates))
+			/**
+			 * ⚠ The nine stages' answer is written back onto `presetScore`, and
+			 * without this line every one of them was discarded.
+			 *
+			 * `core:query/vector-search@1` builds its candidates with
+			 * `presetScore: hit.score` — the raw cosine — so the merge downstream
+			 * has an ordering to fuse. This node then re-scores them: rrf across
+			 * the per-message lists, normalise, recency, priority, threshold,
+			 * MMR, per-source cap. All of that lands on `score`, and `select`'s
+			 * `scoreOf` reads `presetScore` first and never looks at `score`. So
+			 * a `vector-search → rank-semantic → rank-hybrid` chain — the shape
+			 * the SDK documents as the canonical semantic mechanism — ran the whole
+			 * stack and then re-sorted the survivors by raw cosine, silently.
+			 *
+			 * Written here rather than inside `rankSemantic`: `presetScore` is
+			 * `select`'s vocabulary, not the ranking stages', and this binding is
+			 * the seam between the two. `score` is left in place beside it so the
+			 * receipt still shows what each stage computed.
+			 */
+			const candidates = mergeWindows(
+				ranked.map((r) => r.candidates)
+			).map((c) => ({ ...c, presetScore: c.score }))
 			return ok({
 				main: candidates,
 				candidates,
@@ -831,7 +1973,9 @@ export function coreBindings(): Bindings {
 
 		"core:task/rank-hybrid@1": async (input: any) => {
 			const params = withDefaults(rankingParamsFrom(input?.params))
-			const candidates = normaliseTfidf(input?.candidates ?? [])
+			const candidates = normaliseTfidf(
+				toBudgetGroups(input?.candidates ?? [])
+			)
 			const selection = select(candidates, {
 				// From the `budget` in-port, which `core:task/context-budget@1`
 				// derives from the sampling config's window. There is no longer
@@ -839,7 +1983,12 @@ export function coreBindings(): Bindings {
 				// which model it was about to be sent to.
 				availableTokens:
 					input?.budget?.remaining ?? input?.availableTokens ?? 0,
-				params
+				params,
+				// Design §7's inversion, behind its declared switch. Passed
+				// from here because this is the only runtime `select()` there
+				// is — while nothing passed it, the option existed and no run
+				// could reach it.
+				scoreLedAllocation: scoreLedFrom(input?.params)
 			})
 
 			return ok({
@@ -913,7 +2062,10 @@ export function coreBindings(): Bindings {
 			// node needs the template, not the number.
 			const templateContext = await buildTemplateContext({
 				...resolved,
-				variables: input?.variables
+				variables: input?.variables,
+				// Every layout here may be a plugin's engine, so the run rides
+				// along — without it a cancelled run cannot stop them.
+				...run
 			})
 			return ok({
 				main: templateContext,
@@ -966,7 +2118,7 @@ export function coreBindings(): Bindings {
 		 * path is the generation Provider and a corpus proving the two paths
 		 * render the same bytes; rendering itself is no longer the gap.
 		 */
-		"core:task/assemble@2": async (input: any) => {
+		"core:task/assemble@2": async (input: any, ctx: any) => {
 			const slot = input?.template
 			/**
 			 * The story string, and **only** a real string.
@@ -1059,10 +2211,44 @@ export function coreBindings(): Bindings {
 					postHistoryDepth: input?.params?.postHistoryDepth ?? 0,
 					postHistoryTokenTrigger:
 						input?.params?.postHistoryTokenTrigger ?? 0,
-					tokenCounter: { countTokens: (t: string) => roughTokens(t) }
+					// Where the reminder lands is a function of how deep the
+					// messages above it are, so it is context fitting and
+					// measures with the run's tokenizer like everything else
+					// that decides what fits.
+					tokenCounter: {
+						countTokens: (t: string) => ctx.countTokens(t)
+					}
 				})
 				postHistory = resolved.postHistory
 			}
+
+			/**
+			 * The wire format this prompt is being written FOR.
+			 *
+			 * From the node's own `connection` slot, which every shipped spec
+			 * wires to the SENDING Provider (`slot.connectionOf("generate")`) —
+			 * so the format the render uses and the format the request goes out
+			 * in are one value by construction, not two that must agree.
+			 *
+			 * ⚠ This read is the whole of the fix it belongs to. `input.
+			 * promptFormat` used to be read here and no spec, no port and no
+			 * slot ever supplied it: it was `undefined` on every run, so
+			 * `renderers.ts` fell back to Vicuna and every ChatML, Llama-2,
+			 * Alpaca and Claude connection was sent Vicuna markers — while
+			 * `dispatch.ts` stamped the receipt with the connection's REAL
+			 * format, so the receipt asserted a format the render had not used.
+			 *
+			 * `promptFormatOf` and not `??`: see its own note. A cleared
+			 * `prompt_format` column is an empty string, and `"" ?? "vicuna"`
+			 * is `""`, which `makeBlock` renders as ChatML.
+			 *
+			 * A slot that resolves to nothing — no connection registered, or a
+			 * spec that did not wire it — arrives as `null`, and Vicuna is what
+			 * this path has always produced in that case.
+			 */
+			const promptFormat = promptFormatOf(
+				input?.connection?.metadata?.promptFormat
+			)
 
 			const rendered = await render({
 				allocation,
@@ -1080,13 +2266,42 @@ export function coreBindings(): Bindings {
 				// only known here.
 				variables: input?.variables,
 				messages: input?.messages ?? [],
-				promptFormat: input?.promptFormat
+				promptFormat,
+				// The story string and this node's layouts both render here, and
+				// both can be somebody's engine. Same reason as the context
+				// builder above.
+				...run
 			})
 
 			return ok({
-				main: { ...allocation, ...rendered },
-				context: { ...allocation, ...rendered },
-				blocks: allocation.blocks,
+				/**
+				 * `promptFormat` rides the payload, and that is what makes the
+				 * receipt honest rather than plausible.
+				 *
+				 * `toCompiledPrompt` used to derive `meta.promptFormat` from the
+				 * connection it had just resolved — a second resolution, on a
+				 * second path (`resolveTaskConfig`), of a question this node had
+				 * already answered. The two agree on the pipeline path by
+				 * construction and are free to disagree on the legacy one, where
+				 * the preview renders through the world manifest and the send
+				 * resolves its own row. Reporting the value that was USED
+				 * removes the disagreement instead of documenting it.
+				 */
+				main: { ...allocation, ...rendered, promptFormat },
+				context: { ...allocation, ...rendered, promptFormat },
+				/**
+				 * ⚠ **Allocations, not blocks** — one retrieved item each, with
+				 * its verdict, where a *block* is one message (NOMENCLATURE
+				 * §15). A dozen of these render into the variables inside one
+				 * block, so the old name described a container's granularity.
+				 *
+				 * Undeclared, like `budget` beside it: `ports.out` is `main` and
+				 * `context`, so nothing core wires this and no shape check
+				 * reaches it. The same array rides `main`/`context` as `.blocks`
+				 * — that field is the SDK's word at the seam and is deliberately
+				 * left alone (assemble.ts, NOMENCLATURE §24).
+				 */
+				allocations: allocation.blocks,
 				budget: allocation.budget
 			})
 		},
@@ -1101,11 +2316,54 @@ export function coreBindings(): Bindings {
 		 * quietly embedded would be a model call nobody was billed for and
 		 * nobody could see.
 		 */
+		/**
+		 * Embedding, and the `enabled` setting that was declared and read by
+		 * nothing.
+		 *
+		 * `enabled: 'auto' | 'on' | 'off'` has been on this node's params slot
+		 * since it was written and this binding ignored it, which put it in the
+		 * dead-control family bugs 12 and 15 kept finding. It is live now because
+		 * the reply pipeline needs the middle value to mean something:
+		 *
+		 *   · **off** — do not call at all. No vectors, no model, no cost.
+		 *   · **auto** (the default) — call, and treat a failure as *no vectors*
+		 *     rather than as a failed turn. Most installs have no embedding
+		 *     model loaded, and the host's answer for that case is a thrown
+		 *     "no embedding model is loaded and validated". Under `auto` that is
+		 *     not an error, it is an absence.
+		 *   · **on** — call, and let a failure be a failure. Somebody who asked
+		 *     for this explicitly should hear about it.
+		 *
+		 * ⚠ **`auto` is the plan's second governing rule in one branch**: *an
+		 * unavailable mechanism subtracts a signal; it never reroutes, disables a
+		 * path, or excludes a candidate.* The reason is not tidiness — loading an
+		 * embedding model once silently removed almost all lore from prompts, and
+		 * the inverse (not having one costing a turn) is the same class of
+		 * failure pointed the other way.
+		 *
+		 * The *reason* is not swallowed with the error: `core:query/vector-search@1`
+		 * reads `embedding_status` itself and puts "no embedding model is loaded
+		 * and validated" on the receipt, which is where a reader looks. This node
+		 * has no diagnostics port and inventing one would move its content hash.
+		 *
+		 * A node whose `params` slot is not wired gets `undefined` here and is
+		 * treated as `auto`, which is the behaviour it had before this existed.
+		 */
 		"core:provider/embed-text@1": async (input: any, ctx: any) => {
-			const result: any = await ctx.call({
-				text: input?.text,
-				texts: input?.texts
-			})
+			const empty = ok({ main: null, vector: null, vectors: [] })
+			const enabled = input?.params?.enabled ?? "auto"
+			if (enabled === "off") return empty
+
+			let result: any
+			try {
+				result = await ctx.call({
+					text: input?.text,
+					texts: input?.texts
+				})
+			} catch (e) {
+				if (enabled === "on") throw e
+				return empty
+			}
 			return ok({
 				main: result?.vector ?? null,
 				vector: result?.vector ?? null,
@@ -1146,25 +2404,41 @@ export function coreBindings(): Bindings {
 				// decoration: the values stored, and no reader ever saw them. The
 				// host resolves them; this binding only has to stop dropping them.
 				connection: input?.connection ?? null,
-				sampling: input?.sampling ?? null
+				sampling: input?.sampling ?? null,
+				// The files this step's `attachments` port carries, as media
+				// REFERENCES and in order. Forwarded rather than resolved: the
+				// substrate turns a uuid into bytes, having first checked it
+				// against the run — a binding never sees the bytes, exactly as it
+				// never sees the connection.
+				attachments: input?.attachments
 			})
 
 			if (result?.isAborted)
 				return halt("generation was aborted before the model finished")
 			if (!result?.text)
+				// The provider type used to be named here. `haltReason` is a
+				// plain string on the SDK receipt, so nothing downstream can
+				// take it back out again — and a non-admin reads their own
+				// receipt through `pipelines:run`. The fact moves to the field
+				// below, which the projection can remove.
 				return halt(
-					`the model returned nothing (via ${result?.via ?? "unknown"}) — there is no ` +
-						`message to write`
+					"the model returned nothing — there is no message to write"
 				)
 
 			return ok({
 				main: result.text,
 				text: result.text,
 				thinking: result.thinking,
-				// The connection *type*, not the connection: enough to answer "which
-				// provider answered this turn" from the receipt, and nothing that
-				// could be replayed by whoever reads it.
-				via: result.via
+				// The connection *type*, not the connection: enough to answer
+				// "which provider answered this turn" from the receipt, and
+				// nothing that could be replayed by whoever reads it.
+				//
+				// Under `connection` rather than as a bare `via` string, because
+				// this value IS the node's receipt output and a non-admin can
+				// fetch their own receipt. Which provider the administrator runs
+				// is still the administrator's business; the projection removes
+				// this key for everyone else.
+				connection: { type: result.via }
 			})
 		},
 
@@ -1365,6 +2639,12 @@ export function coreBindings(): Bindings {
 			let tokens = 0
 
 			for (const msg of messages) {
+				// Deliberately the flat estimate rather than the run's
+				// tokenizer. This is not context fitting: it decides how many
+				// messages go into one summarization batch, a chunk size with a
+				// 1500-token safety margin already subtracted from it. Making it
+				// exact would change nothing a person can observe, and it would
+				// make `ctx` a parameter of a binding that otherwise needs none.
 				const cost =
 					roughTokens(
 						JSON.stringify({

@@ -41,6 +41,76 @@ const PUBLISHED: Record<string, string> = {
 	"core:spec/create-chat@2.2.0": "fa56525a69fb9",
 	"core:spec/create-chat@2.1.0": "ea80f2679383c",
 	"core:spec/create-chat@2.0.0": "a6281141b21ea",
+	// 1.16.0 / 1.10.0: the three lore gather branches and the narrator's trigger query
+	// wire `params: slot.params()`. The executor resolves only the slots a
+	// node's config names, so until now their declared parameters — Scan
+	// Depth, Max Recursion Depth, Retrieval Mode — were handed over as
+	// `undefined` on every run. The bump is what carries the wiring to an
+	// install: seeding matches on (slug, semver), which is exactly what this
+	// file exists to make loud.
+	// 1.17.0: the three lore gather branches stop going through
+	// `core:task/merge-candidates@1`, whose reciprocal-rank `presetScore`
+	// overrode every signal weight downstream — the branches are disjoint, so
+	// there was nothing for rank fusion to fuse and each entry ranked by its
+	// position in its own list. `core:task/concat-candidates@1` instead.
+	// 1.11.0: the narrator gets a `contextBudget` node, so `rank` has a budget
+	// to select against. Without one `availableTokens` was 0 and the narrator
+	// retrieved no lore at all.
+	// 1.18.0: `core:query/entity-search@1` joins the three lore gather branches and is
+	// concatenated **last**, so an entry the keyword scan already found keeps
+	// its keyword signals and the new mechanism only ever adds rows no key reached.
+	// It ships inert — both its caps default to 0, which is off — so the bump
+	// carries the node to an install without changing any prompt until somebody
+	// raises one.
+	// 1.19.0: the fourth mechanism. `core:query/vector-search@1` has been built,
+	// bound and tested since the decomposition and was wired into no shipped
+	// spec at all; it joins the three lore gather branches and the entity mechanism at
+	// `concat-candidates`, contributing `signals.semantic` as a **score
+	// component** rather than an ordering to be fused. Its own `async` block
+	// after `gather` — chains of a parallel block cannot read each other, and
+	// the embed Provider on the spine would halt the debug preview. Ships off:
+	// `vector-search.maxEntries` defaults to 0.
+	// 1.20.0: the fifth mechanism. A `names` block — `mention-spans` → `embed`
+	// → `entity-link` — and a `loreLinked` concatenation `rank` now reads
+	// instead of `lore`. The mechanism matches the scene's *descriptions* ("the
+	// captain") to an entry's *names* (Captain Vell) in a second vector space,
+	// and it may only reorder: `entity-link` takes the candidate list on an
+	// in-port and returns it enriched, with the unenriched list concatenated
+	// behind it, so every way the mechanism can produce nothing lands on exactly what
+	// the ranker would have seen without it. Ships off — `maxMentions` is 0, on
+	// the first node of the chain, so nothing is read and nothing is embedded.
+	//
+	// ⚠ **1.20.0 and 1.11.0 moved WITHOUT a version bump, and that is the
+	// exception this file's own rule names, not a breach of it.**
+	//
+	// The version freeze ruled for the 0.6 pre-release — "no SDK spec bumps;
+	// all stay a hard 1 until 0.7.0" — leaves editing in place as the only way
+	// to ship a spec change. The hazard the freeze creates is exactly the one
+	// this file exists to catch: seeding matches on (slug, semver) and, on a
+	// match, updates only the display name, so an in-place edit reaches NO
+	// database that has already seeded and is invisible on a fresh test one.
+	//
+	// So the edit is paired with `drizzle/0095_prompt_format_reprojection.sql`,
+	// which deletes the published `pipeline_spec_versions` rows for these two
+	// pins so boot republishes them. **A moved hash here with no such migration
+	// is still the failure this file is for** — updating a line to make the
+	// suite green is only correct alongside the re-projection that carries the
+	// change to an install.
+	//
+	// What moved: the `prompt` step gained `connection: slot.connectionOf(
+	// "generate")`, so the render finally learns the wire format it is
+	// rendering for. Nothing supplied it before — every prompt went out Vicuna
+	// whatever the connection said, and the receipt reported the format that
+	// was not used.
+	"core:spec/respond@1.20.0": "1f78a2ce64600",
+	"core:spec/respond@1.19.0": "fdf2f7090f13c",
+	"core:spec/respond@1.18.0": "9315ce3ddeaa4",
+	"core:spec/respond@1.17.0": "118378cf44739b",
+	// Edited in place with respond@1.20.0 above, and re-projected by the same
+	// migration — see the note there.
+	"core:spec/narrate@1.11.0": "540d1e252d8c9",
+	"core:spec/respond@1.16.0": "1cf854da57fc1c",
+	"core:spec/narrate@1.10.0": "1db2e9e9b859b4",
 	"core:spec/respond@1.15.0": "f8768da5723e3",
 	"core:spec/narrate@1.9.0": "1f7a1f6da815d7",
 	// Pre-24 (the genre rename): superseded, kept for the drift check.

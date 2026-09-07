@@ -10,11 +10,21 @@
  * one in the document, as an author preset (12 §3). Either way, publishing a
  * spec version materializes it.
  *
- * It is immutable because it is the thing a user's config is *derived from* and
- * reconciled against. Editing the shipped default in place would silently
+ * It is immutable because it is the thing every other config is *derived from*
+ * and reconciled against. Editing the shipped default in place would silently
  * redefine what "back to defaults" means for everyone who had not touched it,
  * which is the same failure pinning a type version prevents. Customizing is
  * duplicating.
+ *
+ * ## Who owns one (R8)
+ *
+ * An administrator, and nobody else. There is no owner column and there never
+ * was one: an administrator curates which configurations exist and everyone
+ * else *selects* among the ones on offer, which is why the CRUD below takes no
+ * viewer — the authorization lives at the socket, where the viewer is, and the
+ * curation rule (`enabled`) is applied by `selectNamedConfig` and by the panel
+ * read. So the "user" in what follows is whoever tuned the configuration, and
+ * that is always an administrator.
  *
  * ## What a new version does to a config somebody tuned
  *
@@ -37,9 +47,13 @@
  * stops at everyone who has (12 §2).
  */
 
-import { and, asc, eq, inArray, isNull } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { declarations, type Decl } from "$lib/server/pipelines/config/panel"
+import {
+	declarations,
+	humanizeCamel,
+	type Decl
+} from "$lib/server/pipelines/config/panel"
 import { defaultPromptFor } from "$lib/server/pipelines/boot/seedPrompts"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 import { defaultVariableTemplateFor } from "$lib/server/pipelines/boot/seedVariableTemplates"
@@ -176,8 +190,9 @@ async function refDefaults(
  * thing said twice: an author preset *is* a set of declared values, and a
  * pipeline that ships none has exactly its declarations.
  *
- * Idempotent, and matched on `seedKey` rather than on name or id. A user is free
- * to rename their copies; the shipped one has to stay findable regardless.
+ * Idempotent, and matched on `seedKey` rather than on name or id. An
+ * administrator is free to rename the copies; the shipped one has to stay
+ * findable regardless.
  */
 export async function ensureDefaultConfig(
 	db: Db,
@@ -305,6 +320,54 @@ export interface ReconcileReport {
 }
 
 /**
+ * What a culled address was CALLED, from whichever earlier version declared it.
+ *
+ * A cull is by definition an address the new version does not declare, so the
+ * label cannot come from the declarations the reconciler is holding — and a
+ * notice that cannot name what was lost is barely better than the silence it
+ * exists to replace ("a setting was removed" asks the reader to diff two
+ * pipelines in their head). The version that *did* declare it still has its
+ * nodes, so its `Decl` still has its label: that is the one authoritative
+ * source, and it is read here.
+ *
+ * It is not always reachable, and the limit is worth stating rather than
+ * hiding. A pre-release re-projection (0186, 0191) DELETES the type registry
+ * row and lets boot sync write the new declarations at the same pinned
+ * version — so the old label is gone from the database entirely, and no query
+ * can recover it. Those culls fall back to the address, humanized the way the
+ * panel humanizes every other key. After 0.6.0 ships, a changed type is a new
+ * version rather than a rewrite of the row (13 §12b), and the label survives.
+ *
+ * Read once per reconcile and only when something was actually culled: it is a
+ * declaration walk per version, which is affordable at publish time and would
+ * not be on every boot.
+ */
+async function priorDeclaredLabels(
+	db: Db,
+	specId: number,
+	specVersionId: number
+): Promise<Map<string, string>> {
+	const out = new Map<string, string>()
+	const versions = await db
+		.select()
+		.from(schema.pipelineSpecVersions)
+		.where(eq(schema.pipelineSpecVersions.specId, specId))
+		// Newest first, and first spelling wins: a label the version before
+		// last changed is the one the user was looking at when they set the
+		// value, not whatever the option was called three versions ago.
+		.orderBy(desc(schema.pipelineSpecVersions.id))
+
+	for (const v of versions as any[]) {
+		if (v.id === specVersionId) continue
+		for (const d of await declarations(db, v.id)) {
+			const key = addr(d.nodeKey, d.slot, d.path)
+			if (!out.has(key)) out.set(key, d.label)
+		}
+	}
+	return out
+}
+
+/**
  * Bring every user config for a spec in line with a newly published version.
  *
  * The immutable shipped default is reconciled too, and first: it is the source
@@ -339,6 +402,24 @@ export async function reconcileConfigs(
 	const defaults = new Map<string, { value: unknown }>()
 	const reports: ReconcileReport[] = []
 
+	// Built on the first cull and shared by every config after it — the
+	// orphaned addresses are the same ones in each, so re-walking the older
+	// versions per config would answer the same question a dozen times.
+	let priorLabels: Map<string, string> | null = null
+	const labelForCulled = async (r: {
+		nodeKey: string
+		slot: string
+		path?: string | null
+	}) => {
+		if (!priorLabels)
+			priorLabels = await priorDeclaredLabels(db, specId, specVersionId)
+		// The address is the fallback, not a placeholder: `scanDepth` reads as
+		// "Scan Depth", which is what the control was called even where the
+		// declaration that said so is gone. The empty path is a whole-slot
+		// value (a connection, a template) and names its slot instead.
+		return priorLabels.get(addrOf(r)) ?? humanizeCamel(r.path || r.slot)
+	}
+
 	for (const config of ordered) {
 		const rows = await db
 			.select()
@@ -358,6 +439,9 @@ export async function reconcileConfigs(
 			(r) => !declByAddr.has(addrOf(r))
 		)
 		if (orphaned.length) {
+			const labels = new Map<string, string>()
+			for (const r of orphaned)
+				labels.set(addrOf(r), await labelForCulled(r))
 			await db.insert(schema.pipelineConfigNotices).values(
 				orphaned.map((r) => ({
 					configId: config.id,
@@ -365,7 +449,7 @@ export async function reconcileConfigs(
 					nodeKey: r.nodeKey,
 					slot: r.slot,
 					path: r.path ?? "",
-					label: null,
+					label: labels.get(addrOf(r)),
 					previousValue: r.value,
 					specVersionId
 				}))
@@ -418,6 +502,12 @@ export async function reconcileConfigs(
 					nodeKey: a.nodeKey,
 					slot: a.slot,
 					path: a.path,
+					// Straight off the declaration that arrived, which is the
+					// half of this that IS reachable — a back-fill names a
+					// control the pipeline still has. Left null it would render
+					// as namelessly as the cull did, in the same list.
+					label: declByAddr.get(addr(a.nodeKey, a.slot, a.path))
+						?.label,
 					previousValue: null,
 					specVersionId
 				}))
@@ -462,6 +552,44 @@ export async function pendingNotices(db: Db, configId: number) {
 			)
 		)
 		.orderBy(asc(schema.pipelineConfigNotices.id))
+}
+
+/**
+ * Mark notices seen — one of them, or every pending one for the config.
+ *
+ * A dismissal has to outlive the tab that made it, so it is a column on the
+ * row rather than anything the client remembers: `acknowledged_at` is what
+ * `pendingNotices` filters on, so acknowledging IS the thing that stops it
+ * coming back. Already-acknowledged rows are left alone, which keeps the
+ * timestamp honest about when the person actually saw it.
+ *
+ * Scoped by `configId` as well as by id, always. The id arrives from a client
+ * and a notice id is a small integer somebody can guess; without the pairing,
+ * dismissing your own notice would be indistinguishable from dismissing
+ * somebody else's configuration's.
+ *
+ * Returns how many rows it moved, so a caller can tell "dismissed" from "that
+ * one was already gone".
+ */
+export async function acknowledgeNotices(
+	db: Db,
+	configId: number,
+	noticeId?: number
+): Promise<number> {
+	const rows = await db
+		.update(schema.pipelineConfigNotices)
+		.set({ acknowledgedAt: new Date() })
+		.where(
+			and(
+				eq(schema.pipelineConfigNotices.configId, configId),
+				isNull(schema.pipelineConfigNotices.acknowledgedAt),
+				...(noticeId != null
+					? [eq(schema.pipelineConfigNotices.id, noticeId)]
+					: [])
+			)
+		)
+		.returning({ id: schema.pipelineConfigNotices.id })
+	return (rows as any[]).length
 }
 
 /* ------------------------------------------------------------------ *

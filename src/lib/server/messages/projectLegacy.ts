@@ -20,6 +20,7 @@
  * idempotent: re-projecting a row always produces byte-identical parts.
  */
 
+import type { ConnectionIdentity } from "$lib/shared/connections/identity"
 import type { messages, messageParts } from "$lib/server/db/schema"
 
 /** What the projection reads — the legacy row, loosely typed on purpose. */
@@ -30,6 +31,8 @@ export interface LegacyMessageRow {
 	characterId?: number | null
 	personaId?: number | null
 	role: string
+	/** The lane this message is on (20 §7). Absent means `main`. */
+	channel?: string | null
 	isNarratorResponse?: boolean | null
 	content: string
 	createdAt?: unknown
@@ -48,7 +51,16 @@ export interface LegacyMessageRow {
 	} | null
 	isGenerating?: boolean | null
 	generationStage?: string | null
-	error?: { message: string; code?: string } | null
+	/**
+	 * `connection` is connection identity, kept out of `message` on purpose —
+	 * this projection is a READ path, re-run on every reload, and only a key can
+	 * be removed on the way out. See `connections/visibility.ts`.
+	 */
+	error?: {
+		message: string
+		code?: string
+		connection?: ConnectionIdentity
+	} | null
 	queueItemId?: string | null
 	isHidden?: boolean | null
 	debugMeta?: Record<string, any> | null
@@ -68,12 +80,11 @@ export function projectLegacy(row: LegacyMessageRow): {
 	const meta = row.metadata ?? {}
 	const swipes = meta.swipes
 	const hasSwipes = !!swipes?.history?.length
-	const revisions: string[] = hasSwipes ? swipes!.history : [row.content ?? ""]
+	const revisions: string[] = hasSwipes
+		? swipes!.history
+		: [row.content ?? ""]
 	const active = hasSwipes
-		? Math.max(
-				0,
-				Math.min(swipes!.currentIdx ?? 0, revisions.length - 1)
-			)
+		? Math.max(0, Math.min(swipes!.currentIdx ?? 0, revisions.length - 1))
 		: 0
 
 	const thinkingFor = (i: number): string | null => {
@@ -138,7 +149,11 @@ export function projectLegacy(row: LegacyMessageRow): {
 		message: {
 			id: row.id,
 			sessionId: row.sessionId,
-			channel: "main",
+			// Carried, not assumed. This was hardcoded `"main"` for as long as
+			// the legacy row had no channel to carry (0200), which made the
+			// mirror the only place a lane could live and the store's own
+			// "the legacy row leads" rule untrue of exactly one field.
+			channel: row.channel || "main",
 			kind: row.isNarratorResponse ? "core:narration" : "core:chat",
 			// Ruled 2026-08-26: nullable, no DB default, every creating code
 			// path writes "1.0" — migration included.

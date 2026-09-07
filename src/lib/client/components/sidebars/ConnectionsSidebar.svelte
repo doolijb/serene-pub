@@ -397,7 +397,23 @@
 		connection = { ...msg.connection }
 		originalConnection = { ...msg.connection }
 		toaster.success({ title: "Connection Updated" })
-		announce(`Connection ${connection?.name} has been updated successfully`)
+		// The save succeeded AND dropped something the payload claimed — today,
+		// a preset slug the server would not store. Its own toast rather than a
+		// replacement for the success one: both are true, and a discarded preset
+		// that nobody mentions is exactly the silence this exists to break.
+		if (msg.notice)
+			toaster.warning({
+				title: "Preset not kept",
+				description: msg.notice
+			})
+		// One announce() carrying both: `announcements` is a single string, so a
+		// second call in the same tick would replace the first rather than queue
+		// behind it.
+		announce(
+			`Connection ${connection?.name} has been updated successfully${
+				msg.notice ? `. ${msg.notice}` : ""
+			}`
+		)
 	}
 	function handleConnectionsDelete(msg: Sockets.Connections.Delete.Response) {
 		// Only react when the delete actually targeted the connection this

@@ -5,7 +5,7 @@ import type { PluginHookRequest } from "$lib/server/pipelines/scripts/pluginDisp
 /**
  * The port that turns a plugin-owned chain link into a `manager.callHook` and
  * its result back into the Scripts sandbox shape. Proven against fakes: the
- * routing (ownerPluginId → runtime id, type id → hook name) and the result
+ * routing (ownerPluginId → sandbox id, type id → hook name) and the result
  * translation are the whole job, and both are pure given the db + manager.
  */
 

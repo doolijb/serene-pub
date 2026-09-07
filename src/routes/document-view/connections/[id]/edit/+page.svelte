@@ -45,6 +45,15 @@
 	let loaded = $state(false)
 	let notFound = $state(false)
 	let error = $state("")
+	/**
+	 * A save that SUCCEEDED but did not store everything it was sent — today,
+	 * only a preset slug the server refused (see Update.Response's `notice`).
+	 *
+	 * Its own state and its own `role="status"` box rather than a second use of
+	 * `error` above: the connection did save, and an alert saying otherwise
+	 * would be the wrong sentence in the wrong politeness level.
+	 */
+	let notice = $state("")
 	let saving = $state(false)
 	let deleting = $state(false)
 
@@ -162,6 +171,7 @@
 	function submit(event: SubmitEvent) {
 		event.preventDefault()
 		error = ""
+		notice = ""
 		if (!name.trim()) {
 			error = "Connection name is required."
 			announce(error)
@@ -228,7 +238,20 @@
 	function handleConnectionsUpdate(msg: any) {
 		saving = false
 		if (!msg.connection) return
-		announce("Connection saved.")
+		// Re-seeded from the SAVED row rather than left as the form last had it.
+		// This is the only surface with a Type picker, so it is the only one that
+		// can strand the preset it carries — and the server clears a stranded one
+		// on write. Without this the next Save would re-send the dead slug and
+		// earn the same notice again.
+		preset = (msg.connection as { preset?: string | null }).preset ?? null
+		// Saved, but not exactly as sent. `notice` is only ever present when the
+		// server discarded something the payload claimed, so it gets its own
+		// status box rather than being left for the user to notice a preset had
+		// gone. ONE announce() call carrying both halves: the announcer clears
+		// and re-sets on the next frame, so a second call in the same tick would
+		// simply replace the first and "Connection saved." would never be read.
+		notice = msg.notice ?? ""
+		announce(notice ? `Connection saved. ${notice}` : "Connection saved.")
 		// Re-READ the column, for the same reason the test path does. This is the
 		// only surface with a Type picker for an existing connection, and the
 		// capability panel renders the SAVED type's key space — so after a type
@@ -307,6 +330,12 @@
 		</div>
 	{/if}
 
+	{#if notice}
+		<div class="a11y-status" role="status">
+			<p>{notice}</p>
+		</div>
+	{/if}
+
 	<form onsubmit={submit}>
 		<div class="a11y-field">
 			<label for="a11y-conn-name">Connection Name</label>
@@ -319,8 +348,25 @@
 			/>
 		</div>
 
+		<!-- The pickers on this form stay native <select>s deliberately, and a
+		     later sweep should leave them alone. Document View is not the
+		     Skeleton surface: the root layout strips data-mode/data-theme off
+		     <html> for as long as this shell is mounted, so Skeleton's palette
+		     falls back to greyscale (--color-primary-500 resolves to
+		     oklch(0.556 0 0) here), and Combobox portals its popup to <body> —
+		     OUTSIDE .a11y-root, which is where both the mode palette and
+		     --a11y-font-scale live. Measured with inputs/Select.svelte dropped
+		     into this shell: an rgb(245,245,245) popup over the rgb(13,13,13)
+		     page, a selected row at 4.54:1 against accessible.css's stated AAA
+		     7:1 floor, and a list stuck at 14px while the page sat at 32px
+		     under this surface's own 200% text control — WCAG 1.4.4, on the
+		     surface that exists for it. Native also hands AT the platform
+		     picker, which is the strongest control here, not the weakest.
+		     Styling it for Document View would mean teaching one component two
+		     design systems, which this page already refuses to do for the
+		     capability rows below. -->
 		<div class="a11y-field">
-			<label for="a11y-conn-type">Provider Type</label>
+			<label for="a11y-conn-type">Service Type</label>
 			<select id="a11y-conn-type" bind:value={type} disabled={saving}>
 				{#each typeOptions as opt}
 					<option value={opt.value}>{opt.label}</option>
@@ -342,7 +388,7 @@
 		<div class="a11y-field">
 			<label for="a11y-conn-api-key">API Key</label>
 			<p class="a11y-hint">
-				Only required for providers that need one (e.g. OpenAI,
+				Only required for services that need one (e.g. OpenAI,
 				Anthropic).
 			</p>
 			<input
@@ -425,7 +471,7 @@
 		</div>
 
 		<p class="a11y-hint">
-			Advanced provider-specific options (streaming, thinking, keep-alive,
+			Advanced service-specific options (streaming, thinking, keep-alive,
 			etc.) aren't available in Document View yet — use the standard site
 			for those.
 		</p>

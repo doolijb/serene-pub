@@ -45,6 +45,17 @@
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import type { SettingsSchema } from "@serene-pub/sdk"
 import type { AdapterActions } from "$lib/server/adapters/actions"
+import {
+	capOutputCount,
+	prepareAttachments,
+	type AttachmentInput,
+	type AttachmentPlan,
+	type IgnoreReporter,
+	type PrepareOptions
+} from "$lib/server/adapters/attachments"
+import { adapterIo } from "$lib/shared/connectionAdapters/manifest"
+import type { AdapterIo } from "$lib/shared/connectionAdapters/io"
+import type { MediaKind } from "$lib/shared/media/formats"
 import type {
 	ImageCapabilities,
 	ImageGenOptions,
@@ -187,6 +198,59 @@ export abstract class BaseImageAdapter implements AdapterActions {
 	 * adapters' preflight).
 	 */
 	async preflight(_signal?: AbortSignal): Promise<void> {}
+
+	// ── Files in and out (not actions) ──────────────────────────────────────
+	//
+	// The same seam the text family has, for the same reason, and it matters here
+	// too: `ImageEditRequest.init` is a `MediaRef[]` because inpainting backends
+	// take reference SETS, so an image adapter has a multi-file input the moment
+	// anything implements `editImage`. Declaring the limits per entry and
+	// enforcing them once is what keeps that from being re-derived per backend.
+
+	/** What this connection's TYPE declares about files. `undefined` means no
+	 *  known limit — never "no files". */
+	protected get io(): AdapterIo | undefined {
+		return adapterIo(this.connection?.type ?? "")
+	}
+
+	/**
+	 * Negotiate formats and enforce limits for a set of input files, in order.
+	 *
+	 * Bytes rather than refs, conversion before the byte checks, refusal as a
+	 * value — see `$lib/server/adapters/attachments`, and the matching method on
+	 * `BaseConnectionAdapter`. One engine, so the two families cannot come to
+	 * different conclusions about the same file.
+	 */
+	protected async prepareAttachments(
+		inputs: readonly AttachmentInput[],
+		opts?: PrepareOptions
+	): Promise<AttachmentPlan> {
+		return prepareAttachments(this.io, inputs, opts)
+	}
+
+	/**
+	 * Ask for no more output files than this entry says can come back, reporting
+	 * any reduction as `ignored`.
+	 *
+	 * The output twin of the input caps, and the one count that is CLAMPED rather
+	 * than refused — because "produce four instead of thirty" is a request that
+	 * can still be honoured usefully, where "read only twenty of my thirty
+	 * images" is not. The reduction travels the `applied`/`ignored` channel a
+	 * render already reports through, rather than a second vocabulary beside it:
+	 * `ignored: ["batch"]` already means "you set this and it did not survive".
+	 *
+	 * With nothing declared — which is every entry today, deliberately; see the
+	 * manifest — this returns `requested` untouched and reports nothing, so
+	 * calling it costs an adapter nothing until a cap exists to enforce.
+	 */
+	protected cappedOutputCount(
+		kind: MediaKind,
+		requested: number,
+		key: string,
+		report: IgnoreReporter
+	): number {
+		return capOutputCount(this.io, kind, requested, key, report)
+	}
 
 	/** Trim a trailing slash so `${base}/v1/...` never doubles up. */
 	protected baseUrl(fallback: string): string {

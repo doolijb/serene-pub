@@ -11,10 +11,10 @@
  *      Also: the surviving auto-create half now advances
  *      lorebooks.nextBindingNumber past any found-in-content token number,
  *      closing the one remaining collision path.
- *  - 1c: worldLoreEntries:update / historyEntries:update /
- *      lorebooks:updateBinding used to let a client relocate their own
- *      entry/binding into a lorebook they don't own via an unstripped
- *      lorebookId in the update payload.
+ *  - 1c: entries:update (then worldLoreEntries:update /
+ *      historyEntries:update) and lorebooks:updateBinding used to let a client
+ *      relocate their own entry/binding into a lorebook they don't own via an
+ *      unstripped lorebookId in the update payload.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -22,6 +22,11 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { HISTORY_TYPE_ID, WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
+import {
+	historyValues,
+	worldLoreValues
+} from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -123,12 +128,16 @@ describe("syncLorebookBindings — never deletes (PGlite integration)", () => {
 		const { syncLorebookBindings } = await import("./lorebooks")
 		const user = await makeUser("sync-advance-user")
 		const lorebook = await makeLorebook(user.id, "Sync Advance Book")
-		await testDb.insert(schema.worldLoreEntries).values({
-			lorebookId: lorebook.id,
-			name: "Entry",
-			content: "Mentions {{char:50}} here.",
-			keys: ""
-		})
+		await testDb.insert(schema.lorebookEntries).values(
+			worldLoreValues([
+				{
+					lorebookId: lorebook.id,
+					name: "Entry",
+					content: "Mentions {{char:50}} here.",
+					keys: ""
+				}
+			])
+		)
 
 		await syncLorebookBindings({ lorebookId: lorebook.id })
 
@@ -148,22 +157,25 @@ describe("syncLorebookBindings — never deletes (PGlite integration)", () => {
 })
 
 describe("cross-lorebook relocation via update — scoping (PGlite integration)", () => {
-	test("worldLoreEntries:update ignores a foreign lorebookId", async () => {
-		const { updateWorldLoreEntryHandler } = await import(
-			"./worldLoreEntries"
-		)
+	test("entries:update ignores a foreign lorebookId, world lore", async () => {
+		const { updateEntryHandler } = await import("./entries")
 		const owner = await makeUser("wle-scope-owner")
 		const ownLorebook = await makeLorebook(owner.id, "Own Book")
 		const foreignLorebook = await makeLorebook(owner.id, "Foreign Book")
 		const [entry] = await testDb
-			.insert(schema.worldLoreEntries)
-			.values({ lorebookId: ownLorebook.id, name: "Entry", content: "" })
+			.insert(schema.lorebookEntries)
+			.values(
+				worldLoreValues([
+					{ lorebookId: ownLorebook.id, name: "Entry", content: "" }
+				])
+			)
 			.returning()
 
-		const res = await updateWorldLoreEntryHandler.handler(
+		const res = await updateEntryHandler.handler(
 			fakeSocket(owner.id),
 			{
-				worldLoreEntry: {
+				entry: {
+					typeId: WORLD_LORE_TYPE_ID,
 					id: entry.id,
 					lorebookId: foreignLorebook.id,
 					content: "updated"
@@ -172,12 +184,12 @@ describe("cross-lorebook relocation via update — scoping (PGlite integration)"
 			noopEmit
 		)
 
-		expect(res.worldLoreEntry.lorebookId).toBe(ownLorebook.id)
-		expect(res.worldLoreEntry.content).toBe("updated")
+		expect(res.entry.lorebookId).toBe(ownLorebook.id)
+		expect(res.entry.content).toBe("updated")
 	})
 
-	test("historyEntries:update ignores a foreign lorebookId", async () => {
-		const { updateHistoryEntryHandler } = await import("./historyEntries")
+	test("entries:update ignores a foreign lorebookId, history", async () => {
+		const { updateEntryHandler } = await import("./entries")
 		const owner = await makeUser("he-scope-owner")
 		const ownLorebook = await makeLorebook(owner.id, "Own History Book")
 		const foreignLorebook = await makeLorebook(
@@ -185,14 +197,15 @@ describe("cross-lorebook relocation via update — scoping (PGlite integration)"
 			"Foreign History Book"
 		)
 		const [entry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: ownLorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: ownLorebook.id }]))
 			.returning()
 
-		const res = await updateHistoryEntryHandler.handler(
+		const res = await updateEntryHandler.handler(
 			fakeSocket(owner.id),
 			{
-				historyEntry: {
+				entry: {
+					typeId: HISTORY_TYPE_ID,
 					id: entry.id,
 					lorebookId: foreignLorebook.id
 				} as any
@@ -200,7 +213,7 @@ describe("cross-lorebook relocation via update — scoping (PGlite integration)"
 			noopEmit
 		)
 
-		expect(res.historyEntry.lorebookId).toBe(ownLorebook.id)
+		expect(res.entry.lorebookId).toBe(ownLorebook.id)
 	})
 
 	test("lorebooks:updateBinding ignores a foreign lorebookId", async () => {

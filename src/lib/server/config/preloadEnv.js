@@ -291,7 +291,7 @@ for (const file of plan.load) dotenv.config({ path: file })
 
 // SERENE_PUB_DATA_DIR is the one variable whose VALUE has to be rewritten
 // rather than merely applied. Everything downstream — getAppDataDir() in
-// utils/index.ts and in drizzle.config.ts, RuntimeManager's plugin storage
+// utils/index.ts and in drizzle.config.ts, SandboxManager's plugin storage
 // root — reads it straight from the environment and resolves a relative value
 // against whatever the working directory happens to be by then. That is how
 // `SERENE_PUB_DATA_DIR=./data` would land inside the app/ folder an update
@@ -299,7 +299,7 @@ for (const file of plan.load) dotenv.config({ path: file })
 // downstream has to know any of this.
 //
 // Guarded on it already being set, so a default install is left with the
-// variable genuinely absent — RuntimeManager treats presence as "the operator
+// variable genuinely absent — SandboxManager treats presence as "the operator
 // chose a data directory" and enabling plugin storage as a side effect of a
 // path fix would be an unrelated behavior change.
 if (process.env.SERENE_PUB_DATA_DIR) {

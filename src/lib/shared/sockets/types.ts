@@ -10,6 +10,12 @@ import type {
 	CardSourceSort
 } from "$lib/shared/library/types"
 import type { ComboRow } from "$lib/shared/capabilities/combos"
+import type {
+	EntryTypeId,
+	LorebookEntry,
+	LorebookEntryPatch,
+	NewLorebookEntry
+} from "$lib/shared/entries/types"
 
 declare global {
 	namespace Sockets {
@@ -377,6 +383,27 @@ declare global {
 				id: number
 				name: string | null
 			} | null
+			/**
+			 * The parent id is stale: this file names a character, persona or
+			 * session that has been deleted, so nothing can reach it any more.
+			 *
+			 * Server-computed, because "no name came back" and "there is no
+			 * parent to name" are different states and only the server can tell
+			 * them apart. A file with `attachedTo: null` is a user-level upload
+			 * with no parent BY DESIGN — not an orphan, and never reclaimable
+			 * on that basis.
+			 */
+			orphaned: boolean
+			/**
+			 * How many DISTINCT messages render this file — a `core:image` /
+			 * `core:file` part, or an `image` block inside a block tree.
+			 *
+			 * Deleting a file does NOT remove these parts (28 §2 tolerates the
+			 * dangling reference on purpose), so this is the count of chat
+			 * transcripts that would show a broken image afterwards. Non-zero
+			 * makes `media:delete` require `confirmMessageRefs`.
+			 */
+			messageRefs: number
 		}
 
 		namespace Media {
@@ -412,9 +439,23 @@ declare global {
 			namespace Delete {
 				interface Params {
 					mediaId: number
+					/**
+					 * Acknowledges that messages render this file and will show
+					 * a broken image once it is gone.
+					 *
+					 * The handler REFUSES a referenced file without it, and
+					 * re-counts rather than trusting a number from the client —
+					 * a panel left open while a session generated another image
+					 * is holding a stale count, and the point of the gate is
+					 * that nobody deletes chat history's images unaware.
+					 */
+					confirmMessageRefs?: boolean
 				}
 				interface Response {
 					mediaId: number
+					/** Messages left showing a broken image by this delete —
+					 *  what the caller confirmed, echoed back. */
+					messageRefs: number
 				}
 			}
 			/** What the cleanup actions would do, priced before anyone commits. */
@@ -488,6 +529,12 @@ declare global {
 				/** Whether the manifest declares a settings schema (12 §6). */
 				hasSettings: boolean
 				/**
+				 * A declared permission no admin has decided about yet. Until
+				 * one does it is refused, so this is both "waiting for you" and
+				 * the explanation for a plugin that runs but reaches nothing.
+				 */
+				needsReview?: boolean
+				/**
 				 * Whether the runtime holds a loaded copy right now (warm) —
 				 * runtime truth from the live manager, never stored. Absent or
 				 * false when the runtime gate is off: nothing is ever loaded.
@@ -557,7 +604,7 @@ declare global {
 					error?: string
 				}
 			}
-			/** One in-flight sandbox call, for the live runtime monitor. */
+			/** One in-flight sandbox call, for the live sandbox monitor. */
 			interface ActiveRow {
 				callId: number
 				pluginId: string
@@ -588,8 +635,8 @@ declare global {
 				interface Params {}
 				interface Response {
 					plugins: PluginRow[]
-					/** Whether the runtime is actually on (SP_PLUGINS_ENABLED). */
-					runtimeEnabled: boolean
+					/** Whether the sandbox is actually on (SP_PLUGINS_ENABLED). */
+					sandboxEnabled: boolean
 				}
 			}
 			namespace Install {
@@ -654,6 +701,25 @@ declare global {
 					active: ActiveRow[]
 				}
 			}
+			/**
+			 * Ask one in-flight hook to stop itself — its `ctx.signal` fires
+			 * and it winds down in its own frame. The cooperative half of
+			 * `Kill`, and the one to reach for first: a hook that wakes returns
+			 * an ordinary result, having released whatever it was holding.
+			 *
+			 * `aborted` says only that there was a call in flight to signal,
+			 * never that the hook acted on it — that is observable exactly one
+			 * way, by the call leaving the monitor.
+			 */
+			namespace Abort {
+				interface Params {
+					callId: number
+				}
+				interface Response {
+					aborted: boolean
+					active: ActiveRow[]
+				}
+			}
 			namespace Kill {
 				interface Params {
 					callId: number
@@ -678,7 +744,10 @@ declare global {
 				kind: "system" | "resource" | "event"
 				label: string
 				accountAffecting: boolean
+				/** In force right now — reviewed *and* not denied. */
 				granted: boolean
+				/** Declared, but awaiting an admin's first decision. Refused meanwhile. */
+				pending: boolean
 			}
 			/** The storage-quota picture for a plugin, for the admin override control. */
 			interface StorageQuota {
@@ -710,6 +779,21 @@ declare global {
 					pluginId: string
 					key: string
 					granted: boolean
+				}
+				interface Response {
+					pluginId: string
+					permissions: PermState[]
+					storage?: StorageQuota
+				}
+			}
+			/**
+			 * Record that an admin has reviewed this plugin's requested
+			 * permissions — the consent act. Everything still granted goes into
+			 * force; anything they denied first stays denied.
+			 */
+			namespace ReviewPermissions {
+				interface Params {
+					pluginId: string
 				}
 				interface Response {
 					pluginId: string
@@ -759,6 +843,23 @@ declare global {
 				}
 				interface Response {
 					connection: SelectConnection
+					/**
+					 * What the save quietly changed on its way in, where it
+					 * changed something the payload asserted.
+					 *
+					 * Today that is exactly one thing: a `preset` the server
+					 * refused to store — not a slug, not a slug this build
+					 * knows, or a slug belonging to a different API than the
+					 * type the row now has. The handler normalizes it to NULL
+					 * ("custom") rather than refusing the whole update, so
+					 * without this the connection would come back saved and a
+					 * preset the user had chosen would simply be gone.
+					 *
+					 * Not an `error`: the save SUCCEEDED and `connection` is the
+					 * real, written row. A client shows it as a warning
+					 * alongside the success, never instead of it.
+					 */
+					notice?: string
 				}
 			}
 			namespace Delete {
@@ -1670,6 +1771,42 @@ declare global {
 					function: string
 					success?: boolean
 					error?: string
+					/**
+					 * The run was stopped on request rather than failing.
+					 *
+					 * A third outcome beside `success` and `error`, not a
+					 * politer error: somebody pressing Cancel is a deliberate
+					 * act, and a consumer that has to tell "it broke" from
+					 * "they stopped it" — a retry prompt, an activity card, a
+					 * receipt view — must not do it by reading the sentence.
+					 * The same flat flag `ImagesGenerateResponse` and
+					 * `RunProgress` already carry, for the same reason and
+					 * with the same meaning.
+					 *
+					 * ⚠ Set from the run handle's abort, NOT from the
+					 * receipt's outcome. A node that throws on abort ends the
+					 * run as `err` before the executor next polls its cancel
+					 * hook, so the receipt does not always know it was
+					 * cancelled; the registry, which recorded the actor before
+					 * it aborted, always does. Which is why no `error` rides
+					 * along here: the sentence would describe a failure that
+					 * the abort caused, and every consumer that checks `error`
+					 * first would render the cancel as a failure again.
+					 */
+					cancelled?: boolean
+					/**
+					 * Who stopped it: `user:<id>`, `system:superseded` (the
+					 * client re-sent the same run id), `system:reset`. The
+					 * registry's own vocabulary, and the same value the SDK
+					 * stamps on `Receipt.cancelledBy`.
+					 *
+					 * On the wire whether or not anything renders it, because
+					 * these are three different events — a supersede is
+					 * bookkeeping nobody asked for, a person's cancel is an
+					 * act — and a consumer cannot recover an actor that was
+					 * thrown away here.
+					 */
+					cancelledBy?: string
 				}
 			}
 			/**
@@ -1748,6 +1885,16 @@ declare global {
 					panels: Frame[]
 					/** The mode's declared surface-grid panels (21). */
 					modePanels: ModePanel[]
+					/**
+					 * The session's channels (20 §7), `main` first.
+					 *
+					 * `main` is implicit and always present; the rest are what
+					 * the genre declares. This is the read side of the fact a
+					 * message carries in `channel` — a panel's `channels` says
+					 * which lanes it subscribes to, and this says which lanes
+					 * there are to subscribe to.
+					 */
+					channels: string[]
 				}
 			}
 			/**
@@ -2453,9 +2600,13 @@ declare global {
 				}
 				interface Response {
 					lorebook: (SelectLorebook & { tags: string[] }) | null
-					worldLoreEntries: SelectWorldLoreEntry[]
-					characterLoreEntries: SelectCharacterLoreEntry[]
-					historyEntries: SelectHistoryEntry[]
+					/**
+					 * Every entry of the book, of every type, in one list —
+					 * `typeId` is what splits them, and nothing at this end
+					 * needs them split. The three lists this replaces were the
+					 * three tables' names on the wire.
+					 */
+					entries: LorebookEntry[]
 				}
 			}
 			namespace Create {
@@ -2592,82 +2743,48 @@ declare global {
 			}
 		}
 
-		// World Lore Entries namespace
-		namespace WorldLoreEntries {
+		/**
+		 * Lorebook entries — one namespace, every declared type.
+		 *
+		 * `WorldLoreEntries`, `CharacterLoreEntries` and `HistoryEntries` were
+		 * three copies of this with three row shapes; `typeId` carries what the
+		 * three namespaces used to carry, and `LorebookEntry<T>` is the one shape,
+		 * branded by it. **Every payload names its type**, because that is what
+		 * scopes the read or the write: a world lore id presented to a history
+		 * update finds no row rather than being edited through the wrong shape.
+		 */
+		namespace Entries {
 			namespace List {
 				interface Params {
 					lorebookId: number
+					typeId: EntryTypeId
 				}
 				interface Response {
-					worldLoreEntryList: SelectWorldLoreEntry[]
+					lorebookId: number
+					typeId: EntryTypeId
+					entryList: LorebookEntry[]
 				}
 			}
 			namespace Create {
 				interface Params {
-					worldLoreEntry: InsertWorldLoreEntry
+					entry: NewLorebookEntry
 				}
 				interface Response {
-					worldLoreEntry: SelectWorldLoreEntry
+					entry: LorebookEntry
 				}
 			}
 			namespace Update {
 				interface Params {
-					worldLoreEntry: UpdateWorldLoreEntry
+					entry: LorebookEntryPatch
 				}
 				interface Response {
-					worldLoreEntry: SelectWorldLoreEntry
+					entry: LorebookEntry
 				}
 			}
 			namespace Delete {
 				interface Params {
 					id: number
-				}
-				interface Response {
-					success?: string
-					error?: string
-				}
-			}
-			namespace UpdatePositions {
-				interface Params {
-					updates: Array<{ id: number; position: number }>
-				}
-				interface Response {
-					success?: string
-					error?: string
-				}
-			}
-		}
-
-		// Character Lore Entries namespace
-		namespace CharacterLoreEntries {
-			namespace List {
-				interface Params {
-					lorebookId: number
-				}
-				interface Response {
-					lorebookId: number
-					characterLoreEntryList: SelectCharacterLoreEntry[]
-				}
-			}
-			namespace Create {
-				interface Params {
-					characterLoreEntry: InsertCharacterLoreEntry
-				}
-				interface Response {
-					characterLoreEntry: SelectCharacterLoreEntry
-				}
-			}
-			namespace Update {
-				interface Params {
-					characterLoreEntry: UpdateCharacterLoreEntry
-				}
-				interface Response {
-					characterLoreEntry: SelectCharacterLoreEntry
-				}
-			}
-			namespace Delete {
-				interface Params {
-					id: number
+					typeId: EntryTypeId
 				}
 				interface Response {
 					success?: string
@@ -2677,6 +2794,7 @@ declare global {
 			namespace UpdatePositions {
 				interface Params {
 					lorebookId: number
+					typeId: EntryTypeId
 					positions: Array<{ id: number; position: number }>
 				}
 				interface Response {
@@ -2684,50 +2802,56 @@ declare global {
 					error?: string
 				}
 			}
-		}
-
-		// History Entries namespace
-		namespace HistoryEntries {
-			namespace List {
-				interface Params {
-					lorebookId: number
-				}
-				interface Response {
-					lorebookId: number
-					historyEntryList: SelectHistoryEntry[]
-				}
-			}
-			namespace Create {
-				interface Params {
-					historyEntry: InsertHistoryEntry
-				}
-				interface Response {
-					historyEntry: SelectHistoryEntry
-				}
-			}
-			namespace Update {
-				interface Params {
-					historyEntry: UpdateHistoryEntry
-				}
-				interface Response {
-					historyEntry: SelectHistoryEntry
-				}
-			}
-			namespace Delete {
-				interface Params {
-					id: number
-				}
-				interface Response {
-					success?: string
-					error?: string
-				}
-			}
+			/** Only a type declaring an `order` role answers this. */
 			namespace IterateNext {
 				interface Params {
 					id: number
+					typeId: EntryTypeId
 				}
 				interface Response {
-					historyEntry: SelectHistoryEntry
+					entry: LorebookEntry
+				}
+			}
+			/**
+			 * "Would this entry fire?" — asked from the editor, answered by a
+			 * real turn.
+			 *
+			 * An entry does not fire in the abstract, so the question names a
+			 * conversation. The answer is the **same row** the run receipt's
+			 * retrieval panel renders (`Pipelines.RetrievalRow`) rather than a
+			 * second vocabulary for the same decision: one shape, two readers.
+			 */
+			namespace TestRetrieval {
+				interface Params {
+					id: number
+					typeId: EntryTypeId
+					/** Which conversation to test against. */
+					sessionId: number
+				}
+				interface Response {
+					/** Echoed, so a late answer is not shown under another entry. */
+					id: number
+					typeId: EntryTypeId
+					sessionId: number
+					/**
+					 * This entry's decision, in the retrieval panel's shape.
+					 *
+					 * ⚠ **Absent is a real answer**, not an error: no mechanism
+					 * offered this entry to the ranker and none declined it by
+					 * name either. `ranked` and `notes` are what say why.
+					 */
+					row?: Pipelines.RetrievalRow
+					/** False when the turn ranked nothing at all. */
+					ranked?: boolean
+					/**
+					 * The mechanism-level half of the trail — how deep the scan
+					 * went, whether an embedding model was there. This is what
+					 * answers a missing `row`.
+					 */
+					notes?: string[]
+					/** Wiring problems the turn reported. */
+					warnings?: string[]
+					error?: string
 				}
 			}
 		}
@@ -3132,16 +3256,26 @@ declare global {
 			}
 			/**
 			 * A named configuration for this pipeline — the shipped immutable
-			 * default plus any copies a person has made. Selecting one is what
-			 * the old preset picker did, over the table the runtime actually
-			 * resolves against.
+			 * default plus whatever an administrator has added. Selecting one
+			 * is what the old preset picker did, over the table the runtime
+			 * actually resolves against.
+			 *
+			 * Nobody but an administrator owns one. A person's relationship to
+			 * a configuration is a *selection*, so this list is a menu rather
+			 * than an inventory, and it carries no create/rename/delete verbs
+			 * for the surfaces a non-admin sees.
 			 */
 			interface NamedConfig {
 				id: number
 				name: string
 				isDefault: boolean
 				readOnly: boolean
-				/** Whether a non-admin may choose this preset. */
+				/**
+				 * Whether a non-admin may choose this preset.
+				 *
+				 * Only ever `false` in an admin's view — a withdrawn
+				 * configuration is not listed for anyone else.
+				 */
 				enabled: boolean
 				/**
 				 * Which of the mode's actions sessions on this preset include.
@@ -3149,6 +3283,38 @@ declare global {
 				 * states none.
 				 */
 				includedActions: string[] | null
+			}
+			/**
+			 * What publishing a new version did to a configuration, kept until
+			 * somebody has seen it.
+			 *
+			 * A version can *remove* an option a person deliberately set. The
+			 * value is culled — a row addressing a field that no longer exists
+			 * resolves to nothing and reads as corruption — and this is the
+			 * half that makes the cull honest: what it was called, and what it
+			 * held. Back-fills travel under their own kind, because they answer
+			 * the same question ("why is this different today") and a reader who
+			 * has to consult two places will consult neither.
+			 *
+			 * The ADDRESS is deliberately absent. `nodeKey` is topology and the
+			 * payload carries none (05 §0a); the label is what a person needs
+			 * and the id is what a dismissal names.
+			 */
+			interface ConfigNotice {
+				id: number
+				kind: "culled" | "backfilled"
+				/**
+				 * What the control was called. Recovered from the version that
+				 * last declared it, and humanized from the address when that
+				 * version's declarations are gone — never empty, because a
+				 * notice that cannot name what was lost is barely better than
+				 * the silence it replaces.
+				 */
+				label: string
+				/** What the user had set, for a cull. Absent for a back-fill. */
+				previousValue?: unknown
+				/** When the change happened, ISO-8601. */
+				at: string
 			}
 			interface Namespace {
 				slug: string
@@ -3176,12 +3342,22 @@ declare global {
 					specSlug: string
 					origin: "companion" | "attachment"
 				}[]
-				/** `source` is where the selection came from: session | user | instance | shipped. */
+				/** `source` is where the selection came from: session | instance | shipped. */
 				selectedConfig: {
 					id: number
 					name: string
 					source: string
 				} | null
+				/**
+				 * Whether this viewer may change the selection from here.
+				 *
+				 * A selection made inside a session is the session's; made
+				 * anywhere else it is the instance's, which is the
+				 * administrator's alone. False therefore means "show what is
+				 * selected, offer no picker" — an absent control rather than a
+				 * live one whose every use is refused.
+				 */
+				canSelectConfig: boolean
 				steps: Step[]
 				/**
 				 * The kinds of setting this pipeline contains, in render order,
@@ -3299,6 +3475,367 @@ declare global {
 				}
 			}
 			/**
+			 * Retrieval, explained — design §9, plan Part 6.
+			 *
+			 * The whole "why" trail is computed on every turn and, until this,
+			 * was rendered nowhere: `keywordQuery.skipped[]`, the mechanisms'
+			 * `diagnostics`, `merge`'s `foundBy`, and `select`'s `Decision`
+			 * across eleven reasons all reach the receipt and stop there.
+			 *
+			 * Shaped the way the plan rules and **not** as a numeric panel:
+			 * anchored to each result, content vocabulary before numbers, named
+			 * ordered criteria rather than a composite float, and every row
+			 * carrying an action. Two levels of disclosure and no third — the
+			 * row is level one, `criteria` and `entry` are level two.
+			 *
+			 * Projected server-side rather than derived on the client from the
+			 * raw receipt, for the reason every other handler here states: the
+			 * receipt is an internal record whose shape grows, and a panel
+			 * reading it directly is a second copy of what a decision means.
+			 */
+			interface RetrievalCriterion {
+				/** The criterion's name, in content vocabulary. */
+				label: string
+				/** What was measured, in words. Numbers are the second half. */
+				detail: string
+				/**
+				 * What the criterion measured, 0–1.
+				 *
+				 * The measurement and **not** a weighted contribution, which is
+				 * the number a reader would rather have and the one this
+				 * surface cannot honestly produce: the signal weights are flat
+				 * per-signal config maps that `bindings.ts` folds into
+				 * `RankingParams` privately, so anything here would either
+				 * duplicate that fold or quietly assume the defaults. Worse,
+				 * half the candidates carry a `presetScore` — rank fusion, a
+				 * similarity — and were ordered by a number no weight touched,
+				 * so a contribution column would explain the wrong arithmetic
+				 * for them. The composite the ranker actually sorted on is on
+				 * the row, once, as `score`.
+				 */
+				value?: number
+			}
+			/**
+			 * The row's own entry, and the two levers it can offer.
+			 *
+			 * `constant` is "always include" and `enabled` is "never include" —
+			 * both real columns with real editors, so the panel writes through
+			 * `entries:update` rather than growing a verb of its own. Present
+			 * only for a lore row whose entry the asker owns; a message or a
+			 * graph node has neither field and gets no lever.
+			 */
+			interface RetrievalEntryRef {
+				id: number
+				typeId: EntryTypeId
+				/** Current values, so a toggle can say what it will do. */
+				constant: boolean
+				enabled: boolean
+				/** The entry's keys, for the keyword criterion's wording. */
+				keys: string[]
+			}
+			interface RetrievalRow {
+				/** `source:id` — stable, and what the panel keys `{#each}` on. */
+				key: string
+				id: number | string
+				/** The budget group: `worldLore`, `history`, `messages`… */
+				source: string
+				/** That group's front-door name. */
+				sourceLabel: string
+				/**
+				 * The entry's title, or a stand-in when it has none.
+				 *
+				 * The **recorded** one once `provenance` says the entry has
+				 * moved, and the live one otherwise — see `currentTitle`.
+				 */
+				title: string
+				/**
+				 * The first line of what it says — content, not metadata.
+				 *
+				 * Always the recorded text: it is read off the candidate's own
+				 * `payload`, which is the row as the run scored it, so this
+				 * half of the panel has never had the drift `provenance`
+				 * names.
+				 */
+				excerpt?: string
+				/**
+				 * Whether the entry behind this row is still what the run
+				 * scored — the honest states of a record that keeps decisions
+				 * but not content.
+				 *
+				 * A receipt stores candidate ids, scores and reasons; the
+				 * titles and keys beside them are read **live** when the panel
+				 * opens. So an entry edited or deleted after its run used to
+				 * render the current text against the old decision, with
+				 * nothing saying they were never together — a composite that
+				 * never existed. Each candidate now records a fingerprint of
+				 * its stored title, keys and content (`entrySourceHash`, the
+				 * annotation lane's own hash), and this is that fingerprint
+				 * compared against the row as it is now:
+				 *
+				 *  · `unchanged` — the live entry *is* what was scored, so the
+				 *    panel may render it inline as it always has.
+				 *  · `changed` — the row exists and is not what was scored.
+				 *    The decision stands; the entry beside it is a reference,
+				 *    and `currentTitle` is how it reads now.
+				 *  · `deleted` — no such row in this session's lorebook any
+				 *    more. The decision is all that is left of it.
+				 *
+				 * ⚠ **Absent means nothing is claimed**, and that is a real and
+				 * common state rather than a fourth outcome: a receipt written
+				 * before the fingerprint existed, a candidate from a mechanism that
+				 * does not carry one, a run whose session or lorebook can no
+				 * longer be read. A reader must not treat absence as
+				 * `unchanged` — the whole defect this field exists for is a
+				 * panel presenting an unverified pairing as a verified one.
+				 */
+				provenance?: "unchanged" | "changed" | "deleted"
+				/**
+				 * What happened to it, as a sentence — present exactly when
+				 * `provenance` is `changed` or `deleted`.
+				 *
+				 * Content vocabulary and no numbers, like every other sentence
+				 * on this row: the figures are the second level and this is a
+				 * statement about the record.
+				 */
+				provenanceNote?: string
+				/**
+				 * The entry's title **as it reads now**, when that is not the
+				 * title this row carries.
+				 *
+				 * The clearly-labelled reference half of a `changed` row: the
+				 * decision is about the recorded title, and this is the one a
+				 * reader will find if they go looking. Absent when the two
+				 * agree, when the entry is gone, and when the run recorded no
+				 * title to contrast with.
+				 */
+				currentTitle?: string
+				/**
+				 * `skipped` is not a weaker `excluded`: it means no mechanism ever
+				 * offered this entry to the ranker, which is a different
+				 * question with a different control behind it.
+				 */
+				outcome: "included" | "excluded" | "skipped"
+				/** Level one: one sentence, in content vocabulary. */
+				verdict: string
+				/** The medal — how it got here, in two or three words. */
+				marker: string
+				/** What the medal is about, for colour and grouping. */
+				markerKind:
+					| "pinned"
+					| "keyword"
+					| "semantic"
+					| "entity"
+					| "floor"
+					| "none"
+				/** Level two, ordered by contribution where there is one. */
+				criteria: RetrievalCriterion[]
+				score?: number
+				tokens?: number
+				/**
+				 * `select`'s own vocabulary — `filled_scored`,
+				 * `excluded_share_cap`. Kept because it is what the code and
+				 * the tests are written in, and a reader who knows it should
+				 * not have to translate back from prose.
+				 */
+				reason?: string
+				/** Which node decided, for a spec ranking in more than one gather branch. */
+				nodeKey?: string
+				/**
+				 * The engine's own sentence, with the numbers that produced the
+				 * decision — `select` writes it at the decision site because
+				 * they exist there and nowhere else once the loop moves on
+				 * (16 §7c). Level two, under the prose verdict.
+				 */
+				why?: string[]
+				entry?: RetrievalEntryRef
+			}
+			/** One budget group's arithmetic — what `renderSelection` summarised. */
+			interface RetrievalBand {
+				source: string
+				label: string
+				allocated: number
+				used: number
+				entries: number
+				cap: number
+				/** How many candidates of this source the ranker turned away. */
+				dropped: number
+				/**
+				 * Its slice of what retrieval actually spent, 0–1 — the figure
+				 * behind `RetrievalBudget.headline`.
+				 *
+				 * Absent when nothing was spent at all, because a share of
+				 * nothing is undefined rather than zero, and four rows each
+				 * reading "0%" would be the panel asserting a division it never
+				 * performed.
+				 */
+				share?: number
+			}
+			/**
+			 * Where the room went — the budget, said in one sentence.
+			 *
+			 * The per-item token counts have always been on the receipt and the
+			 * bands have always carried their sums; nothing ever added them up
+			 * into a *statement*. A reader wanting to know what was eating the
+			 * prompt had four numeric columns and a subtraction to do, which is
+			 * the same failure the retrieval rows exist to fix one level down:
+			 * the arithmetic was present and the finding was not.
+			 *
+			 * ⚠ **"The retrieved context", never "your prompt".** These bands
+			 * budget what *retrieval* put in — world lore, character lore,
+			 * history, messages, relationships — and the system prompt, the
+			 * persona, the instructions and the reply itself sit outside every
+			 * one of them. A share stated against "the prompt" would be a
+			 * larger claim than the receipt can support, so every sentence here
+			 * names the smaller thing it is honestly a share of.
+			 */
+			interface RetrievalBudget {
+				/**
+				 * Which band is taking the room, named before the figure that
+				 * says how much.
+				 */
+				headline: string
+				/**
+				 * How full the room got — present only when the run recorded a
+				 * ceiling to be full of. A run that halted before assembly
+				 * recorded none, and inventing one from the sum of the bands
+				 * would be reporting "100% full" for every such run.
+				 */
+				detail?: string
+				/** Tokens the retrieved context actually holds. */
+				used: number
+				/** The ceiling assemble recorded for it, when it recorded one. */
+				total?: number
+				/** What was left of that ceiling. Present with `total`. */
+				remaining?: number
+			}
+			namespace RunExplain {
+				interface Params {
+					runId: string
+				}
+				interface Response {
+					runId?: string
+					explanation?: {
+						rows: RetrievalRow[]
+						bands: RetrievalBand[]
+						/**
+						 * Mechanism-level facts no row can carry — how deep the scan
+						 * went, whether an embedding model was available.
+						 */
+						notes: string[]
+						/**
+						 * Wiring problems the run reported: disjoint fusion, a
+						 * source the candidate fetch could not read whole.
+						 */
+						warnings: string[]
+						/**
+						 * False when the run recorded no ranking at all — a
+						 * halt before retrieval, or a compacted receipt. The
+						 * panel says so rather than rendering an empty list,
+						 * which reads as "nothing matched".
+						 */
+						ranked: boolean
+						/** Rows dropped from this projection for size. */
+						omitted: number
+						/**
+						 * What is eating the room, summed by band.
+						 *
+						 * Absent when the run recorded no budget groups and
+						 * put no tokens in — a halt before retrieval, a
+						 * compacted receipt. Silence rather than a breakdown
+						 * of nothing, for the reason `ranked` exists: an empty
+						 * table reads as "nothing was retrieved" when the
+						 * truth is "nothing was recorded".
+						 */
+						budget?: RetrievalBudget
+					}
+					error?: string
+				}
+			}
+			/**
+			 * Everything that has ever fired in one session.
+			 *
+			 * Every run's receipt has always recorded what fired, and nothing
+			 * ever added them up — so "which entries is this session actually
+			 * using?" meant opening runs one at a time and holding the answer
+			 * in your head. This is the aggregate across a session's runs:
+			 * which entries reached a prompt, how often, and when last.
+			 *
+			 * ⚠ **Aggregated in the database, not in this process.** A long
+			 * session holds hundreds of receipts and each one is large, so this
+			 * is a grouped query over the receipt column rather than every blob
+			 * loaded and reduced in memory. The read is still bounded, and the
+			 * bound is *stated*: `runsRead` against `runsTotal`, and a sentence
+			 * in `notes`. A bound nobody is told about turns a partial answer
+			 * into a wrong one.
+			 */
+			interface SessionEntryUsageRow {
+				/** `source:id` — the same key the run explanation rows use. */
+				key: string
+				id: number | string
+				/** The budget group: `worldLore`, `history`, `messages`… */
+				source: string
+				/** That group's front-door name. */
+				sourceLabel: string
+				/**
+				 * The entry's title as it reads **now**, falling back to the
+				 * name the last run recorded and then to its id.
+				 *
+				 * No `provenance` here, deliberately. Drift is a statement
+				 * about one decision and one entry at one moment; across
+				 * fifty runs "has it been edited since" has fifty answers and
+				 * the honest aggregate of them is none. A reader who needs
+				 * that opens `lastRunId`, where the comparison is well posed.
+				 */
+				title: string
+				/** How many runs put it in the prompt. */
+				usedInRuns: number
+				/**
+				 * How many runs judged it at all, used or not — the
+				 * denominator that makes `usedInRuns` mean something. "12 of
+				 * 12" and "12 of 300" are different facts about one entry.
+				 */
+				judgedInRuns: number
+				/** When it was last in a prompt, ISO. */
+				lastUsedAt: string
+				/** The run it was last in, so its own trail is one click away. */
+				lastRunId: string
+				/** What it cost the last time it went in. */
+				tokens?: number
+				entry?: RetrievalEntryRef
+			}
+			namespace SessionEntryUsage {
+				interface Params {
+					sessionId: number
+					/** How many rows to answer with. */
+					limit?: number
+					/** How many of the session's newest runs to read. */
+					runLimit?: number
+				}
+				interface Response {
+					sessionId?: number
+					/**
+					 * The finding, in one sentence — what this session keeps
+					 * reaching for, before the figure that says how often.
+					 */
+					summary?: string
+					/**
+					 * What the aggregate did not cover, said in words: the run
+					 * bound, the previews it left out, the tail it did not
+					 * list.
+					 */
+					notes?: string[]
+					/** Most-used first; see the handler on why frequency. */
+					entries?: SessionEntryUsageRow[]
+					/** How many runs this answer actually read. */
+					runsRead?: number
+					/** How many non-preview runs the session has in total. */
+					runsTotal?: number
+					/** Entries past `limit` that are not listed. */
+					omitted?: number
+					error?: string
+				}
+			}
+			/**
 			 * The review gate (01 §7). A run parked at a gated node pushes
 			 * `pipelines:reviewRequested` with a form inferred from the
 			 * payload the node received — the same schema strategy plugin
@@ -3331,6 +3868,13 @@ declare global {
 				interface Response {
 					ok?: boolean
 					error?: string
+					/**
+					 * Which review the error is about. A refused edit leaves
+					 * that card parked and decidable, so the client needs to
+					 * know which one to re-enable — and, since errors reach
+					 * every tab this person has open, which ones to ignore.
+					 */
+					id?: string
 				}
 			}
 			/**
@@ -3406,6 +3950,47 @@ declare global {
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			/**
+			 * The notices one configuration is holding, oldest first.
+			 *
+			 * Read separately from the view rather than folded into it: the
+			 * view is re-emitted by every write, and a banner that reappeared
+			 * on each keystroke-driven refresh would be a notice nobody could
+			 * get rid of. This answers only when asked, and after a dismissal.
+			 */
+			namespace ConfigNotices {
+				interface Params {
+					slug: string
+					configId: number
+				}
+				interface Response {
+					configId?: number
+					notices?: ConfigNotice[]
+					error?: string
+				}
+			}
+			/**
+			 * Dismiss one notice — or, with no id, everything pending on the
+			 * configuration.
+			 *
+			 * Answers on `pipelines:configNotices` with the refreshed list, the
+			 * same "a mutation answers with the whole view" rule the option
+			 * writes follow: what is left is the only thing the caller needs
+			 * and re-deriving it client-side is how the two come to disagree.
+			 */
+			namespace AcknowledgeConfigNotices {
+				interface Params {
+					slug: string
+					configId: number
+					/** Omit to dismiss every pending notice for the config. */
+					noticeId?: number
+				}
+				interface Response {
+					configId?: number
+					notices?: ConfigNotice[]
 					error?: string
 				}
 			}
@@ -4059,6 +4644,19 @@ declare global {
 						tokensSpent: number
 						isPreview: boolean
 						messageId: number | null
+						/**
+						 * The session this run belonged to, when it belonged to
+						 * one.
+						 *
+						 * Carried so a receipt on screen can offer the
+						 * session-wide view beside it — the run says what fired
+						 * this turn, `pipelines:sessionEntryUsage` says what
+						 * has ever fired, and without this the panel showing
+						 * the first has no way to ask for the second. Null on a
+						 * run with no session, and on one whose session has
+						 * since been deleted (the column is `set null`).
+						 */
+						sessionId: number | null
 						startedAt: string
 					}[]
 				}
@@ -5372,6 +5970,69 @@ declare global {
 					visible: boolean
 				}
 			}
+			/**
+			 * The instance's language (R5) — the admin's setup choice, and what
+			 * every user who has not picked one of their own inherits.
+			 */
+			namespace UpdateDefaultLanguage {
+				interface Params {
+					/** ISO 639-1, from `LANGUAGES`. Refused otherwise. */
+					language: string
+				}
+				interface Response {
+					success: boolean
+					language: string
+				}
+			}
+			/**
+			 * Whether the server may call an outside service to fill in UI
+			 * strings, and which one. Off until an admin says otherwise — see
+			 * the schema note on `auto_translate_enabled`.
+			 */
+			namespace UpdateAutoTranslate {
+				interface Params {
+					enabled: boolean
+					engine: "google" | "libre"
+					/** LibreTranslate base URL; ignored by `google`. */
+					endpoint: string | null
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+		}
+
+		/**
+		 * UI language (plan `retrieval-and-knowledge` §7 R5).
+		 *
+		 * One event, because there is only one question the client asks: "what
+		 * do these English strings say in my language?" Everything else about
+		 * language — which one, who set it — travels on the settings rows the
+		 * client already receives.
+		 */
+		namespace Language {
+			namespace Catalog {
+				interface Params {
+					/**
+					 * English source strings the client has rendered and has no
+					 * translation for. Capped server-side, both in count and in
+					 * per-string length; see `server/i18n/translate.ts`.
+					 */
+					sources: string[]
+				}
+				interface Response {
+					/** The caller's effective language, resolved server-side. */
+					language: string
+					/**
+					 * Source → translation, for whatever could be answered. A
+					 * requested string may legitimately be **absent**: the
+					 * instance has no translation and auto-translation is off,
+					 * or the engine failed. The client keeps showing English,
+					 * which is why absence is not an error.
+					 */
+					entries: Record<string, string>
+				}
+			}
 		}
 
 		// User Settings namespace
@@ -5395,7 +6056,35 @@ declare global {
 						backgroundImagePath: string | null
 						backgroundOpacity: number
 						charaVaultIncludeNsfw: boolean
+						/**
+						 * The user's own choice (R5), or **null** meaning "follow
+						 * the instance default".
+						 *
+						 * Sent as stored rather than pre-resolved, deliberately:
+						 * the settings picker has to be able to show "Use the
+						 * server default" as a distinct state from an explicit
+						 * choice that happens to match it. `effectiveLanguage`
+						 * beside it is what the UI actually renders in.
+						 */
+						language: string | null
+						/**
+						 * The resolved answer — user, else instance, else `en`.
+						 * The one field anything drawing the interface reads.
+						 */
+						effectiveLanguage: string
 					}
+				}
+			}
+			/** Pick a UI language, or null to follow the instance default (R5). */
+			namespace UpdateLanguage {
+				interface Params {
+					/** ISO 639-1 from `LANGUAGES`, or null to inherit. */
+					language: string | null
+				}
+				interface Response {
+					success: boolean
+					language: string | null
+					effectiveLanguage: string
 				}
 			}
 			namespace ListBackgrounds {

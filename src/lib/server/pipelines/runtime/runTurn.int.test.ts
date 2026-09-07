@@ -14,6 +14,7 @@ import { eq } from "drizzle-orm"
 import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
+import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 
 // Whichever test runs a turn first pays the cold dynamic import of the entire
@@ -26,6 +27,12 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 })
 
 let streamed: string[] = []
 
+/**
+ * Fired inside the fake model's `generateText`, so a test can do something
+ * while a turn is mid-provider — pressing Cancel, in the one below.
+ */
+let whileGenerating: (() => void) | null = null
+
 /** Pinned to the real action, so a rename cannot pass here — fakeTextAdapter.ts. */
 class FakeAdapter implements FakeTextAdapter {
 	injected: any
@@ -37,6 +44,7 @@ class FakeAdapter implements FakeTextAdapter {
 	}
 	abort() {}
 	async generateText() {
+		whileGenerating?.()
 		return {
 			compiledPrompt: this.injected,
 			isAborted: false,
@@ -113,13 +121,16 @@ beforeAll(async () => {
 		.insert(schema.lorebooks)
 		.values({ name: "Turn Lore", userId })
 		.returning()
-	await db.insert(schema.worldLoreEntries).values({
-		lorebookId: lorebook.id,
-		name: "The Ashguard",
-		keys: "ashguard",
-		content: "Riders who patrol the ash wastes.",
-		retrievalStrategy: "keyword"
-	})
+	await db.insert(schema.lorebookEntries).values(
+		worldLoreValues([
+			{
+				lorebookId: lorebook.id,
+				name: "The Ashguard",
+				keys: "ashguard",
+				content: "Riders who patrol the ash wastes."
+			}
+		])
+	)
 
 	const [session] = await db
 		.insert(schema.sessions)
@@ -127,14 +138,12 @@ beforeAll(async () => {
 		.returning()
 	sessionId = session.id
 
-	await db
-		.insert(schema.sessionCharacters)
-		.values({
-			sessionId,
-			characterId,
-			isActive: true,
-			visibility: "visible"
-		})
+	await db.insert(schema.sessionCharacters).values({
+		sessionId,
+		characterId,
+		isActive: true,
+		visibility: "visible"
+	})
 	await db
 		.insert(schema.sessionPersonas)
 		.values({ sessionId, personaId: persona.id })
@@ -331,6 +340,64 @@ describe("running a turn", () => {
 				specId: "core:spec/not-published"
 			})
 		).rejects.toThrow(PipelineUnavailableError)
+	})
+})
+
+/**
+ * Cancel, on a real turn (13 §3).
+ *
+ * ⚠ Cancel used to reach the adapter and nothing else: `signal` stopped the
+ * request in flight, `checkCancel` was never wired, and the executor walked on
+ * to the next node — so stopping an image render started the write that
+ * followed it. The assertion is therefore about the node that must *not* run,
+ * not about the status that comes back.
+ *
+ * The fake model returns normally when aborted, which is the case the signal
+ * alone cannot cover: a provider that hands back what it has is a successful
+ * node, and nothing about its result says stop.
+ */
+describe("cancelling a turn", () => {
+	it("stops before the next node, and the receipt says who and why", async () => {
+		const runRegistry = await import(
+			"$lib/server/pipelines/runtime/runRegistry"
+		)
+		const before = await db
+			.select()
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, sessionId))
+
+		const runId = "run:cancel-mid-flight"
+		const handle = runRegistry.start({ runId, userId, sessionId })
+		whileGenerating = () => runRegistry.cancel(runId, userId)
+
+		let receipt: any
+		try {
+			receipt = await turn({
+				seed: "turn:cancelled",
+				runId,
+				// Exactly the pair the socket handler passes: the event for the
+				// adapter, the poll for the executor, one controller behind both.
+				signal: handle.controller.signal,
+				cancelSignal: () => runRegistry.cancellation(handle)
+			})
+		} finally {
+			whileGenerating = null
+			runRegistry.finish(runId)
+		}
+
+		// The write node is the one after the provider. It did not run — which
+		// is the whole claim, and it is a row, not a status.
+		expect(receipt.nodes.map((n: any) => n.nodeKey)).toContain("generate")
+		expect(receipt.nodes.map((n: any) => n.nodeKey)).not.toContain("save")
+		const after = await db
+			.select()
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, sessionId))
+		expect(after).toHaveLength(before.length)
+
+		expect(receipt.outcome).toBe("cancelled")
+		expect(receipt.cancelledBy).toBe(`user:${userId}`)
+		expect(receipt.haltReason).toBe("the run was cancelled")
 	})
 })
 
@@ -678,11 +745,24 @@ describe("script chains on a turn", () => {
 
 			const apps = receiptScripts(receipt)
 			const winner = apps.find((a: any) => a.won)
+			// `via` says which SIDE supplied the guard, which is the provenance
+			// a receipt reader needs; WHICH connection it was is identity, and
+			// this record is stored in the receipt blob `pipelines:run` hands
+			// back to whoever owns the run — a non-admin included. So the name
+			// moved to `connectionName`, a key `withoutConnectionIdentity` has
+			// always removed.
 			expect(winner).toMatchObject({
 				name: "Dawn guard",
-				via: "connection:Turn Kobold",
+				via: "connection",
+				connectionName: "Turn Kobold",
 				appliedBy: "substrate"
 			})
+			const { redactConnections } = await import(
+				"$lib/server/connections/visibility"
+			)
+			expect(
+				JSON.stringify(redactConnections(winner, { isAdmin: false }))
+			).not.toContain("Turn Kobold")
 		} finally {
 			// Released so the tests after this one run against a bare default
 			// connection rather than inheriting the guard.

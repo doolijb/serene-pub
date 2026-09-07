@@ -10,6 +10,9 @@
  * `runId` is what makes cancellation possible: a progress event a client cannot
  * name is one it cannot stop.
  */
+
+import type { ConnectionIdentity } from "$lib/shared/connections/identity"
+
 export interface RunProgress {
 	/** Identifies the run, for cancelling it and for keying client state. */
 	runId: string
@@ -38,6 +41,16 @@ export interface RunProgress {
 	 */
 	preview?: { base64: string; mime: string }
 	message?: string
+	/**
+	 * Which connection this step is about.
+	 *
+	 * A FIELD, because the sentence beside it must not name one: an image model
+	 * is a path on the administrator's disk, and this event fans out to everyone
+	 * watching the session. `withoutConnectionIdentity` removes the key at every
+	 * egress, so an administrator's client can render "Loading sd-1.5" and
+	 * nobody else's is even told there is a connection.
+	 */
+	connection?: ConnectionIdentity
 	/** The run finished. A client clears its state on this or on `error`. */
 	done?: boolean
 	/** The run failed, with something a person can act on. */

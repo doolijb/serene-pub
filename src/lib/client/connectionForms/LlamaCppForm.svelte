@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { onMount, onDestroy } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { z } from "zod"
@@ -165,30 +166,18 @@
 			{/if}
 		</button>
 	</div>
-	<div class="mt-2 flex flex-col gap-1">
-		<label class="font-semibold" for="promptFormat">Prompt Format</label>
-		<select
-			id="promptFormat"
-			class="select bg-background border-muted w-full rounded border"
-			bind:value={connection.promptFormat}
-		>
-			{#each PromptFormats.options as option}
-				<option value={option.value}>{option.label}</option>
-			{/each}
-		</select>
-	</div>
-	<div class="mt-2 flex flex-col gap-1">
-		<label class="font-semibold" for="tokenCounter">Token Counter</label>
-		<select
-			id="tokenCounter"
-			bind:value={connection.tokenCounter}
-			class="select bg-background border-muted w-full rounded border"
-		>
-			{#each TokenCounterOptions.options as t}
-				<option value={t.value}>{t.label}</option>
-			{/each}
-		</select>
-	</div>
+	<Select
+		class="mt-2"
+		label="Prompt Format"
+		options={PromptFormats.options}
+		bind:value={connection.promptFormat}
+	/>
+	<Select
+		class="mt-2"
+		label="Token Counter"
+		options={TokenCounterOptions.options}
+		bind:value={connection.tokenCounter}
+	/>
 	<details class="mt-4">
 		<summary class="cursor-pointer font-semibold">
 			Advanced Settings

@@ -19,12 +19,13 @@
 
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, asc, desc, eq } from "drizzle-orm"
+import { and, asc, desc, eq, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import {
 	clearOption,
 	listNamespaces,
 	declarations,
+	humanizeCamel,
 	humanizeTypeId,
 	i18nText,
 	namespaceView,
@@ -34,6 +35,25 @@ import {
 	OptionNotWritableError,
 	type Viewer
 } from "$lib/server/pipelines/config/panel"
+import { redactConnections } from "$lib/server/connections/visibility"
+// Owner-OR-guest, in the one place that decides it. A local
+// `eq(sessions.userId, userId)` here would be a fourth copy of a rule whose
+// previous copies locked guests out of features they were entitled to — see
+// `sessionAccess.ts`'s own note. Runs stay scoped to the asker's `user_id`
+// on top of it, so access to the session never becomes access to somebody
+// else's receipts.
+import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
+// The budget band a declared entry type's rows compete in — the declaration's
+// own answer, not a fourth table of source names. It is what keys the entry
+// index the retrieval explanation looks rows up in.
+import {
+	entryDeclaration,
+	bandOfType
+} from "$lib/server/entries/declarations"
+// The one recipe for "what this entry says", shared with the annotation lane
+// and with the run that recorded the receipt — see `entrySourceHash`.
+import { entrySourceHash } from "$lib/server/annotations"
+import type { EntryTypeId } from "$lib/shared/entries/types"
 
 /**
  * The instance secret that keys option handles.
@@ -590,6 +610,105 @@ export const pipelinesSelectConfig: Handler<
 }
 
 /* ------------------------------------------------------------------ *
+ * Version notices — what publishing did to a configuration
+ *
+ * The cull has always been recorded (`pipeline_config_notices`) and, until
+ * now, read by nobody: a person who deliberately set a value at an address a
+ * later version moved lost it with no indication anywhere. These two events are
+ * the reader. Admin-only, on the same terms as the rest of the config verbs —
+ * the notice is about the instance's configuration, and dismissing one is a
+ * write to it.
+ * ------------------------------------------------------------------ */
+
+/** The pending notices for a config, in the shape the panel renders. */
+async function noticesFor(
+	configId: number
+): Promise<Sockets.Pipelines.ConfigNotice[]> {
+	const { pendingNotices } = await import(
+		"$lib/server/pipelines/config/named"
+	)
+	return ((await pendingNotices(db as any, configId)) as any[]).map((n) => ({
+		id: n.id,
+		kind: n.kind,
+		// A row written before the reconciler learned to label its culls has
+		// none, and there is nothing left to recover it from — so it says what
+		// it can rather than rendering as an empty line. Fresh notices always
+		// carry a label.
+		label:
+			n.label ??
+			(n.kind === "culled"
+				? "A setting this version removed"
+				: "A setting this version added"),
+		// The address is not sent. `nodeKey` is topology (05 §0a) and the label
+		// is the part a person needs; the id is what a dismissal names.
+		...(n.previousValue != null ? { previousValue: n.previousValue } : {}),
+		at: new Date(n.createdAt).toISOString()
+	}))
+}
+
+export const pipelinesConfigNotices: Handler<
+	Sockets.Pipelines.ConfigNotices.Params,
+	Sockets.Pipelines.ConfigNotices.Response
+> = {
+	event: "pipelines:configNotices",
+	handler: async (socket, params, emitToUser) => {
+		const denied = adminOnly(socket, emitToUser, "pipelines:configNotices")
+		if (denied) return denied
+		try {
+			const config = await configInSpec(params.slug, params.configId)
+			const res = {
+				configId: config.id,
+				notices: await noticesFor(config.id)
+			}
+			emitToUser("pipelines:configNotices", res)
+			return res
+		} catch (err) {
+			const res = { error: await configRefusal(err) }
+			emitToUser("pipelines:configNotices:error", res)
+			return res
+		}
+	}
+}
+
+export const pipelinesAcknowledgeConfigNotices: Handler<
+	Sockets.Pipelines.AcknowledgeConfigNotices.Params,
+	Sockets.Pipelines.AcknowledgeConfigNotices.Response
+> = {
+	event: "pipelines:acknowledgeConfigNotices",
+	handler: async (socket, params, emitToUser) => {
+		const denied = adminOnly(
+			socket,
+			emitToUser,
+			"pipelines:acknowledgeConfigNotices"
+		)
+		if (denied) return denied
+		try {
+			// `configInSpec` first, and the acknowledgement is scoped to that
+			// row's id: the notice id arrives from the client, so the pairing
+			// is what stops one configuration's dismissal reaching another's.
+			const config = await configInSpec(params.slug, params.configId)
+			const { acknowledgeNotices } = await import(
+				"$lib/server/pipelines/config/named"
+			)
+			await acknowledgeNotices(db as any, config.id, params.noticeId)
+			const res = {
+				configId: config.id,
+				notices: await noticesFor(config.id)
+			}
+			// Answered on the read event, like every other mutation here
+			// answers on `pipelines:get`: one listener, and no chance of the
+			// banner disagreeing with the rows behind it.
+			emitToUser("pipelines:configNotices", res)
+			return res
+		} catch (err) {
+			const res = { error: await configRefusal(err) }
+			emitToUser("pipelines:acknowledgeConfigNotices:error", res)
+			return res
+		}
+	}
+}
+
+/* ------------------------------------------------------------------ *
  * Prompt CRUD — clone, edit, delete, from the panel
  * ------------------------------------------------------------------ */
 
@@ -957,10 +1076,7 @@ export const pipelinesDeletePrompt: Handler<
 										schema.pipelineConfigValues.configId,
 										selected.configId
 									),
-									eq(
-										schema.pipelineConfigValues.slot,
-										slot
-									)
+									eq(schema.pipelineConfigValues.slot, slot)
 								)
 							)
 						mineValues.push(
@@ -2487,6 +2603,7 @@ export const pipelinesRuns: Handler<
 				tokensSpent: r.tokensSpent,
 				isPreview: r.isPreview,
 				messageId: r.messageId,
+				sessionId: r.sessionId,
 				startedAt: new Date(r.startedAt).toISOString()
 			}))
 		}
@@ -2536,11 +2653,1610 @@ export const pipelinesRun: Handler<
 				tokensSpent: (r as any).tokensSpent,
 				isPreview: (r as any).isPreview,
 				messageId: (r as any).messageId,
+				// So the panel reading this receipt can ask what has fired
+				// across the whole session, not just this turn.
+				sessionId: (r as any).sessionId ?? null,
 				startedAt: new Date((r as any).startedAt).toISOString(),
 				receipt: ((r as any).receipt ?? {}) as Record<string, unknown>
 			}
 		}
 		emitToUser("pipelines:run", res)
+		return res
+	}
+}
+
+/* ------------------------------------------------------------------ *
+ * Retrieval, explained — design §9, plan Part 6
+ *
+ * The "why" trail has been computed on every turn since the decomposition
+ * landed and rendered nowhere: `keywordQuery.skipped[]` with a sentence per
+ * declined entry, each mechanism's `diagnostics`, `merge`'s `foundBy`, and `select`'s
+ * `Decision` across eleven reasons. All of it reaches the receipt — the
+ * executor records every node's published output — and the receipt's only
+ * reader was a `<pre>` of raw JSON.
+ *
+ * This projects it. Three rules from plan Part 6, and they are the reason this
+ * is not simply the receipt with nicer fonts:
+ *
+ * 1. **Anchored to the result, not a panel of numbers.** One row per candidate,
+ *    carrying a medal and a sentence; the numbers are the second level.
+ * 2. **Content vocabulary first.** "matched 2 of its 3 keys (ashguard, gate)"
+ *    rather than "keyword 0.667" — which is why the entry rows are read here
+ *    and their keys travel with the row.
+ * 3. **Every explanation carries an action.** `constant` is "always include"
+ *    and `enabled` is "never include"; both are real columns with real editors,
+ *    so `entry` carries their current values and the panel writes through
+ *    `entries:update`. The plan's third action — *this is wrong* — has no
+ *    backing field anywhere and is **not** invented here; it is recorded as an
+ *    open question in design §12.
+ *
+ * Projected server-side rather than read out of the raw receipt by the panel,
+ * for the reason stated at the top of this file: the receipt is an internal
+ * record whose shape grows, and a client walking it would be a second copy of
+ * what a decision means.
+ * ------------------------------------------------------------------ */
+
+/** The entry behind a row, as this projection needs it. */
+interface RetrievalEntryFacts {
+	id: number
+	typeId: string
+	title: string | null
+	keys: string[]
+	constant: boolean
+	enabled: boolean
+	/**
+	 * What it says **now** — `entrySourceHash` over the live row, to compare
+	 * against the one the run recorded. See `RetrievalRow.provenance`.
+	 */
+	fingerprint: string
+}
+
+/** The budget groups' front-door names (plan Part 6, rule 1). */
+const RETRIEVAL_SOURCE_LABELS: Record<string, string> = {
+	worldLore: "World lore",
+	characterLore: "Character lore",
+	history: "History",
+	messages: "Messages",
+	relationships: "Relationships"
+}
+const retrievalSourceLabel = (source: string) =>
+	RETRIEVAL_SOURCE_LABELS[source] ?? source
+
+/**
+ * The index vocabulary's three spellings, folded onto the budget groups.
+ *
+ * ⚠ A **display-side** fold, and knowingly the third statement of a
+ * reconciliation that already exists twice — `BUDGET_GROUP_ALIASES` at the
+ * entry to `rank-hybrid` and `VECTOR_SOURCE_ALIASES` in the vector mechanism, which
+ * answer two different questions and are documented not to merge. This one
+ * answers a third: *which row on screen is this receipt line about*. The vector
+ * mechanism's `skipped[]` records `historyEntry` while the ranker's decisions record
+ * `history`, so without it one entry renders as two rows, one of them nameless.
+ * It reconciles nothing else and must not grow to.
+ */
+const RETRIEVAL_SOURCE_ALIASES: Record<string, string> = {
+	message: "messages",
+	historyEntry: "history",
+	narrativeRelationship: "relationships"
+}
+const retrievalGroupOf = (source: string) =>
+	RETRIEVAL_SOURCE_ALIASES[source] ?? source
+
+/**
+ * Every gather branch's front-door name, keyed the way `nodeKey` spells it
+ * (`gather.<branch>.read`) rather than the way the budget groups do.
+ *
+ * A separate table from `RETRIEVAL_SOURCE_LABELS` on purpose: `historyEntries`,
+ * `entities`, `cast`, `relationshipsPerspectives` and `relationshipsKnown` are
+ * index-side gather branches with no budget group of their own (respond.ts 1.9.0,
+ * 1.10.0), so folding them into that map would either invent a budget group
+ * that does not exist or collide with `RETRIEVAL_SOURCE_ALIASES`'s own fold.
+ * This one answers a narrower question — *what does a person call this scan*
+ * — for the one place that needs it: naming a mechanism-level note when the node's
+ * own output has nothing for `nodeSource` to read.
+ */
+const GATHER_BRANCH_LABELS: Record<string, string> = {
+	history: "History",
+	worldLore: "World lore",
+	characterLore: "Character lore",
+	historyEntries: "History entries",
+	entities: "Entities",
+	cast: "Cast",
+	relationshipsPerspectives: "Relationship perspectives",
+	relationshipsKnown: "Known relationships"
+}
+
+/**
+ * A gather node's own name, read from its key rather than from a candidate it
+ * never produced.
+ *
+ * `nodeSource` names a mechanism from its own hits/main/skipped — the entry
+ * vocabulary a reader already knows — but an empty scan offers it nothing to
+ * read, and the note still has to say whose scan it is. `nodeKey` is topology
+ * (05 §0a) and unfit to print as-is: `gather.characterLore.read` is an
+ * address, not a sentence. This pulls the branch out of it and looks the branch
+ * up above; a branch this does not know — a future one, or a plugin's — is
+ * humanized rather than shown as a raw dotted path.
+ */
+function retrievalNodeLabel(nodeKey: string): string {
+	const branch = /^gather\.([^.]+)\.read$/.exec(nodeKey)?.[1]
+	if (branch) return GATHER_BRANCH_LABELS[branch] ?? humanizeCamel(branch)
+	return humanizeCamel(nodeKey.split(".").pop() || nodeKey)
+}
+
+/**
+ * The order criteria are read in — most directly answering "why is this here"
+ * first.
+ *
+ * Fixed rather than sorted by contribution, and the type's `value` field says
+ * why: the weights that would rank them are not on the receipt in a shape this
+ * surface can read without duplicating `bindings.ts`'s private fold.
+ *
+ * ⚠ **This list is the filter, not a preference.** The loop below reads only
+ * what is named here, so a signal the engine computes and `score()` weights and
+ * this array omits is rendered *nowhere* — `retrievalCriterion`'s `default:`
+ * branch cannot be reached to catch it. `proximity` and `semantic` were both in
+ * that state: `keywordQuery` computes proximity on every scan, the vector
+ * mechanism writes `signals.semantic` on every hit, `signalProximity` and
+ * `signalSemantic` are declared, writable and read — and an entry that owed its
+ * place to either got no line saying so. **A signal added to `SignalWeights`
+ * belongs here in the same change.**
+ */
+const RETRIEVAL_CRITERION_ORDER = [
+	"keyword",
+	// Beside `keyword` because it qualifies that match rather than standing
+	// beside it: proximity is 0 unless two of an entry's keys matched exactly,
+	// so it never explains a placement on its own.
+	"proximity",
+	"entityCooccurrence",
+	"nameMatch",
+	"entityVector",
+	"semantic",
+	"tfidf",
+	"lastRefRecency",
+	"recency",
+	"sceneAffinity",
+	"density"
+] as const
+
+const num = (v: unknown): number | undefined =>
+	typeof v === "number" && Number.isFinite(v) ? v : undefined
+
+/**
+ * A dated heading, for the one declared type with no title role.
+ *
+ * History is *dated* rather than named — `entryInsert` stores `title: null` for
+ * it because the declaration carries no `title` role — so a panel that fell
+ * back to `#12` would name the one shape a reader most needs to recognise
+ * worst. This is the heading `HistoryEntryManager` already writes, character
+ * for character: the front door's name, not a second one invented here.
+ */
+function datedTitle(fields: unknown): string | null {
+	const f = (fields ?? {}) as Record<string, unknown>
+	const year = num(f.year)
+	if (year === undefined) return null
+	const month = num(f.month)
+	const day = num(f.day)
+	return (
+		`Year ${year}` +
+		(month ? `, Mo. ${month}` : "") +
+		(day ? `, Day ${day}` : "")
+	)
+}
+
+/** A short, single-line taste of what the block actually says. */
+function retrievalExcerpt(content: unknown): string | undefined {
+	if (typeof content !== "string") return undefined
+	const flat = content.replace(/\s+/g, " ").trim()
+	if (!flat) return undefined
+	return flat.length > 160 ? `${flat.slice(0, 157)}…` : flat
+}
+
+/** One signal, named and said in words. Returns null for a signal that did not fire. */
+function retrievalCriterion(
+	signal: string,
+	value: number,
+	source: string,
+	entry: RetrievalEntryFacts | undefined,
+	payload: Record<string, unknown>
+): Sockets.Pipelines.RetrievalCriterion | null {
+	if (!(value > 0)) return null
+	const pct = `${Math.round(value * 100)}%`
+	switch (signal) {
+		case "keyword": {
+			const keys = entry?.keys ?? []
+			if (!keys.length)
+				return {
+					label: "Its keys",
+					detail: `${pct} of its keys matched the scanned messages`,
+					value
+				}
+			const total = keys.length
+			const hit = Math.max(1, Math.min(total, Math.round(value * total)))
+			const list =
+				keys.length > 6
+					? `${keys.slice(0, 6).join(", ")}, …`
+					: keys.join(", ")
+			return {
+				label: "Its keys",
+				detail:
+					total === 1
+						? `matched “${keys[0]}” in the scanned messages`
+						: hit === total
+							? `matched all ${total} of its keys (${list})`
+							: `matched ${hit} of its ${total} keys (${list})`,
+				value
+			}
+		}
+		case "proximity":
+			// `keywordMatch` measures the smallest gap between two exactly
+			// matched keys, `exp(-gap / 120)` — so this is only ever true of an
+			// entry whose keys fired more than once, and the sentence says the
+			// thing that happened rather than naming the curve.
+			return {
+				label: "Its keywords, close together",
+				detail:
+					"two or more of its keywords matched near each other rather than scattered across the scanned messages",
+				value
+			}
+		case "nameMatch":
+			return {
+				label: "Its title, in the conversation",
+				detail: "the title appears in the scanned messages",
+				value
+			}
+		case "entityCooccurrence":
+			// Two different questions under one name, split by source exactly
+			// as `signals.ts` splits them: world lore asks whether the ENTRY
+			// names a cast member, character lore whether its own character
+			// spoke. One label for both would describe one of them wrongly.
+			return source === "characterLore"
+				? {
+						label: "Its character, in the scene",
+						detail: "the character it belongs to spoke recently",
+						value
+					}
+				: {
+						label: "Names it shares with the scene",
+						detail: "it names someone who is in this session",
+						value
+					}
+		case "entityVector": {
+			// The fourth mechanism's own line (`entityLink.ts`): a conversational
+			// mention — "the captain" — linked to one of the entry's names —
+			// "Captain Vell" — by meaning, not by text. `linkNote` already
+			// wrote that sentence for the payload; repeating it here rather
+			// than re-deriving it keeps the receipt and this row saying the
+			// same thing about the same link.
+			const links = Array.isArray(payload.entityLinks)
+				? (payload.entityLinks as unknown[]).filter(
+						(l): l is string => typeof l === "string"
+					)
+				: []
+			return {
+				label: "A name it's called by, in the scene",
+				detail: links[0] ?? "a mention was linked to one of its names",
+				value
+			}
+		}
+		case "semantic":
+			// The vector mechanism's cosine, which `bindings.ts` writes onto
+			// `signals.semantic` rather than onto `presetScore` — so the
+			// "Similarity to the conversation" line further down, which reads
+			// `presetScore`, never fires for it. Two surfaces, one mechanism;
+			// this is the one the shipped reply pipeline reaches.
+			return {
+				label: "Similar in meaning",
+				detail:
+					"it is about what the conversation is about, without needing a word in common",
+				value
+			}
+		case "tfidf":
+			return {
+				label: "Uncommon words in common",
+				detail: "wording the rest of the lorebook does not share",
+				value
+			}
+		case "lastRefRecency":
+			return {
+				label: "Last referred to",
+				detail: "came up recently in the conversation",
+				value
+			}
+		case "recency":
+			return {
+				label: "How recent it is",
+				detail: `near the end of the timeline (${value.toFixed(2)})`,
+				value
+			}
+		case "sceneAffinity":
+			return {
+				label: "Fit with the current scene",
+				detail: value.toFixed(2),
+				value
+			}
+		case "density":
+			return {
+				label: "How much it says per token",
+				detail: value.toFixed(2),
+				value
+			}
+		default:
+			return { label: signal, detail: value.toFixed(3), value }
+	}
+}
+
+/** `["arm0#3","arm1#1"]` → the ranks each mechanism gave it. */
+function fusionRanks(foundBy: unknown): number[] {
+	if (!Array.isArray(foundBy)) return []
+	return foundBy
+		.map((f) =>
+			typeof f === "string" ? Number(/#(\d+)$/.exec(f)?.[1]) : NaN
+		)
+		.filter((n) => Number.isFinite(n))
+}
+
+const ordinal = (n: number) => {
+	const suffix =
+		n % 100 >= 11 && n % 100 <= 13
+			? "th"
+			: n % 10 === 1
+				? "st"
+				: n % 10 === 2
+					? "nd"
+					: n % 10 === 3
+						? "rd"
+						: "th"
+	return `${n}${suffix}`
+}
+
+/**
+ * How a candidate got here — the medal, and the one thing read before anything
+ * else on the row.
+ */
+function retrievalMarker(
+	candidate: any,
+	reason: string | undefined
+): { marker: string; markerKind: Sockets.Pipelines.RetrievalRow["markerKind"] } {
+	const foundBy = candidate?.payload?.foundBy
+	if (candidate?.pinned || reason === "reserved" || reason?.startsWith("excluded_pinned"))
+		return { marker: "Always include", markerKind: "pinned" }
+	if (reason === "reserved_minimum")
+		return { marker: "Kept by a floor", markerKind: "floor" }
+	if (foundBy === "entity-search")
+		return { marker: "Shared entity", markerKind: "entity" }
+	if (fusionRanks(foundBy).length > 1)
+		return { marker: "Both arms", markerKind: "semantic" }
+	if (num(candidate?.signals?.keyword))
+		return { marker: "Keyword", markerKind: "keyword" }
+	// ⚠ `signals.semantic` as well as `presetScore`, and the second is the one
+	// the shipped pipeline cannot produce. `core:query/vector-search@1` writes
+	// its cosine to `signals.semantic` and deliberately stamps no `presetScore`
+	// — a score there would make every signal weight inert — so a candidate
+	// only the vector mechanism found reached the `No signal` fall-through and
+	// this panel told a reader the opposite of what happened.
+	if (
+		num(candidate?.presetScore) !== undefined ||
+		num(candidate?.signals?.semantic)
+	)
+		return { marker: "Similarity", markerKind: "semantic" }
+	if (
+		num(candidate?.signals?.nameMatch) ||
+		num(candidate?.signals?.entityCooccurrence)
+	)
+		return { marker: "Named in the scene", markerKind: "keyword" }
+	return { marker: "No signal", markerKind: "none" }
+}
+
+/**
+ * The one sentence a reader gets before deciding whether to open the row.
+ *
+ * Written from `select`'s reason rather than from its `why`: the `why` carries
+ * the arithmetic and belongs to level two, and eleven reasons is eleven
+ * different controls to point at. `excluded_pinned_*` deliberately says both
+ * halves — an entry marked always-include that is missing is the case somebody
+ * arrives already hunting for a setting that overrode it, and neither half
+ * alone explains it (`select.ts`'s own note).
+ */
+function retrievalVerdict(
+	reason: string | undefined,
+	source: string,
+	label: string,
+	cap: number | undefined,
+	lead: string | undefined
+): string {
+	switch (reason) {
+		case "reserved":
+			return "Always included — it is marked constant, so retrieval is bypassed for it."
+		case "reserved_minimum":
+			return `Kept because ${label} had not met its minimum number of entries yet.`
+		case "filled_scored":
+			return lead ? `Included — ${lead}.` : "Included on score."
+		case "filled_zero_score":
+			return `Included — no signal matched it, and ${label} still had room.`
+		case "excluded_budget":
+			return cap
+				? `Left out — ${label} was already holding its maximum of ${cap} entries.`
+				: `Left out — ${label} was already at its maximum number of entries.`
+		case "excluded_token_limit":
+			return `Left out — the room for ${label} ran out before it.`
+		case "excluded_share_cap":
+			return `Left out — ${label} had already spent its whole share, and nothing was spare.`
+		case "excluded_group_disabled":
+			return `Left out — ${label} is switched off: its share is zero.`
+		case "excluded_unknown_source":
+			return `Left out — nothing budgets for “${source}”, so it had nothing to compete in.`
+		// ⚠ Not a budget sentence, and the one exclusion here that no budget
+		// control can undo — see `select.ts`'s note on the reason. The rule's
+		// own words are in `why`, which is level two; this line has to say
+		// enough that a reader does not go looking for the share that dropped
+		// it, because there is not one.
+		case "excluded_ineligible":
+			return "Left out — a rule excluded it, so it never competed for space."
+		case "excluded_pinned_token_limit":
+			return "Marked always-include, and still left out: it does not fit the context window."
+		case "excluded_pinned_group_disabled":
+			return `Marked always-include, and still left out: ${label} has a share of zero.`
+		default:
+			return lead ? `Included — ${lead}.` : "Included."
+	}
+}
+
+/** Which source a node was working on, when its own output says. */
+function nodeSource(output: any): string | undefined {
+	const first =
+		(Array.isArray(output?.hits) && output.hits[0]) ||
+		(Array.isArray(output?.main) && output.main[0]) ||
+		(Array.isArray(output?.skipped) && output.skipped[0])
+	const source = first?.source
+	return typeof source === "string" ? retrievalGroupOf(source) : undefined
+}
+
+/**
+ * Whether this type's heading is a column the fingerprint covers.
+ *
+ * ⚠ **The one thing `entrySourceHash` cannot see.** It hashes `title`, `keys`
+ * and `content`, which is the annotation lane's definition of an entry's
+ * content and is deliberately shared with it. History declares **no `title`
+ * role** — it is not named, it is *dated* — so its heading comes out of
+ * `fields`, its date feeds the recency signals, and an edited year is therefore
+ * an edit that changed the outcome and moved no hash.
+ *
+ * Saying `unchanged` over that would be worse than saying nothing: it is this
+ * surface newly *asserting* a pairing it did not verify, which is the whole
+ * defect wearing the fix's clothes. So a type whose heading the hash does not
+ * cover can be reported `changed` and `deleted` — both are positive findings
+ * this can still make — and never `unchanged` on the hash alone.
+ *
+ * Read off the declaration rather than by testing for history, so a future type
+ * that declares no title is unverifiable here the day it is declared instead of
+ * the day somebody remembers this function exists.
+ */
+const headingIsHashed = (typeId: string): boolean =>
+	!!entryDeclaration(typeId)?.roles.title
+
+/**
+ * What the run recorded about this candidate, against what the entry says now.
+ *
+ * The three states of `RetrievalRow.provenance`, and the fourth thing that is
+ * not a state: silence. Absence of a recorded fingerprint is the ordinary case
+ * for every receipt written before this existed and for any mechanism that does not
+ * carry one, and the honest answer there is to say nothing — the panel then
+ * renders exactly what it rendered before, which was never *wrong*, only
+ * unverified.
+ *
+ * ⚠ `deleted` is claimed only when the lorebook was read. An unreadable run —
+ * no session, a deleted one, a lorebook the asker no longer owns — produces the
+ * same empty map as a lorebook that really has lost every entry, and guessing
+ * would turn "I could not look" into "your lore is gone" on every row at once.
+ */
+function retrievalProvenance(
+	recorded: string | undefined,
+	entry: RetrievalEntryFacts | undefined,
+	entriesRead: boolean,
+	/**
+	 * The row's heading as the run recorded it, and as it reads now — the
+	 * second half of the comparison, for the part of an entry the hash does
+	 * not reach. A skipped row has no recorded heading to offer.
+	 */
+	headings: { recorded: string; live: string } = { recorded: "", live: "" }
+): Pick<Sockets.Pipelines.RetrievalRow, "provenance" | "provenanceNote"> {
+	if (!recorded) return {}
+	if (entry) {
+		const changed = {
+			provenance: "changed",
+			provenanceNote:
+				"This entry has been edited since the run — what it says " +
+				"now is not what was scored below."
+		} as const
+		if (entry.fingerprint !== recorded) return changed
+		// The hash matched. A heading that moved anyway is history's date —
+		// scored by recency, carried in `fields`, and invisible to a hash over
+		// the three text columns. Both values are already on this row, so
+		// noticing costs a comparison rather than a second hash.
+		if (
+			headings.recorded &&
+			headings.live &&
+			headings.recorded !== headings.live
+		)
+			return changed
+		// Verified when the hash covers the heading, or when the recorded
+		// heading is here and agrees. Otherwise the text is verified and the
+		// heading is not, and the honest report of that is silence.
+		return headingIsHashed(entry.typeId) ||
+			(headings.recorded && headings.recorded === headings.live)
+			? { provenance: "unchanged" }
+			: {}
+	}
+	if (!entriesRead) return {}
+	return {
+		provenance: "deleted",
+		// "No longer in this session's lorebook" rather than "deleted",
+		// because both a removed entry and a session pointed at a different
+		// lorebook arrive here and only one of them was deleted. The sentence
+		// is true of both; the stronger one would be a guess.
+		provenanceNote:
+			"This entry is no longer in this session's lorebook — the decision " +
+			"below is all that remains of it."
+	}
+}
+
+/* ------------------------------------------------------------------ *
+ * What is eating the budget — T1
+ *
+ * The per-item token counts have been on every receipt since the ranker
+ * published its decisions whole, and the bands have carried the ranker's own
+ * per-group sums beside them. Nothing added either up into a *statement*: a
+ * reader asking "what is taking all the room" got four numeric columns behind
+ * a disclosure toggle and a division to do in their head.
+ *
+ * That is the same failure the rows above exist to fix, one level up. The
+ * arithmetic was present; the finding was not. So this says the finding first
+ * — "World lore is taking most of the retrieved context" — and lets the
+ * figure follow it.
+ *
+ * ⚠ **A share of the RETRIEVED context, never of "the prompt".** The bands
+ * budget what retrieval put in; the system prompt, the persona, the
+ * instructions and the reply itself sit outside every one of them. "60% of
+ * your prompt" would be a larger claim than the receipt can support and the
+ * kind of number a person would then go and act on.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Fill in the bands' shares and say what they add up to.
+ *
+ * Mutates the bands it is given — `share` is the same arithmetic as the
+ * headline over the same totals, and computing it twice is how the sentence
+ * and the table start disagreeing about which source is the big one.
+ *
+ * `spent` is the sum of the per-item token counts, deduplicated by entry: two
+ * gather branches can both include the same row, and it occupies the prompt
+ * once. It is used to *fill* a band the ranker recorded no usage for, never to
+ * overrule one it did — `select`'s own ledger is the authority on its own
+ * arithmetic, and this is the reading of it that survives a receipt whose
+ * ranker published decisions without groups.
+ */
+function retrievalBudget(
+	bands: Sockets.Pipelines.RetrievalBand[],
+	spent: Map<string, number>,
+	entryCounts: Map<string, number>,
+	/** Assemble's own ceiling, when the run reached assembly. */
+	ceiling: { total?: number; remaining?: number }
+): Sockets.Pipelines.RetrievalBudget | undefined {
+	// A source that spent tokens and has no band is not a rounding error: it
+	// would silently shrink the denominator every share is stated against, so
+	// the sentence would name the wrong leader. Reported as a band with no
+	// allocation, which is what it is.
+	for (const [source, tokens] of spent)
+		if (tokens > 0 && !bands.some((b) => b.source === source))
+			bands.push({
+				source,
+				label: retrievalSourceLabel(source),
+				allocated: 0,
+				used: 0,
+				entries: entryCounts.get(source) ?? 0,
+				cap: 0,
+				dropped: 0
+			})
+	for (const b of bands) if (!b.used) b.used = spent.get(b.source) ?? 0
+
+	// No bands and nothing spent: the run recorded no budget at all. Silence,
+	// for the reason `ranked` exists — an empty breakdown reads as "nothing
+	// came in" when the truth is "nothing was written down".
+	if (!bands.length) return undefined
+	const used = bands.reduce((sum, b) => sum + b.used, 0)
+	// Left undefined rather than set to 0 when nothing was spent: a share of
+	// nothing is a division that did not happen, and a column of "0%" is this
+	// surface asserting it did.
+	if (used > 0) for (const b of bands) b.share = b.used / used
+
+	const total = ceiling.total
+	const detail =
+		total !== undefined && total > 0
+			? `The retrieved context filled ${used} of the ${total} tokens set ` +
+				`aside for it, leaving ${ceiling.remaining ?? Math.max(0, total - used)} spare.`
+			: undefined
+
+	if (!used)
+		return {
+			headline:
+				"Nothing retrieved reached this prompt, so no source is using any of its room.",
+			used: 0,
+			...(total !== undefined ? { total } : {}),
+			...(total !== undefined
+				? { remaining: ceiling.remaining ?? total }
+				: {}),
+			...(detail ? { detail } : {})
+		}
+
+	const spending = bands.filter((b) => b.used > 0).sort((a, b) => b.used - a.used)
+	const lead = spending[0]
+	const pct = Math.round((lead.used / used) * 100)
+	const headline =
+		spending.length === 1
+			? `${lead.label} is the only thing retrieval put in this prompt — ${lead.used} tokens.`
+			: `${lead.label} is taking ${pct >= 50 ? "most" : "the largest share"} of ` +
+				`the retrieved context — ${pct}% of its ${used} tokens.`
+
+	return {
+		headline,
+		...(detail ? { detail } : {}),
+		used,
+		...(total !== undefined ? { total } : {}),
+		...(total !== undefined
+			? { remaining: ceiling.remaining ?? Math.max(0, total - used) }
+			: {})
+	}
+}
+
+/** Options for the projection. */
+interface ExplainRetrievalOptions {
+	/** How many rows the panel is willing to hold. */
+	limit?: number
+	/**
+	 * Whether the entry map is an answer or an absence — see
+	 * `retrievalProvenance`. Defaults to *not read*, so a caller that says
+	 * nothing claims nothing.
+	 */
+	entriesRead?: boolean
+}
+
+/**
+ * Turn a stored receipt into the panel's model.
+ *
+ * Pure, and exported for its own test: everything it needs arrives as an
+ * argument, so the projection can be asserted against a hand-written receipt
+ * without a database, a run, or a pipeline.
+ */
+export function explainRetrieval(
+	receipt: any,
+	entries: Map<string, RetrievalEntryFacts>,
+	opts: ExplainRetrievalOptions = {}
+): NonNullable<Sockets.Pipelines.RunExplain.Response["explanation"]> {
+	const limit = opts.limit ?? 250
+	const entriesRead = opts.entriesRead ?? false
+	const nodes: any[] = Array.isArray(receipt?.nodes) ? receipt.nodes : []
+	const rows: Sockets.Pipelines.RetrievalRow[] = []
+	const notes: string[] = []
+	const warnings: string[] = []
+	let bands: Sockets.Pipelines.RetrievalBand[] = []
+	let ranked = false
+	let omitted = 0
+	/**
+	 * The per-item token counts, added up by band, and the entries behind them
+	 * — T1's half of this projection.
+	 *
+	 * Deduplicated by `source:id` because two gather branches can each decide
+	 * the same row and it occupies the prompt once; counting it twice would
+	 * make one band look like it was eating room it never took.
+	 */
+	const spent = new Map<string, number>()
+	const spentEntries = new Map<string, number>()
+	const counted = new Set<string>()
+	/** Assemble's recorded ceiling, when the run got as far as assembly. */
+	let ceiling: { total?: number; remaining?: number } = {}
+
+	// ── Mechanism-level facts ──────────────────────────────────────────────
+	// The half of the trail no row can carry: how deep the scan looked, whether
+	// an embedding model was there at all, what the candidate fetch could not
+	// read whole. "Why did my lore not come in" is answered here as often as it
+	// is answered per entry.
+	const seenNotes = new Set<string>()
+	const note = (line: string) => {
+		if (line && !seenNotes.has(line)) {
+			seenNotes.add(line)
+			notes.push(line)
+		}
+	}
+	const warn = (line: string) => {
+		if (line && !warnings.includes(line)) warnings.push(line)
+	}
+
+	for (const n of nodes) {
+		/**
+		 * The room retrieval was given, as assemble recorded it.
+		 *
+		 * Read off the node rather than summed from the bands: `allocated` is
+		 * what each band was *dealt*, and a run that halted before assembly
+		 * dealt nothing — so a ceiling derived from the bands would report
+		 * every such run as exactly 100% full. The last node to publish one
+		 * wins, because assemble runs after the ranker and is the node that
+		 * knows what the window left over.
+		 */
+		const declared = n?.output?.budget
+		const declaredTotal = num(declared?.total)
+		if (declaredTotal !== undefined && declaredTotal > 0)
+			ceiling = {
+				total: declaredTotal,
+				remaining: num(declared?.remaining)
+			}
+		const d = n?.output?.diagnostics
+		if (!d || typeof d !== "object") continue
+		// The source when the node's own output says, and its key otherwise.
+		// A node key is topology and this surface may name it (05 §0a) — but
+		// "World lore: 3 of 24 matched" is a sentence and "lore-world-2: …" is
+		// an address, so the address is the fallback rather than the default.
+		const source = nodeSource(n.output)
+		const who = source
+			? retrievalSourceLabel(source)
+			: retrievalNodeLabel(n.nodeKey)
+		const considered = num(d.considered)
+		const matched = num(d.matched)
+		if (num(d.scanDepth) !== undefined)
+			note(
+				`${who}: ${matched ?? 0} of ${considered ?? 0} entries matched, ` +
+					`scanning the last ${d.scanDepth} messages` +
+					(num(d.recursionDepth)
+						? `, ${d.recursionDepth} level(s) of triggered entries deep`
+						: "") +
+					"."
+			)
+		if (num(d.admitThreshold)) {
+			// The keyless-admission gate's own line. Nothing else says an entry
+			// got in without a key, which is exactly the case somebody asks
+			// about (design §12.4 holds whether it wants its own reason).
+			note(
+				`${who}: ${num(d.admittedByEvidence) ?? 0} admitted on relevance ` +
+					`alone, at a threshold of ${Number(d.admitThreshold).toFixed(2)}.`
+			)
+		}
+		if (Array.isArray(d.entities) && d.entities.length)
+			note(
+				`${who}: the scene named ${d.entities.slice(0, 8).join(", ")}` +
+					`${d.entities.length > 8 ? ", …" : ""}.`
+			)
+		if (num(d.queries) !== undefined)
+			note(
+				`${who}: ${matched ?? 0} of ${considered ?? 0} indexed rows kept ` +
+					`across ${d.queries} quer${d.queries === 1 ? "y" : "ies"}.`
+			)
+		if (typeof d.vectorSearch === "string")
+			note(`Vector search: ${d.vectorSearch}.`)
+		/**
+		 * The entity-vector mechanism's own line, and it exists for the reason
+		 * `vectorSearch` does rather than for symmetry.
+		 *
+		 * ⚠ A mechanism that cannot run **must say so where a person reads it.** The
+		 * governing rule lets an unavailable mechanism subtract a signal, and the
+		 * whole difference between *degrading* and *disappearing* is whether the
+		 * receipt names it: this mechanism has three ways to produce nothing that are
+		 * not failures — switched off, no embedding model, nothing described in
+		 * the window — and until now every one of them looked identical to a turn
+		 * where it had simply found no link. The string is the binding's
+		 * (`entity-link`'s `off()` and its success line), so there is one place
+		 * that decides what a mechanism's state is called.
+		 *
+		 * Prefixed rather than named from `nodeSource` like the gather branches are:
+		 * this node returns the *whole candidate pool* enriched, so its first
+		 * `main` row is somebody else's gather branch and the note would be filed under
+		 * "World lore" on a turn where it worked and under its node key on a turn
+		 * where it did not.
+		 */
+		if (typeof d.entityLink === "string")
+			note(`Entity links: ${d.entityLink}.`)
+		/**
+		 * Eager indexing — what a query node had to index before it could
+		 * search, and whether it got through it.
+		 *
+		 * The same requirement the two lines above serve, one layer down. When a
+		 * query scopes content whose index is missing, those rows are promoted
+		 * to the front of the background queue and indexed before the search
+		 * runs — which is the only reason some turns are visibly slower than
+		 * others, and the only reason a search sometimes covers less than the
+		 * scope it named. Both are facts about *this* turn, and neither is
+		 * inferable from the results: a bound that bound and a scope that was
+		 * fully covered produce the same shaped answer.
+		 *
+		 * The string is the host's (`describePromotion`), so one place decides
+		 * what a partial pass is called. Absent when nothing needed indexing,
+		 * because a note every turn saying "nothing to do" is what teaches
+		 * people to stop reading the notes.
+		 */
+		if (typeof d.indexing === "string")
+			note(`Indexing: ${d.indexing}.`)
+		if (typeof d.entityIndexing === "string")
+			note(`Indexing: ${d.entityIndexing}.`)
+		if (Array.isArray(d.truncated) && d.truncated.length)
+			// `{source, fetched, available}`, in the INDEX vocabulary — folded
+			// like every other source name here, and reported with both numbers
+			// because "it read some of them" is not something anyone can act
+			// on and "the newest 2000 of 5400" is.
+			warn(
+				`The candidate fetch could not read ${d.truncated
+					.map((t: any) => {
+						const label = retrievalSourceLabel(
+							retrievalGroupOf(String(t?.source ?? t))
+						)
+						const fetched = num(t?.fetched)
+						const available = num(t?.available)
+						return fetched !== undefined && available !== undefined
+							? `${label} (the newest ${fetched} of ${available})`
+							: label
+					})
+					.join(", ")} whole, so the best match may be outside what was ` +
+					`scanned.`
+			)
+		if (d.disjoint && typeof d.warning === "string") warn(d.warning)
+	}
+
+	// ── The decisions ────────────────────────────────────────────────
+	/**
+	 * Every entry the ranker actually judged, keyed by budget group.
+	 *
+	 * Read by the skipped pass below rather than by anything here: the mechanisms are
+	 * independent and both run on every turn, so an entry the keyword scan never
+	 * matched is routinely one the vector mechanism then found and the ranker judged.
+	 * Rendering the miss as well would put "never reached the ranker" beside the
+	 * row saying what the ranker decided about it, which is not a nuance — it is
+	 * the panel contradicting itself.
+	 */
+	const decided = new Set<string>()
+	for (const n of nodes) {
+		const decisions = n?.output?.decisions
+		if (!Array.isArray(decisions)) continue
+		ranked = true
+
+		const groups = n?.output?.groups
+		if (!bands.length && groups && typeof groups === "object") {
+			bands = Object.entries(groups as Record<string, any>).map(
+				([source, usage]) => ({
+					source,
+					label: retrievalSourceLabel(source),
+					allocated: num(usage?.allocated) ?? 0,
+					used: num(usage?.used) ?? 0,
+					entries: num(usage?.entries) ?? 0,
+					cap: num(usage?.cap) ?? 0,
+					dropped: decisions.filter(
+						(x: any) =>
+							x?.included === false &&
+							x?.candidate?.source === source
+					).length
+				})
+			)
+		}
+		const capOf = (source: string) =>
+			bands.find((b) => b.source === source)?.cap || undefined
+
+		for (const d of decisions) {
+			const candidate = d?.candidate ?? {}
+			const source = retrievalGroupOf(String(candidate.source ?? ""))
+			const id = candidate.id
+			const entry =
+				typeof id === "number" ? entries.get(`${source}:${id}`) : undefined
+			const payload = (candidate.payload ?? {}) as Record<string, unknown>
+
+			const criteria: Sockets.Pipelines.RetrievalCriterion[] = []
+			for (const signal of RETRIEVAL_CRITERION_ORDER) {
+				const value = num((candidate.signals ?? {})[signal])
+				if (value === undefined) continue
+				const c = retrievalCriterion(signal, value, source, entry, payload)
+				if (c) criteria.push(c)
+			}
+			const priority = num(candidate.priority)
+			if (priority !== undefined && priority > 1)
+				criteria.push({
+					label: "Author priority",
+					detail: `its author set priority ${priority}`,
+					value: priority
+				})
+			// A candidate carrying a `presetScore` was ordered by a number the
+			// signals above did not produce — rank fusion, or the semantic
+			// mechanism's nine stages written back at the seam. Saying which is the
+			// difference between "it scored 0.83" and "both mechanisms found it".
+			const preset = num(candidate.presetScore)
+			if (preset !== undefined) {
+				const ranks = fusionRanks(payload.foundBy)
+				if (payload.foundBy === "entity-search") {
+					const shared = Array.isArray(payload.sharedEntities)
+						? (payload.sharedEntities as unknown[]).map(String)
+						: []
+					criteria.push({
+						label: "Entities it shares with the scene",
+						detail: shared.length
+							? shared.slice(0, 6).join(", ")
+							: "found by the entity arm",
+						value: num(candidate?.signals?.entityCooccurrence)
+					})
+				} else if (ranks.length > 1)
+					criteria.push({
+						label: "Both retrieval arms found it",
+						detail: `ranked ${ranks.map(ordinal).join(" and ")} by the arms that found it`
+					})
+				else if (ranks.length === 1)
+					criteria.push({
+						label: "One retrieval arm found it",
+						detail: `ranked ${ordinal(ranks[0])} in its arm`
+					})
+				else
+					criteria.push({
+						label: "Similarity to the conversation",
+						detail: `the semantic arm scored it ${preset.toFixed(3)}`
+					})
+			}
+
+			const { marker, markerKind } = retrievalMarker(candidate, d?.reason)
+			const label = retrievalSourceLabel(source)
+			const liveTitle = entry?.title?.trim() || ""
+			const recordedTitle =
+				(typeof payload.name === "string" && payload.name.trim()) ||
+				// The candidate payload IS the lore row, so a history hit
+				// carries its date even when the entry read found nothing.
+				datedTitle(payload) ||
+				""
+			const drift = retrievalProvenance(
+				typeof payload.fingerprint === "string"
+					? payload.fingerprint
+					: undefined,
+				entry,
+				entriesRead,
+				{ recorded: recordedTitle, live: liveTitle }
+			)
+			/**
+			 * Live first, **except** once the record and the row are known to
+			 * disagree.
+			 *
+			 * The order is the whole fix. A row headed with the live title over
+			 * a decision made about different text is the composite that never
+			 * existed — it reads as though the run scored what the reader is
+			 * looking at. So when `provenance` says the entry moved, the
+			 * recorded title heads the row and the live one is offered beside
+			 * it as `currentTitle`, labelled for what it is. When nothing
+			 * moved the two agree and the order cannot matter; when nothing is
+			 * claimed this is exactly what it always was.
+			 */
+			const drifted =
+				drift.provenance === "changed" ||
+				drift.provenance === "deleted"
+			const title =
+				(drifted
+					? recordedTitle || liveTitle
+					: liveTitle || recordedTitle) || `#${id}`
+
+			decided.add(`${source}:${id}`)
+			// What it actually cost the prompt, banked once per entry.
+			if (d?.included && !counted.has(`${source}:${id}`)) {
+				counted.add(`${source}:${id}`)
+				spent.set(
+					source,
+					(spent.get(source) ?? 0) + (num(candidate.tokens) ?? 0)
+				)
+				spentEntries.set(source, (spentEntries.get(source) ?? 0) + 1)
+			}
+			rows.push({
+				key: `${n.nodeKey}:${source}:${id}`,
+				id,
+				source,
+				sourceLabel: label,
+				title,
+				...drift,
+				...(drifted && liveTitle && liveTitle !== title
+					? { currentTitle: liveTitle }
+					: {}),
+				excerpt: retrievalExcerpt(payload.content),
+				outcome: d?.included ? "included" : "excluded",
+				verdict: retrievalVerdict(
+					d?.reason,
+					source,
+					label,
+					capOf(source),
+					criteria[0]?.detail
+				),
+				marker,
+				markerKind,
+				criteria,
+				score: num(d?.score),
+				tokens: num(candidate.tokens),
+				reason: typeof d?.reason === "string" ? d.reason : undefined,
+				nodeKey: n.nodeKey,
+				why: [
+					typeof d?.why === "string" ? d.why : null,
+					// Stated once. `filled_scored`'s own `why` already reads
+					// "scored 0.300, 47 tokens" — appending "score 0.300" here
+					// too repeated the same number a second time in the same
+					// line. Every other reason's `why` never names the score in
+					// words, so the score still needs to be said for those.
+					num(d?.score) !== undefined &&
+					!(typeof d?.why === "string" && /\bscored\b/i.test(d.why))
+						? `score ${Number(d.score).toFixed(3)}`
+						: null
+				].filter(Boolean) as string[],
+				...(entry
+					? {
+							entry: {
+								id: entry.id,
+								typeId: entry.typeId as EntryTypeId,
+								constant: entry.constant,
+								enabled: entry.enabled,
+								keys: entry.keys
+							}
+						}
+					: {})
+			})
+		}
+	}
+
+	// ── Never reached the ranker ─────────────────────────────────────
+	//
+	// A different question from "excluded", with a different control behind it:
+	// an entry the mechanisms declined never competed for budget at all. Reported
+	// after the decisions so the list reads in the order retrieval happened.
+	const seenSkips = new Set<string>()
+	for (const n of nodes) {
+		const skipped = n?.output?.skipped
+		if (!Array.isArray(skipped)) continue
+		for (const s of skipped) {
+			const source = retrievalGroupOf(String(s?.source ?? ""))
+			const id = s?.id
+			const key = `${source}:${id}`
+			// Judged by the ranker after all, on some other mechanism — see `decided`.
+			if (decided.has(key)) continue
+			// One decline per entry, first mechanism wins. A second mechanism's reason for
+			// the same row would be a second sentence about the same absence,
+			// and the reader has one question, not two.
+			if (seenSkips.has(key)) continue
+			seenSkips.add(key)
+			const entry = typeof id === "number" ? entries.get(key) : undefined
+			const label = retrievalSourceLabel(source)
+			const reason = typeof s?.reason === "string" ? s.reason : ""
+			/**
+			 * A skip carries no payload, so there is no recorded title to head
+			 * the row with when the entry has moved — the mechanism declined it
+			 * before anything about it was worth writing down. The row shows
+			 * the live title either way and the sentence says which run it is
+			 * about, which is the honest reading of the only two facts kept:
+			 * an id and a reason.
+			 */
+			const drift = retrievalProvenance(
+				typeof s?.fingerprint === "string" ? s.fingerprint : undefined,
+				entry,
+				entriesRead
+			)
+			rows.push({
+				key: `skip:${key}`,
+				id,
+				source,
+				sourceLabel: label,
+				title: entry?.title?.trim() || `#${id}`,
+				...drift,
+				outcome: "skipped",
+				verdict: reason
+					? `Never reached the ranker — ${reason}.`
+					: "Never reached the ranker.",
+				marker: "Not considered",
+				markerKind: "none",
+				criteria: [],
+				nodeKey: n.nodeKey,
+				...(entry
+					? {
+							entry: {
+								id: entry.id,
+								typeId: entry.typeId as EntryTypeId,
+								constant: entry.constant,
+								enabled: entry.enabled,
+								keys: entry.keys
+							}
+						}
+					: {})
+			})
+		}
+	}
+
+	/**
+	 * The three drops a per-row scan cannot find.
+	 *
+	 * `renderSelection` (`ranking/select.ts`) exists for exactly these and has
+	 * never had a caller. It is not called here — it renders a per-group
+	 * summary, which is the Elasticsearch-shaped panel plan Part 6 rules
+	 * against — but its argument holds and is honoured: a dropped pin reads as
+	 * one row among hundreds, and a zero-share group never appears in the band
+	 * table at all because `allocated` and `used` are both zero.
+	 */
+	const pinnedDrops = rows.filter(
+		(r) => r.reason === "excluded_pinned_token_limit"
+	)
+	if (pinnedDrops.length)
+		warn(
+			`${pinnedDrops.length} entr${pinnedDrops.length === 1 ? "y" : "ies"} ` +
+				`marked always-include did not fit the context window ` +
+				`(${[...new Set(pinnedDrops.map((r) => r.sourceLabel))].join(", ")}).`
+		)
+	const disabledPins = rows.filter(
+		(r) => r.reason === "excluded_pinned_group_disabled"
+	)
+	if (disabledPins.length)
+		warn(
+			`${disabledPins.length} entr${disabledPins.length === 1 ? "y" : "ies"} ` +
+				`marked always-include sit in a source whose share is zero ` +
+				`(${[...new Set(disabledPins.map((r) => r.sourceLabel))].join(", ")}).`
+		)
+	const unknown = rows.filter((r) => r.reason === "excluded_unknown_source")
+	if (unknown.length)
+		warn(
+			`${unknown.length} candidate(s) came from a source with no budget ` +
+				`group (${[...new Set(unknown.map((r) => r.source))].join(", ")}), ` +
+				`so nothing could weigh them.`
+		)
+
+	if (rows.length > limit) {
+		omitted = rows.length - limit
+		rows.length = limit
+	}
+	if (receipt?.compact)
+		note(
+			"This receipt was compacted: the run halted before anything effectful, " +
+				"so the node trail it would have explained is not kept."
+		)
+
+	const budget = retrievalBudget(bands, spent, spentEntries, ceiling)
+
+	return {
+		rows,
+		bands,
+		notes,
+		warnings,
+		ranked,
+		omitted,
+		...(budget ? { budget } : {})
+	}
+}
+
+/**
+ * The entries behind a run's rows — titles, keys, and the two levers.
+ *
+ * Read rather than carried on the receipt, and only what a row needs: a title
+ * so the panel can speak content vocabulary, `keys` so the keyword criterion
+ * can name what matched, and `constant` / `enabled` **as they are now** so a
+ * toggle says what it will do rather than what it would have done at run time.
+ *
+ * Scoped through the session the run belongs to and re-checked against the
+ * asker, not taken from the run row: `sessionId` is a column somebody could
+ * have written, and lore is session-scoped data. A run with no session, or one
+ * that has since been deleted, simply gets no names — the rows still render,
+ * with ids.
+ *
+ * ⚠ **`read` is not `!entries.size`**, and the difference is the whole
+ * `deleted` state. "This lorebook holds none of the entries the run named" and
+ * "this run's lore could not be looked at" produce the same empty map and mean
+ * opposite things, and a projection that guessed would report every row of an
+ * unreadable run as a deleted entry — the loudest possible way to be wrong
+ * about somebody's audit trail. So the read says whether it read, and a
+ * projection told `false` claims nothing.
+ */
+interface RetrievalEntryRead {
+	entries: Map<string, RetrievalEntryFacts>
+	/** Whether the lorebook was actually reachable and read. */
+	read: boolean
+}
+
+async function retrievalEntriesFor(
+	sessionId: number | null,
+	userId: number
+): Promise<RetrievalEntryRead> {
+	const entries = new Map<string, RetrievalEntryFacts>()
+	if (sessionId == null) return { entries, read: false }
+	const [session] = await db
+		.select({
+			userId: schema.sessions.userId,
+			lorebookId: schema.sessions.lorebookId
+		})
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!session || session.userId !== userId || !session.lorebookId)
+		return { entries, read: false }
+
+	const rows = await db
+		.select({
+			id: schema.lorebookEntries.id,
+			typeId: schema.lorebookEntries.typeId,
+			title: schema.lorebookEntries.title,
+			keys: schema.lorebookEntries.keys,
+			constant: schema.lorebookEntries.constant,
+			enabled: schema.lorebookEntries.enabled,
+			// Read for one thing: history's date, which is its heading.
+			fields: schema.lorebookEntries.fields,
+			/**
+			 * Read for one thing as well: the fingerprint below. Nothing here
+			 * renders it — the excerpt a row shows is the recorded one off the
+			 * receipt — but "is this still the entry that was scored" is a
+			 * question about the content, and `entrySourceHash` is over the
+			 * content by definition.
+			 */
+			content: schema.lorebookEntries.content
+		})
+		.from(schema.lorebookEntries)
+		.where(eq(schema.lorebookEntries.lorebookId, session.lorebookId))
+
+	for (const r of rows as any[])
+		entries.set(`${bandOfType(r.typeId)}:${r.id}`, {
+			id: r.id,
+			typeId: r.typeId,
+			title: r.title?.trim() || datedTitle(r.fields),
+			keys: Array.isArray(r.keys) ? r.keys : [],
+			constant: !!r.constant,
+			enabled: !!r.enabled,
+			// ⚠ The stored columns, hashed by the same function the run used
+			// on the same three columns. Two recipes over one row is how a
+			// panel ends up calling every entry "edited" the moment one side
+			// starts trimming whitespace.
+			fingerprint: entrySourceHash(r)
+		})
+	return { entries, read: true }
+}
+
+/**
+ * One run's retrieval, explained.
+ *
+ * Owner-scoped on exactly the terms `pipelines:run` is, and deliberately not
+ * `adminOnly`: this explains a receipt the asker already owns and may already
+ * read whole, so an admin gate here would refuse people their own evidence
+ * while changing nothing about what is reachable. The config verbs are
+ * admin-only because they *write instance configuration*; this reads one run.
+ */
+export const pipelinesRunExplain: Handler<
+	Sockets.Pipelines.RunExplain.Params,
+	Sockets.Pipelines.RunExplain.Response
+> = {
+	event: "pipelines:runExplain",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const [r] = await db
+			.select()
+			.from(schema.pipelineRuns)
+			.where(
+				and(
+					eq(schema.pipelineRuns.runId, params.runId),
+					eq(schema.pipelineRuns.userId, userId)
+				)
+			)
+			.limit(1)
+		if (!r) {
+			const res = { error: "No such run." }
+			emitToUser("pipelines:runExplain:error", res)
+			return res
+		}
+		const { entries, read } = await retrievalEntriesFor(
+			(r as any).sessionId ?? null,
+			userId
+		)
+		const res: Sockets.Pipelines.RunExplain.Response = {
+			runId: (r as any).runId,
+			explanation: explainRetrieval((r as any).receipt ?? {}, entries, {
+				entriesRead: read
+			})
+		}
+		emitToUser("pipelines:runExplain", res)
+		return res
+	}
+}
+
+/* ------------------------------------------------------------------ *
+ * Everything that has ever fired in this session — Q6
+ *
+ * Every run's receipt records what fired. Nothing ever added them up, so the
+ * author's actual question — *which of my entries is this session using?* —
+ * was answered by opening runs one at a time and holding the tally in your
+ * head. This is that tally.
+ *
+ * ## The aggregation runs in the database
+ *
+ * A long session has hundreds of receipts and each receipt is large — the
+ * decisions carry every candidate whole, payload included, because assemble
+ * allocates from them. Loading all of that into this process to count ids
+ * would be tens of megabytes of JSON parsed to produce a few hundred integers.
+ * So the grouping is a query: the receipt column is walked by Postgres, and
+ * what comes back is one row per entry.
+ *
+ * The read is bounded anyway — the newest `runLimit` runs — and the bound is
+ * **stated**, in `runsRead`/`runsTotal` and in a sentence. A tally that
+ * silently stopped counting at some depth is not a partial answer; it is a
+ * wrong one, and an author acting on "this never fires" would be acting on an
+ * artefact of the limit.
+ *
+ * ## Sorted by how often, not by how recently
+ *
+ * Both are on the row, and the client can reorder either way. Frequency is the
+ * default because the question this answers is which entries are *shaping*
+ * the session: an entry in forty of fifty turns is doing the work whether or
+ * not it happened to fire in the last one, and a recency sort would put a
+ * single stray hit from the most recent turn above it. Recency ties frequency,
+ * so equally-used entries still read newest-first.
+ * ------------------------------------------------------------------ */
+
+/**
+ * The index vocabulary's fold, as SQL.
+ *
+ * ⚠ Generated from `RETRIEVAL_SOURCE_ALIASES` rather than restated beside it.
+ * The fold has to happen *before* the grouping — an entry the vector mechanism
+ * recorded as `historyEntry` and the ranker as `history` would otherwise come
+ * back as two rows for one entry — and a second hand-written copy of that map
+ * in a SQL string is exactly the drift the constant's own note warns about.
+ */
+const RETRIEVAL_SOURCE_ALIAS_JSON = JSON.stringify(RETRIEVAL_SOURCE_ALIASES)
+
+/** "3 of the 12 turns" reads wrong for one; this is the only plural rule needed. */
+const plural = (n: number, one: string, many = `${one}s`) =>
+	n === 1 ? one : many
+
+/**
+ * Everything that has ever fired in this session.
+ *
+ * ⚠ **Two gates, and both are load-bearing.** The session must be one the
+ * asker can reach — `checkSessionAccess`, owner **or** guest, because session
+ * access has never been ownership and a local re-check here would be the
+ * fourth copy of a rule that has already locked guests out once. And the runs
+ * aggregated are the asker's own (`user_id`), exactly as `pipelines:runs` and
+ * `pipelines:run` scope them — so reaching a shared session never becomes
+ * reading somebody else's receipts. Neither gate implies the other: a guest
+ * passes the first and is still confined by the second, and a person who owns
+ * a run whose `session_id` names a session they cannot reach fails the first.
+ *
+ * The titles come through `retrievalEntriesFor`, which re-reads the session
+ * and is owner-scoped by its own rule. A guest therefore gets the names their
+ * own receipts recorded rather than a live read of the owner's lorebook, which
+ * is the same answer `pipelines:runExplain` already gives them.
+ */
+export const pipelinesSessionEntryUsage: Handler<
+	Sockets.Pipelines.SessionEntryUsage.Params,
+	Sockets.Pipelines.SessionEntryUsage.Response
+> = {
+	event: "pipelines:sessionEntryUsage",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const sessionId = Number(params.sessionId)
+		const refuse = (error: string) => {
+			const res = { error }
+			emitToUser("pipelines:sessionEntryUsage:error", res)
+			return res
+		}
+		// One sentence for "no such session" and "not yours", because telling
+		// the two apart is how a session id becomes something worth guessing.
+		if (!Number.isInteger(sessionId)) return refuse("No such session.")
+		const access = await checkSessionAccess(sessionId, userId)
+		if (!access.hasAccess) return refuse("No such session.")
+
+		const limit = Math.min(Math.max(params.limit ?? 100, 1), 500)
+		const runLimit = Math.min(Math.max(params.runLimit ?? 200, 1), 1000)
+
+		const mine = and(
+			eq(schema.pipelineRuns.sessionId, sessionId),
+			eq(schema.pipelineRuns.userId, userId)
+		)!
+		// Both counts in one pass: how many turns there are to read, and
+		// whether any previews were left out of them.
+		const [tally] = await db
+			.select({
+				turns: sql<number>`count(*) FILTER (WHERE ${schema.pipelineRuns.isPreview} = false)`,
+				previews: sql<number>`count(*) FILTER (WHERE ${schema.pipelineRuns.isPreview})`
+			})
+			.from(schema.pipelineRuns)
+			.where(mine)
+		const runsTotal = Number(tally?.turns ?? 0)
+		const previews = Number(tally?.previews ?? 0)
+		const runsRead = Math.min(runsTotal, runLimit)
+
+		/**
+		 * One row per entry, grouped by Postgres.
+		 *
+		 * `CASE WHEN jsonb_typeof(…) = 'array'` guards both unnests: a
+		 * compacted receipt has no `nodes` at all and a node's output may be a
+		 * scalar, and `jsonb_array_elements` of a non-array raises rather than
+		 * returning nothing. A `CASE` with no `ELSE` yields NULL, and a
+		 * set-returning function given NULL contributes no rows — so a
+		 * malformed or compacted receipt drops out of the tally instead of
+		 * failing the whole read.
+		 *
+		 * `count(DISTINCT run_pk)` rather than `count(*)`: "how many times"
+		 * means how many turns, and two gather branches deciding the same row
+		 * in one turn is one appearance in one prompt.
+		 *
+		 * `count(*) OVER ()` carries the number of entries *before* the LIMIT,
+		 * so the tail can be reported rather than silently dropped.
+		 */
+		const result: any = await db.execute(sql`
+			WITH considered AS (
+				SELECT
+					r.id AS run_pk,
+					r.run_id AS run_id,
+					r.started_at AS started_at,
+					r.receipt::jsonb AS receipt
+				FROM ${schema.pipelineRuns} r
+				WHERE r.session_id = ${sessionId}
+					AND r.user_id = ${userId}
+					AND r.is_preview = false
+				ORDER BY r.id DESC
+				LIMIT ${runLimit}
+			),
+			judged AS (
+				SELECT
+					c.run_pk,
+					c.run_id,
+					c.started_at,
+					COALESCE(
+						${RETRIEVAL_SOURCE_ALIAS_JSON}::jsonb ->> (d->'candidate'->>'source'),
+						d->'candidate'->>'source'
+					) AS source,
+					d->'candidate'->>'id' AS entry_id,
+					-- Compared as jsonb rather than cast from text. A node
+					-- outside core can publish a decision with anything at
+					-- all under \`included\`, and \`'1'::boolean\` raises — which
+					-- would fail this whole read on one malformed row rather
+					-- than dropping it. Equality against \`true\` never raises.
+					(d->'included') = 'true'::jsonb AS included,
+					CASE
+						WHEN jsonb_typeof(d->'candidate'->'tokens') = 'number'
+						-- \`numeric\`, not \`int\`: a JSON number is not
+						-- necessarily a whole one, and \`'1.5'::int\` raises.
+						THEN (d->'candidate'->>'tokens')::numeric
+					END AS tokens,
+					jsonb_strip_nulls(jsonb_build_object(
+						'name', d->'candidate'->'payload'->'name',
+						'year', d->'candidate'->'payload'->'year',
+						'month', d->'candidate'->'payload'->'month',
+						'day', d->'candidate'->'payload'->'day'
+					)) AS heading
+				FROM considered c
+				CROSS JOIN LATERAL jsonb_array_elements(
+					CASE WHEN jsonb_typeof(c.receipt->'nodes') = 'array'
+						THEN c.receipt->'nodes' END
+				) AS n
+				CROSS JOIN LATERAL jsonb_array_elements(
+					CASE WHEN jsonb_typeof(n->'output'->'decisions') = 'array'
+						THEN n->'output'->'decisions' END
+				) AS d
+			),
+			grouped AS (
+				SELECT
+					source,
+					entry_id,
+					count(DISTINCT run_pk) FILTER (WHERE included) AS used_runs,
+					count(DISTINCT run_pk) AS judged_runs,
+					-- ⚠ Formatted as UTC here rather than handed back as a
+					-- driver-parsed Date. \`started_at\` is a timestamp WITHOUT
+					-- time zone holding a UTC wall clock (drizzle writes
+					-- \`toISOString()\` and reads it back as UTC), and a raw
+					-- query bypasses that column mapping — so on any server not
+					-- running in UTC the same instant would come back here
+					-- offset from the \`startedAt\` the run list shows for the
+					-- very same run.
+					to_char(
+						max(started_at) FILTER (WHERE included),
+						'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+					) AS last_used_at,
+					(array_agg(run_id ORDER BY run_pk DESC)
+						FILTER (WHERE included))[1] AS last_run_id,
+					(array_agg(tokens ORDER BY run_pk DESC)
+						FILTER (WHERE included AND tokens IS NOT NULL))[1] AS tokens,
+					(array_agg(heading ORDER BY run_pk DESC)
+						FILTER (WHERE heading <> '{}'::jsonb))[1] AS heading
+				FROM judged
+				WHERE entry_id IS NOT NULL AND source IS NOT NULL
+				GROUP BY source, entry_id
+				HAVING count(*) FILTER (WHERE included) > 0
+			)
+			SELECT g.*, count(*) OVER () AS group_total
+			FROM grouped g
+			-- Frequency first, recency to break its ties; \`last_used_at\` is a
+			-- fixed-width UTC ISO string, which orders lexicographically
+			-- exactly as it orders chronologically. The id is the last tiebreak
+			-- so the same session always answers in the same order.
+			ORDER BY g.used_runs DESC, g.last_used_at DESC NULLS LAST, g.entry_id
+			LIMIT ${limit}
+		`)
+		const raw: any[] = result?.rows ?? result ?? []
+
+		// The live rows, for names and for the two levers — the same read the
+		// single-run explanation does, and owner-scoped by the same rule.
+		const { entries } = await retrievalEntriesFor(sessionId, userId)
+
+		const rows: Sockets.Pipelines.SessionEntryUsageRow[] = raw.map((r) => {
+			const source = String(r.source)
+			const rawId = String(r.entry_id)
+			const asNumber = Number(rawId)
+			const key = `${source}:${rawId}`
+			const entry = entries.get(key)
+			// The heading the last run recorded, for an entry the lorebook no
+			// longer has: a name where the type carries one, and history's date
+			// where it does not — the same two rules the run's own rows use.
+			const heading = (r.heading ?? {}) as Record<string, unknown>
+			const recorded =
+				(typeof heading.name === "string" && heading.name.trim()) ||
+				datedTitle(heading) ||
+				""
+			return {
+				key,
+				id:
+					Number.isInteger(asNumber) && String(asNumber) === rawId
+						? asNumber
+						: rawId,
+				source,
+				sourceLabel: retrievalSourceLabel(source),
+				title: entry?.title?.trim() || recorded || `#${rawId}`,
+				usedInRuns: Number(r.used_runs) || 0,
+				judgedInRuns: Number(r.judged_runs) || 0,
+				lastUsedAt: new Date(r.last_used_at).toISOString(),
+				lastRunId: String(r.last_run_id),
+				...(r.tokens != null ? { tokens: Number(r.tokens) } : {}),
+				...(entry
+					? {
+							entry: {
+								id: entry.id,
+								typeId: entry.typeId as EntryTypeId,
+								constant: entry.constant,
+								enabled: entry.enabled,
+								keys: entry.keys
+							}
+						}
+					: {})
+			}
+		})
+
+		const found = raw.length ? Number(raw[0].group_total) || rows.length : 0
+		const omitted = Math.max(0, found - rows.length)
+
+		const notes: string[] = []
+		if (runsTotal > runsRead)
+			notes.push(
+				`Counted across the newest ${runsRead} of this session's ` +
+					`${runsTotal} turns — an entry that only fired before those ` +
+					`is not in this list.`
+			)
+		if (previews)
+			notes.push(
+				`${previews} ${plural(previews, "preview")} ${plural(previews, "is", "are")} ` +
+					`not counted: a preview assembles a prompt and never sends it.`
+			)
+		if (omitted)
+			notes.push(
+				`${omitted} further ${plural(omitted, "entry", "entries")} fired ` +
+					`less often and ${plural(omitted, "is", "are")} not listed.`
+			)
+
+		const top = rows[0]
+		const summary = !runsTotal
+			? "This session has no recorded turns yet, so nothing has fired in it."
+			: !top
+				? `Nothing has reached a prompt across the ${runsRead} ` +
+					`${plural(runsRead, "turn")} counted here.`
+				: found === 1
+					? `“${top.title}” is the only entry this session has put in a ` +
+						`prompt — in ${top.usedInRuns} of the ${runsRead} ` +
+						`${plural(runsRead, "turn")} counted here.`
+					: `“${top.title}” is what this session reaches for most — it has ` +
+						`gone into ${top.usedInRuns} of the ${runsRead} ` +
+						`${plural(runsRead, "turn")} counted here, alongside ` +
+						`${found - 1} other ${plural(found - 1, "entry", "entries")}.`
+
+		const res: Sockets.Pipelines.SessionEntryUsage.Response = {
+			sessionId,
+			summary,
+			notes,
+			entries: rows,
+			runsRead,
+			runsTotal,
+			omitted
+		}
+		emitToUser("pipelines:sessionEntryUsage", res)
 		return res
 	}
 }
@@ -2571,32 +4287,49 @@ export const pipelinesResolveReview: Handler<
 > = {
 	event: "pipelines:resolveReview",
 	handler: async (socket, params, emitToUser) => {
-		const { resolveReview, ReviewNotFoundError } = await import(
-			"$lib/server/pipelines/runtime/reviewGate"
-		)
+		const { resolveReview, ReviewNotFoundError, pendingReviewsFor } =
+			await import("$lib/server/pipelines/runtime/reviewGate")
 		try {
 			resolveReview(
 				params.id,
 				socket.user!.id,
 				params.action,
-				params.values
+				params.values,
+				// Read now, not when the run parked: a review can sit for as
+				// long as the person takes, and what they may change is what
+				// they may change today.
+				socket.user!
 			)
 		} catch (err) {
+			// A refused edit — an unparseable JSON field, a number that is not
+			// one — leaves the entry parked and still decidable. Send the card
+			// back so the person can correct the field instead of being left
+			// with a toast and nothing to retry in. Idempotent by id, so a
+			// client that never dropped it sees no second card.
+			const stillParked = pendingReviewsFor(socket.user!.id).find(
+				(r) => r.id === params.id
+			)
+			if (stillParked)
+				emitToUser("pipelines:reviewRequested", stillParked)
 			const res = {
 				error:
 					err instanceof ReviewNotFoundError || err instanceof Error
 						? err.message
-						: "That decision could not be recorded."
+						: "That decision could not be recorded.",
+				id: params.id
 			}
 			emitToUser("pipelines:resolveReview:error", res)
 			return res
 		}
+		// Closed for every one of this person's tabs, not just the one that
+		// decided — the same event a cancelled run sends, because from a
+		// client's side the two are the same fact: this card is finished.
+		emitToUser("pipelines:reviewClosed", { id: params.id })
 		const res = { ok: true }
 		emitToUser("pipelines:resolveReview", res)
 		return res
 	}
 }
-
 
 /**
  * The configurations inventory (admin IA 2026-08-28): every named config
@@ -2628,7 +4361,10 @@ export const pipelinesConfigsIndex: Handler<
 				(p.bindings ?? {}) as Record<string, { config?: number }>
 			))
 				if (b?.config != null)
-					presetCount.set(b.config, (presetCount.get(b.config) ?? 0) + 1)
+					presetCount.set(
+						b.config,
+						(presetCount.get(b.config) ?? 0) + 1
+					)
 
 		// …and sessions whose scope selection points at it.
 		const selections = await db
@@ -2703,6 +4439,13 @@ export const pipelinesCancelRun: Handler<
 	}
 }
 
+/**
+ * Serializes review pushes across every socket, so the order the gate asked for
+ * is the order the browser sees. Module scope rather than per-connection: the
+ * transport is a process-wide seam and is reinstalled on each connect.
+ */
+let reviewPushes: Promise<unknown> = Promise.resolve()
+
 export function registerPipelineHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -2715,11 +4458,39 @@ export function registerPipelineHandlers(
 	// The gate's push transport, bound once per process to socket.io's rooms.
 	// A review can park from any trigger, so it pushes by user rather than
 	// through whichever handler happened to start the run.
+	//
+	// It also does not go through `emitToUser`, which is where connections are
+	// redacted for everyone else — so the redaction is repeated here, against
+	// the RECIPIENT rather than against whoever's socket last installed the
+	// transport. The row read is affordable because a review is human-paced:
+	// one push per gated node, per person, per run.
 	import("$lib/server/pipelines/runtime/reviewGate").then(
 		({ setReviewTransport }) =>
-			setReviewTransport((userId, event, data) =>
-				socket.io.to(`user_${userId}`).emit(event, data)
-			)
+			setReviewTransport((userId, event, data) => {
+				// Queued, not awaited by the caller: the gate pushes
+				// `reviewRequested` and — if the run is cancelled — a
+				// `reviewClosed` for the same card, and a client that received
+				// them out of order would keep a card nothing can decide. The
+				// chain makes delivery order the CALL order rather than
+				// whichever row read finished first.
+				reviewPushes = reviewPushes
+					.then(async () => {
+						const [row] = await db
+							.select({ isAdmin: schema.users.isAdmin })
+							.from(schema.users)
+							.where(eq(schema.users.id, userId))
+							.limit(1)
+						socket.io
+							.to(`user_${userId}`)
+							.emit(event, redactConnections(data, row))
+					})
+					.catch((err) => {
+						console.warn(
+							"[pipelines] could not deliver a review push:",
+							err
+						)
+					})
+			})
 	)
 
 	register(socket, pipelinesList, emitToUser)
@@ -2729,12 +4500,16 @@ export function registerPipelineHandlers(
 	register(socket, pipelinesClearOption, emitToUser)
 	register(socket, pipelinesSetOptions, emitToUser)
 	register(socket, pipelinesRun, emitToUser)
+	register(socket, pipelinesRunExplain, emitToUser)
+	register(socket, pipelinesSessionEntryUsage, emitToUser)
 	register(socket, pipelinesCancelRun, emitToUser)
 	register(socket, pipelinesSelectConfig, emitToUser)
 	register(socket, pipelinesCreateConfig, emitToUser)
 	register(socket, pipelinesSetPresetActions, emitToUser)
 	register(socket, pipelinesRenameConfig, emitToUser)
 	register(socket, pipelinesDeleteConfig, emitToUser)
+	register(socket, pipelinesConfigNotices, emitToUser)
+	register(socket, pipelinesAcknowledgeConfigNotices, emitToUser)
 	register(socket, pipelinesCreatePrompt, emitToUser)
 	register(socket, pipelinesClonePrompt, emitToUser)
 	register(socket, pipelinesUpdatePrompt, emitToUser)

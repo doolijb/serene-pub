@@ -20,8 +20,10 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
+import { DEFAULT_VECTOR_NAME } from "$lib/server/utils/lorebookEntries"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -104,10 +106,32 @@ async function makeStaleLoreEntry(userId: number, name: string) {
 		.values({ name: `${name} Book`, userId })
 		.returning()
 	const [entry] = await testDb
-		.insert(schema.worldLoreEntries)
-		.values({ lorebookId: lorebook.id, name, content: `${name} content` })
+		.insert(schema.lorebookEntries)
+		.values(
+			worldLoreValues([
+				{ lorebookId: lorebook.id, name, content: `${name} content` }
+			])
+		)
 		.returning()
 	return entry
+}
+
+/**
+ * The entry's default-space vector — where its `embeddingModel`/`vectorizedAt`
+ * live now that a vector is a row rather than three columns on the entry.
+ */
+async function defaultVector(entryId: number) {
+	const [row] = await testDb
+		.select()
+		.from(schema.lorebookEntryVectors)
+		.where(
+			and(
+				eq(schema.lorebookEntryVectors.entryId, entryId),
+				eq(schema.lorebookEntryVectors.vectorName, DEFAULT_VECTOR_NAME),
+				eq(schema.lorebookEntryVectors.chunkIndex, 0)
+			)
+		)
+	return row
 }
 
 async function runOneCycle() {
@@ -150,10 +174,8 @@ describe("runQueue() — peek before load", () => {
 		// queue doesn't loop back and load again once the row is current).
 		expect(testEmbedCreate).toHaveBeenCalledTimes(2)
 
-		const after = await testDb.query.worldLoreEntries.findFirst({
-			where: eq(schema.worldLoreEntries.id, entry.id)
-		})
-		expect(after?.embedding).not.toBeNull()
+		const after = await defaultVector(entry.id)
+		expect(after?.vector?.length).toBeGreaterThan(0)
 		expect(after?.vectorizedAt).not.toBeNull()
 	})
 
@@ -179,10 +201,7 @@ describe("runQueue() — peek before load", () => {
 		// "expected 2, got 3"). What matters is that a real cycle ran AND that
 		// it achieved the setup — which is a stronger check than the count was.
 		expect(testEmbedCreate).toHaveBeenCalled()
-		const warmed = await testDb.query.worldLoreEntries.findFirst({
-			where: eq(schema.worldLoreEntries.id, entry.id)
-		})
-		expect(warmed?.vectorizedAt).not.toBeNull()
+		expect((await defaultVector(entry.id))?.vectorizedAt).not.toBeNull()
 		unloadEmbeddingModel()
 		expect(getLoadedModelId()).toBeNull()
 
@@ -196,10 +215,7 @@ describe("runQueue() — peek before load", () => {
 		// Distinguishes "correctly declined to load" from "runQueue broke
 		// and did nothing" — the staleness check itself still ran, using
 		// the pre-load candidate id, and correctly found nothing.
-		const stillCurrent = await testDb.query.worldLoreEntries.findFirst({
-			where: eq(schema.worldLoreEntries.id, entry.id)
-		})
-		expect(stillCurrent?.vectorizedAt).not.toBeNull()
+		expect((await defaultVector(entry.id))?.vectorizedAt).not.toBeNull()
 	})
 
 	test("model switch: a row current under model A is re-embedded once the configured model changes to B", async () => {
@@ -221,10 +237,8 @@ describe("runQueue() — peek before load", () => {
 		// are the real claim.
 		expect(testEmbedCreate.mock.calls.length).toBeGreaterThanOrEqual(2)
 
-		const afterA = await testDb.query.worldLoreEntries.findFirst({
-			where: eq(schema.worldLoreEntries.id, entry.id)
-		})
-		expect(afterA?.embeddingModel).toContain("model-a")
+		const afterA = await defaultVector(entry.id)
+		expect(afterA?.model).toContain("model-a")
 
 		// Switch the configured model — the row is now stale under B even
 		// though nothing about the row itself changed. This is the one test
@@ -246,10 +260,8 @@ describe("runQueue() — peek before load", () => {
 		// embed for this row is the real claim; the row-level checks below
 		// are what actually prove it.
 		expect(testEmbedCreate.mock.calls.length).toBeGreaterThanOrEqual(2)
-		const afterB = await testDb.query.worldLoreEntries.findFirst({
-			where: eq(schema.worldLoreEntries.id, entry.id)
-		})
-		expect(afterB?.embeddingModel).toContain("model-b")
-		expect(afterB?.embeddingModel).not.toBe(afterA?.embeddingModel)
+		const afterB = await defaultVector(entry.id)
+		expect(afterB?.model).toContain("model-b")
+		expect(afterB?.model).not.toBe(afterA?.model)
 	})
 })

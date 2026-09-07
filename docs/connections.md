@@ -49,7 +49,7 @@ The Ollama connection form has a **Model** dropdown populated via **Refresh Mode
 
 OpenAI Session is Serene Pub's generic OpenAI-compatible connection type, meant for the real OpenAI API as well as any of the many services that mimic its session-completion schema. Its form has a **Model** dropdown (via **Refresh Models**), **Test Connection**, a **Base URL** field, and an **API Key** field (password-masked). Advanced Settings hold a **Stream** switch and a **Prerender Prompt** switch — when Prerender Prompt is on, a **Prompt Format** dropdown appears so the prompt is rendered to text client-side before being sent as a single session message, rather than sent as native multi-message session.
 
-Because so many providers speak this same protocol, the **AI Service** picker in the New Connection modal (see [Overview](#overview)) lists every OpenAI-compatible preset directly alongside the native connection types, pre-filling the Base URL and a sensible Token Counter/Prompt Format for each. Selecting any preset here still creates an `openai` (OpenAI Session) connection underneath — the preset only decides the starting values:
+Because so many services speak this same protocol, the **AI Service** picker in the New Connection modal (see [Overview](#overview)) lists every OpenAI-compatible preset directly alongside the native connection types, pre-filling the Base URL and a sensible Token Counter/Prompt Format for each. Selecting any preset here still creates an `openai` (OpenAI Session) connection underneath — the preset only decides the starting values:
 
 | Preset                                 | Base URL                                                   |
 | -------------------------------------- | ---------------------------------------------------------- |
@@ -77,7 +77,7 @@ Because so many providers speak this same protocol, the **AI Service** picker in
 | SGLang _(Experimental)_                | `http://localhost:30000/v1/`                               |
 | Aphrodite Engine _(Experimental)_      | `http://localhost:2242/v1/`                                |
 
-Presets tagged **Experimental** are newer additions provided as a starting point but not yet as thoroughly exercised against Serene Pub as the original list above — double-check the Base URL and any provider-specific quirks yourself. Every preset only sets the initial Base URL, Prompt Format, and Token Counter — you can change any of them afterward, and you'll still need to supply an API key for services that require one. The Ollama and KoboldCPP presets here talk to those backends' OpenAI-_compatible_ endpoints, a different wire protocol from the dedicated [Ollama](#ollama) and [KoboldCPP (Remote)](#koboldcpp-remote) connection types described below — the picker labels them "(via OpenAI-Compatible API)" to keep the two apart.
+Presets tagged **Experimental** are newer additions provided as a starting point but not yet as thoroughly exercised against Serene Pub as the original list above — double-check the Base URL and any service-specific quirks yourself. Every preset only sets the initial Base URL, Prompt Format, and Token Counter — you can change any of them afterward, and you'll still need to supply an API key for services that require one. The Ollama and KoboldCPP presets here talk to those backends' OpenAI-_compatible_ endpoints, a different wire protocol from the dedicated [Ollama](#ollama) and [KoboldCPP (Remote)](#koboldcpp-remote) connection types described below — the picker labels them "(via OpenAI-Compatible API)" to keep the two apart.
 
 ## Llama.cpp
 
@@ -89,7 +89,7 @@ The Anthropic form has a **Model** dropdown (via **Refresh Models**), **Test Con
 
 ### Where the API keys come from
 
-For OpenAI Session and Anthropic, obtain a key from the respective provider's console (`platform.openai.com` / `console.anthropic.com`, or the equivalent page for whichever OpenAI-compatible service you're using) and paste it into the connection's API Key field. Keys are stored per-connection, so you can run multiple connections against the same provider with different keys or models.
+For OpenAI Session and Anthropic, obtain a key from the respective service's console (`platform.openai.com` / `console.anthropic.com`, or the equivalent page for whichever OpenAI-compatible service you're using) and paste it into the connection's API Key field. Keys are stored per-connection, so you can run multiple connections against the same service with different keys or models.
 
 ## KoboldCPP (Remote)
 
@@ -251,7 +251,7 @@ Response Tokens and Context Tokens each have an **Unlock max** checkbox that rai
 
 ### Switching a parameter on and off
 
-A parameter's checkbox controls whether it is sent to the backend at all. Unchecked, the value is remembered but left out of the request, and the provider uses its own default — so turning a sampler off and on again does not lose what you had set.
+A parameter's checkbox controls whether it is sent to the backend at all. Unchecked, the value is remembered but left out of the request, and the service uses its own default — so turning a sampler off and on again does not lose what you had set.
 
 A parameter can be switched on and still not reach a given backend: not every connection type understands every sampler (Anthropic, for instance, accepts only temperature, top P, top K and response tokens). Those are dropped from the outgoing request and recorded as ignored rather than causing an error.
 

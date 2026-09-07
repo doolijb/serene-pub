@@ -24,6 +24,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import PipelineConfigOptions from "$lib/client/components/pipelines/PipelineConfigOptions.svelte"
+	import ConfigNotices from "$lib/client/components/pipelines/ConfigNotices.svelte"
 	import PipelineMap from "$lib/client/components/pipelines/workspace/PipelineMap.svelte"
 	import StepList from "$lib/client/components/pipelines/workspace/StepList.svelte"
 	import RunsPanel from "$lib/client/components/pipelines/workspace/RunsPanel.svelte"
@@ -109,7 +110,9 @@
 	}
 
 	function startNew(duplicate: boolean) {
-		const base = duplicate ? `${selected?.name ?? "Configuration"} copy` : ""
+		const base = duplicate
+			? `${selected?.name ?? "Configuration"} copy`
+			: ""
 		creating = {
 			name: base,
 			...(duplicate && selected ? { fromConfigId: selected.id } : {})
@@ -136,6 +139,28 @@
 			name: renaming.name.trim()
 		})
 		renaming = null
+	}
+
+	/**
+	 * Withdraw a configuration from the set people may choose, or put it back.
+	 *
+	 * The half of R8 that makes "users choose among them" mean anything: an
+	 * administrator decides what the list contains. Withdrawing is deliberately
+	 * NOT deletion — sessions already on it keep running, it simply stops being
+	 * offered — so it is a switch here and not a second confirm dialog.
+	 *
+	 * The shipped configuration has no switch: it is the fallback everything
+	 * else resolves through, so withdrawing it would leave a scope resolving to
+	 * something it may not choose. `setPresetActions` refuses an immutable row
+	 * for the same reason.
+	 */
+	function setAvailability(enabled: boolean) {
+		if (!selected || selected.readOnly) return
+		socket.emit("pipelines:setPresetActions", {
+			slug,
+			configId: selected.id,
+			enabled
+		})
 	}
 
 	function removeConfig() {
@@ -215,7 +240,13 @@
 	/* ── the workspace tabs + URL state (22) ────────────────────────── */
 
 	type Tab = "configure" | "changes" | "runs" | "versions" | "preset"
-	const TAB_IDS: Tab[] = ["configure", "changes", "runs", "versions", "preset"]
+	const TAB_IDS: Tab[] = [
+		"configure",
+		"changes",
+		"runs",
+		"versions",
+		"preset"
+	]
 	const initialParams =
 		typeof window !== "undefined"
 			? new URLSearchParams(window.location.search)
@@ -502,7 +533,8 @@
 		<div class="min-w-0 flex-1">
 			<p class="text-surface-600-400 text-xs">
 				<a href="/admin/pipelines" class="hover:underline">Pipelines</a>
-				/ <strong>{spec?.name ?? slug}</strong>
+				/
+				<strong>{spec?.name ?? slug}</strong>
 			</p>
 			<h1 class="truncate text-2xl font-semibold">
 				{spec?.name ?? slug}
@@ -517,8 +549,9 @@
 				{#if detail?.taxonomy?.zone}
 					<span
 						class="preset-tonal-surface rounded-full px-1.5 py-0.5 font-sans text-[0.68rem]"
-						>{detail.taxonomy.zone}</span
 					>
+						{detail.taxonomy.zone}
+					</span>
 				{/if}
 				{#if detail?.taxonomy?.role}
 					<span
@@ -529,8 +562,9 @@
 								: detail.taxonomy.role === 'create'
 									? 'preset-tonal-tertiary'
 									: 'preset-tonal-surface'} rounded-full px-1.5 py-0.5 font-sans text-[0.68rem]"
-						>{detail.taxonomy.role}</span
 					>
+						{detail.taxonomy.role}
+					</span>
 				{/if}
 				{#if detail?.taxonomy?.role === "create" && detail?.taxonomy?.genre}
 					<!-- A create pipeline is its genre's required member (24 §3). -->
@@ -572,7 +606,9 @@
 			aria-label="Configuration"
 		>
 			<label class="min-w-[14rem] flex-1">
-				<span class="text-surface-600-400 mb-1 block text-xs font-semibold">
+				<span
+					class="text-surface-600-400 mb-1 block text-xs font-semibold"
+				>
 					Configuration
 				</span>
 				<select
@@ -586,10 +622,29 @@
 						<option value={String(c.id)}>
 							{c.isDefault ? "★ " : ""}{c.name}{c.readOnly
 								? " (shipped)"
-								: ""}
+								: ""}{c.enabled ? "" : " (withdrawn)"}
 						</option>
 					{/each}
 				</select>
+			</label>
+
+			<!-- What the instance offers. Only an admin sees a withdrawn
+			     configuration at all — everyone else's list is the offered set,
+			     and the server refuses a selection outside it. -->
+			<label
+				class="flex items-center gap-1.5 pb-2 text-xs"
+				title={selected?.readOnly
+					? "The shipped configuration is the fallback everything else resolves through, so it is always offered"
+					: "Whether people may choose this configuration. Withdrawing it leaves sessions already on it running."}
+			>
+				<input
+					type="checkbox"
+					class="checkbox"
+					checked={selected ? selected.enabled : true}
+					disabled={!selected || selected.readOnly}
+					onchange={(e) => setAvailability(e.currentTarget.checked)}
+				/>
+				{selected && !selected.enabled ? "Withdrawn" : "Offered"}
 			</label>
 
 			<div class="flex flex-wrap items-center gap-1">
@@ -636,8 +691,15 @@
 			</div>
 		</section>
 
+		<!-- What the last published version did to the configuration named
+		     above: a setting it removed takes the value somebody set with it,
+		     and this is the only place that says so. -->
+		<ConfigNotices {slug} configId={selected?.id ?? null} />
+
 		{#if creating}
-			<div class="card preset-filled-surface-100-900-primary flex flex-wrap gap-2 p-3">
+			<div
+				class="card preset-filled-surface-100-900-primary flex flex-wrap gap-2 p-3"
+			>
 				<label class="min-w-[14rem] flex-1">
 					<span class="mb-1 block text-xs font-semibold">
 						{creating.fromConfigId != null
@@ -670,7 +732,9 @@
 		{/if}
 
 		{#if renaming}
-			<div class="card preset-filled-surface-100-900-primary flex flex-wrap gap-2 p-3">
+			<div
+				class="card preset-filled-surface-100-900-primary flex flex-wrap gap-2 p-3"
+			>
 				<label class="min-w-[14rem] flex-1">
 					<span class="mb-1 block text-xs font-semibold">
 						Rename configuration
@@ -827,7 +891,10 @@
 						? 'grid grid-cols-[minmax(0,1fr)_25rem]'
 						: 'flex flex-col'}"
 			>
-				<section aria-label="Steps" class="card preset-filled-surface-100-900 min-w-0">
+				<section
+					aria-label="Steps"
+					class="card preset-filled-surface-100-900 min-w-0"
+				>
 					{#if navView === "map"}
 						<PipelineMap
 							{graph}
@@ -857,7 +924,9 @@
 				<section
 					bind:this={inspectorEl}
 					aria-label="Settings"
-					class="min-w-0 scroll-mt-4 {sideBySide ? 'sticky top-4' : ''}"
+					class="min-w-0 scroll-mt-4 {sideBySide
+						? 'sticky top-4'
+						: ''}"
 				>
 					<div
 						class="border-surface-300-700 mb-2 flex items-baseline gap-2 border-b pb-1"
@@ -867,7 +936,9 @@
 
 					{#if active}
 						<div class="mb-2 flex items-baseline gap-2">
-							<h2 class="text-lg font-semibold">{active.label}</h2>
+							<h2 class="text-lg font-semibold">
+								{active.label}
+							</h2>
 							<span class="text-surface-600-400 text-xs">
 								step {steps.findIndex(
 									(s) => s.key === active.key
@@ -897,8 +968,9 @@
 						>
 							<Icons.Lock size={12} class="shrink-0" />
 							<span>
-								<strong>{selected.name}</strong> is shipped —
-								Save all will ask where your changes land.
+								<strong>{selected.name}</strong>
+								 is shipped — Save all will ask where your changes
+								land.
 							</span>
 						</p>
 					{/if}
@@ -956,9 +1028,9 @@
 			/>
 		{:else if tab === "runs"}
 			<p class="text-surface-600-400 text-sm">
-				This pipeline's recent run receipts. A halt is not a failure — an
-				aborted generation and an empty completion both halt, with the
-				reason recorded.
+				This pipeline's recent run receipts. A halt is not a failure —
+				an aborted generation and an empty completion both halt, with
+				the reason recorded.
 			</p>
 			<RunsPanel runs={pipelineRuns} loading={runsLoading} />
 		{:else if tab === "versions"}
@@ -1010,10 +1082,10 @@
 				{selected?.name ?? "This configuration"} is shipped
 			</h3>
 			<p class="text-surface-600-400 text-sm">
-				Shipped configurations stay as written — the server refuses edits
-				into them. Your {pendingCount}
-				change{pendingCount === 1 ? "" : "s"} land in a copy, which
-				becomes the selected configuration:
+				Shipped configurations stay as written — the server refuses
+				edits into them. Your {pendingCount}
+				change{pendingCount === 1 ? "" : "s"} land in a copy, which becomes
+				the selected configuration:
 			</p>
 			<label class="flex flex-col gap-1 text-sm">
 				<span class="font-medium">Name the new configuration</span>

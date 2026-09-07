@@ -14,6 +14,10 @@
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		registerLanguageSocket,
+		setLanguage
+	} from "$lib/client/i18n/state.svelte"
 	import { appVersion } from "$lib/shared/constants/version"
 	import "./accessible.css"
 	import {
@@ -95,18 +99,24 @@
 	}
 	function handleUserSettingsGet(message: any) {
 		userSettingsCtx.settings = message.userSettings
+		// The *resolved* language, not the stored choice — the stored one may
+		// be null meaning "follow the instance default", and the renderer needs
+		// a language rather than an intent (R5).
+		setLanguage(message.userSettings.effectiveLanguage)
 	}
 
 	onMount(() => {
 		socket.on("systemSettings:get", handleSystemSettingsGet)
 		socket.on("users:current", handleUsersCurrent)
 		socket.on("userSettings:get", handleUserSettingsGet)
+		const offLanguageCatalog = registerLanguageSocket()
 		socket.emit("systemSettings:get", {})
 
 		return () => {
 			socket.off("systemSettings:get", handleSystemSettingsGet)
 			socket.off("users:current", handleUsersCurrent)
 			socket.off("userSettings:get", handleUserSettingsGet)
+			offLanguageCatalog()
 		}
 	})
 

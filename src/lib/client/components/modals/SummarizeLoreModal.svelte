@@ -1,4 +1,10 @@
 <script lang="ts">
+	import {
+		HISTORY_TYPE_ID,
+		type LorebookEntry
+	} from "$lib/shared/entries/types"
+
+	type History = LorebookEntry<typeof HISTORY_TYPE_ID>
 	import * as Icons from "@lucide/svelte"
 	import { getSocket } from "$lib/client/sockets/socketInstance"
 	import { onDestroy, onMount } from "svelte"
@@ -29,9 +35,11 @@
 		return (b.day ?? 0) - (a.day ?? 0)
 	}
 
-	function computeDefaultDate(
-		entries: Sockets.HistoryEntries.List.Response["historyEntryList"]
-	): { year: number; month: number; day: number } {
+	function computeDefaultDate(entries: readonly History[]): {
+		year: number
+		month: number
+		day: number
+	} {
 		const dated = entries.filter((e) => e.year !== null)
 		if (dated.length === 0) return { year: 1, month: 1, day: 1 }
 
@@ -125,9 +133,7 @@
 	let attachingLorebookId = $state<number | "">("")
 	let isCreatingLorebook = $state(false)
 	let newLorebookName = $state("")
-	let historyEntryList = $state<
-		Sockets.HistoryEntries.List.Response["historyEntryList"]
-	>([])
+	let historyEntryList = $state<History[]>([])
 
 	let selectedHistoryEntryId = $state<number | "">("")
 	let isCreatingHistoryEntry = $state(false)
@@ -338,7 +344,10 @@
 
 	$effect(() => {
 		if (open && lorebookId) {
-			socket.emit("historyEntries:list", { lorebookId })
+			socket.emit("entries:list", {
+				lorebookId,
+				typeId: HISTORY_TYPE_ID
+			})
 			socket.emit("lorebooks:bindingList", { lorebookId })
 		}
 	})
@@ -427,11 +436,11 @@
 		})
 	}
 
-	function handleHistoryEntriesList(
-		data: Sockets.HistoryEntries.List.Response
-	) {
-		if (data.lorebookId === lorebookId) {
-			historyEntryList = data.historyEntryList
+	function handleHistoryEntriesList(data: Sockets.Entries.List.Response) {
+		// One namespace now, so a list for some *other* tab's type arrives
+		// here too — the type filter is what makes that harmless.
+		if (data.lorebookId === lorebookId && data.typeId === HISTORY_TYPE_ID) {
+			historyEntryList = data.entryList as History[]
 			// Default to the most recent entry — the overwhelmingly common
 			// choice when summarising a scene that just happened.
 			if (
@@ -446,22 +455,22 @@
 		}
 	}
 
-	function handleHistoryEntryCreate(
-		data: Sockets.HistoryEntries.Create.Response
-	) {
+	function handleHistoryEntryCreate(data: Sockets.Entries.Create.Response) {
+		if (data.entry?.typeId !== HISTORY_TYPE_ID) return
+		const historyEntry = data.entry as History
 		isCreatingHistoryEntry = false
-		if (data.historyEntry) {
-			// Don't rely on a subsequent historyEntries:list refresh to show
+		if (historyEntry) {
+			// Don't rely on a subsequent entries:list refresh to show
 			// this entry — in a busy session (concurrent message generation,
 			// vectorization), that refresh can be one of several in flight
 			// and an older, slower one can resolve last and overwrite this
 			// entry right back out of the list. Apply it locally so the
 			// modal is correct regardless of refresh ordering.
-			if (!historyEntryList.some((e) => e.id === data.historyEntry!.id)) {
-				historyEntryList = [...historyEntryList, data.historyEntry]
+			if (!historyEntryList.some((e) => e.id === historyEntry.id)) {
+				historyEntryList = [...historyEntryList, historyEntry]
 			}
 			if (loreType === "scene") {
-				selectedHistoryEntryId = data.historyEntry.id
+				selectedHistoryEntryId = historyEntry.id
 			}
 		}
 	}
@@ -470,7 +479,7 @@
 	// out from under this modal, or any other server-side error) left
 	// isCreatingHistoryEntry stuck true forever — the "New"/"Create New
 	// Entry" button would spin indefinitely with no way to retry, since
-	// historyEntries:create never fires and this was the only place that
+	// entries:create never fires and this was the only place that
 	// cleared the loading state.
 	function handleHistoryEntryCreateError(data: { error: string }) {
 		isCreatingHistoryEntry = false
@@ -507,9 +516,9 @@
 		socket.on("sessions:setLorebook", handleSetLorebook)
 		socket.on("lorebooks:create", handleLorebookCreate)
 		socket.on("lorebooks:create:error", handleLorebookCreateError)
-		socket.on("historyEntries:list", handleHistoryEntriesList)
-		socket.on("historyEntries:create", handleHistoryEntryCreate)
-		socket.on("historyEntries:create:error", handleHistoryEntryCreateError)
+		socket.on("entries:list", handleHistoryEntriesList)
+		socket.on("entries:create", handleHistoryEntryCreate)
+		socket.on("entries:create:error", handleHistoryEntryCreateError)
 		socket.on("lorebooks:bindingList", handleLorebookBindingList)
 		socket.emit("lorebooks:list", {})
 	})
@@ -522,9 +531,9 @@
 		s.off("sessions:setLorebook", handleSetLorebook)
 		s.off("lorebooks:create", handleLorebookCreate)
 		s.off("lorebooks:create:error", handleLorebookCreateError)
-		s.off("historyEntries:list", handleHistoryEntriesList)
-		s.off("historyEntries:create", handleHistoryEntryCreate)
-		s.off("historyEntries:create:error", handleHistoryEntryCreateError)
+		s.off("entries:list", handleHistoryEntriesList)
+		s.off("entries:create", handleHistoryEntryCreate)
+		s.off("entries:create:error", handleHistoryEntryCreateError)
 		s.off("lorebooks:bindingList", handleLorebookBindingList)
 	})
 
@@ -555,8 +564,9 @@
 			historyEntryList.length > 0
 				? computeDefaultDate(historyEntryList)
 				: { year: 1, month: 1, day: 1 }
-		socket.emit("historyEntries:create", {
-			historyEntry: {
+		socket.emit("entries:create", {
+			entry: {
+				typeId: HISTORY_TYPE_ID,
 				lorebookId,
 				year: defaultDate.year,
 				month: defaultDate.month,

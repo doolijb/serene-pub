@@ -1,8 +1,15 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq, inArray, asc, and } from "drizzle-orm"
+import { eq, inArray, asc, and, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
+import {
+	HISTORY_TYPE_ID,
+	historyDateOf,
+	inBookOfType,
+	toEntryRow,
+	type LorebookEntry
+} from "$lib/server/utils/lorebookEntries"
 import { compileScenesForEntry } from "$lib/server/utils/summarizer"
 import {
 	readSceneCast,
@@ -21,7 +28,7 @@ import {
 	resolveCapabilityTarget,
 	TEXT_CAPABILITY
 } from "$lib/server/connections/capabilityTarget"
-import { activityStore } from "$lib/server/utils/activityStore"
+import { activityError, activityStore } from "$lib/server/utils/activityStore"
 import { withSessionTriggerLock } from "$lib/server/utils/sessionTriggerLock"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
@@ -80,14 +87,11 @@ export const sceneListHandler: Handler<
 			where: eq(schema.scenes.sessionId, params.sessionId),
 			orderBy: (s, { asc }) => asc(s.id),
 			with: {
+				// The date and the completion flag are declared fields now,
+				// so the row carries `fields` and the projection below reads
+				// them out — see `toEntryRow`.
 				historyEntry: {
-					columns: {
-						id: true,
-						year: true,
-						month: true,
-						day: true,
-						isCompleted: true
-					}
+					columns: { id: true, fields: true }
 				}
 			}
 		})
@@ -104,16 +108,27 @@ export const sceneListHandler: Handler<
 			} | null
 		>()
 		if (lorebookId) {
-			const allEntries = await db.query.historyEntries.findMany({
-				where: eq(schema.historyEntries.lorebookId, lorebookId),
-				columns: { id: true, year: true, month: true, day: true },
-				orderBy: [
-					asc(schema.historyEntries.year),
-					asc(schema.historyEntries.month),
-					asc(schema.historyEntries.day),
-					asc(schema.historyEntries.id)
-				]
-			})
+			// ⚠ The date sorts on jsonb members now, so the ordering is
+			// spelled in SQL rather than by column: `->>` yields text, and
+			// text order is not date order past nine. `NULLS FIRST` keeps the
+			// old column ordering, which Postgres gives ascending sorts by
+			// default and which this list depends on — an entry with only a
+			// year sorts before its own dated months.
+			const allEntries = (
+				await db
+					.select({
+						id: schema.lorebookEntries.id,
+						fields: schema.lorebookEntries.fields
+					})
+					.from(schema.lorebookEntries)
+					.where(inBookOfType(lorebookId, HISTORY_TYPE_ID))
+					.orderBy(
+						sql`(${schema.lorebookEntries.fields}->>'year')::int ASC NULLS FIRST`,
+						sql`(${schema.lorebookEntries.fields}->>'month')::int ASC NULLS FIRST`,
+						sql`(${schema.lorebookEntries.fields}->>'day')::int ASC NULLS FIRST`,
+						asc(schema.lorebookEntries.id)
+					)
+			).map((e) => ({ id: e.id, ...historyDateOf(e) }))
 			for (let i = 0; i < allEntries.length; i++) {
 				nextEntryMap.set(allEntries[i].id, allEntries[i + 1] ?? null)
 			}
@@ -123,7 +138,10 @@ export const sceneListHandler: Handler<
 			...s,
 			historyEntry: s.historyEntry
 				? {
-						...s.historyEntry,
+						id: s.historyEntry.id,
+						...historyDateOf(s.historyEntry),
+						isCompleted:
+							s.historyEntry.fields?.isCompleted ?? false,
 						nextEntry: nextEntryMap.get(s.historyEntry.id) ?? null
 					}
 				: null
@@ -178,9 +196,15 @@ export const sceneCreateHandler: Handler<
 		// historyEntryId alone, so the injected scene's content would feed
 		// directly into the victim's own LLM-driven compile call the next
 		// time they compile that history entry.
-		const historyEntry = await db.query.historyEntries.findFirst({
-			where: (h, { eq }) => eq(h.id, data.historyEntryId)
-		})
+		const [historyEntry] = await db
+			.select({ lorebookId: schema.lorebookEntries.lorebookId })
+			.from(schema.lorebookEntries)
+			.where(
+				and(
+					eq(schema.lorebookEntries.id, data.historyEntryId),
+					eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
+				)
+			)
 		if (!historyEntry || historyEntry.lorebookId !== data.lorebookId) {
 			throw new Error(
 				"History entry not found or does not belong to this lorebook."
@@ -487,15 +511,32 @@ export const sceneCompileHandler: Handler<
 		const userId = socket.user!.id
 
 		// Verify history entry ownership via lorebook
-		const historyEntry = await db.query.historyEntries.findFirst({
-			where: eq(schema.historyEntries.id, params.historyEntryId),
-			with: { lorebook: true }
-		})
-		if (
-			!historyEntry ||
-			(historyEntry as any).lorebook?.userId !== userId
-		) {
+		const [row] = await db
+			.select({
+				entry: schema.lorebookEntries,
+				lorebook: schema.lorebooks
+			})
+			.from(schema.lorebookEntries)
+			.innerJoin(
+				schema.lorebooks,
+				eq(schema.lorebooks.id, schema.lorebookEntries.lorebookId)
+			)
+			.where(
+				and(
+					eq(schema.lorebookEntries.id, params.historyEntryId),
+					eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
+				)
+			)
+		if (!row || row.lorebook.userId !== userId) {
 			throw new Error("History entry not found or access denied.")
+		}
+		// Narrowed to the dated type, which the `type_id` predicate above
+		// already guaranteed: `toEntryRow` returns the union of every declared
+		// shape, and reading a date off that union is exactly the mistake the
+		// branded type exists to refuse.
+		const historyEntry = {
+			...(toEntryRow(row.entry) as LorebookEntry<typeof HISTORY_TYPE_ID>),
+			lorebook: row.lorebook
 		}
 
 		// Fetch scenes for this history entry — defense-in-depth: also scope
@@ -506,7 +547,7 @@ export const sceneCompileHandler: Handler<
 		const scenes = await db.query.scenes.findMany({
 			where: and(
 				eq(schema.scenes.historyEntryId, params.historyEntryId),
-				eq(schema.scenes.lorebookId, (historyEntry as any).lorebookId)
+				eq(schema.scenes.lorebookId, historyEntry.lorebookId)
 			),
 			orderBy: asc(schema.scenes.id)
 		})
@@ -570,7 +611,7 @@ export const sceneCompileHandler: Handler<
 			)
 		const compileSampling = target.sampling
 
-		const lorebook = (historyEntry as any).lorebook
+		const lorebook = historyEntry.lorebook
 		const historyEntryDate = `Year ${historyEntry.year}${historyEntry.month ? `, Mo. ${historyEntry.month}` : ""}${historyEntry.day ? `, Day ${historyEntry.day}` : ""}`
 
 		const abortController = new AbortController()
@@ -579,7 +620,7 @@ export const sceneCompileHandler: Handler<
 				userId,
 				historyEntryId: params.historyEntryId,
 				historyEntryDate,
-				lorebookId: (historyEntry as any).lorebookId,
+				lorebookId: historyEntry.lorebookId,
 				lorebookLabel: lorebook.name
 			},
 			abortController
@@ -619,10 +660,12 @@ export const sceneCompileHandler: Handler<
 			if (abortController.signal.aborted) {
 				return null as any // already removed by activityStore.cancel() — nothing to update
 			}
+			// `activityError` rather than `err.message`: this record is served
+			// back to a non-admin by `activityStore.getFor`, and an adapter
+			// failure's words are the base URL and the model file.
 			activityStore.updateCompile(activityId, {
 				status: "error",
-				errorMessage:
-					err instanceof Error ? err.message : "Unknown error"
+				...activityError(err)
 			})
 			throw err
 		}
@@ -919,10 +962,10 @@ export const sceneProcessHandler: Handler<
 			if (abortController.signal.aborted) {
 				return null as any // already removed by activityStore.cancel() — nothing to update
 			}
+			// See the note on the identical write in the compile handler above.
 			activityStore.updateScene(activityId, {
 				status: "error",
-				errorMessage:
-					err instanceof Error ? err.message : "Unknown error"
+				...activityError(err)
 			})
 			throw err
 		}

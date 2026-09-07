@@ -123,6 +123,29 @@ const modalityAllows = (type: string, capability: CapabilityId): boolean =>
  *
  * A sentence rather than a throw because each dispatcher's failures carry its
  * own error class and callers key on those.
+ *
+ * ## It names no connection, and that is the whole design
+ *
+ * It used to open `"Studio" cannot do Image generation.` — one string feeding
+ * six sinks, four of which reach somebody who is not an administrator: the draft
+ * preview's error, all three dispatchers' error classes, `receipt.haltReason`,
+ * and the activity cards. Connections are invisible to non-admins
+ * (`connections/visibility.ts`), and a key-shaped projection cannot see a name
+ * inside a sentence, so the name had to leave the sentence.
+ *
+ * Not a second, redacted variant of the sentence — ONE sentence, safe wherever
+ * it lands. Two variants would need a reader identity this function has never
+ * had and cannot get (it is called from `resolveCapabilityTarget`, which judges
+ * a chain, not a person), and they would need to be kept in step forever. The
+ * identity a caller wants for an administrator travels as a FIELD instead:
+ * `connectionIdentity(connection)` under the key `connection`, which the
+ * projection already removes at every egress.
+ *
+ * The consequence to know about: this sentence is concatenated into larger
+ * strings at six sites and passes through two string-only contracts
+ * (`Error.message` and the SDK's `Receipt.haltReason`). Nothing downstream could
+ * still tell where a name had been, so composing it out later was never
+ * available — safe by construction is the only form that survives the journey.
  */
 export function capabilityRefusal(
 	connection: { name?: string | null; type: string; capabilities?: unknown },
@@ -164,8 +187,14 @@ export function capabilityRefusal(
 	// The capability in the words the connection screen showed, never its id:
 	// somebody who switched "Image generation" off has no way to connect
 	// `text->image` back to the toggle they touched.
+	//
+	// "This connection", never `connection.name` — see the header. It reads for
+	// both audiences: on an administrator's picker it means the row they just
+	// clicked, and everywhere else `resolveCapabilityTarget` appends the tier
+	// that chose it ("It is set in Admin → Defaults."), which is the half a
+	// person can actually act on.
 	return (
-		`"${connection.name}" cannot do ${capabilityLabel(capability)}. ` +
+		`This connection cannot do ${capabilityLabel(capability)}. ` +
 		`Enable it on the connection, or choose one that can.`
 	)
 }

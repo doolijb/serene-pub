@@ -14,6 +14,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest"
 import { sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import {
 	createTestDb,
 	createTestUser,
@@ -92,8 +93,8 @@ describe("migration 0091 — legacy cast conversion", () => {
 			.values({ name: "Legacy Book", userId: user.id })
 			.returning()
 		const [historyEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id }]))
 			.returning()
 		const [aria] = await testDb
 			.insert(schema.lorebookBindings)
@@ -185,8 +186,8 @@ describe("migration 0091 — legacy cast conversion", () => {
 			.values({ name: "Both Roles", userId: user.id })
 			.returning()
 		const [historyEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id }]))
 			.returning()
 		const [solo] = await testDb
 			.insert(schema.lorebookBindings)

@@ -744,6 +744,191 @@ describe("named configs", () => {
 })
 
 /**
+ * Admins define which configurations exist; everyone else chooses among them.
+ *
+ * R8, and the half of it that is easy to get wrong is the second clause. There
+ * is no owner column here and there never was, so "removing user ownership" is
+ * not a schema change — it is making the administrator's curation *binding*.
+ * `enabled` is that curation, and until this it was advisory in the panel path:
+ * every configuration was listed to everyone, and `selectNamedConfig` would
+ * store a choice of a withdrawn one without comment. The picker filter is not
+ * what protects it — a config id is a small integer arriving from the client —
+ * so the refusal is asserted separately from the listing.
+ */
+describe("the curated set", () => {
+	let specId: number
+	let withdrawn: number
+	let offered: number
+
+	beforeAll(async () => {
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		specId = spec.id
+
+		const [off] = await db
+			.insert(schema.pipelineConfigs)
+			.values({ specId, name: "Withdrawn", enabled: false })
+			.returning()
+		withdrawn = off.id
+		const [on] = await db
+			.insert(schema.pipelineConfigs)
+			.values({ specId, name: "On the menu", enabled: true })
+			.returning()
+		offered = on.id
+	}, 60_000)
+
+	it("does not list a withdrawn configuration to a non-admin", async () => {
+		const v = await view()
+		const ids = v.configs.map((c) => c.id)
+		expect(ids).toContain(offered)
+		expect(ids).not.toContain(withdrawn)
+	})
+
+	it("still lists it to an admin, marked, so switching one off is not deletion", async () => {
+		// An admin who withdrew a configuration and then could not find it
+		// would reasonably conclude they had deleted it.
+		const v = await view({ isAdmin: true, userId: adminId })
+		const row = v.configs.find((c) => c.id === withdrawn)
+		expect(row).toBeTruthy()
+		expect(row!.enabled).toBe(false)
+	})
+
+	it("refuses a non-admin who names a withdrawn configuration anyway", async () => {
+		// The id did not have to come from the list. This is the check that
+		// makes the switch a rule rather than a rendering decision.
+		await expect(
+			selectNamedConfig(
+				db as any,
+				RESPOND_SPEC_ID,
+				viewer({ sessionId }),
+				withdrawn,
+				"session"
+			)
+		).rejects.toThrow(OptionNotWritableError)
+
+		const rows = await db
+			.select()
+			.from(schema.pipelineConfigSelections)
+			.where(
+				and(
+					eq(schema.pipelineConfigSelections.scopeKind, "session"),
+					eq(schema.pipelineConfigSelections.scopeId, sessionId)
+				)
+			)
+		// Refused means nothing was written, not "written and then reported".
+		expect(rows.map((r) => r.configId)).not.toContain(withdrawn)
+	})
+
+	it("lets a non-admin choose an offered one for their own session", async () => {
+		// The other half of the ruling, and the one a permission change is
+		// most likely to break by accident: choosing is the verb people keep.
+		await selectNamedConfig(
+			db as any,
+			RESPOND_SPEC_ID,
+			viewer({ sessionId }),
+			offered,
+			"session"
+		)
+		const v = await view({ sessionId })
+		expect(v.selectedConfig).toEqual({
+			id: offered,
+			name: "On the menu",
+			source: "session"
+		})
+	})
+
+	it("lets an admin choose a withdrawn one, since it is their switch", async () => {
+		await selectNamedConfig(
+			db as any,
+			RESPOND_SPEC_ID,
+			viewer({ userId: adminId, isAdmin: true }),
+			withdrawn,
+			"instance"
+		)
+		const [row] = await db
+			.select()
+			.from(schema.pipelineConfigSelections)
+			.where(eq(schema.pipelineConfigSelections.scopeKind, "instance"))
+		expect(row.configId).toBe(withdrawn)
+	})
+
+	it("refuses a session-scope choice made from outside a session", async () => {
+		// It used to fall through to scope id 0 — a selection stored against a
+		// session that does not exist, resolved by nobody, reported as saved.
+		// A no-op that answers "done" is the failure the refusals here exist
+		// to prevent.
+		await expect(
+			selectNamedConfig(
+				db as any,
+				RESPOND_SPEC_ID,
+				viewer(),
+				offered,
+				"session"
+			)
+		).rejects.toThrow(OptionNotWritableError)
+
+		const rows = await db
+			.select()
+			.from(schema.pipelineConfigSelections)
+			.where(
+				and(
+					eq(schema.pipelineConfigSelections.scopeKind, "session"),
+					eq(schema.pipelineConfigSelections.scopeId, 0)
+				)
+			)
+		expect(rows).toHaveLength(0)
+	})
+})
+
+/**
+ * Choosing is offered where it can succeed, and stated where it cannot.
+ *
+ * `canSelectConfig` exists because the client cannot work this out: it knows
+ * neither the viewer's role nor the scope rule. Without it the Pipelines panel
+ * rendered a live dropdown for a non-admin standing outside a session, whose
+ * every use ended in "only an administrator chooses the configuration for
+ * everyone on this instance" — a control that would have worked for somebody
+ * else, which is worse than no control at all.
+ */
+describe("whether the selection is this viewer's to make", () => {
+	it("is false for a non-admin outside a session", async () => {
+		const v = await view()
+		expect(v.canSelectConfig).toBe(false)
+	})
+
+	it("is true inside a session they own", async () => {
+		const v = await view({ sessionId })
+		expect(v.canSelectConfig).toBe(true)
+	})
+
+	it("is true for an admin anywhere", async () => {
+		const v = await view({ userId: adminId, isAdmin: true })
+		expect(v.canSelectConfig).toBe(true)
+	})
+
+	it("agrees with what the write path actually accepts", async () => {
+		// The claim is not "the flag has a value" but "the flag and the
+		// refusal are the same rule". Two independent copies of a permission
+		// rule is how a screen ends up disagreeing with the server — the
+		// configuration named here is one the panel itself just offered, so
+		// nothing but the viewer's standing can be the reason it is refused.
+		const v = await view()
+		expect(v.canSelectConfig).toBe(false)
+		expect(v.configs.length).toBeGreaterThan(0)
+		await expect(
+			selectNamedConfig(
+				db as any,
+				RESPOND_SPEC_ID,
+				viewer(),
+				v.configs[0].id
+			)
+		).rejects.toThrow(OptionNotWritableError)
+	})
+})
+
+/**
  * An edit made in the builder belongs to the configuration it was made in.
  *
  * This is the seam that decides whether configurations are a real thing or a
@@ -902,96 +1087,6 @@ describe("configurations hold their own values", () => {
 				foreign.id
 			)
 		).rejects.toThrow(/different pipeline/i)
-	})
-})
-
-/**
- * `0115` keeps a gate that somebody turned on.
- *
- * `sync` and `async` are retired spellings. Reading them as `off` on upgrade is
- * the one outcome of this change that could let an unreviewed write land on an
- * install that had deliberately gated it — so both become `on`, and this is the
- * test that says so against rows written before the change rather than against
- * a fresh database, where the values cannot occur at all.
- */
-describe("0115 retires the third review position", () => {
-	const migration = async () =>
-		(await import("node:fs")).readFileSync(
-			"drizzle/0115_review_on_off.sql",
-			"utf8"
-		)
-
-	it("turns both retired spellings into 'on', in both tables", async () => {
-		const [spec] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
-		const [cfg] = await db
-			.insert(schema.pipelineConfigs)
-			.values({ specId: spec.id, name: "Review legacy" })
-			.returning()
-
-		// Session-scope rows: the only override scope 0140 leaves, and the 0115
-		// rewrite never keyed on scope — retired spellings are retired
-		// wherever they sit.
-		await db.insert(schema.pipelineNodeOverrides).values([
-			{
-				specId: spec.id,
-				scopeKind: "session",
-				scopeId: 4241,
-				nodeKey: "save",
-				slot: "settings",
-				path: "review",
-				value: "sync" as any
-			},
-			{
-				specId: spec.id,
-				scopeKind: "session",
-				scopeId: 4242,
-				nodeKey: "generate",
-				slot: "settings",
-				path: "review",
-				value: "async" as any
-			},
-			// A gate deliberately left off stays off.
-			{
-				specId: spec.id,
-				scopeKind: "session",
-				scopeId: 4243,
-				nodeKey: "generate",
-				slot: "settings",
-				path: "review",
-				value: "off" as any
-			}
-		])
-		await db.insert(schema.pipelineConfigValues).values({
-			configId: cfg.id,
-			nodeKey: "save",
-			slot: "settings",
-			path: "review",
-			value: "async" as any
-		})
-
-		for (const stmt of (await migration()).split(
-			"--> statement-breakpoint"
-		))
-			await db.execute(stmt)
-
-		const overrides = await db
-			.select()
-			.from(schema.pipelineNodeOverrides)
-			.where(eq(schema.pipelineNodeOverrides.path, "review"))
-		const values = overrides.map((o: any) => o.value).sort()
-		expect(values).toEqual(["off", "on", "on"])
-
-		const [inConfig] = await db
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(eq(schema.pipelineConfigValues.configId, cfg.id))
-		expect(
-			inConfig.value,
-			"a configuration's own review value was left behind"
-		).toBe("on")
 	})
 })
 
@@ -1302,17 +1397,38 @@ describe("options arrive in the order they were declared", () => {
 			"Context split",
 			"Most entries per source",
 			"Always keep at least",
+			// The three grouped mechanism strengths (migration 0201), declared
+			// **ahead** of the nine and rendering there — the altitude a reader
+			// starts at, with the individual signals under them for anyone who
+			// wants that far in. Its own control type, not a share: raising one
+			// takes nothing from the others.
+			"How entries are found",
 			// The signal-weight matrix (migration 0146), in the transposed
-			// declaration's own order — nine per-source rows, advanced only.
+			// declaration's own order — per-source rows, advanced only. Ten
+			// since 0199 added `signalProximity`, which is declared between
+			// density and priority and therefore renders there; eleven since
+			// 0201 added `signalSemantic`, declared beside the entity signal it
+			// sits with in the "how entries are found" grouping; twelve since
+			// 0202 added `signalEntityVector`, declared after it and in the
+			// same grouping.
 			"Keyword match",
 			"Name mentioned",
 			"Shared entities",
+			"Similar meaning",
+			"Called by a description",
 			"Distinctive words",
 			"Recently referenced",
 			"Recency",
 			"Same scene",
 			"Information density",
-			"Author priority"
+			"Keywords close together",
+			"Author priority",
+			// The allocation switch (migration 0196), declared after the
+			// matrix and therefore rendered after it. Last rather than beside
+			// "Context split" because it is spread onto this type alone, after
+			// the signal fields — `rankSlots` is shared with
+			// `rank-by-recency`, which does not run this selection.
+			"Let the best entries lead"
 		])
 	})
 

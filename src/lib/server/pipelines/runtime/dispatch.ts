@@ -23,6 +23,33 @@
  * gate would show a perfectly innocent-looking node.
  *
  * What comes back is the completion, whether it was aborted, and token counts.
+ *
+ * ## Attachments: references in, bytes out, resolved HERE
+ *
+ * A file travels the graph as a `MediaRef` — a uuid — because bytes on a port
+ * would be copied into the receipt, the review payload and every node in
+ * between (media.ts: "a reference, never bytes"). An adapter needs the opposite:
+ * the bytes, in order, with a mime. Something has to be the seam, and it is this
+ * module, for three reasons that all point the same way:
+ *
+ *  - **The database.** Loading a ref needs `$lib/server/media`, which needs the
+ *    db and the image codecs. Adapters are lazily imported so that graph never
+ *    reaches server boot (`importBoundary.test.ts`), and `BaseConnectionAdapter`
+ *    is imported freely by ordinary server modules — putting the media module in
+ *    its import graph would drag the db behind every one of them.
+ *  - **Which database.** `dispatchGeneration` is handed a `db` on purpose (see
+ *    `DispatchRequest.db`): an adapter has no db handle at all and would have to
+ *    reach for the global one, which is exactly the bug that param exists to
+ *    prevent. Resolution belongs where the run's own database is known.
+ *  - **Access.** A uuid is unguessable, but "unguessable" is not an access rule.
+ *    A spec that could name any uuid could send another user's private image to
+ *    a third-party API — so every reference is checked against the run's session
+ *    and user, the same rule the host applies when posting media into a message.
+ *    An adapter knows nothing about users and could not make that check.
+ *
+ * The symmetry with `dispatchImage` is deliberate: that one takes bytes from a
+ * backend and puts a reference on the port; this one takes a reference off the
+ * port and gives bytes to a backend. Neither lets bytes travel the graph.
  */
 
 import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
@@ -31,8 +58,26 @@ import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
+import { capabilityRefusal } from "$lib/server/pipelines/runtime/capabilityGuard"
+import type { AttachmentInput } from "$lib/server/adapters/attachments"
+import type { MediaRef } from "@serene-pub/sdk"
+import {
+	ComposedError,
+	connectionIdentity
+} from "$lib/server/connections/visibility"
+import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
 
-export class DispatchError extends Error {}
+/**
+ * A dispatch failure, and a marker: this sentence is ours.
+ *
+ * `ComposedError` is what tells `persistGenerationErrorRow` that the message may
+ * be stored and shown to anybody — it names no connection. An adapter's own
+ * error, which names the base URL and the model file, is a plain `Error` and is
+ * replaced there instead. The optional second argument is the identity the
+ * failure was about, carried as a field so the projection can remove it for
+ * everyone who is not an administrator.
+ */
+export class DispatchError extends ComposedError {}
 
 /** Just the query surface this module needs, so any caller's db will do. */
 export interface DbLike {
@@ -71,6 +116,12 @@ export interface DispatchRequest {
 	 * there for the primary path.
 	 */
 	connectionId?: number | null
+	/**
+	 * The files travelling with this request, as the graph carries them:
+	 * references, in the order they are to be sent. Resolved to bytes below —
+	 * see the header for why that happens here and nowhere lower.
+	 */
+	attachments?: readonly (MediaRef | string)[]
 	samplingId?: number | null
 	/** Called with each chunk when the adapter streams. */
 	onChunk?: (chunk: string) => void
@@ -82,7 +133,16 @@ export interface DispatchResult {
 	text: string
 	thinking?: string
 	isAborted: boolean
-	/** Which adapter answered, by connection type — a label, not a handle. */
+	/**
+	 * Which adapter answered, by connection type — a label, not a handle.
+	 *
+	 * ⚠ Server-side only. The connection type names the administrator's compute,
+	 * so it may not be emitted as a bare string: the binding that consumes this
+	 * puts it on the node output under `connection`, which
+	 * `withoutConnectionIdentity` removes for everyone who is not an
+	 * administrator. A caller that interpolates it into a sentence has written a
+	 * leak no projection can find.
+	 */
 	via: string
 }
 
@@ -145,8 +205,31 @@ export function toCompiledPrompt(
 	connection: { promptFormat?: string | null },
 	meta: { currentCharacterId?: number | null; messageCount?: number } = {}
 ): any {
+	/**
+	 * ⚠ **`blocks` is what tells Assemble's output apart from a compiled one**,
+	 * and without it the split path silently loses its whole `meta`.
+	 *
+	 * Assemble publishes `{blocks, budget, rendered, messages, …}` — and in
+	 * split-session format `messages` is a real array, so the "already looks
+	 * compiled" test below matched Assemble's OWN payload and returned it
+	 * untouched. The caller then got an allocation record where it expected
+	 * `{prompt, messages, meta}`: `sessions.ts`'s token count reads
+	 * `meta.tokenCounts` off it, `generateResponse.ts` hands it to an adapter.
+	 * Both would have read `undefined` and reported it as a model fault.
+	 *
+	 * It was unreachable while nothing ever produced `messages` — the prompt
+	 * format never reached the render, so every payload was a flat string.
+	 * Restoring that wire is what makes this line load-bearing.
+	 *
+	 * An allocation record is exactly what carries a `blocks` ARRAY (the SDK
+	 * spells the same test `isAllocatedContext`), and a plugin handing over its
+	 * own finished wire format carries none — so the escape hatch this test
+	 * exists for is untouched.
+	 */
+	const isAllocation = Array.isArray(payload?.blocks)
 	if (
 		payload &&
+		!isAllocation &&
 		(payload.prompt !== undefined || payload.messages !== undefined)
 	)
 		return payload
@@ -164,7 +247,29 @@ export function toCompiledPrompt(
 		prompt: rendered,
 		messages,
 		meta: {
-			promptFormat: connection.promptFormat ?? "vicuna",
+			/**
+			 * What the render ACTUALLY used, and only then what the connection
+			 * says.
+			 *
+			 * This read `connection.promptFormat ?? "vicuna"` — a second
+			 * resolution of a question Assemble had already answered, and for
+			 * the whole of 0.6 to date an outright lie: nothing supplied the
+			 * format to the render, so every prompt went out Vicuna while this
+			 * line stamped the receipt with the connection's real format. A
+			 * reader debugging a ChatML model saw "chatml" on a prompt wrapped
+			 * in `### Assistant:`.
+			 *
+			 * Assemble now puts the value it rendered with on its own payload,
+			 * so the receipt reports a fact rather than re-deriving one. The
+			 * connection stays as the fallback for a payload that carries no
+			 * such field — a plugin's own assembler, or a stored receipt
+			 * replayed from before this existed.
+			 *
+			 * `promptFormatOf`, not `??`, at both ends: see its note.
+			 */
+			promptFormat: promptFormatOf(
+				payload?.promptFormat || connection.promptFormat
+			),
 			// Null rather than invented. The pipeline knows which template *engine*
 			// rendered this but not the config's display name, and a plausible-looking
 			// wrong name in the debug panel is worse than an honest blank.
@@ -237,6 +342,98 @@ const idsOf = (payload: any, included: boolean): number[] =>
 		.map((b: any) => b.id)
 		.filter((id: unknown): id is number => typeof id === "number")
 
+/**
+ * Media references → the bytes an adapter can put on a wire, in order.
+ *
+ * The read is the ORIGINAL (falling back to the display form when the original
+ * has been culled — `readMedia`'s own default). The original is the highest
+ * fidelity there is, and whether the provider will take that format is the
+ * attachment engine's question to answer: it negotiates against what the
+ * connection's type declares and converts only if it must. Asking for the
+ * display variant instead would hand every backend a re-encode nobody asked
+ * for, including the ones that would have taken the file as it is.
+ *
+ * ⚠ A reference that does not resolve is FATAL here, unlike the host's
+ * `mediaParts`, which skips one. The difference is what is at stake at each
+ * point: there, the images were already rendered and stored and failing the
+ * write would throw the message away; here, nothing has been sent yet, and a
+ * request that quietly went out without one of its files is indistinguishable
+ * from a model ignoring it — the failure the whole attachment path is arranged
+ * to prevent.
+ *
+ * `db: any` for the same reason `mediaParts` takes one: the media module wants
+ * the real drizzle type and every caller here holds a structural subset of it.
+ */
+export async function resolveAttachments(
+	db: any,
+	refs: readonly unknown[],
+	scope: { sessionId: number; userId?: number }
+): Promise<AttachmentInput[]> {
+	if (!refs.length) return []
+
+	// Imported HERE rather than at the top of the file: `$lib/server/media`
+	// carries the db and the image codecs, and a run with no attachments — which
+	// is every run until something puts refs on the port — should pay nothing
+	// for them. Same shape the host uses for its own occasional imports.
+	const { getMediaByUuid, readMedia } = await import("$lib/server/media")
+
+	const inputs: AttachmentInput[] = []
+	// Sequential and in list order, deliberately: the order is the contract, the
+	// first bad reference is the one worth reporting, and thirty attachments are
+	// not thirty concurrent disk reads.
+	for (const [index, ref] of refs.entries()) {
+		const at = `attachment ${index + 1}`
+		const uuid =
+			typeof ref === "string"
+				? ref
+				: typeof (ref as Record<string, unknown>)?.uuid === "string"
+					? ((ref as Record<string, string>).uuid as string)
+					: null
+		if (!uuid)
+			throw new DispatchError(
+				`${at} is not a media reference — it carries no uuid, so there is nothing to load and ` +
+					`nothing to send. A media port carries references; bytes never travel the graph.`
+			)
+
+		const file = await getMediaByUuid(db, uuid)
+		if (!file)
+			throw new DispatchError(
+				`${at} names media ${uuid}, which this instance no longer has. It was deleted, or it was ` +
+					`never here. The request is not sent without it.`
+			)
+
+		// The same ownership rule the host applies to media it posts into a
+		// message, and for a sharper reason: this file is about to leave the
+		// instance for a third-party API.
+		const ownedHere =
+			(file.sessionId != null && file.sessionId === scope.sessionId) ||
+			(scope.userId != null && file.userId === scope.userId)
+		if (!ownedHere)
+			throw new DispatchError(
+				`${at} names media ${uuid}, which belongs to neither this session nor the user this run is ` +
+					`acting as, so it is not sent to a model on their behalf.`
+			)
+
+		const read = await readMedia(db, file.id)
+		if (!read)
+			throw new DispatchError(
+				`${at} names media ${uuid}, whose row exists but whose bytes could not be read. The request is ` +
+					`not sent without it.`
+			)
+
+		inputs.push({
+			bytes: read.bytes,
+			// What the stored representation ACTUALLY is, from the variant that
+			// was read — not the file row's guess and not the ref's `mime` hint,
+			// which describes the display variant and may not be what came back.
+			mime: read.mime,
+			...(file.filename ? { filename: file.filename } : {})
+		})
+	}
+
+	return inputs
+}
+
 export async function dispatchGeneration(
 	request: DispatchRequest
 ): Promise<DispatchResult> {
@@ -289,7 +486,8 @@ export async function dispatchGeneration(
 	if (!connection)
 		throw new DispatchError(
 			resolved.problem?.message ??
-				"no AI connection is configured, so there is nothing to send this prompt to."
+				"no AI connection is configured, so there is nothing to send this prompt to.",
+			resolved.problem?.connection
 		)
 
 	const { Adapter } = await getConnectionAdapter(connection.type)
@@ -318,6 +516,49 @@ export async function dispatchGeneration(
 			currentCharacterId: request.currentCharacterId ?? null
 		})
 	)
+
+	// The files this request carries, references turned into bytes — see the
+	// header for why that is this module's job.
+	const attachments = await resolveAttachments(
+		request.db,
+		request.attachments ?? [],
+		{ sessionId: request.sessionId, userId: request.userId }
+	)
+	if (attachments.length) {
+		// Two different questions, asked in the order they matter. First: has
+		// somebody switched vision OFF for this connection? That is the user's
+		// own setting, and `capabilityRefusal` is the app's single answer to it —
+		// permissive on a row nobody has determined yet, so an untested
+		// connection is not refused, and phrased in the words the connection
+		// screen showed rather than in a transform id.
+		const refusal = capabilityRefusal(connection, "text+image->text")
+		if (refusal)
+			throw new DispatchError(
+				`${refusal} This request carries ${attachments.length} file${attachments.length === 1 ? "" : "s"}, ` +
+					`which would have gone out unseen.`,
+				connectionIdentity(connection)
+			)
+
+		// ⚠ Refused, never sent anyway. Most connection types whose API format
+		// has vision have no adapter code that sends it, so handing the files
+		// over would drop them silently — and a reply about files the model
+		// never saw reads as the model ignoring them, not as this app losing
+		// them. `consumesAttachments` is the adapter's own answer to "would I
+		// send these", which is a different question from what the manifest
+		// declares a connection may do.
+		if (!adapter.consumesAttachments)
+			// The connection TYPE is identity too (it names the administrator's
+			// compute), so it rides in the field rather than in the sentence —
+			// same rule, same key, one place that removes it.
+			throw new DispatchError(
+				`this request carries ${attachments.length} file${attachments.length === 1 ? "" : "s"}, and the ` +
+					`configured adapter has no code that sends them. It would go out as text alone, and a reply ` +
+					`about files the model never received is indistinguishable from a model ignoring them — so it is ` +
+					`refused instead. Bind a connection whose adapter sends attachments.`,
+				connectionIdentity(connection)
+			)
+		adapter.withAttachments(attachments)
+	}
 
 	// An abort has to reach the adapter's own flag; the signal alone would stop
 	// this function while the request kept running against the provider.

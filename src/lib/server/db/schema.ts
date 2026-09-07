@@ -16,7 +16,10 @@ import {
 	varchar,
 	uuid,
 	check,
-	primaryKey
+	primaryKey,
+	jsonb,
+	unique,
+	foreignKey
 } from "drizzle-orm/pg-core"
 
 // ─── Enumerated value types ───────────────────────────────────────────────────
@@ -27,6 +30,7 @@ export type RelationshipVisibility = "secret" | "acknowledged" | "public"
 import { GroupReplyStrategies } from "../../shared/constants/GroupReplyStrategies"
 import { SessionCharacterVisibility } from "../../shared/constants/SessionCharacterVisibility"
 import { SessionTypes } from "../../shared/constants/SessionTypes"
+import type { ConnectionIdentity } from "../../shared/connections/identity"
 import type {
 	TunnelMode,
 	TunnelProvider,
@@ -155,6 +159,21 @@ export const userSettings = pgTable(
 		charaVaultIncludeNsfw: boolean("chara_vault_include_nsfw")
 			.notNull()
 			.default(false),
+		/**
+		 * This user's language (R5). ISO 639-1, from `LANGUAGES`.
+		 *
+		 * **Nullable, and that is the whole design.** NULL is not "English" —
+		 * it is *"whatever the instance's default is"*, so an admin who changes
+		 * `system_settings.default_language` moves every user who never made a
+		 * choice, and nobody who did. A NOT NULL column defaulting to `'en'`
+		 * would have written an explicit English preference for every existing
+		 * account at migration time, permanently pinning them away from the
+		 * server default they were supposed to inherit.
+		 *
+		 * Resolution lives in `$lib/server/i18n`, never inline: this column is
+		 * one of two inputs and reading it alone gives the wrong answer.
+		 */
+		language: text("language"),
 		/**
 		 * Off means never keep a derived form on disk — re-derive on every
 		 * request (0182).
@@ -1057,9 +1076,19 @@ export const lorebooks = pgTable(
 )
 
 export const lorebooksRelations = relations(lorebooks, ({ many, one }) => ({
-	worldLoreEntries: many(worldLoreEntries),
-	characterLoreEntries: many(characterLoreEntries),
-	historyEntries: many(historyEntries),
+	/**
+	 * Every entry of every declared type.
+	 *
+	 * ⚠ The three relations this replaces — `worldLoreEntries`,
+	 * `characterLoreEntries`, `historyEntries` — are gone rather than
+	 * repointed. A Drizzle relation is a table, not a table plus a predicate,
+	 * so a repointed `worldLoreEntries` would have returned history too and
+	 * every `with: { worldLoreEntries: true }` in the codebase would have gone
+	 * on compiling while quietly meaning something else. Removing them makes
+	 * each of those a type error instead, which is the only way a rename of
+	 * this size is safe.
+	 */
+	lorebookEntries: many(lorebookEntries),
 	scenes: many(scenes),
 	user: one(users, {
 		fields: [lorebooks.userId],
@@ -1090,7 +1119,7 @@ export const lorebookBindings = pgTable(
 			onDelete: "set null"
 		}),
 		historyEntryId: integer("history_entry_id").references(
-			() => historyEntries.id,
+			(): AnyPgColumn => lorebookEntries.id,
 			{ onDelete: "set null" }
 		),
 		// Display name — kept in sync with the bound character/persona's own
@@ -1171,7 +1200,8 @@ export const lorebookBindingsRelations = relations(
 			fields: [lorebookBindings.personaId],
 			references: [personas.id]
 		}),
-		characterLoreEntries: many(characterLoreEntries),
+		/** Entries anchored to this binding — character lore's privacy anchor. */
+		anchoredEntries: many(lorebookEntries),
 		/** Scenes this binding appears in, via the scene_characters join. */
 		sceneAppearances: many(sceneCharacters),
 		// ── Narrative-graph relations (merged in from the former
@@ -1180,9 +1210,9 @@ export const lorebookBindingsRelations = relations(
 			fields: [lorebookBindings.sceneId],
 			references: [scenes.id]
 		}),
-		historyEntry: one(historyEntries, {
+		historyEntry: one(lorebookEntries, {
 			fields: [lorebookBindings.historyEntryId],
-			references: [historyEntries.id]
+			references: [lorebookEntries.id]
 		}),
 		parentNode: one(lorebookBindings, {
 			fields: [lorebookBindings.parentNodeId],
@@ -1341,18 +1371,19 @@ export const worldLoreEntries = pgTable(
 		category: text("category"),
 		keys: text("keys").notNull().default(""),
 		/**
-		 * How this entry may be retrieved (13 §10a / DECOMPOSITION §4).
+		 * ⚠ **Dead residue on a legacy table.**
 		 *
-		 * `keyword` — only the keyword scan surfaces it.
-		 * `rag` — vector search surfaces it, **falling back to keyword when no
-		 *   embeddings are available**, because the alternative is retrieving
-		 *   nothing and reading as "the bot forgot my lore".
-		 * `both` — both arms may surface it and the combined ranker decides.
+		 * `keyword` / `rag` / `both`, NULL meaning `rag`. Nothing has read this
+		 * since the entries collapse, and its live counterpart on
+		 * `lorebook_entries` is gone — see the tombstone there for why the gate
+		 * went and what its successor would be.
 		 *
-		 * NULL means `rag`, the default. Nullable rather than defaulted so an
-		 * entry that has never been touched is distinguishable from one a user
-		 * deliberately set to the default — which is what makes a future change
-		 * of default safe to apply to the first group and not the second.
+		 * It used to be kept because `0188_lorebook_entries.sql` selected it by
+		 * name. **That reason expired**: every migration from `0094` up was
+		 * squashed into `0094_baseline_0_6` (2026-09-06) and the test replaying
+		 * that backfill went with it. The column survives only because this
+		 * whole table does; it goes when the three legacy source tables are
+		 * dropped, not before, and dropping it alone buys nothing.
 		 */
 		retrievalStrategy: text("retrieval_strategy"),
 		/**
@@ -1373,9 +1404,9 @@ export const worldLoreEntries = pgTable(
 		 * `0` is the conversation only: never dragged in by another entry.
 		 * NULL is no opinion, and the query node's `maxRecursionDepth` decides
 		 * — which is what makes turning recursion on for a whole lorebook one
-		 * setting rather than several hundred. Nullable for the same reason
-		 * `retrievalStrategy` is: an entry nobody has ruled on has to stay
-		 * distinguishable from one somebody deliberately set to the default.
+		 * setting rather than several hundred. Nullable so an entry nobody has
+		 * ruled on stays distinguishable from one somebody deliberately set to
+		 * the default.
 		 */
 		recursionDepth: integer("recursion_depth"),
 		content: text("content").notNull().default(""),
@@ -1427,18 +1458,19 @@ export const characterLoreEntries = pgTable(
 		name: text("name").notNull(),
 		keys: text("keys").notNull().default(""),
 		/**
-		 * How this entry may be retrieved (13 §10a / DECOMPOSITION §4).
+		 * ⚠ **Dead residue on a legacy table.**
 		 *
-		 * `keyword` — only the keyword scan surfaces it.
-		 * `rag` — vector search surfaces it, **falling back to keyword when no
-		 *   embeddings are available**, because the alternative is retrieving
-		 *   nothing and reading as "the bot forgot my lore".
-		 * `both` — both arms may surface it and the combined ranker decides.
+		 * `keyword` / `rag` / `both`, NULL meaning `rag`. Nothing has read this
+		 * since the entries collapse, and its live counterpart on
+		 * `lorebook_entries` is gone — see the tombstone there for why the gate
+		 * went and what its successor would be.
 		 *
-		 * NULL means `rag`, the default. Nullable rather than defaulted so an
-		 * entry that has never been touched is distinguishable from one a user
-		 * deliberately set to the default — which is what makes a future change
-		 * of default safe to apply to the first group and not the second.
+		 * It used to be kept because `0188_lorebook_entries.sql` selected it by
+		 * name. **That reason expired**: every migration from `0094` up was
+		 * squashed into `0094_baseline_0_6` (2026-09-06) and the test replaying
+		 * that backfill went with it. The column survives only because this
+		 * whole table does; it goes when the three legacy source tables are
+		 * dropped, not before, and dropping it alone buys nothing.
 		 */
 		retrievalStrategy: text("retrieval_strategy"),
 		/**
@@ -1459,9 +1491,9 @@ export const characterLoreEntries = pgTable(
 		 * `0` is the conversation only: never dragged in by another entry.
 		 * NULL is no opinion, and the query node's `maxRecursionDepth` decides
 		 * — which is what makes turning recursion on for a whole lorebook one
-		 * setting rather than several hundred. Nullable for the same reason
-		 * `retrievalStrategy` is: an entry nobody has ruled on has to stay
-		 * distinguishable from one somebody deliberately set to the default.
+		 * setting rather than several hundred. Nullable so an entry nobody has
+		 * ruled on stays distinguishable from one somebody deliberately set to
+		 * the default.
 		 */
 		recursionDepth: integer("recursion_depth"),
 		content: text("content").notNull().default(""),
@@ -1515,18 +1547,19 @@ export const historyEntries = pgTable(
 		day: integer("day"), // Default to 1
 		keys: text("keys").notNull().default(""),
 		/**
-		 * How this entry may be retrieved (13 §10a / DECOMPOSITION §4).
+		 * ⚠ **Dead residue on a legacy table.**
 		 *
-		 * `keyword` — only the keyword scan surfaces it.
-		 * `rag` — vector search surfaces it, **falling back to keyword when no
-		 *   embeddings are available**, because the alternative is retrieving
-		 *   nothing and reading as "the bot forgot my lore".
-		 * `both` — both arms may surface it and the combined ranker decides.
+		 * `keyword` / `rag` / `both`, NULL meaning `rag`. Nothing has read this
+		 * since the entries collapse, and its live counterpart on
+		 * `lorebook_entries` is gone — see the tombstone there for why the gate
+		 * went and what its successor would be.
 		 *
-		 * NULL means `rag`, the default. Nullable rather than defaulted so an
-		 * entry that has never been touched is distinguishable from one a user
-		 * deliberately set to the default — which is what makes a future change
-		 * of default safe to apply to the first group and not the second.
+		 * It used to be kept because `0188_lorebook_entries.sql` selected it by
+		 * name. **That reason expired**: every migration from `0094` up was
+		 * squashed into `0094_baseline_0_6` (2026-09-06) and the test replaying
+		 * that backfill went with it. The column survives only because this
+		 * whole table does; it goes when the three legacy source tables are
+		 * dropped, not before, and dropping it alone buys nothing.
 		 */
 		retrievalStrategy: text("retrieval_strategy"),
 		/**
@@ -1547,9 +1580,9 @@ export const historyEntries = pgTable(
 		 * `0` is the conversation only: never dragged in by another entry.
 		 * NULL is no opinion, and the query node's `maxRecursionDepth` decides
 		 * — which is what makes turning recursion on for a whole lorebook one
-		 * setting rather than several hundred. Nullable for the same reason
-		 * `retrievalStrategy` is: an entry nobody has ruled on has to stay
-		 * distinguishable from one somebody deliberately set to the default.
+		 * setting rather than several hundred. Nullable so an entry nobody has
+		 * ruled on stays distinguishable from one somebody deliberately set to
+		 * the default.
 		 */
 		recursionDepth: integer("recursion_depth"),
 		content: text("content").notNull().default(""),
@@ -1576,16 +1609,13 @@ export const historyEntries = pgTable(
 	(table) => [index("history_entries_lorebook_id_idx").on(table.lorebookId)]
 )
 
-export const historyEntriesRelations = relations(
-	historyEntries,
-	({ one, many }) => ({
-		lorebook: one(lorebooks, {
-			fields: [historyEntries.lorebookId],
-			references: [lorebooks.id]
-		}),
-		scenes: many(scenes)
+export const historyEntriesRelations = relations(historyEntries, ({ one }) => ({
+	lorebook: one(lorebooks, {
+		fields: [historyEntries.lorebookId],
+		references: [lorebooks.id]
 	})
-)
+	// `scenes` moved to `lorebookEntriesRelations` with the FK it described.
+}))
 
 export const tags = pgTable(
 	"tags",
@@ -2010,6 +2040,19 @@ export const sessionMessages = pgTable(
 			onDelete: "set null"
 		}), // nullable
 		role: text("role").notNull(), // 'user', 'character', 'system', etc
+		/**
+		 * Filter lane within a session (20 §7, R6) — mirrored to
+		 * `messages.channel`, which this row is now authoritative for.
+		 *
+		 * Every message ever written before 0200 is on `main`, and every genre
+		 * that declares no extra lanes keeps writing there, so a history read
+		 * scoped to `main` returns exactly what an unscoped read returned. The
+		 * column exists on the legacy table because the legacy table is what
+		 * every prompt-facing read still selects from: scoping the *mirror*
+		 * would have meant filtering a limited window through a second table,
+		 * which is both a join per read and the wrong window.
+		 */
+		channel: text("channel").notNull().default("main"),
 		// True for a manually-triggered Narrator response (narration/environment
 		// flavor, not a character) — characterId/personaId stay null, role stays
 		// "assistant" so existing history-building code keeps including it.
@@ -2041,7 +2084,17 @@ export const sessionMessages = pgTable(
 		}>(), // JSON for extra info
 		isGenerating: boolean("is_generating").notNull().default(false), // 1 if processing, 0 otherwise
 		generationStage: text("generation_stage"), // 'queued' | 'loading' | 'generating' | null; only meaningful while isGenerating
-		error: json("error").$type<{ message: string; code?: string } | null>(),
+		// `connection` is connection identity — see
+		// `$lib/server/connections/visibility.ts`. It is written here rather than
+		// into `message` because this row is RE-SERVED on every reload, and only a
+		// key can be taken away from a non-admin on the way out; a name inside the
+		// sentence would be re-served forever. `persistGenerationErrorRow` is the
+		// only writer.
+		error: json("error").$type<{
+			message: string
+			code?: string
+			connection?: ConnectionIdentity
+		} | null>(),
 		queueItemId: text("queue_item_id"), // UUID of the current llmQueue item, nullable
 		isHidden: boolean("is_hidden").notNull().default(false), // Whether this message is processed or not
 		debugMeta: json("debug_meta").$type<Record<string, any>>(),
@@ -2050,7 +2103,16 @@ export const sessionMessages = pgTable(
 		vectorizedAt: timestamp("vectorized_at")
 	},
 	// The single hottest query in the app — every session load filters by this.
-	(table) => [index("session_messages_session_id_idx").on(table.sessionId)]
+	(table) => [
+		index("session_messages_session_id_idx").on(table.sessionId),
+		// The channel-scoped read (20 §7). Redundant with the above while every
+		// session has one lane, and the reason a lane can be added later
+		// without the read degrading to a filter over the whole session.
+		index("session_messages_session_channel_idx").on(
+			table.sessionId,
+			table.channel
+		)
+	]
 )
 
 export const sessionMessagesRelations = relations(
@@ -2100,7 +2162,13 @@ export const messages = pgTable(
 		sessionId: integer("session_id")
 			.notNull()
 			.references(() => sessions.id, { onDelete: "cascade" }),
-		/** Filter lane within a session; the mode declares the set (20 §7). */
+		/**
+		 * Filter lane within a session; the genre declares the set (20 §7).
+		 *
+		 * ⚠ **Mirrored from `session_messages.channel` since 0200**, which is
+		 * where the prompt-facing reads select from and therefore where the
+		 * lane has to live. The store is the single writer of both.
+		 */
 		channel: text("channel").notNull().default("main"),
 		/** Namespaced activity kind — `core:chat`, `core:narration`, a plugin's. */
 		kind: text("kind").notNull().default("core:chat"),
@@ -2125,7 +2193,17 @@ export const messages = pgTable(
 		role: text("role").notNull(),
 		/** Lifecycle of the *latest* step; earlier steps are frozen-settled. */
 		status: text("status").notNull().default("settled"),
-		error: json("error").$type<{ message: string; code?: string } | null>(),
+		// `connection` is connection identity — see
+		// `$lib/server/connections/visibility.ts`. It is written here rather than
+		// into `message` because this row is RE-SERVED on every reload, and only a
+		// key can be taken away from a non-admin on the way out; a name inside the
+		// sentence would be re-served forever. `persistGenerationErrorRow` is the
+		// only writer.
+		error: json("error").$type<{
+			message: string
+			code?: string
+			connection?: ConnectionIdentity
+		} | null>(),
 		/** Which revision shows, per step — `{"0": 1}`. See the freeze rule. */
 		activeRevisions: json("active_revisions")
 			.notNull()
@@ -2887,7 +2965,54 @@ export const systemSettings = pgTable("system_settings", {
 	 */
 	contextTemplatesMigrated: boolean("context_templates_migrated")
 		.notNull()
-		.default(false)
+		.default(false),
+	/**
+	 * The instance's language (R5) — the admin's choice at setup, and the value
+	 * every user who has not picked one of their own inherits.
+	 *
+	 * NOT NULL with an English default, unlike `user_settings.language`, and
+	 * the asymmetry is deliberate: this is the bottom of the resolution chain,
+	 * so it is the one place an answer must always exist. See that column for
+	 * why the *user* end must be able to say "unset".
+	 */
+	defaultLanguage: text("default_language").notNull().default("en"),
+	/**
+	 * Whether the server may call an outside translation service to fill in UI
+	 * strings it has no translation for.
+	 *
+	 * **Off by default, and it stays off until an admin turns it on.** Turning
+	 * it on is a decision to send this app's *interface strings* — never
+	 * session content, characters or lore; see `server/i18n/translate.ts` for
+	 * what is actually sent — to whichever engine is configured. On a
+	 * self-hosted install that is a network egress an operator may not want, so
+	 * it is not something an upgrade may switch on for them.
+	 *
+	 * Setting the language to English needs none of this: English is the source
+	 * language, so nothing is ever translated and nothing is ever sent.
+	 */
+	autoTranslateEnabled: boolean("auto_translate_enabled")
+		.notNull()
+		.default(false),
+	/**
+	 * Which engine `translate` uses. `google` (keyless) or `libre`.
+	 *
+	 * `libre` plus `autoTranslateEndpoint` is the answer for an operator who
+	 * wants translation without a third party: point it at their own
+	 * LibreTranslate and nothing leaves the network.
+	 *
+	 * The engines needing an API key (`deepl`, `yandex`) are deliberately not
+	 * offered. A key is a secret, and a secret column is an encryption scheme,
+	 * a never-send-to-client exclusion and a rotation story — none of which
+	 * this lane built, and all of which a half-done version would imply.
+	 */
+	autoTranslateEngine: text("auto_translate_engine")
+		.notNull()
+		.default("google"),
+	/**
+	 * Base URL for the `libre` engine. NULL means the library's public default.
+	 * Ignored by the `google` engine, which has no configurable endpoint.
+	 */
+	autoTranslateEndpoint: text("auto_translate_endpoint")
 })
 
 export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
@@ -2923,6 +3048,60 @@ export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
 		references: [graphBuildConfigs.id]
 	})
 }))
+
+/**
+ * Machine-translated UI strings, cached forever (R5).
+ *
+ * ## Why a table and not a file
+ *
+ * The auto-translation path has no catalog to author against: a source string
+ * is discovered when a component first renders it, which means the set of
+ * strings is only fully known at runtime and grows as the UI does. So the cache
+ * has to be writable at runtime, and it has to be shared — a second user
+ * opening the same screen must not pay for the same translation again.
+ *
+ * ## Why it never expires
+ *
+ * A row keys on the exact source text. Editing an English string in a component
+ * changes the key, so the old row is simply never looked up again and the new
+ * text is translated on first render. There is no staleness to invalidate,
+ * which is why there is no TTL and no revision column — the source *is* the
+ * version. Rows for text nobody renders any more are dead weight measured in
+ * kilobytes, and deleting them would need a reachability analysis over every
+ * `.svelte` file to be safe.
+ *
+ * **Nothing user-authored is ever stored here.** Only strings that came from a
+ * `t()` call in this app's own source; see `server/i18n/translate.ts`.
+ */
+export const uiTranslations = pgTable(
+	"ui_translations",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** ISO 639-1 target. Never `en` — English is the source language. */
+		language: text("language").notNull(),
+		/**
+		 * SHA-256 of `source`, hex.
+		 *
+		 * The unique index is on this rather than on `source` itself because a
+		 * btree index entry is capped near 2700 bytes and a source string has
+		 * no declared maximum — a long paragraph would fail the *insert*, at
+		 * runtime, on whichever install happened to render it.
+		 */
+		sourceKey: text("source_key").notNull(),
+		/** Kept verbatim: without it a row is unreadable to a human debugging. */
+		source: text("source").notNull(),
+		translated: text("translated").notNull(),
+		/** Which engine produced it, so a bad batch can be found and deleted. */
+		engine: text("engine").notNull(),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex("ui_translations_language_source_key_unique").on(
+			t.language,
+			t.sourceKey
+		)
+	]
+)
 
 export const ollamaSettings = pgTable("ollama_settings", {
 	id: integer("id").primaryKey().default(1),
@@ -3045,7 +3224,9 @@ export const scenes = pgTable(
 		// History entry this scene contributes to — cascade so scenes don't outlive their entry
 		historyEntryId: integer("history_entry_id")
 			.notNull()
-			.references(() => historyEntries.id, { onDelete: "cascade" }),
+			.references((): AnyPgColumn => lorebookEntries.id, {
+				onDelete: "cascade"
+			}),
 		name: text("name"),
 		// The IDs of sessionMessages included in this scene
 		selectedMessageIds: json("selected_message_ids")
@@ -3096,9 +3277,9 @@ export const scenesRelations = relations(scenes, ({ one, many }) => ({
 		fields: [scenes.lorebookId],
 		references: [lorebooks.id]
 	}),
-	historyEntry: one(historyEntries, {
+	historyEntry: one(lorebookEntries, {
 		fields: [scenes.historyEntryId],
-		references: [historyEntries.id]
+		references: [lorebookEntries.id]
 	}),
 	lorebookBindings: many(lorebookBindings),
 	characters: many(sceneCharacters)
@@ -3198,7 +3379,7 @@ export const narrativeRelationships = pgTable(
 			.references(() => lorebookBindings.id, { onDelete: "cascade" }),
 		// History entry this relationship state was established in (optional)
 		historyEntryId: integer("history_entry_id").references(
-			() => historyEntries.id,
+			(): AnyPgColumn => lorebookEntries.id,
 			{
 				onDelete: "set null"
 			}
@@ -3255,9 +3436,9 @@ export const narrativeRelationshipsRelations = relations(
 			references: [lorebookBindings.id],
 			relationName: "toNode"
 		}),
-		historyEntry: one(historyEntries, {
+		historyEntry: one(lorebookEntries, {
 			fields: [narrativeRelationships.historyEntryId],
-			references: [historyEntries.id]
+			references: [lorebookEntries.id]
 		}),
 		scene: one(scenes, {
 			fields: [narrativeRelationships.sceneId],
@@ -3460,7 +3641,7 @@ export const pipelineBlocks = pgTable(
 		// here as well as at publish, because the row is the system of record
 		// and an unbounded loop reaching it through any other path is the one
 		// failure the whole design refuses to allow. Async and route are
-		// exempt because neither repeats: a fan-out runs each lane once, a
+		// exempt because neither repeats: a fan-out runs each branch once, a
 		// route fires a subset of its branches once (20 §10) — the constraint
 		// predated route blocks and refused every routed spec at the row.
 		check(
@@ -3758,7 +3939,7 @@ export const pipelineConfigSelections = pgTable(
 		 * difference is not an inconsistency — it is the reason the slug rule
 		 * existed. Presets hang off a spec *version*, so an id would dangle the
 		 * moment a pipeline republished. Configs hang off the **spec**, survive
-		 * republishing by construction, and are renameable by their owner — which
+		 * republishing by construction, and are renameable by an admin — which
 		 * makes a name the unstable identifier here and the id the stable one.
 		 *
 		 * `ON DELETE SET NULL` is load-bearing rather than tidy. NULL is defined
@@ -3827,10 +4008,10 @@ export const pipelineConfigs = pgTable(
 			.notNull()
 			.references(() => pipelineSpecs.id, { onDelete: "cascade" }),
 		/**
-		 * Stable seed identity for the rows core ships, NULL for anything a user
-		 * made — the same rule `db/defaults.ts` runs under, and for the same
-		 * reason: matching a seeded row on `id` overwrote a user's config once
-		 * already.
+		 * Stable seed identity for the rows core ships, NULL for anything an
+		 * admin made — the same rule `db/defaults.ts` runs under, and for the
+		 * same reason: matching a seeded row on `id` overwrote a user's config
+		 * once already.
 		 */
 		seedKey: text("seed_key").unique(),
 		name: text("name").notNull(),
@@ -4670,7 +4851,7 @@ export const plugins = pgTable(
 			.$type<Record<string, any>>(),
 		/**
 		 * Permission keys an admin has denied at the plugin level. The effective
-		 * grant is (manifest-declared − this); every capability the runtime hands
+		 * grant is (manifest-declared − this); every permission the sandbox hands
 		 * out derives from the effective set, never the raw manifest.
 		 */
 		adminDenied: json("admin_denied")
@@ -4743,6 +4924,89 @@ export const pluginFiles = pgTable(
 		bytes: integer("bytes").notNull()
 	},
 	(t) => [uniqueIndex("plugin_files_plugin_path_idx").on(t.pluginId, t.path)]
+)
+
+/**
+ * An extension's own rows — the freeform JSON store behind `ctx.storage`
+ * (SDK `ExtensionStorage`, 13 §7c).
+ *
+ * One shared table, scoped by a **column, not a convention**. Nothing an
+ * extension can say names a plugin: the host loads `WHERE plugin_id = $1` from
+ * the descriptor it is dispatching and commits back under the same value, so
+ * `query()` has no vocabulary in which another extension's rows exist. A prefix
+ * filter in application code would have been a naming rule one bug away from
+ * being nothing at all.
+ *
+ * **Why a table rather than files.** Rows back up and restore with the rest of
+ * the instance, which is the whole reason the SDK splits them from
+ * `storage.files`: a downloaded model index belongs on disk, an extension's
+ * state belongs where `pg_dump` can see it. They share one quota with the file
+ * half (`plugins.storage_quota_override` / the manifest grant), with a sub-cap
+ * on the row side — see `rowQuotaFor` in `plugins/storageHost.ts` for why that
+ * sub-cap exists and how small it deliberately is.
+ *
+ * **The FK is the uninstall story.** `LifecycleMoment: 'uninstall'` promises
+ * that "the host removes the extension's namespace afterwards regardless"; ON
+ * DELETE CASCADE is that promise, kept by the database rather than by a cleanup
+ * path someone has to remember to call. `plugin_files` beside it has no such FK
+ * and is cleaned by hand in two places — that is the pattern this one is
+ * declining to repeat, not a precedent it is breaking.
+ */
+export const pluginRows = pgTable(
+	"plugin_rows",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/**
+		 * The owning extension, by the same `namespace/name` address the sandbox
+		 * dispatches against — so the host needs no id lookup on the hot path,
+		 * and a reinstall (an upsert on the same `plugin_id`) keeps its data.
+		 */
+		pluginId: text("plugin_id")
+			.notNull()
+			.references(() => plugins.pluginId, {
+				onDelete: "cascade",
+				onUpdate: "cascade"
+			}),
+		/** The extension's own key. Opaque to core; ≤512 chars, enforced at the write. */
+		key: text("key").notNull(),
+		/**
+		 * Whatever JSON the extension put there — core never interprets it.
+		 *
+		 * Nullable, and deliberately: an extension may store the JSON value
+		 * `null`, and Drizzle maps a JS `null` parameter to SQL NULL *before*
+		 * the json encoder ever sees it, so a NOT NULL column would make
+		 * `put(key, null)` fail at the insert. SQL NULL here therefore **is**
+		 * the extension's `null`; there is no third state, and the read path
+		 * hands back `null` either way.
+		 */
+		value: json("value").$type<unknown>(),
+		/**
+		 * What this row costs against the row budget: its key plus its
+		 * serialized value. Stored so `usage()` and an admin view can answer
+		 * without re-serializing every row, and recomputed at every write by the
+		 * one formula in `storageHost.ts` — a store that charged only for values
+		 * would let an extension spend its budget on index keys for free.
+		 */
+		bytes: integer("bytes").notNull().default(0),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		/**
+		 * The call's pinned clock (`ctx.now()`), not `now()` — so the timestamp a
+		 * hook read back inside the call is the one that landed, and a replay
+		 * reproduces it.
+		 */
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		/**
+		 * The one index, and it earns its place three times over: it makes the
+		 * per-call load a seek into one plugin's slice of a shared table rather
+		 * than a scan across every plugin's rows, it is the upsert's conflict
+		 * target, and its leading `plugin_id` makes a key-prefix range a range.
+		 * Without it, a busy extension's every hook call reads every other
+		 * extension's data off disk to find its own.
+		 */
+		uniqueIndex("plugin_rows_plugin_key_unique").on(t.pluginId, t.key)
+	]
 )
 
 export const pluginHookInvocations = pgTable(
@@ -4833,6 +5097,17 @@ export const pipelineTypeRegistry = pgTable(
 			string,
 			unknown
 		> | null>(),
+		/**
+		 * The entry-row contract — present only on `kind: 'entry'` types.
+		 *
+		 * Its own column for the reason `session_shape` has one: it is a
+		 * different kind of type's contract, read from rows by things that never
+		 * load the declaring code (F6), and hashed. The half of it that is a
+		 * declared *schema* lives in `config_schema` instead — the column that
+		 * already exists for exactly that, and the one the constraint and index
+		 * projection reads generically rather than reaching into a blob for.
+		 */
+		entryShape: json("entry_shape").$type<Record<string, unknown> | null>(),
 		causesEvent: text("causes_event"),
 		isPublic: boolean("is_public").notNull().default(false),
 		declaresRandomness: boolean("declares_randomness")
@@ -5227,7 +5502,7 @@ export const sessionPanelLayoutsRelations = relations(
 
 /**
  * Instance-level network identity (26 §2). Deliberately thin: a stable anchor
- * for instance-scoped, non-model-provider settings — tunnels today — and NOT a
+ * for instance-scoped, non-model-service settings — tunnels today — and NOT a
  * home for Ollama/KoboldCPP, which stay exactly where they are. Whether those
  * ever migrate here is a separate decision plan 26 explicitly does not make.
  *
@@ -5463,3 +5738,650 @@ export const accountInvitesRelations = relations(accountInvites, ({ one }) => ({
 		references: [users.id]
 	})
 }))
+
+// ─── Lorebook entries — the one typed table ───────────────────────────────────
+//
+// World lore, character lore and history live in three near-identical tables
+// with no discriminator column anywhere: **the subtype is the table**. These two
+// tables are what that collapses into — engine-contract columns plus a declared
+// `fields` half, discriminated by a real foreign key into the type registry.
+//
+// ⚠ NOTHING READS THEM YET. The three legacy tables are untouched and still
+// authoritative; this step creates the storage and fills it, and each reader
+// (`host.ts`, assembly, the vectorizer, the sockets, the client) moves across in
+// its own separately-verifiable step.
+//
+// **Placement.** Down here rather than beside `lorebooks`, and not by taste: the
+// composite foreign key names `pipelineTypeRegistry`'s columns, and a
+// `pgTable`'s extras callback runs the moment `pgTable` is called — so a
+// definition above the registry's would read a `const` in its temporal dead
+// zone and throw at import.
+
+/**
+ * One lorebook row, of a declared type.
+ *
+ * The tier the columns sit in is a rule rather than a taste: **tier one is what
+ * the engine reads for every type without consulting a declaration.** `enabled`,
+ * `constant`, `recursionDepth`, `position`, `content` and
+ * the matcher set are read by the ranker for every row it sees, so they are
+ * columns; `category`, `priority`, `year`/`month`/`day`, `isCompleted` and
+ * `graphed` are asked for by name only by the type that declares them, so they
+ * are `fields`.
+ *
+ * ⚠ **`fields` is never replaced wholesale; every writer merges.** `graphed` and
+ * `isCompleted` are machine-written — by the graph builder and the summarizer —
+ * concurrently with a user editing the same row's `content`. As columns a
+ * partial `UPDATE` was safe; in jsonb a whole-object write from either side
+ * clobbers the other. Nothing writes `fields` yet, which is exactly why the rule
+ * is written down before the first writer exists: use `"fields" || '{...}'::jsonb`
+ * (or `jsonb_set`), never `SET "fields" = …`.
+ */
+export const lorebookEntries = pgTable(
+	"lorebook_entries",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }),
+
+		/**
+		 * The declared type, and its version, as a real foreign key into
+		 * `pipeline_type_registry` — never a free string.
+		 *
+		 * Without the constraint the discriminator is a column anybody can
+		 * misspell, and a misspelt one is a row that no reader will ever ask
+		 * for and nothing will ever report. `type_version` rides along because
+		 * a version is what carries a schema change: `@2` may require a field
+		 * `@1` did not, so the CHECK projection is keyed on the pair and the
+		 * reference has to be too.
+		 *
+		 * ⚠ The constraint is added `NOT VALID` by the migration and validated
+		 * by the boot projection, because migrations run *before*
+		 * `syncTypeRegistry` — at backfill time the registry rows the
+		 * backfilled entries point at do not exist yet. Same discipline as the
+		 * CHECK constraints, for the same reason: new writes are protected
+		 * immediately, existing rows are never destroyed by an ordering.
+		 */
+		typeId: text("type_id").notNull(),
+		typeVersion: integer("type_version").notNull(),
+
+		/**
+		 * The trigger keywords, as an array.
+		 *
+		 * `text[]` and not the legacy delimited string: `splitKeys()` splits on
+		 * `,`, which makes a keyword containing a comma unrepresentable — there
+		 * is no escape and no way to author one. The cost lands on the CCv3
+		 * export mapper, which flattens back to a delimited list on the way
+		 * out.
+		 */
+		keys: text("keys")
+			.array()
+			.notNull()
+			.default(sql`ARRAY[]::text[]`),
+		/*
+		 * ⚠ **`retrievalStrategy` was here and is gone (migration 0204).**
+		 *
+		 * `keyword` / `rag` / `both`, NULL meaning `rag`. It was the last
+		 * exclusive routing in the retrieval path: an entry set to `keyword`
+		 * stayed out of the vector mechanism with a model loaded and a cosine of 1.
+		 * That is the shape the retrieval plan's second governing rule forbids
+		 * — *an unavailable mechanism subtracts a signal; it never reroutes,
+		 * disables a path, or excludes a candidate* — one scope down from the
+		 * node-level `retrievalMode` migration 0203 culled for the same reason.
+		 * Two of its three values had also stopped differing, `both`'s fusion
+		 * having been removed in respond 1.17.0.
+		 *
+		 * Dropping it destroyed nothing: no client form ever wrote it, no
+		 * importer set it, no seed set it, so every row a user could have
+		 * created held NULL.
+		 *
+		 * ⚠ **If per-entry mechanism preference comes back, it comes back as
+		 * weights.** The want behind `keyword` was real — *this entry is a
+		 * name; do not let a paraphrase drag it in* — and the axis for it
+		 * exists: mechanism weights (keyword / semantic / name) in
+		 * `ranking/weights.ts`, set per pipeline. The successor is that same
+		 * concept at a second scope, so a lean of zero subtracts a signal's
+		 * contribution and leaves the candidate in the pool for every other
+		 * mechanism and for the receipt. A column that gates removes it, and
+		 * nothing downstream can tell it existed. Do not re-add a gate under
+		 * another name.
+		 *
+		 * The three legacy tables above keep their copies. Nothing reads or
+		 * writes them, 0188's backfill SQL still selects them, and the test
+		 * that replays that SQL is the proof the data came across — see the
+		 * residue note in the entries ledger.
+		 */
+		/**
+		 * `substring` / `word` / `regex`. NULL falls back to `useRegex`, which
+		 * is why that column stays.
+		 *
+		 * Nullable-with-fallback is also the shape the matcher set is heading
+		 * for: matching policy is stored 200 times per 200-entry lorebook
+		 * today, and the ruling is that it becomes a per-type default with a
+		 * per-row override. The columns are the override half.
+		 */
+		matchMode: text("match_mode"),
+		useRegex: boolean("use_regex"),
+		caseSensitive: boolean("case_sensitive"),
+		/**
+		 * The condition keys — what has to *also* be said, or must not be.
+		 *
+		 * `text[]` like `keys`, and for the same reason: a keyword containing a
+		 * comma is unrepresentable in a delimited string and there is no escape
+		 * to author one.
+		 *
+		 * Empty is the default and means there is no condition, which is what
+		 * every row that has never heard of this holds. Together with a NULL
+		 * `selective_logic` that is the state the matcher reads as "no opinion"
+		 * and skips entirely.
+		 */
+		secondaryKeys: text("secondary_keys")
+			.array()
+			.notNull()
+			.default(sql`ARRAY[]::text[]`),
+		/**
+		 * How the condition keys are read — `andAny` / `andAll` / `notAny` /
+		 * `notAll`, or NULL for no condition.
+		 *
+		 * Nullable rather than defaulted, exactly like `match_mode` above and
+		 * for the same reason: an entry nobody has ruled on has to stay
+		 * distinguishable from one somebody deliberately set, which is what
+		 * makes a future change of default safe to apply to the first group and
+		 * not the second.
+		 *
+		 * ⚠ Stored as the name and never as SillyTavern's integer. The wire
+		 * format keeps carrying `selectiveLogic: 0` because that is what a
+		 * foreign file says; a column holding 0 is a number whose meaning lives
+		 * in a lookup table, and ST's own enum is `AND_ANY = 0, NOT_ALL = 1,
+		 * NOT_ANY = 2, AND_ALL = 3` — not the order anybody guesses.
+		 * `SELECTIVE_LOGIC_BY_ST_CODE` in `ranking/signals.ts` is the one
+		 * translation.
+		 */
+		selectiveLogic: text("selective_logic"),
+		/** The deepest recursion level this entry may still be reached at.
+		 *  NULL is no opinion and the query node's `maxRecursionDepth` decides. */
+		recursionDepth: integer("recursion_depth"),
+		content: text("content").notNull().default(""),
+		constant: boolean("constant").notNull().default(false),
+		enabled: boolean("enabled").notNull().default(true),
+		/**
+		 * Distinct from `enabled`: don't retrieve it *and* don't show it to me.
+		 *
+		 * `enabled: false` is a switch on a row the author still keeps in front
+		 * of them; archiving is what a row gets when it should stop occupying
+		 * the manager list without being destroyed.
+		 */
+		archived: boolean("archived").notNull().default(false),
+		/** A manual score multiplier. NULL is no opinion — not 1, which would
+		 *  be an author's deliberate "leave it alone" and is a different fact. */
+		weight: real("weight"),
+		/**
+		 * Who wrote this row — `human`, `summarizer`, `graph-builder`.
+		 *
+		 * The same call already made for media, and it gates the same thing:
+		 * whether a machine writer may overwrite. A summarizer that would
+		 * happily rewrite its own earlier output must not rewrite a sentence a
+		 * person typed.
+		 */
+		provenance: text("provenance").notNull().default("human"),
+		/**
+		 * Authored order, unique per **`(lorebookId, typeId)`** — not per
+		 * lorebook.
+		 *
+		 * The three tables this replaces can each hold position 1 in the same
+		 * book, so per-book uniqueness would silently reorder every existing
+		 * lorebook on the way in. Order is meaningful among siblings of one
+		 * type; across types it is meaningless, because the template decides
+		 * where each block sits.
+		 */
+		position: integer("position").notNull(),
+
+		/**
+		 * Denormalized from the `title` role.
+		 *
+		 * A column and not a `fields` read because two callers need it without
+		 * asking a declaration: the manager list renders it, and
+		 * `attachCharacterLoreToCharacters` asserts it non-null. Nullable
+		 * because a history entry has no title — it is *dated*, and its heading
+		 * is the date.
+		 */
+		title: text("title"),
+		/**
+		 * The privacy anchor — character lore's `anchor` role.
+		 *
+		 * A real foreign key because a reference must be one:
+		 * `validateBindingCrossRefs` exists precisely because dangling and
+		 * cross-tenant references are a live threat here, and a pointer living
+		 * inside `fields` could have neither a constraint nor an `ON DELETE`.
+		 */
+		anchorBindingId: integer("anchor_binding_id").references(
+			() => lorebookBindings.id,
+			{ onDelete: "set null" }
+		),
+		/**
+		 * The `parent` role — an amendment's base entry, a scene's history
+		 * entry, a district's city.
+		 *
+		 * Cascades: an amendment without its base is not an entry, it is a
+		 * fragment. Declared now because it is also the traversal edge for
+		 * nested lore, and the alternative to a self-reference now is one
+		 * later, at `@2` on all three types, to state a column that already
+		 * exists.
+		 */
+		anchorEntryId: integer("anchor_entry_id").references(
+			(): AnyPgColumn => lorebookEntries.id,
+			{ onDelete: "cascade" }
+		),
+
+		// Validity (design Part 4) is deliberately absent from this release.
+		// An earlier draft printed `valid_from_entry_id` / `valid_until_entry_id`
+		// / `lineage_id` here, anchored directly to a history entry row, but the
+		// temporal design has since moved on to anchoring validity to a registry
+		// of named temporal moments instead — so those columns would have
+		// pointed at the wrong target. The whole temporal layer, registry
+		// included, lands together in that later phase, which rules on
+		// calendars first. Better absent than wrong.
+
+		/**
+		 * The type-specific half, validated against the declared schema in
+		 * `pipeline_type_registry.config_schema`.
+		 *
+		 * ⚠ Merge, never replace — see the table's own note. And note what
+		 * `absent` has to keep meaning: `priority` is read for every row, and
+		 * the semantic ranker excludes history from the priority boost because
+		 * history has never had the column. Under one table every type has
+		 * column-shaped access to everything, so **absent means no bonus**,
+		 * never "absent means 1 and gets the bonus".
+		 */
+		fields: jsonb("fields")
+			.notNull()
+			.default({})
+			.$type<Record<string, any>>(),
+		/** Foreign per-entry payload an import could not map. Not `fields`:
+		 *  `fields` is declared and validated, this is whatever came in. */
+		extraJson: json("extra_json")
+			.notNull()
+			.default({})
+			.$type<Record<string, any>>(),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [
+		foreignKey({
+			name: "lorebook_entries_type_fk",
+			columns: [t.typeId, t.typeVersion],
+			foreignColumns: [
+				pipelineTypeRegistry.typeId,
+				pipelineTypeRegistry.version
+			]
+		}),
+		/**
+		 * ⚠ **Plain, and deliberately so — it is enforced at every instant,
+		 * not at COMMIT.** An earlier hand-written migration made this
+		 * `DEFERRABLE INITIALLY DEFERRED`, because a renumber is a permutation
+		 * and a permutation written straight (`SET position = position + 1`
+		 * over a run, or a 1..n rewrite) is valid at the end and duplicated
+		 * partway through. Drizzle's builder cannot say `DEFERRABLE`, so
+		 * `db:generate` emits the plain form and the declaration here would
+		 * have permanently disagreed with the database.
+		 *
+		 * The need was removed rather than the divergence papered over: every
+		 * renumber now **parks** its rows in a free range below everything and
+		 * then **places** them at their finals (`parkingFloor` in
+		 * `utils/lorebookEntries.ts`), so no intermediate row ever collides.
+		 * Do not reinstate deferrability — declaration, generation and database
+		 * agree exactly as written.
+		 */
+		unique("lorebook_entries_position_uq").on(
+			t.lorebookId,
+			t.typeId,
+			t.position
+		),
+		index("lorebook_entries_book_type_idx").on(t.lorebookId, t.typeId)
+	]
+)
+
+/**
+ * Named vectors — N independently-configured spaces per entry.
+ *
+ * Qdrant and Weaviate's term, and not "multi-vector", which in the IR
+ * literature means ColBERT-style late interaction.
+ *
+ * **Why they leave the entry row**, strongest reason first: one column is one
+ * vector permanently; chunking is not a column shape; a model migration needs
+ * the old and new spaces to coexist; sparse population is single-table-
+ * inheritance NULL sprawl in miniature; and the circular staleness bug — a
+ * vector in the row means re-embedding *writes the row*, moving `updated_at`,
+ * which is the signal staleness is computed from.
+ */
+export const lorebookEntryVectors = pgTable(
+	"lorebook_entry_vectors",
+	{
+		entryId: integer("entry_id")
+			.notNull()
+			.references(() => lorebookEntries.id, { onDelete: "cascade" }),
+		/** The space, e.g. `core:vec/default@1`. Versioned in the name, so a
+		 *  recipe change re-embeds only that name. */
+		vectorName: text("vector_name").notNull(),
+		/** 0 for a whole-entry vector. Chunking is a per-type retrieval-unit
+		 *  decision, and the key is what makes it not a schema change. */
+		chunkIndex: integer("chunk_index").notNull().default(0),
+
+		/**
+		 * The comparison key: `(model, modelVersion, normalization, dims)`.
+		 *
+		 * Qdrant, Elasticsearch, Vespa and typed-column pgvector all reject a
+		 * wrong-*sized* vector loudly and **none of them detect
+		 * same-dimension-different-model** — two different 768-dim encoders
+		 * return a plausible, meaningless cosine. Carrying model identity and
+		 * refusing a query whose encoder does not match is nearly free and
+		 * closes that gap.
+		 *
+		 * ⚠ `model` is nullable, and NULL is a real answer rather than a
+		 * missing one: the legacy tables allow an `embedding` with a NULL
+		 * `embedding_model`, and the honest record of such a vector is *we do
+		 * not know what produced this*. It costs nothing and loses nothing —
+		 * `rankBySimilarity` already drops a row whose model does not equal the
+		 * loaded one, so a NULL never matched any encoder before this table
+		 * existed either. The row is carried rather than dropped so nothing is
+		 * destroyed, and the vectorizer replaces it on its next pass.
+		 */
+		model: text("model"),
+		modelVersion: text("model_version"),
+		normalization: text("normalization"),
+		dims: integer("dims").notNull(),
+
+		vector: real("vector").array().notNull(),
+		/**
+		 * What the vector was computed over, hashed.
+		 *
+		 * The staleness signal that replaces `updated_at`, and it is more
+		 * precise than one: editing an entry's content re-embeds, editing an
+		 * unrelated `fields` value does not.
+		 */
+		sourceHash: text("source_hash"),
+		/**
+		 * The recipe that produced what was embedded, when there was one.
+		 *
+		 * ⚠ **NULL is a real answer, not a missing one:** it says *this space's
+		 * derivation reads nothing but the row*. `core:vec/default@1` embeds the
+		 * entry's own title and content, so content moved is the whole of its
+		 * staleness and these two columns stay empty for it.
+		 *
+		 * `core:vec/entity@1` is the case they exist for. It embeds an entry's
+		 * **names** — the title, the aliases its body declares, and the bound
+		 * character's names — so two things outside the row decide what the same
+		 * unchanged text yields: the extractor that reads the appositives, and
+		 * the vocabulary the cast is read from. Design §13.3 names the third
+		 * identity for annotations and says plainly that it *"has no analogue in
+		 * the vector case"* — which was true while the only vector space embedded
+		 * content. A space whose input is derived needs it too, and it is carried
+		 * here in the shape `entry_annotations` already carries it rather than as
+		 * a second discipline growing beside the first.
+		 *
+		 * A pair of columns and not a blob inside `chunk_meta`, because a reader
+		 * must be able to refuse a whole book's stale name vectors from one
+		 * cheaply-known hash without re-deriving every entry's name list — which
+		 * is exactly what `source_hash` alone cannot do here, since deriving it
+		 * *is* the work.
+		 */
+		extractorVersion: text("extractor_version"),
+		/** Over the vocabulary the names were read from. Names moved ⇒ re-embed. */
+		gazetteerHash: text("gazetteer_hash"),
+		/**
+		 * Sentence-window context and chunk offsets — excluded from the
+		 * embedding, swapped in at synthesis.
+		 *
+		 * `core:vec/entity@1` stores `{ name, kind }` here: the chunk key is an
+		 * index and a reader needs the string back to say *"matched “the
+		 * captain” → Captain Vell"*. That is content about the chunk, which is
+		 * what this column is for; the freshness identity is not, and lives in
+		 * the two columns above.
+		 */
+		chunkMeta: jsonb("chunk_meta")
+			.notNull()
+			.default({})
+			.$type<Record<string, any>>(),
+		/** Nullable: the legacy tables carry embeddings whose `vectorized_at`
+		 *  is NULL, and stamping `now()` on those would invent a fact. */
+		vectorizedAt: timestamp("vectorized_at")
+	},
+	(t) => [
+		// The key *is* (entry, name, chunk) — no surrogate id, because there is
+		// no second way to name one of these rows.
+		primaryKey({
+			name: "lorebook_entry_vectors_pkey",
+			columns: [t.entryId, t.vectorName, t.chunkIndex]
+		})
+		// Deliberately no other index. Part 5's ruling is exact scan with the
+		// predicate and the ordering in one statement and **no ANN index**:
+		// filtered ANN recall was measured at 39.7% on two ANDed predicates,
+		// and temporal validity is exactly the low-selectivity predicate that
+		// breaks it worst.
+	]
+)
+
+export const lorebookEntriesRelations = relations(
+	lorebookEntries,
+	({ one, many }) => ({
+		lorebook: one(lorebooks, {
+			fields: [lorebookEntries.lorebookId],
+			references: [lorebooks.id]
+		}),
+		anchorBinding: one(lorebookBindings, {
+			fields: [lorebookEntries.anchorBindingId],
+			references: [lorebookBindings.id]
+		}),
+		/** History entries only — a scene contributes to the entry it summarises. */
+		scenes: many(scenes),
+		vectors: many(lorebookEntryVectors)
+	})
+)
+
+export const lorebookEntryVectorsRelations = relations(
+	lorebookEntryVectors,
+	({ one }) => ({
+		entry: one(lorebookEntries, {
+			fields: [lorebookEntryVectors.entryId],
+			references: [lorebookEntries.id]
+		})
+	})
+)
+
+// ─── Annotations ──────────────────────────────────────────────────────────────
+
+/**
+ * What a passage names — the NER subsystem's store (design §13.2).
+ *
+ * ## Two tables, not one keyed `(sourceKind, sourceId)`
+ *
+ * Plan Part 5 rules this and the Django generic-relation critique is what
+ * decides it: a generic pointer has no foreign key, so no `ON DELETE`, no
+ * automatic index, and no way to filter *through* the reference. Annotations are
+ * high-volume machine-written derived data over two very different parents, so
+ * the deliberate duplication below is the cheaper trade — each table gets a real
+ * cascade from its own parent and an index that means something.
+ *
+ * ## The resolved reference is the point of tier one
+ *
+ * `character_id` / `persona_id` / `ref_entry_id` are the exclusive arc: at most
+ * one is set, and only for a **gazetteer** hit — a name the world already knows,
+ * matched on a word boundary and resolved to the row it names. That is what
+ * makes `Alice` and her nickname `Al` one entity rather than two. An **open**
+ * hit — a capitalised run the gazetteer did not claim — carries none of them and
+ * stays a string, which is plan Part 2's *"references that don't resolve yet"*:
+ * resolution is enrichment, not a precondition.
+ *
+ * `ON DELETE SET NULL` rather than cascade, and the difference matters. Deleting
+ * a character does not make the sentence stop naming them; it makes the name
+ * unresolvable. Cascading would delete annotation rows *while their source hash
+ * still matched*, so the parent would look freshly annotated and be quietly
+ * missing an entity — the exact silent-wrongness `source_hash` exists to
+ * prevent.
+ *
+ * ## Freshness carries two identities, not one
+ *
+ * `extractor_version` + `source_hash` is design §13.3's discipline, the third
+ * use of the same idea (named vectors carry `(model, modelVersion, …)`, summary
+ * spans carry a `sourceHash` over the range they cover). `gazetteer_hash` is the
+ * third: extraction is *dictionary lookup against a known vocabulary*, so a
+ * renamed character or a new entry title changes what the same text yields even
+ * though the text did not move. Two columns rather than one blended hash so a
+ * receipt can say which of the two went stale.
+ *
+ * **Staleness degrades to correct-and-verbose, never to silently-wrong.** A row
+ * whose triple does not match is not evidence: entries are re-extracted in place
+ * (small N, cheap, no model), messages are ignored for that turn and re-annotated
+ * in the background.
+ *
+ * ## The empty extraction is a row
+ *
+ * ⚠ A passage that names nothing is recorded as a single row with
+ * `entity_key = ''` and `tier = 'none'`. Without it "no rows" would mean both
+ * *never extracted* and *extracted, found nothing*, and the freshness check
+ * would re-extract those passages forever. The sentinel never matches a real
+ * entity key — every reader filters on keys the conversation actually produced,
+ * and no such key is the empty string — so it is invisible to search by
+ * construction.
+ */
+export const entryAnnotations = pgTable(
+	"entry_annotations",
+	{
+		entryId: integer("entry_id")
+			.notNull()
+			.references(() => lorebookEntries.id, { onDelete: "cascade" }),
+		/** `character:12` for a resolved hit, `open:the ashguard riders`
+		 *  otherwise, `''` for the empty-extraction sentinel above. */
+		entityKey: text("entity_key").notNull(),
+		/** The surface form as first seen, for receipts. */
+		surface: text("surface").notNull().default(""),
+		/** Lowercased, whitespace-collapsed — what the matcher compares. */
+		normalized: text("normalized").notNull().default(""),
+		/** `gazetteer` | `open` | `none` (the sentinel). */
+		tier: text("tier").notNull(),
+		characterId: integer("character_id").references(() => characters.id, {
+			onDelete: "set null"
+		}),
+		personaId: integer("persona_id").references(() => personas.id, {
+			onDelete: "set null"
+		}),
+		/** The lorebook entry this name resolves to — an entry titled after it. */
+		refEntryId: integer("ref_entry_id").references(
+			(): AnyPgColumn => lorebookEntries.id,
+			{ onDelete: "set null" }
+		),
+		/**
+		 * The tier's prior, not a calibrated probability.
+		 *
+		 * A dictionary hit is 1 because it matched a name the world declared; an
+		 * open hit is below that because a capitalised run is a guess. The
+		 * heuristic extractor computes nothing finer, and **the ranker does not
+		 * read this** — weighting the score by it would make the entity mechanism and
+		 * the admission gate disagree about the same entity, and the gate's
+		 * calibration is measured. It is here because it is the column a real
+		 * NER model fills (plan phase 9), and it reaches the receipt.
+		 */
+		confidence: real("confidence").notNull().default(1),
+		/** How many times the passage named it. */
+		mentions: integer("mentions").notNull().default(0),
+		/** `[{start, end}]` character offsets, for a receipt to point at. */
+		spans: jsonb("spans")
+			.notNull()
+			.default(sql`'[]'::jsonb`)
+			.$type<Array<{ start: number; end: number }>>(),
+		extractorVersion: text("extractor_version").notNull(),
+		/** Over the annotated text. Content moved ⇒ re-extract. */
+		sourceHash: text("source_hash").notNull(),
+		/** Over the vocabulary matched against. Names moved ⇒ re-extract. */
+		gazetteerHash: text("gazetteer_hash").notNull(),
+		annotatedAt: timestamp("annotated_at").notNull().defaultNow()
+	},
+	(t) => [
+		primaryKey({
+			name: "entry_annotations_pkey",
+			columns: [t.entryId, t.entityKey]
+		}),
+		/** The search: given the entities of a window, which entries name them. */
+		index("entry_annotations_entity_idx").on(t.entityKey)
+	]
+)
+
+/**
+ * The same store over the transcript — and the half that makes NER a strategy
+ * rather than a signal.
+ *
+ * Design §13.5: the entity mechanism *searches messages*, which nothing else does. The
+ * vector mechanism is unwired on the shipped spec and the keyword mechanism only scans a
+ * bounded window for triggers, so this is the first real retrieval over
+ * conversation history.
+ *
+ * The parent is `messages` — the message model (20 §1) — rather than the legacy
+ * `session_messages`. The two share identity by construction (the store writes
+ * the legacy row and mirrors it under the same id) and `deleteLegacy*` removes
+ * both, so the cascade here is the one that survives the legacy table retiring.
+ *
+ * Everything else about the shape, including the empty-extraction sentinel, is
+ * `entry_annotations` above; read its note.
+ */
+export const messageAnnotations = pgTable(
+	"message_annotations",
+	{
+		messageId: integer("message_id")
+			.notNull()
+			.references(() => messages.id, { onDelete: "cascade" }),
+		entityKey: text("entity_key").notNull(),
+		surface: text("surface").notNull().default(""),
+		normalized: text("normalized").notNull().default(""),
+		tier: text("tier").notNull(),
+		characterId: integer("character_id").references(() => characters.id, {
+			onDelete: "set null"
+		}),
+		personaId: integer("persona_id").references(() => personas.id, {
+			onDelete: "set null"
+		}),
+		refEntryId: integer("ref_entry_id").references(
+			(): AnyPgColumn => lorebookEntries.id,
+			{ onDelete: "set null" }
+		),
+		confidence: real("confidence").notNull().default(1),
+		mentions: integer("mentions").notNull().default(0),
+		spans: jsonb("spans")
+			.notNull()
+			.default(sql`'[]'::jsonb`)
+			.$type<Array<{ start: number; end: number }>>(),
+		extractorVersion: text("extractor_version").notNull(),
+		sourceHash: text("source_hash").notNull(),
+		gazetteerHash: text("gazetteer_hash").notNull(),
+		annotatedAt: timestamp("annotated_at").notNull().defaultNow()
+	},
+	(t) => [
+		primaryKey({
+			name: "message_annotations_pkey",
+			columns: [t.messageId, t.entityKey]
+		}),
+		index("message_annotations_entity_idx").on(t.entityKey)
+	]
+)
+
+export const entryAnnotationsRelations = relations(
+	entryAnnotations,
+	({ one }) => ({
+		entry: one(lorebookEntries, {
+			fields: [entryAnnotations.entryId],
+			references: [lorebookEntries.id]
+		})
+	})
+)
+
+export const messageAnnotationsRelations = relations(
+	messageAnnotations,
+	({ one }) => ({
+		message: one(messages, {
+			fields: [messageAnnotations.messageId],
+			references: [messages.id]
+		})
+	})
+)

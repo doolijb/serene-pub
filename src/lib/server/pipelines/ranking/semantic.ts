@@ -1,9 +1,9 @@
 /**
- * The semantic arm's ranking stages, as functions over their inputs.
+ * The semantic mechanism's ranking stages, as functions over their inputs.
  *
  * `RagInfillEngine` runs nine of these between "here are candidates" and "here
  * is what goes in the prompt", all inline in one 200-line block and all keyed to
- * module-level constants. The pipeline's vector arm did one of them — cosine
+ * module-level constants. The pipeline's vector mechanism did one of them — cosine
  * similarity — which is why a RAG parity fixture could not have passed: the two
  * paths were not computing the same thing, or anything close to it.
  *
@@ -29,7 +29,9 @@
  * to replace, and a version of this that ran host-side would be frozen.
  */
 
+import { entryDeclarations } from "$lib/server/entries/declarations"
 import type { SemanticParams } from "$lib/server/pipelines/ranking/weights"
+import { rrf } from "$lib/server/pipelines/ranking/strategy"
 
 export interface RagCandidate {
 	id: number | string
@@ -56,24 +58,26 @@ const keyOf = (c: RagCandidate) => `${c.source}:${c.id}`
  * and for the same reason — two similarity scores from two different queries
  * are not on one scale.
  *
+ * The arithmetic is `strategy.ts`'s `rrf`, which is now the only copy of it.
+ * There were two, disagreeing by exactly one in the denominator, so the same
+ * top hit was worth 1/60 here and 1/61 there; that note records which
+ * convention was kept and why. This function is the shape adapter — the stages
+ * downstream want a candidate carrying its own `score`, not a `{item, score}`
+ * pair.
+ *
+ * ⚠ **Order is insertion order, not score order.** `rankSemantic` indexes the
+ * similarity matrix against this output, so sorting here would diversify
+ * against the wrong candidates. The sort happens after the threshold, inside
+ * MMR.
+ *
  * Note what this does *not* fuse: the current window and the recent window are
- * separate runs of the whole arm, concatenated by `mergeWindows`. See its note.
+ * separate runs of the whole mechanism, concatenated by `mergeWindows`. See its note.
  */
 export function rrfMerge(
 	lists: ReadonlyArray<ReadonlyArray<RagCandidate>>,
 	k: number
 ): RagCandidate[] {
-	const merged = new Map<string, { item: RagCandidate; score: number }>()
-	for (const list of lists)
-		for (let rank = 0; rank < list.length; rank++) {
-			const item = list[rank]!
-			const key = keyOf(item)
-			const contribution = 1 / (k + rank)
-			const existing = merged.get(key)
-			if (existing) existing.score += contribution
-			else merged.set(key, { item, score: contribution })
-		}
-	return [...merged.values()].map(({ item, score }) => ({ ...item, score }))
+	return rrf(lists, k).map(({ item, score }) => ({ ...item, score }))
 }
 
 /**
@@ -117,18 +121,32 @@ export function recencyBoost(
 /**
  * Honour the author's priority tier.
  *
- * Mirrors the keyword arm's bonus deliberately: an author who marks an entry
+ * Mirrors the keyword mechanism's bonus deliberately: an author who marks an entry
  * High expects that to mean something in both modes, and pure similarity
- * ranking would silently ignore it. Lore only — history entries have no
- * priority column, in either mode.
+ * ranking would silently ignore it.
+ *
+ * ⚠ **The gate is the type's `priority` role, and "absent" means no bonus — not
+ * "absent means 1 and gets the bonus".** This used to read `source !==
+ * "worldLore" && source !== "characterLore"`, which was correct for the reason
+ * stated in the SDK: history has never had a priority column. Under one table
+ * every type has column-shaped access to everything, so the rule that a missing
+ * column used to enforce is enforced by a missing *role* instead. Ungate it and
+ * every prompt containing history changes.
+ *
+ * A candidate whose source no entry type declares — a message, a graph node —
+ * is not boosted either, which is the same answer it got before.
  */
 export function priorityBoost(
 	candidates: readonly RagCandidate[],
 	bonusPerTier: number
 ): RagCandidate[] {
+	const boosted = new Set(
+		entryDeclarations()
+			.filter((d) => d.roles.priority !== undefined)
+			.map((d) => d.sourceKind)
+	)
 	return candidates.map((c) => {
-		if (c.source !== "worldLore" && c.source !== "characterLore")
-			return { ...c }
+		if (!boosted.has(c.source)) return { ...c }
 		const tier = (c.priority ?? 1) - 1
 		return tier > 0
 			? { ...c, score: c.score + tier * bonusPerTier }
@@ -237,7 +255,7 @@ export interface SemanticRankInput {
 	/** Message ids in reading order, for the recency boost. */
 	messageOrder?: ReadonlyArray<number | string>
 	params: SemanticParams
-	/** The keyword arm's per-tier priority bonus, so both modes agree. */
+	/** The keyword mechanism's per-tier priority bonus, so both modes agree. */
 	priorityBonus: number
 }
 
@@ -254,7 +272,7 @@ export interface SemanticRankResult {
 }
 
 /**
- * The whole arm, in order, as one call.
+ * The whole mechanism, in order, as one call.
  *
  * The order is the original's and is not arbitrary: boosts apply before the
  * threshold (so a recent message can survive a cut it would otherwise fail),
@@ -318,7 +336,7 @@ function remapSimilarity(
  * Concatenate several windows' results, first occurrence winning.
  *
  * **Not a fusion.** The current window and the recent window each run the whole
- * arm — fuse, boost, threshold, diversify, cap — and their outputs are then
+ * mechanism — fuse, boost, threshold, diversify, cap — and their outputs are then
  * appended in order, dropping anything already seen. It reads like something
  * RRF should handle and it is deliberately not:
  *

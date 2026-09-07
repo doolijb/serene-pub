@@ -490,6 +490,12 @@ export async function clearOption(
  * Delegates to `configs.selectConfig`, which refuses a config belonging to
  * another pipeline — the panel and the runtime share one write path the same
  * way `layers()` makes them share one read path.
+ *
+ * What it does NOT delegate is who may choose what (R8). Choosing is the only
+ * verb a non-admin has over a configuration — they never create, rename or
+ * delete one — so the two limits on it are enforced here, where the viewer is:
+ * the scope they are choosing for, and whether the configuration is one the
+ * administrator put on offer.
  */
 export async function selectNamedConfig(
 	db: Db,
@@ -514,6 +520,34 @@ export async function selectNamedConfig(
 			"Only an administrator chooses the configuration for everyone on this instance."
 		)
 
+	// `scope: "session"` from a caller who is not in one — or is in someone
+	// else's, which `viewerFor` strips to `undefined`. It used to fall through
+	// to `scopeId` 0 and write a selection for session zero: accepted, stored,
+	// resolved by nobody. A refusal is the honest answer; a write that lands
+	// nowhere is the failure mode selection refusals exist to prevent.
+	if (target === "session" && viewer.sessionId == null)
+		throw new OptionNotWritableError(
+			"A configuration is chosen for a session you are in. Open the session " +
+				"you want to change and choose there."
+		)
+
+	// The administrator's curation is a rule, not a hint (R8). `namespaceView`
+	// already hides a withdrawn configuration from everyone but an admin — but
+	// hiding is not what protects it, since the id arrives from the client and
+	// is a small integer somebody can guess. This refusal is.
+	const [config] = await db
+		.select()
+		.from(schema.pipelineConfigs)
+		.where(eq(schema.pipelineConfigs.id, configId))
+		.limit(1)
+	if (config && (config as any).enabled === false && !viewer.isAdmin)
+		throw new OptionNotWritableError(
+			`'${(config as any).name}' is not one of the configurations this ` +
+				`instance offers. An administrator withdrew it.`
+		)
+
+	// `!` survives the guard above rather than in spite of it: the throw is what
+	// makes it true, and TypeScript cannot see the pairing through `target`.
 	const scopeId = target === "session" ? viewer.sessionId! : 0
 
 	const { selectConfig } = await import("$lib/server/pipelines/config/named")

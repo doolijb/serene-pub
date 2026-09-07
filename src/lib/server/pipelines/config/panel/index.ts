@@ -43,7 +43,10 @@ export {
 	humanizeTypeId,
 	// The panel resolves display text this way and the builder needs the same
 	// rule: two readings of an `I18n` is one that eventually disagrees.
-	i18nText
+	i18nText,
+	// How a key becomes English. The reconciler names a culled option from its
+	// address when the declaration that carried the label is gone.
+	humanizeCamel
 } from "$lib/server/pipelines/config/panel/declarations"
 export { writeScopeFor } from "$lib/server/pipelines/config/panel/scopes"
 export {

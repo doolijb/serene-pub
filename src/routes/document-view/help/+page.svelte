@@ -121,7 +121,7 @@
 						href: "/document-view/connections",
 						label: "Connections",
 						description:
-							"Manage AI provider connections and the system default.",
+							"Manage AI service connections and the system default.",
 						show: isAdmin
 					},
 					{

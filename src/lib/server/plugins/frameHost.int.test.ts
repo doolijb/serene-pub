@@ -9,6 +9,7 @@ import {
 	frameSrc,
 	frameCsp
 } from "./frameHost"
+import { declaredPermissions, reviewMarks } from "./permissions"
 
 /**
  * Frame surfaces, server half (20 §12): file storage refuses traversal,
@@ -109,20 +110,26 @@ describe("the composed CSP", () => {
 		expect(denied).toContain("connect-src 'none'")
 		expect(denied).toContain("form-action 'none'")
 
+		// A declared-but-unreviewed host is not a grant: until an admin has
+		// consented, the frame reaches no further than a plugin with no
+		// permission at all (permissions.ts's review gate).
+		const asked = {
+			permissions: { network: { hosts: ["api.example.com"] } }
+		}
+		expect(frameCsp(asked, null)).toContain("connect-src 'none'")
+
 		// A granted host projects into connect-src, on both schemes.
-		const granted = frameCsp(
-			{ permissions: { network: { hosts: ["api.example.com"] } } },
-			null
-		)
+		const consented = reviewMarks(declaredPermissions(asked))
+		const granted = frameCsp(asked, consented)
 		expect(granted).toContain("https://api.example.com")
 		expect(granted).toContain("wss://api.example.com")
 		expect(granted).not.toContain("connect-src 'none'")
 
 		// Admin-denying the grant removes it from the frame's reach too.
-		const revoked = frameCsp(
-			{ permissions: { network: { hosts: ["api.example.com"] } } },
-			["network:api.example.com"]
-		)
+		const revoked = frameCsp(asked, [
+			...consented,
+			"network:api.example.com"
+		])
 		expect(revoked).toContain("connect-src 'none'")
 	})
 })

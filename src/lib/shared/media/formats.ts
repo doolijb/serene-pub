@@ -8,7 +8,7 @@
  * bundled codec stack can read or write those bytes today.
  *
  * That split is the whole point of the table. A file picker offering "what this
- * provider accepts" wants the format facts: a backend that takes animated WebP
+ * service accepts" wants the format facts: a backend that takes animated WebP
  * takes it regardless of what we can produce. The conversion router wants the
  * build facts: it must refuse what it cannot actually make rather than hand
  * back something lesser that looks right. One merged "supported" flag would
@@ -93,8 +93,15 @@ const NEEDS_DOC_ENGINE =
  * the conversion router can route between; `convert.test.ts` pins that
  * correspondence in both directions, so a `true` added here without a converter
  * — or a converter added without the `true` — fails rather than drifts.
+ *
+ * ⚠ `as const satisfies` rather than an annotation, and both halves are
+ * load-bearing. `satisfies` still checks every entry against `MediaFormat`, so
+ * a missing field or a bad `kind` fails here as it always did; `as const` is
+ * what keeps the literal mimes in the type, which is what `KnownMime` below is
+ * derived from. An annotation widens `mime` to `string` and every consumer
+ * naming a format has to spell it as an unchecked string.
  */
-export const MEDIA_FORMATS: readonly MediaFormat[] = [
+export const MEDIA_FORMATS = [
 	// ── image ────────────────────────────────────────────────────────────────
 	{
 		mime: "image/png",
@@ -406,7 +413,24 @@ export const MEDIA_FORMATS: readonly MediaFormat[] = [
 		encode: true,
 		note: "As text/plain: readable and writable as UTF-8, with no converter registered."
 	}
-]
+] as const satisfies readonly MediaFormat[]
+
+/**
+ * Every mime the table names, as a union.
+ *
+ * The point of it is a consumer that DECLARES formats — "this backend accepts
+ * JPEG, PNG, GIF and WebP" — rather than one that looks a runtime string up.
+ * Typed as `KnownMime`, a declaration of `"image/jpg"` or `"image/jpg "` is a
+ * compile error where it was written, instead of a lookup that silently returns
+ * undefined and reads as "the vocabulary has no such format".
+ *
+ * ⚠ Canonical spellings ONLY: the aliases in `MIME_ALIASES` are deliberately
+ * not part of this union. An alias is for a string that ARRIVES from a browser
+ * or a backend, and `normalizeMime` is where it is resolved; a declaration
+ * written by hand has no excuse to use one. That is also why nothing here
+ * re-spells a mime a second time — a declaration names a table entry.
+ */
+export type KnownMime = (typeof MEDIA_FORMATS)[number]["mime"]
 
 /**
  * Mimes that are wrong but common, mapped onto the canonical one.

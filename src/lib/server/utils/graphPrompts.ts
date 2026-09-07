@@ -45,7 +45,7 @@
  *
  *     It is now pinned at the decoder instead — buildPerspectiveSchema
  *     constrains `from` to the subject's literal name, so a reversed pair is
- *     unemittable on any provider that honours the schema, and is discarded
+ *     unemittable on any service that honours the schema, and is discarded
  *     rather than swapped where it is not. Asking for it in the prompt is what
  *     makes the constraint legible to a model reading only the prompt.
  *  5. The prompt ENDS on a populated example. It used to end on
@@ -56,7 +56,7 @@
  * This prompt is now the SECOND line of defence, not the only one. Graph calls
  * set `adapter.responseFormat = "json"` and hand the perspective call a
  * per-subject `responseSchema`, and each adapter translates both into its
- * provider's own constraint (a GBNF grammar for KoboldCPP and llama.cpp,
+ * service's own constraint (a GBNF grammar for KoboldCPP and llama.cpp,
  * `format` for Ollama, `response_format` for OpenAI-compatible). An earlier
  * version of this comment claimed constrained decoding was unavailable in this
  * app — it was merely unwired.

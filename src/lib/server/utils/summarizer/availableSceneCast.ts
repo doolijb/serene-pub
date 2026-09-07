@@ -23,6 +23,7 @@
  */
 
 import * as schema from "$lib/server/db/schema"
+import { historyDateOf } from "$lib/server/utils/lorebookEntries"
 import { eq, sql } from "drizzle-orm"
 import type { CastEntry, ExtractedCastRef } from "./templates"
 import type { PgliteDatabase } from "drizzle-orm/pglite"
@@ -322,16 +323,23 @@ export async function buildSceneCastList(
 
 	let currentPos: TimelinePos | null = null
 	if (currentHistoryEntryId) {
-		const he = await db.query.historyEntries.findFirst({
-			where: eq(schema.historyEntries.id, currentHistoryEntryId),
-			columns: { id: true, year: true, month: true, day: true }
-		})
+		// The date is a declared field now, so the row carries `fields` and
+		// `historyDateOf` reads it out with the same coalescing the column
+		// defaults gave.
+		const [he] = await db
+			.select({
+				id: schema.lorebookEntries.id,
+				fields: schema.lorebookEntries.fields
+			})
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, currentHistoryEntryId))
 		if (he) {
+			const date = historyDateOf(he)
 			currentPos = {
 				entryId: he.id,
-				year: he.year ?? 0,
-				month: he.month,
-				day: he.day
+				year: date.year ?? 0,
+				month: date.month,
+				day: date.day
 			}
 		}
 	}
@@ -341,7 +349,7 @@ export async function buildSceneCastList(
 		where: eq(schema.lorebookBindings.lorebookId, lorebookId),
 		with: {
 			historyEntry: {
-				columns: { id: true, year: true, month: true, day: true }
+				columns: { id: true, fields: true }
 			}
 		}
 	})
@@ -428,11 +436,12 @@ export async function buildSceneCastList(
 				currentPos &&
 				sceneId !== null
 			) {
+				const heDate = historyDateOf(he)
 				const bindingPos: TimelinePos = {
 					entryId: he.id,
-					year: he.year ?? 0,
-					month: he.month,
-					day: he.day
+					year: heDate.year ?? 0,
+					month: heDate.month,
+					day: heDate.day
 				}
 				const eligible =
 					isStrictlyBefore(

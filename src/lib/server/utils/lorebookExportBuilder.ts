@@ -22,6 +22,7 @@ import * as schema from "$lib/server/db/schema"
 import { and, eq } from "drizzle-orm"
 import {
 	buildSpecV3Lorebook,
+	type ExportableEntryWithPosition,
 	assignHistoryEntryLocalIds,
 	attachBoundEntities,
 	mapSceneForExport,
@@ -33,6 +34,11 @@ import {
 	type ExportedBinding,
 	type ExportedScene
 } from "$lib/server/utils/lorebookExportMapper"
+import {
+	HISTORY_TYPE_ID,
+	entriesOfType,
+	loadBookEntries
+} from "$lib/server/utils/lorebookEntries"
 import { buildCharacterCardV3 } from "$lib/server/utils/characterCardParser"
 import { buildPersonaExportCard } from "$lib/server/sockets/personas"
 
@@ -51,9 +57,6 @@ export async function buildLorebookExportData(
 			eq(schema.lorebooks.userId, userId)
 		),
 		with: {
-			worldLoreEntries: true,
-			characterLoreEntries: true,
-			historyEntries: true,
 			// `characters` are the scene_characters join rows; the export
 			// mapper still wants the flat id arrays, so they're projected
 			// below. Ordered so export bytes stay stable — import compares
@@ -65,6 +68,12 @@ export async function buildLorebookExportData(
 	if (!lorebook) {
 		throw new Error("Lorebook not found.")
 	}
+
+	// One list, one shape. The export's wire names stay
+	// `world`/`character`/`history` — a type id never goes into a file — and
+	// `buildSpecV3Lorebook` is what groups the list back into that order.
+	const entries = await loadBookEntries(db, lorebookId)
+	const historyEntries = entriesOfType(entries, HISTORY_TYPE_ID)
 
 	// All default to true — matches the original always-include-everything
 	// behavior for any caller that doesn't specify.
@@ -151,9 +160,8 @@ export async function buildLorebookExportData(
 	// top-level array (a scene belongs to exactly one history entry) —
 	// assign each a document-scoped localId here so narrativeGraph nodes/
 	// relationships below can reference one.
-	const historyEntryLocalIdByRealId = assignHistoryEntryLocalIds(
-		lorebook.historyEntries
-	)
+	const historyEntryLocalIdByRealId =
+		assignHistoryEntryLocalIds(historyEntries)
 	const sceneLocalIdByRealId = new Map<number, number>()
 	const scenesByHistoryEntryId = new Map<number, ExportedScene[]>()
 	lorebook.scenes.forEach((scene) => {
@@ -187,9 +195,10 @@ export async function buildLorebookExportData(
 	const specBook = attachBoundEntities(
 		buildSpecV3Lorebook(
 			lorebook,
-			lorebook.worldLoreEntries,
-			lorebook.characterLoreEntries,
-			lorebook.historyEntries,
+			// A `LorebookEntry` satisfies `ExportableEntry` field for field;
+			// TypeScript will not infer the index signature that type needs
+			// from an interface, which is the whole of the mismatch.
+			entries as unknown as ExportableEntryWithPosition[],
 			bindingLocalIdByRealId,
 			scenesByHistoryEntryId,
 			historyEntryLocalIdByRealId

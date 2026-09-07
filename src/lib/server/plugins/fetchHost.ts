@@ -1,10 +1,10 @@
 /**
- * The mediated network capability — a permission-checked `fetch`.
+ * The mediated network permission — a permission-checked `fetch`.
  *
- * `makeFetchHost(hosts)` runs in the **worker's Node scope**, outside the
- * sandbox; the guest gets an async `ctx.fetch(url, opts?)` that only reaches
- * hosts the plugin declared *and* an admin left granted. Enforced here, not in
- * the guest:
+ * `makeFetchHost(hosts, isCancelled)` runs in the **worker's Node scope**,
+ * outside the sandbox; the guest gets an async `ctx.fetch(url, opts?)` that only
+ * reaches hosts the plugin declared *and* an admin left granted. Enforced here,
+ * not in the guest:
  *  - **Host allowlist:** the URL's host must match an entry in `hosts`. An entry
  *    is an exact host (`api.example.com`), a wildcard (`*.example.com` matches
  *    any sub-domain but not the apex; a bare `*` matches any host), and may pin a
@@ -29,17 +29,31 @@
  *    headers and the body, and are capped.
  *  - **Response is flattened to a plain object** ({status, ok, headers, body})
  *    so nothing live (a stream, the real Response) crosses the boundary.
+ *  - **No new requests once the call is aborted.** `isCancelled()` is the
+ *    backend's per-call view of `ctx.signal`, and a request started after it
+ *    fires — including the next hop of a redirect chain — is refused. Without
+ *    this, declaring an abort handler would be a way to keep working for the
+ *    whole cancellation grace (`hookGrace.ts`) after the person said stop. It is
+ *    deliberately *only* the outbound permission: storage stays permitted after
+ *    an abort, because winding down local data is what the grace is for.
  *
  * Residual: a determined DNS-rebind that flips the record between this check and
  * undici's own connect is not fully closed here (that needs a pinned dispatcher);
  * the resolved-address gate blocks the static-internal-IP and redirect vectors,
  * which are the practical ones.
  *
- * Async by nature — network cannot be synchronous — so this is a **SES-only**
- * capability: QuickJS's asyncify cannot resolve the JS promise an awaited fetch
- * returns, so a plugin declaring `network` runs on the SES backend (the same
- * backend-support rule as WebAssembly). Embedded as a source string because the
- * eval workers cannot import modules; the unit test evaluates this very string.
+ * Async by nature — network cannot be synchronous — which is why this was a
+ * SES-only permission for as long as QuickJS had no way to answer a guest with a
+ * promise. It does now: the QuickJS backend creates the guest's promise itself
+ * (`context.newPromise`), keeps the resolvers host-side, and settles them from
+ * this same function while its drive loop pumps the job queue (see
+ * `QuickJsSandbox.ts`'s `bridgeFetch`). So `network` is a permission of **both**
+ * backends, running the one source below on each — the allowlist, the port
+ * scope, the internal-address gate, the per-hop re-validation and the
+ * cancellation refusal are literally the same code, and cannot drift.
+ *
+ * Embedded as a source string because the eval workers cannot import modules;
+ * the unit test evaluates this very string.
  */
 
 /**
@@ -94,8 +108,13 @@ function matchAllow(allow, reqHost, reqPort) {
 export const FETCH_HOST_SOURCE =
 	HOST_ALLOW_SOURCE +
 	String.raw`
-function makeFetchHost(hosts) {
+function makeFetchHost(hosts, isCancelled) {
 	var allow = Array.isArray(hosts) ? hosts : [];
+	// Whether this call's ctx.signal has already fired. The gate lives here,
+	// with the permission, rather than in a backend — which is exactly what let
+	// it travel unchanged when the second backend gained fetch. Each host passes
+	// its own view of the abort: SES a per-job flag, QuickJS the STOP_ABORT bit.
+	var cancelled = typeof isCancelled === "function" ? isCancelled : function () { return false; };
 
 	function isPrivateV4(ip) {
 		var p = ip.split(".");
@@ -168,6 +187,11 @@ function makeFetchHost(hosts) {
 		var maxHops = 5;
 
 		for (var hop = 0; ; hop++) {
+			// Checked per hop, not once: a redirect is another outbound request,
+			// and one that started before the abort must not carry on chasing
+			// Location headers after it.
+			if (cancelled())
+				throw new Error("fetch: the run was cancelled — no new requests");
 			await assertReachable(current);
 			var res = await fetch(current.toString(), {
 				method: method,
@@ -199,5 +223,25 @@ function makeFetchHost(hosts) {
 			return { status: res.status, ok: res.ok, headers: outHeaders, body: text };
 		}
 	};
+}
+// The refusal a plugin without the permission hears — one definition, spliced
+// into both backends, because a hook must not be able to tell them apart by the
+// wording of a denial. It throws rather than resolving to a response, so a
+// denial can never be mistaken for a request that failed.
+var __DENIED_FETCH = function () { throw new Error("network: permission not granted"); };
+// The permission a backend should endow, from the grants it was loaded with.
+//
+// An allowlist with nothing in it is NOT a grant with nothing in it: it is what
+// an admin who denied every 'network:<host>' key leaves behind, and such a
+// plugin must hear "permission not granted" — the named refusal — rather than
+// "host not permitted", which would confirm it holds the permission and merely
+// aimed badly. SandboxManager.permissionConfig already drops the whole grant in
+// that case; this keeps the same answer true one layer down, for any caller that
+// hands a sandbox an empty allowlist directly.
+function fetchHostFor(config, isCancelled) {
+	var hosts = config && config.networkHosts;
+	return Array.isArray(hosts) && hosts.length
+		? makeFetchHost(hosts, isCancelled)
+		: __DENIED_FETCH;
 }
 `

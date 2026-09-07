@@ -23,6 +23,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
 	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import EntityGalleryViewModal from "$lib/client/components/sessionMessages/EntityGalleryViewModal.svelte"
 	import {
 		MediaVisibility,
@@ -42,6 +43,10 @@
 	let sort = $state<"newest" | "oldest" | "largest" | "smallest" | "name">(
 		"newest"
 	)
+	// Orphan-ness is a server fact now (`item.orphaned`), so this filter is
+	// client-side like the search: it partitions a list already in memory, and
+	// a round trip would only make the counts beside it disagree.
+	let orphanedOnly = $state(false)
 	let viewMode = $state<"grid" | "list">("grid")
 	let menuOpenFor = $state<number | null>(null)
 	let busyId = $state<number | null>(null)
@@ -62,6 +67,10 @@
 	let pendingDelete = $derived(
 		items.find((i) => i.id === pendingDeleteId) ?? null
 	)
+	/** Ticked to unlock the delete of a file some messages render. Reset every
+	 *  time the dialog opens, so an acknowledgement never carries over to the
+	 *  next file. */
+	let ackMessageRefs = $state(false)
 
 	function formatBytes(n: number): string {
 		if (n < 1024) return `${n} B`
@@ -106,8 +115,11 @@
 				: null,
 			item.width && item.height ? `${item.width}×${item.height}` : null,
 			fullDate(item.createdAt),
-			item.attachedTo
-				? (item.attachedTo.name ?? "orphaned — parent deleted")
+			item.orphaned
+				? "orphaned — parent deleted"
+				: (item.attachedTo?.name ?? null),
+			item.messageRefs
+				? `shown in ${item.messageRefs} ${item.messageRefs === 1 ? "message" : "messages"}`
 				: null
 		]
 			.filter(Boolean)
@@ -124,11 +136,17 @@
 		)
 	}
 
+	/** How many of the loaded items name a parent that no longer exists. Shown
+	 *  on the filter itself, because "reclaim your orphans" is only an
+	 *  invitation worth making when there are some. */
+	let orphanCount = $derived(items.filter((i) => i.orphaned).length)
+
 	/** Client-side because it is a substring match over a list already in
 	 *  memory; a round trip per keystroke would be slower and no more
 	 *  correct. Sorting stays on the server, where the whole set lives. */
 	let filtered = $derived(
 		items.filter((item) => {
+			if (orphanedOnly && !item.orphaned) return false
 			const q = search.trim().toLowerCase()
 			if (!q) return true
 			return (
@@ -220,13 +238,24 @@
 
 	function requestDelete(item: Item) {
 		menuOpenFor = null
+		ackMessageRefs = false
 		pendingDeleteId = item.id
 	}
 
 	function confirmDelete() {
 		if (pendingDeleteId === null) return
-		socket.emit("media:delete", { mediaId: pendingDeleteId })
+		const item = items.find((i) => i.id === pendingDeleteId)
+		if (item?.messageRefs && !ackMessageRefs) return
+		socket.emit("media:delete", {
+			mediaId: pendingDeleteId,
+			// Sent only when there is something to acknowledge. The server
+			// re-counts and refuses without this, so a stale list here cannot
+			// turn into a silent delete — it turns into the server's refusal,
+			// naming the real count.
+			...(item?.messageRefs ? { confirmMessageRefs: true } : {})
+		})
 		pendingDeleteId = null
+		ackMessageRefs = false
 	}
 
 	onMount(() => {
@@ -248,7 +277,15 @@
 					: "Already at full size — the original is served"
 			})
 		}
-		const onDelete = () => toaster.success({ title: "Image deleted" })
+		const onDelete = (res: Sockets.Media.Delete.Response) =>
+			toaster.success({
+				title: "Image deleted",
+				// The server's own count, not the one the dialog showed — it
+				// re-counts, so this is what actually happened.
+				description: res.messageRefs
+					? `${res.messageRefs} ${res.messageRefs === 1 ? "message" : "messages"} now show a broken image.`
+					: undefined
+			})
 		const onCleanup = (res: Sockets.Media.CleanupPreview.Response) => {
 			cleanup = res
 			cleanupBusy = false
@@ -465,30 +502,57 @@
 
 	<!-- max-w caps only bind once there is room to spare: in a 320px sidebar
 	     and on mobile the controls still share the row via flex-1, but in a
-	     fullscreen panel they stop stretching to 700px each. -->
-	<div class="flex flex-wrap gap-2">
-		<label class="sr-only" for="media-sort">Sort media</label>
-		<select
-			id="media-sort"
-			class="select min-w-0 flex-1 basis-36 sm:max-w-[220px]"
-			bind:value={sort}
+	     fullscreen panel they stop stretching to 700px each.
+
+	     `class` lands on Select's own wrapper (it already carries
+	     `flex flex-col gap-1`), so the flex-item sizing that used to sit on the
+	     `<select>` sits there now, and `labelHidden` keeps the label the
+	     screen-reader label it already was. -->
+	<div class="flex flex-wrap items-end gap-2">
+		<Select
+			label="Sort media"
+			labelHidden
+			class="min-w-0 flex-1 basis-36 sm:max-w-[220px]"
+			value={sort}
+			onValueChange={(v) => (sort = v as typeof sort)}
+			options={[
+				{ value: "newest", label: "Newest first" },
+				{ value: "oldest", label: "Oldest first" },
+				{ value: "largest", label: "Largest first" },
+				{ value: "smallest", label: "Smallest first" },
+				{ value: "name", label: "Name (A–Z)" }
+			]}
+		/>
+		<Select
+			label="Filter by type"
+			labelHidden
+			class="min-w-0 flex-1 basis-32 sm:max-w-[200px]"
+			value={kind}
+			onValueChange={(v) => (kind = v as typeof kind)}
+			options={[
+				{ value: "all", label: "All types" },
+				{ value: "image", label: "Images" },
+				{ value: "document", label: "Documents" }
+			]}
+		/>
+		<!-- The panel's stated premise is that an orphan is visible so its
+		     owner can reclaim it; until now the only way to act on that was to
+		     read every caption. Disabled at zero rather than hidden, so the
+		     count reads as an answer ("none") instead of the control being
+		     missing. -->
+		<button
+			type="button"
+			class="btn shrink-0 {orphanedOnly
+				? 'preset-filled-warning-500'
+				: 'preset-tonal-surface'}"
+			onclick={() => (orphanedOnly = !orphanedOnly)}
+			disabled={orphanCount === 0 && !orphanedOnly}
+			aria-pressed={orphanedOnly}
+			title="Show only files whose character, persona or session has been deleted"
 		>
-			<option value="newest">Newest first</option>
-			<option value="oldest">Oldest first</option>
-			<option value="largest">Largest first</option>
-			<option value="smallest">Smallest first</option>
-			<option value="name">Name (A–Z)</option>
-		</select>
-		<label class="sr-only" for="media-kind">Filter by type</label>
-		<select
-			id="media-kind"
-			class="select min-w-0 flex-1 basis-32 sm:max-w-[200px]"
-			bind:value={kind}
-		>
-			<option value="all">All types</option>
-			<option value="image">Images</option>
-			<option value="document">Documents</option>
-		</select>
+			<Icons.Unlink size={16} aria-hidden="true" />
+			<span>Orphaned ({orphanCount})</span>
+		</button>
 	</div>
 
 	<!-- `totalBytes` is what STORING this library costs, across every
@@ -510,7 +574,9 @@
 			<p class="text-surface-600-400 text-sm">
 				{items.length === 0
 					? "No media yet. Images uploaded to characters, personas and sessions appear here."
-					: "Nothing matches that search."}
+					: orphanedOnly && orphanCount === 0
+						? "Nothing orphaned. Every file here still belongs to something that exists."
+						: "Nothing matches that search."}
 			</p>
 		</div>
 	{:else if viewMode === "grid"}
@@ -595,7 +661,9 @@
 							<p
 								class="text-surface-600-400 truncate text-[10px]"
 							>
-								{item.attachedTo.name ?? "orphaned"}
+								{item.orphaned
+									? "orphaned"
+									: item.attachedTo.name}
 							</p>
 						{/if}
 					</div>
@@ -651,7 +719,15 @@
 								{shortDate(item.createdAt)}
 							</span>
 							{#if item.attachedTo}
-								· {item.attachedTo.name ?? "orphaned"}
+								· {item.orphaned
+									? "orphaned"
+									: item.attachedTo.name}
+							{/if}
+							{#if item.messageRefs}
+								· in {item.messageRefs}
+								{item.messageRefs === 1
+									? "message"
+									: "messages"}
 							{/if}
 							{#if item.storedBytes !== item.bytes}
 								· {formatBytes(item.storedBytes)} on disk
@@ -841,7 +917,10 @@
 <Dialog
 	open={pendingDeleteId !== null}
 	onOpenChange={(e) => {
-		if (!e.open) pendingDeleteId = null
+		if (!e.open) {
+			pendingDeleteId = null
+			ackMessageRefs = false
+		}
 	}}
 >
 	<Portal>
@@ -871,7 +950,7 @@
 					<p class="text-surface-700-300 text-sm">
 						Delete <strong>{displayName(pendingDelete)}</strong>
 						?
-						{#if pendingDelete.attachedTo?.name}
+						{#if !pendingDelete.orphaned && pendingDelete.attachedTo?.name}
 							It belongs to
 							<strong>{pendingDelete.attachedTo.name}</strong>
 							.
@@ -881,6 +960,49 @@
 						Anything using it — an avatar, a gallery entry, a
 						background — will lose it. This cannot be undone.
 					</p>
+					<!-- An avatar or a background re-points itself on delete;
+					     a message part cannot, because the media panel is not
+					     the message store's writer. So this is the one
+					     consequence the user has to be told about rather than
+					     shielded from, and it is gated on saying so. -->
+					{#if pendingDelete.messageRefs}
+						{@const n = pendingDelete.messageRefs}
+						<div
+							class="border-error-500/50 bg-error-500/5 flex flex-col gap-2 rounded-lg border p-3"
+						>
+							<p
+								class="text-error-600-400 flex items-center gap-2 text-sm font-semibold"
+							>
+								<Icons.MessageSquareWarning
+									size={16}
+									aria-hidden="true"
+								/>
+								<span>
+									Shown in {n}
+									{n === 1 ? "message" : "messages"}
+								</span>
+							</p>
+							<p class="text-surface-600-400 text-xs">
+								{n === 1 ? "That message" : "Those messages"}
+								keep their text and their place in the conversation,
+								but where this image is
+								{n === 1 ? "it" : "they"} will show a broken one
+								instead. Nothing can put it back.
+							</p>
+							<label class="flex items-start gap-2 text-xs">
+								<input
+									type="checkbox"
+									class="checkbox mt-0.5 shrink-0"
+									bind:checked={ackMessageRefs}
+								/>
+								<span>
+									Delete it anyway and leave {n === 1
+										? "that message"
+										: "those messages"} showing a broken image.
+								</span>
+							</label>
+						</div>
+					{/if}
 				{/if}
 				<footer class="flex justify-end gap-2">
 					<button
@@ -892,6 +1014,8 @@
 					<button
 						class="btn preset-filled-error-500"
 						onclick={confirmDelete}
+						disabled={!!pendingDelete?.messageRefs &&
+							!ackMessageRefs}
 					>
 						<Icons.Trash2 class="h-4 w-4" />
 						Delete
@@ -948,7 +1072,7 @@
 				<label class="flex flex-col gap-1 text-sm">
 					<span>
 						Type <strong>{CULL_ORIGINALS_CONFIRM}</strong>
-						 to confirm
+						to confirm
 					</span>
 					<input
 						type="text"

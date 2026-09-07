@@ -100,30 +100,24 @@ export global {
 		id: number
 	}
 
-	// World Lore Entry types
-	export type SelectWorldLoreEntry =
-		typeof schema.worldLoreEntries.$inferSelect
-	export type InsertWorldLoreEntry =
-		typeof schema.worldLoreEntries.$inferInsert
-	export type UpdateWorldLoreEntry = Partial<SelectWorldLoreEntry> & {
-		id: number
-	}
-
-	// Character Lore Entry types
-	export type SelectCharacterLoreEntry =
-		typeof schema.characterLoreEntries.$inferSelect
-	export type InsertCharacterLoreEntry =
-		typeof schema.characterLoreEntries.$inferInsert
-	export type UpdateCharacterLoreEntry = Partial<SelectCharacterLoreEntry> & {
-		id: number
-	}
-
-	// History Entry types
-	export type SelectHistoryEntry = typeof schema.historyEntries.$inferSelect
-	export type InsertHistoryEntry = typeof schema.historyEntries.$inferInsert
-	export type UpdateHistoryEntry = Partial<SelectHistoryEntry> & {
-		id: number
-	}
+	/**
+	 * Lorebook entry types are **not** here, and the absence is the decision.
+	 *
+	 * `SelectWorldLoreEntry` / `SelectCharacterLoreEntry` / `SelectHistoryEntry`
+	 * inferred from the three legacy tables, which is what made
+	 * `attachCharacterLoreToCharacters(entries: SelectCharacterLoreEntry[])` a
+	 * compile-time guard against being handed world lore. They named the *wire
+	 * row*, and the wire contract died when the three socket namespaces
+	 * collapsed into `entries:*`. The guard is recovered as
+	 * `LorebookEntry<typeId>` in `$lib/shared/entries/types` — branded by the
+	 * real, non-null `type_id` column, so it refuses in both directions at
+	 * compile time *and* narrows at runtime, which a phantom brand could not.
+	 *
+	 * It lives in a module rather than in this ambient block because the client
+	 * names it too, and because a generic row shape belongs beside the
+	 * declarations it mirrors rather than beside `$inferSelect` aliases for
+	 * tables that no longer back it.
+	 */
 
 	// Tag types
 	export type SelectTag = typeof schema.tags.$inferSelect

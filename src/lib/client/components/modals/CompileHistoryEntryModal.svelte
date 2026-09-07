@@ -5,15 +5,21 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
+	import {
+		HISTORY_TYPE_ID,
+		type LorebookEntry
+	} from "$lib/shared/entries/types"
+
+	type History = LorebookEntry<typeof HISTORY_TYPE_ID>
 
 	interface Props {
 		open: boolean
 		onOpenChange: (e: { open: boolean }) => void
-		historyEntry: SelectHistoryEntry
+		historyEntry: History
 		activityId?: string | null
 		pendingResult?: { content: string } | null
 		initialStep?: "review" | "running"
-		onSaved: (updated: SelectHistoryEntry) => void
+		onSaved: (updated: History) => void
 		onDiscarded?: (activityId: string) => void
 	}
 
@@ -131,12 +137,14 @@
 	})
 
 	function save() {
-		const updated: UpdateHistoryEntry = {
+		const updated = {
 			...historyEntry,
 			content: editableContent.trim(),
 			isCompleted: true
 		}
-		socket.emit("historyEntries:update", { historyEntry: updated })
+		socket.emit("entries:update", {
+			entry: { ...updated, typeId: HISTORY_TYPE_ID }
+		})
 		if (internalActivityId)
 			socket.emit("activity:dismiss", { id: internalActivityId })
 		toaster.success({ title: "History entry updated" })

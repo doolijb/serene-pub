@@ -13,13 +13,24 @@
  * match, and the embedding would never persist. This test exercises
  * exactly that — a freshly inserted, never-updated row — not a row whose
  * updatedAt was set from JS, which wouldn't catch the bug.
+ *
+ * ⚠ **This file follows the lore-entry half of that write onto
+ * `writeEntryVectorIfFresh`**, which is where it lives now that a vector is a
+ * row in `lorebook_entry_vectors` rather than three columns on the entry. Every
+ * property is the same one: the same text comparison, the same
+ * model-changed-mid-flight refusal, and the same "vectorizing is not an edit"
+ * — which the new shape gets structurally, because the statement never touches
+ * the entry row at all. `writeEmbeddingIfFresh` itself is unchanged and still
+ * carries messages, bindings, characters and personas.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq, sql } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
+import { DEFAULT_VECTOR_NAME } from "$lib/server/utils/lorebookEntries"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
 
@@ -66,78 +77,92 @@ async function makeLorebook(userId: number) {
 	return lorebook
 }
 
+/** A world lore entry, left entirely to the column defaults it can be. */
+async function makeEntry(lorebookId: number, name: string, content = "x") {
+	const [entry] = await testDb
+		.insert(schema.lorebookEntries)
+		.values(worldLoreValues([{ lorebookId, name, content }]))
+		.returning()
+	return entry
+}
+
 async function rawUpdatedAt(id: number) {
 	const [row] = await testDb
 		.select({
-			raw: sql<string>`${schema.worldLoreEntries.updatedAt}::text`
+			raw: sql<string>`${schema.lorebookEntries.updatedAt}::text`
 		})
-		.from(schema.worldLoreEntries)
-		.where(eq(schema.worldLoreEntries.id, id))
+		.from(schema.lorebookEntries)
+		.where(eq(schema.lorebookEntries.id, id))
 	return row.raw
 }
 
-describe("writeEmbeddingIfFresh (PGlite integration)", () => {
-	test("persists the embedding for a freshly inserted, never-edited row", async () => {
-		const { writeEmbeddingIfFresh } = await import("./vectorizationQueue")
+/** The entry's default-space vector, or undefined when it has none. */
+async function defaultVector(entryId: number) {
+	const [row] = await testDb
+		.select()
+		.from(schema.lorebookEntryVectors)
+		.where(
+			and(
+				eq(schema.lorebookEntryVectors.entryId, entryId),
+				eq(schema.lorebookEntryVectors.vectorName, DEFAULT_VECTOR_NAME),
+				eq(schema.lorebookEntryVectors.chunkIndex, 0)
+			)
+		)
+	return row
+}
+
+describe("writeEntryVectorIfFresh (PGlite integration)", () => {
+	test("persists the vector for a freshly inserted, never-edited row", async () => {
+		const { writeEntryVectorIfFresh } = await import("./vectorizationQueue")
 
 		const user = await makeUser("write-embedding-fresh-user")
 		const lorebook = await makeLorebook(user.id)
 
 		// Deliberately don't set updatedAt — let the schema's own DB-side
 		// default populate it, at full Postgres microsecond precision.
-		const [entry] = await testDb
-			.insert(schema.worldLoreEntries)
-			.values({ lorebookId: lorebook.id, name: "Entry", content: "x" })
-			.returning()
+		const entry = await makeEntry(lorebook.id, "Entry")
 
-		// Mirrors exactly what a pick* function's SELECT does: capture
-		// updatedAt as text, not as the Drizzle-parsed Date.
-		const [selected] = await testDb
-			.select({
-				id: schema.worldLoreEntries.id,
-				updatedAtRaw: sql<string>`${schema.worldLoreEntries.updatedAt}::text`
-			})
-			.from(schema.worldLoreEntries)
-			.where(eq(schema.worldLoreEntries.id, entry.id))
-
-		await writeEmbeddingIfFresh(
-			schema.worldLoreEntries,
-			schema.worldLoreEntries.id,
-			schema.worldLoreEntries.updatedAt,
+		// Mirrors exactly what the picker's SELECT does: capture updatedAt as
+		// text, not as the Drizzle-parsed Date.
+		await writeEntryVectorIfFresh(
 			entry.id,
-			selected.updatedAtRaw,
+			await rawUpdatedAt(entry.id),
 			"test-model",
 			[0.1, 0.2, 0.3]
 		)
 
-		const updated = await testDb.query.worldLoreEntries.findFirst({
-			where: eq(schema.worldLoreEntries.id, entry.id)
-		})
-		expect(updated?.embedding).toEqual([0.1, 0.2, 0.3])
-		expect(updated?.embeddingModel).toBe("test-model")
-		expect(updated?.vectorizedAt).not.toBeNull()
+		const vector = await defaultVector(entry.id)
+		expect(vector?.vector).toEqual([0.1, 0.2, 0.3])
+		expect(vector?.model).toBe("test-model")
+		expect(vector?.dims).toBe(3)
+		expect(vector?.vectorizedAt).not.toBeNull()
+	})
+
+	test("replaces the vector it already wrote rather than failing on the key", async () => {
+		const { writeEntryVectorIfFresh } = await import("./vectorizationQueue")
+
+		const user = await makeUser("write-embedding-replace-user")
+		const lorebook = await makeLorebook(user.id)
+		const entry = await makeEntry(lorebook.id, "Replaced")
+		const raw = await rawUpdatedAt(entry.id)
+
+		await writeEntryVectorIfFresh(entry.id, raw, "test-model", [1, 0, 0])
+		await writeEntryVectorIfFresh(entry.id, raw, "test-model", [0, 1, 0])
+
+		// `(entry, name, chunk)` IS the key — there is no second way to name
+		// one of these rows, so a re-embed is an upsert and not a duplicate.
+		expect((await defaultVector(entry.id))?.vector).toEqual([0, 1, 0])
 	})
 
 	test("does not count vectorizing as an edit, so the row stops being stale", async () => {
-		const { writeEmbeddingIfFresh } = await import("./vectorizationQueue")
+		const { writeEntryVectorIfFresh } = await import("./vectorizationQueue")
 
 		const user = await makeUser("write-embedding-notanedit-user")
 		const lorebook = await makeLorebook(user.id)
-		const [entry] = await testDb
-			.insert(schema.worldLoreEntries)
-			.values({
-				lorebookId: lorebook.id,
-				name: "Not An Edit",
-				content: "x"
-			})
-			.returning()
+		const entry = await makeEntry(lorebook.id, "Not An Edit")
 
 		const before = await rawUpdatedAt(entry.id)
-
-		await writeEmbeddingIfFresh(
-			schema.worldLoreEntries,
-			schema.worldLoreEntries.id,
-			schema.worldLoreEntries.updatedAt,
+		await writeEntryVectorIfFresh(
 			entry.id,
 			before,
 			"test-model",
@@ -152,106 +177,80 @@ describe("writeEmbeddingIfFresh (PGlite integration)", () => {
 		// is precisely `needsEmbedding`'s "edited since we vectorized" test. The
 		// queue picked the row straight back up and paid for a second embedding.
 		//
-		// Asserted as an exact equality rather than by re-running the queue: the
-		// bug only showed up in ~1 run in 100, so the observable it was found
-		// through is far too weak to be the one guarding it.
+		// The vector living in its own table is what closes that structurally:
+		// this statement does not write the entry row, so `$onUpdate` has
+		// nothing to fire on. Asserted anyway, because the guarantee is what
+		// matters and not the mechanism that currently provides it.
 		expect(await rawUpdatedAt(entry.id)).toBe(before)
 
 		const [{ stale }] = await testDb
 			.select({
-				stale: sql<boolean>`${schema.worldLoreEntries.updatedAt} > ${schema.worldLoreEntries.vectorizedAt}`
+				stale: sql<boolean>`${schema.lorebookEntries.updatedAt} > ${schema.lorebookEntryVectors.vectorizedAt}`
 			})
-			.from(schema.worldLoreEntries)
-			.where(eq(schema.worldLoreEntries.id, entry.id))
+			.from(schema.lorebookEntries)
+			.innerJoin(
+				schema.lorebookEntryVectors,
+				eq(
+					schema.lorebookEntryVectors.entryId,
+					schema.lorebookEntries.id
+				)
+			)
+			.where(eq(schema.lorebookEntries.id, entry.id))
 		expect(stale, "the row was stale the instant it was written").toBe(
 			false
 		)
 	})
 
 	test("skips the write when the row was edited after the capture (edit-during-embed race)", async () => {
-		const { writeEmbeddingIfFresh } = await import("./vectorizationQueue")
+		const { writeEntryVectorIfFresh } = await import("./vectorizationQueue")
 
 		const user = await makeUser("write-embedding-race-user")
 		const lorebook = await makeLorebook(user.id)
-
-		const [entry] = await testDb
-			.insert(schema.worldLoreEntries)
-			.values({
-				lorebookId: lorebook.id,
-				name: "Entry",
-				content: "original"
-			})
-			.returning()
-
-		const [selected] = await testDb
-			.select({
-				updatedAtRaw: sql<string>`${schema.worldLoreEntries.updatedAt}::text`
-			})
-			.from(schema.worldLoreEntries)
-			.where(eq(schema.worldLoreEntries.id, entry.id))
+		const entry = await makeEntry(lorebook.id, "Entry", "original")
+		const captured = await rawUpdatedAt(entry.id)
 
 		// Simulate a concurrent edit landing while embed() was in flight.
 		await testDb
-			.update(schema.worldLoreEntries)
+			.update(schema.lorebookEntries)
 			.set({ content: "edited while embedding was in flight" })
-			.where(eq(schema.worldLoreEntries.id, entry.id))
+			.where(eq(schema.lorebookEntries.id, entry.id))
 
-		await writeEmbeddingIfFresh(
-			schema.worldLoreEntries,
-			schema.worldLoreEntries.id,
-			schema.worldLoreEntries.updatedAt,
+		await writeEntryVectorIfFresh(
 			entry.id,
-			selected.updatedAtRaw,
+			captured,
 			"test-model",
 			[0.9, 0.9, 0.9]
 		)
 
-		const updated = await testDb.query.worldLoreEntries.findFirst({
-			where: eq(schema.worldLoreEntries.id, entry.id)
-		})
-		// The stale vector must never land — the row stays unembedded and
-		// will correctly be re-picked (needsEmbedding() sees updatedAt >
-		// vectorizedAt, which is still null here).
-		expect(updated?.embedding).toBeNull()
-		expect(updated?.content).toBe("edited while embedding was in flight")
+		// The stale vector must never land — the entry stays unembedded and
+		// will correctly be re-picked, since it has no vector at all.
+		expect(await defaultVector(entry.id)).toBeUndefined()
+		const [row] = await testDb
+			.select({ content: schema.lorebookEntries.content })
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, entry.id))
+		expect(row.content).toBe("edited while embedding was in flight")
 	})
 
 	test("skips the write when the active embedding model changed mid-flight", async () => {
-		const { writeEmbeddingIfFresh } = await import("./vectorizationQueue")
+		const { writeEntryVectorIfFresh } = await import("./vectorizationQueue")
 
 		const user = await makeUser("write-embedding-model-switch-user")
 		const lorebook = await makeLorebook(user.id)
-
-		const [entry] = await testDb
-			.insert(schema.worldLoreEntries)
-			.values({ lorebookId: lorebook.id, name: "Entry", content: "x" })
-			.returning()
-
-		const [selected] = await testDb
-			.select({
-				updatedAtRaw: sql<string>`${schema.worldLoreEntries.updatedAt}::text`
-			})
-			.from(schema.worldLoreEntries)
-			.where(eq(schema.worldLoreEntries.id, entry.id))
+		const entry = await makeEntry(lorebook.id, "Entry")
 
 		// The item was picked under "model-a", but by the time embed()
 		// resolves the loaded model has switched to "model-b".
 		getLoadedModelIdMock.mockReturnValue("model-b")
 
-		await writeEmbeddingIfFresh(
-			schema.worldLoreEntries,
-			schema.worldLoreEntries.id,
-			schema.worldLoreEntries.updatedAt,
+		await writeEntryVectorIfFresh(
 			entry.id,
-			selected.updatedAtRaw,
+			await rawUpdatedAt(entry.id),
 			"model-a",
 			[0.5, 0.5, 0.5]
 		)
 
-		const updated = await testDb.query.worldLoreEntries.findFirst({
-			where: eq(schema.worldLoreEntries.id, entry.id)
-		})
-		expect(updated?.embedding).toBeNull()
+		expect(await defaultVector(entry.id)).toBeUndefined()
 
 		getLoadedModelIdMock.mockReturnValue("test-model")
 	})

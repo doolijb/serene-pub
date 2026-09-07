@@ -599,7 +599,7 @@
 					<input
 						type="password"
 						class="input w-full text-sm"
-						placeholder="(optional, depending on provider)"
+						placeholder="(optional, depending on service)"
 						bind:value={apiKey}
 					/>
 				</label>

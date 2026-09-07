@@ -5,8 +5,8 @@
 	 * Re-homed under the administration shell as designed (formerly
 	 * `/pipelines/extensions`, which now redirects here). Admin
 	 * only, checked here and again in every handler. Shows the installed set with
-	 * the security/speed dial, the live runtime monitor with a manual kill, and
-	 * the hook-invocation log. Inert-runtime is surfaced, not hidden — with the
+	 * the security/speed dial, the live sandbox monitor with a manual kill, and
+	 * the hook-invocation log. An inert sandbox is surfaced, not hidden — with the
 	 * flag off (the 0.6.0 release default) plugins are managed here but do not run.
 	 */
 	import { getContext, onDestroy, onMount } from "svelte"
@@ -19,7 +19,7 @@
 	let plugins: Sockets.Plugins.PluginRow[] = $state([])
 	let logs: Sockets.Plugins.LogRow[] = $state([])
 	let active: Sockets.Plugins.ActiveRow[] = $state([])
-	let runtimeEnabled = $state(false)
+	let sandboxEnabled = $state(false)
 	let loading = $state(true)
 	let permsByPlugin = $state<Record<string, Sockets.Plugins.PermState[]>>({})
 	let storageByPlugin = $state<
@@ -48,7 +48,7 @@
 		}
 		socket.on("plugins:list", (res: Sockets.Plugins.List.Response) => {
 			plugins = res.plugins
-			runtimeEnabled = res.runtimeEnabled
+			sandboxEnabled = res.sandboxEnabled
 			loading = false
 		})
 		socket.on("plugins:logs", (res: Sockets.Plugins.Logs.Response) => {
@@ -83,7 +83,7 @@
 		socket.emit("plugins:list", {})
 		socket.emit("plugins:logs", { limit: 100 })
 		socket.emit("plugins:active", {})
-		// The list rides the same poll as the monitor: `warm` is runtime truth
+		// The list rides the same poll as the monitor: `warm` is live truth
 		// that changes as hooks fire, and a stale badge reads as a stuck unload.
 		pollTimer = setInterval(() => {
 			socket.emit("plugins:active", {})
@@ -98,19 +98,38 @@
 	function setEnabled(p: Sockets.Plugins.PluginRow, enabled: boolean) {
 		socket.emit("plugins:setEnabled", { pluginId: p.pluginId, enabled })
 	}
-	function setBackend(p: Sockets.Plugins.PluginRow, backend: "quickjs" | "ses") {
+	function setBackend(
+		p: Sockets.Plugins.PluginRow,
+		backend: "quickjs" | "ses"
+	) {
 		socket.emit("plugins:setBackend", { pluginId: p.pluginId, backend })
 	}
 	function setSequential(p: Sockets.Plugins.PluginRow, sequential: boolean) {
-		socket.emit("plugins:setSequential", { pluginId: p.pluginId, sequential })
+		socket.emit("plugins:setSequential", {
+			pluginId: p.pluginId,
+			sequential
+		})
 	}
 	function uninstall(p: Sockets.Plugins.PluginRow) {
-		if (confirm(`Uninstall "${p.name}"? Its stored data is removed; its log history is kept.`))
+		if (
+			confirm(
+				`Uninstall "${p.name}"? Its stored data is removed; its log history is kept.`
+			)
+		)
 			socket.emit("plugins:uninstall", { pluginId: p.pluginId })
 	}
 	/** Drop the loaded copy; the plugin stays installed and reloads on the next call. */
 	function unload(p: Sockets.Plugins.PluginRow) {
 		socket.emit("plugins:unload", { pluginId: p.pluginId })
+	}
+	/**
+	 * Ask the hook to stop itself: its `ctx.signal` fires and it winds down in
+	 * its own frame — the transaction it opened, the files it made — and
+	 * returns. Only a hook that is awaiting something can hear it, so a call
+	 * that stays in the list below did not, and Kill is what is left.
+	 */
+	function abort(callId: number) {
+		socket.emit("plugins:abort", { callId })
 	}
 	function kill(callId: number) {
 		socket.emit("plugins:kill", { callId })
@@ -118,6 +137,11 @@
 	function togglePerms(pluginId: string) {
 		openPerms = openPerms === pluginId ? null : pluginId
 		if (openPerms) socket.emit("plugins:permissions", { pluginId })
+	}
+	/** Open (never close) the permissions panel — what the waiting badge does. */
+	function openPermsFor(pluginId: string) {
+		openPerms = pluginId
+		socket.emit("plugins:permissions", { pluginId })
 	}
 	function toggleSettings(pluginId: string) {
 		openSettings = openSettings === pluginId ? null : pluginId
@@ -141,9 +165,7 @@
 		return settingsByPlugin[pluginId]?.values?.[key]
 	}
 	const fieldLabel = (key: string, decl: any): string =>
-		typeof decl?.label === "string"
-			? decl.label
-			: (decl?.label?.en ?? key)
+		typeof decl?.label === "string" ? decl.label : (decl?.label?.en ?? key)
 	const fieldDescription = (decl: any): string | null =>
 		typeof decl?.description === "string"
 			? decl.description
@@ -151,9 +173,19 @@
 	function setPerm(pluginId: string, key: string, granted: boolean) {
 		socket.emit("plugins:setPermission", { pluginId, key, granted })
 	}
+	/**
+	 * The consent act. Until it runs, every permission this extension asked for
+	 * is refused — it loads and runs, but reaches no storage, no network, no
+	 * account resources and no events. Untick anything first: this puts into
+	 * force exactly what is still ticked.
+	 */
+	function reviewPerms(pluginId: string) {
+		socket.emit("plugins:reviewPermissions", { pluginId })
+	}
 	function fmtBytes(n: number | null | undefined): string {
 		if (n == null) return "—"
-		if (n >= 1024 * 1024) return `${Math.round((n / (1024 * 1024)) * 10) / 10} MB`
+		if (n >= 1024 * 1024)
+			return `${Math.round((n / (1024 * 1024)) * 10) / 10} MB`
 		return `${Math.round(n / 1024)} KB`
 	}
 	/** Apply an override typed in MB, or clear it (mb = null). */
@@ -174,17 +206,19 @@
 		<div>
 			<h2 class="text-lg font-semibold">Plugins</h2>
 			<p class="text-surface-600-400 text-sm">
-				Installed extensions: permissions, storage, runtime monitor,
-				and the hook-invocation log.
+				Installed extensions: permissions, storage, sandbox monitor, and
+				the hook-invocation log.
 			</p>
 		</div>
 	</header>
 
-	{#if !runtimeEnabled}
+	{#if !sandboxEnabled}
 		<aside class="card variant-soft-warning p-3 text-sm">
-			The plugin <strong>runtime is disabled</strong> (<code>SP_PLUGINS_ENABLED</code>
-			is not set). You can install and configure extensions here, but hooks do
-			not run until it is enabled. 0.6.0 releases ship with it off.
+			The plugin <strong>sandbox is disabled</strong>
+			(
+			<code>SP_PLUGINS_ENABLED</code>
+			is not set). You can install and configure extensions here, but hooks
+			do not run until it is enabled. 0.6.0 releases ship with it off.
 		</aside>
 	{/if}
 
@@ -197,7 +231,7 @@
 			<p class="text-surface-600-400">No extensions installed.</p>
 		{:else}
 			<div class="overflow-x-auto">
-				<table class="table table-compact w-full">
+				<table class="table-compact table w-full">
 					<thead>
 						<tr>
 							<th>Name</th>
@@ -211,10 +245,22 @@
 						{#each plugins as p (p.pluginId)}
 							<tr>
 								<td>
-									<div class="font-medium">{p.name}</div>
-									<div class="text-xs text-surface-600-400">
+									<div class="font-medium">
+										{p.name}
+										{#if p.needsReview}
+											<button
+												class="badge preset-filled-warning-500 text-xs"
+												title="This extension has asked for permissions nobody has reviewed. They are refused until you do — open Permissions to decide."
+												onclick={() =>
+													openPermsFor(p.pluginId)}
+											>
+												Needs review
+											</button>
+										{/if}
+									</div>
+									<div class="text-surface-600-400 text-xs">
 										{p.pluginId} · v{p.version}
-										{#if runtimeEnabled && p.enabled}
+										{#if sandboxEnabled && p.enabled}
 											{#if p.warm}
 												<span
 													class="text-success-600"
@@ -238,24 +284,35 @@
 										value={p.backend}
 										disabled={p.backends.length < 2}
 										onchange={(e) =>
-											setBackend(p, e.currentTarget.value === "ses" ? "ses" : "quickjs")}
+											setBackend(
+												p,
+												e.currentTarget.value === "ses"
+													? "ses"
+													: "quickjs"
+											)}
 									>
 										{#each p.backends as b}
-											<option value={b}
-												>{b === "quickjs"
+											<option value={b}>
+												{b === "quickjs"
 													? "WASM — max isolation (slower)"
-													: "SES — faster (weaker isolation)"}</option
-											>
+													: "SES — faster (weaker isolation)"}
+											</option>
 										{/each}
 									</select>
 								</td>
 								<td>
-									<label class="flex items-center gap-2 text-sm">
+									<label
+										class="flex items-center gap-2 text-sm"
+									>
 										<input
 											type="checkbox"
 											class="checkbox"
 											checked={p.sequential}
-											onchange={(e) => setSequential(p, e.currentTarget.checked)}
+											onchange={(e) =>
+												setSequential(
+													p,
+													e.currentTarget.checked
+												)}
 										/>
 										Sequential
 									</label>
@@ -265,11 +322,15 @@
 										type="checkbox"
 										class="checkbox"
 										checked={p.enabled}
-										onchange={(e) => setEnabled(p, e.currentTarget.checked)}
+										onchange={(e) =>
+											setEnabled(
+												p,
+												e.currentTarget.checked
+											)}
 									/>
 								</td>
 								<td class="text-right whitespace-nowrap">
-									{#if runtimeEnabled && p.warm}
+									{#if sandboxEnabled && p.warm}
 										<button
 											class="btn btn-sm variant-soft"
 											title="Drop the loaded copy and free its sandbox — it reloads on the next hook call"
@@ -281,7 +342,8 @@
 									{#if p.hasSettings}
 										<button
 											class="btn btn-sm variant-soft"
-											onclick={() => toggleSettings(p.pluginId)}
+											onclick={() =>
+												toggleSettings(p.pluginId)}
 										>
 											Settings
 										</button>
@@ -292,7 +354,10 @@
 									>
 										Permissions
 									</button>
-									<button class="btn btn-sm variant-soft-error" onclick={() => uninstall(p)}>
+									<button
+										class="btn btn-sm variant-soft-error"
+										onclick={() => uninstall(p)}
+									>
 										Uninstall
 									</button>
 								</td>
@@ -302,49 +367,102 @@
 								<tr>
 									<td colspan="5">
 										<div class="space-y-3 p-2">
-											<div class="text-sm font-medium">Settings</div>
+											<div class="text-sm font-medium">
+												Settings
+											</div>
 											{#if !view}
-												<p class="text-surface-600-400 text-xs">Loading…</p>
+												<p
+													class="text-surface-600-400 text-xs"
+												>
+													Loading…
+												</p>
 											{:else}
 												{#if view.state.state === "needs-configuration"}
-													<p class="text-warning-600 text-xs">
-														Waiting on {view.state.missing.join(", ")} — the
-														extension is installed and listed, not broken.
+													<p
+														class="text-warning-600 text-xs"
+													>
+														Waiting on {view.state.missing.join(
+															", "
+														)} — the extension is installed
+														and listed, not broken.
 													</p>
 												{/if}
 												{#each Object.entries(view.schema) as [key, decl] (key)}
-													<label class="flex flex-col gap-1 text-sm">
-														<span class="font-medium">
-															{fieldLabel(key, decl)}
+													<label
+														class="flex flex-col gap-1 text-sm"
+													>
+														<span
+															class="font-medium"
+														>
+															{fieldLabel(
+																key,
+																decl
+															)}
 															{#if decl.required}
-																<span class="text-warning-600">*</span>
+																<span
+																	class="text-warning-600"
+																>
+																	*
+																</span>
 															{/if}
 														</span>
 														{#if fieldDescription(decl)}
-															<span class="text-surface-600-400 text-xs">
-																{fieldDescription(decl)}
+															<span
+																class="text-surface-600-400 text-xs"
+															>
+																{fieldDescription(
+																	decl
+																)}
 															</span>
 														{/if}
 														{#if decl.type === "secret"}
-															{@const set = (settingsByPlugin[p.pluginId]?.values?.[key] as any)?.$secretSet}
-															<div class="flex items-center gap-2">
+															{@const set = (
+																settingsByPlugin[
+																	p.pluginId
+																]?.values?.[
+																	key
+																] as any
+															)?.$secretSet}
+															<div
+																class="flex items-center gap-2"
+															>
 																<input
 																	type="password"
 																	class="input input-sm max-w-xs"
 																	placeholder={set
 																		? "•••••• (set — type to replace)"
 																		: "not set"}
-																	value={typeof settingValue(p.pluginId, key) === "string"
-																		? (settingValue(p.pluginId, key) as string)
+																	value={typeof settingValue(
+																		p.pluginId,
+																		key
+																	) ===
+																	"string"
+																		? (settingValue(
+																				p.pluginId,
+																				key
+																			) as string)
 																		: ""}
-																	oninput={(e) =>
-																		editSetting(p.pluginId, key, e.currentTarget.value)}
+																	oninput={(
+																		e
+																	) =>
+																		editSetting(
+																			p.pluginId,
+																			key,
+																			e
+																				.currentTarget
+																				.value
+																		)}
 																/>
 																{#if set}
 																	<button
 																		class="btn btn-sm variant-soft"
 																		title="Clear the stored secret"
-																		onclick={() => editSetting(p.pluginId, key, null)}
+																		onclick={() =>
+																			editSetting(
+																				p.pluginId,
+																				key,
+																				null
+																			)}
 																	>
 																		Clear
 																	</button>
@@ -354,35 +472,74 @@
 															<input
 																type="checkbox"
 																class="checkbox"
-																checked={!!settingValue(p.pluginId, key)}
+																checked={!!settingValue(
+																	p.pluginId,
+																	key
+																)}
 																onchange={(e) =>
-																	editSetting(p.pluginId, key, e.currentTarget.checked)}
+																	editSetting(
+																		p.pluginId,
+																		key,
+																		e
+																			.currentTarget
+																			.checked
+																	)}
 															/>
 														{:else if decl.type === "enum"}
 															<select
 																class="select select-sm max-w-xs"
-																value={settingValue(p.pluginId, key) ?? ""}
+																value={settingValue(
+																	p.pluginId,
+																	key
+																) ?? ""}
 																onchange={(e) =>
-																	editSetting(p.pluginId, key, e.currentTarget.value)}
+																	editSetting(
+																		p.pluginId,
+																		key,
+																		e
+																			.currentTarget
+																			.value
+																	)}
 															>
 																{#each decl.of ?? [] as opt}
-																	<option value={opt}>{opt}</option>
+																	<option
+																		value={opt}
+																	>
+																		{opt}
+																	</option>
 																{/each}
 															</select>
 														{:else if decl.type === "number" || decl.type === "integer"}
 															<input
 																type="number"
 																class="input input-sm max-w-xs"
-																step={decl.type === "integer" ? "1" : "any"}
+																step={decl.type ===
+																"integer"
+																	? "1"
+																	: "any"}
 																min={decl.min}
 																max={decl.max}
-																value={settingValue(p.pluginId, key) ?? ""}
-																oninput={(e) => {
-																	const n = Number(e.currentTarget.value)
+																value={settingValue(
+																	p.pluginId,
+																	key
+																) ?? ""}
+																oninput={(
+																	e
+																) => {
+																	const n =
+																		Number(
+																			e
+																				.currentTarget
+																				.value
+																		)
 																	editSetting(
 																		p.pluginId,
 																		key,
-																		Number.isFinite(n) ? n : undefined
+																		Number.isFinite(
+																			n
+																		)
+																			? n
+																			: undefined
 																	)
 																}}
 															/>
@@ -391,54 +548,114 @@
 																type="text"
 																class="input input-sm"
 																placeholder="comma-separated"
-																value={Array.isArray(settingValue(p.pluginId, key))
-																	? (settingValue(p.pluginId, key) as string[]).join(", ")
+																value={Array.isArray(
+																	settingValue(
+																		p.pluginId,
+																		key
+																	)
+																)
+																	? (
+																			settingValue(
+																				p.pluginId,
+																				key
+																			) as string[]
+																		).join(
+																			", "
+																		)
 																	: ""}
 																oninput={(e) =>
 																	editSetting(
 																		p.pluginId,
 																		key,
 																		e.currentTarget.value
-																			.split(",")
-																			.map((s) => s.trim())
-																			.filter(Boolean)
+																			.split(
+																				","
+																			)
+																			.map(
+																				(
+																					s
+																				) =>
+																					s.trim()
+																			)
+																			.filter(
+																				Boolean
+																			)
 																	)}
 															/>
 														{:else if decl.type === "text"}
 															<textarea
 																class="textarea text-sm"
 																rows="3"
-																value={String(settingValue(p.pluginId, key) ?? "")}
+																value={String(
+																	settingValue(
+																		p.pluginId,
+																		key
+																	) ?? ""
+																)}
 																oninput={(e) =>
-																	editSetting(p.pluginId, key, e.currentTarget.value)}
+																	editSetting(
+																		p.pluginId,
+																		key,
+																		e
+																			.currentTarget
+																			.value
+																	)}
 															></textarea>
 														{:else}
 															<input
 																type="text"
 																class="input input-sm"
-																value={String(settingValue(p.pluginId, key) ?? "")}
+																value={String(
+																	settingValue(
+																		p.pluginId,
+																		key
+																	) ?? ""
+																)}
 																oninput={(e) =>
-																	editSetting(p.pluginId, key, e.currentTarget.value)}
+																	editSetting(
+																		p.pluginId,
+																		key,
+																		e
+																			.currentTarget
+																			.value
+																	)}
 															/>
 														{/if}
 													</label>
 												{/each}
 												{#if view.orphaned.length}
-													<p class="text-surface-600-400 text-xs">
-														Kept from an earlier version (no longer declared):
-														{view.orphaned.join(", ")}
+													<p
+														class="text-surface-600-400 text-xs"
+													>
+														Kept from an earlier
+														version (no longer
+														declared):
+														{view.orphaned.join(
+															", "
+														)}
 													</p>
 												{/if}
 												{#if settingsError[p.pluginId]}
-													<p class="text-error-600 text-xs">
-														{settingsError[p.pluginId]}
+													<p
+														class="text-error-600 text-xs"
+													>
+														{settingsError[
+															p.pluginId
+														]}
 													</p>
 												{/if}
 												<div>
 													<button
 														class="btn btn-sm variant-soft"
-														disabled={!Object.keys(settingsDraft[p.pluginId] ?? {}).length}
-														onclick={() => saveSettings(p.pluginId)}
+														disabled={!Object.keys(
+															settingsDraft[
+																p.pluginId
+															] ?? {}
+														).length}
+														onclick={() =>
+															saveSettings(
+																p.pluginId
+															)}
 													>
 														Save settings
 													</button>
@@ -453,14 +670,33 @@
 									<td colspan="5">
 										<div class="space-y-1 p-2">
 											{#if storageByPlugin[p.pluginId]}
-												{@const sq = storageByPlugin[p.pluginId]!}
-												<div class="text-sm font-medium">Storage quota</div>
-												<div class="flex flex-wrap items-center gap-2 text-sm">
-													<span class="text-surface-600-400 text-xs">
-														Enforced: <strong>{fmtBytes(sq.effectiveBytes)}</strong>
-														· declared {fmtBytes(sq.declaredBytes)}
+												{@const sq =
+													storageByPlugin[
+														p.pluginId
+													]!}
+												<div
+													class="text-sm font-medium"
+												>
+													Storage quota
+												</div>
+												<div
+													class="flex flex-wrap items-center gap-2 text-sm"
+												>
+													<span
+														class="text-surface-600-400 text-xs"
+													>
+														Enforced: <strong>
+															{fmtBytes(
+																sq.effectiveBytes
+															)}
+														</strong>
+														· declared {fmtBytes(
+															sq.declaredBytes
+														)}
 														{#if sq.overrideBytes != null}
-															· override {fmtBytes(sq.overrideBytes)}
+															· override {fmtBytes(
+																sq.overrideBytes
+															)}
 														{/if}
 													</span>
 													<input
@@ -470,12 +706,22 @@
 														placeholder="MB"
 														disabled={!sq.granted}
 														class="input input-sm w-24"
-														bind:value={quotaDraft[p.pluginId]}
+														bind:value={
+															quotaDraft[
+																p.pluginId
+															]
+														}
 														onkeydown={(e) => {
-															if (e.key === "Enter")
+															if (
+																e.key ===
+																"Enter"
+															)
 																setStorageQuota(
 																	p.pluginId,
-																	quotaDraft[p.pluginId] ?? null
+																	quotaDraft[
+																		p
+																			.pluginId
+																	] ?? null
 																)
 														}}
 													/>
@@ -485,51 +731,142 @@
 														onclick={() =>
 															setStorageQuota(
 																p.pluginId,
-																quotaDraft[p.pluginId] ?? null
+																quotaDraft[
+																	p.pluginId
+																] ?? null
 															)}
 													>
 														Set override
 													</button>
 													<button
 														class="btn btn-sm variant-soft"
-														disabled={sq.overrideBytes == null}
-														onclick={() => setStorageQuota(p.pluginId, null)}
+														disabled={sq.overrideBytes ==
+															null}
+														onclick={() =>
+															setStorageQuota(
+																p.pluginId,
+																null
+															)}
 													>
 														Clear
 													</button>
 													{#if !sq.granted}
-														<span class="text-warning-600 text-xs">
-															(storage denied — grant it to set a quota)
+														{@const notYet = (
+															permsByPlugin[
+																p.pluginId
+															] ?? []
+														).some(
+															(x) =>
+																x.key ===
+																	"storage" &&
+																x.pending
+														)}
+														<span
+															class="text-warning-600 text-xs"
+														>
+															{notYet
+																? "(storage not reviewed yet — approve it below to set a quota)"
+																: "(storage denied — grant it to set a quota)"}
 														</span>
 													{/if}
 												</div>
-												<div class="text-surface-600-400 text-xs">
-													Override band {fmtBytes(sq.minBytes)}–{fmtBytes(sq.maxBytes)}.
+												<div
+													class="text-surface-600-400 text-xs"
+												>
+													Override band {fmtBytes(
+														sq.minBytes
+													)}–{fmtBytes(sq.maxBytes)}.
 												</div>
 											{/if}
-											<div class="text-sm font-medium">Permissions (admin deny)</div>
+											<div class="text-sm font-medium">
+												Permissions
+											</div>
 											{#if (permsByPlugin[p.pluginId] ?? []).length === 0}
-												<p class="text-surface-600-400 text-xs">
-													This extension declares no permissions.
+												<p
+													class="text-surface-600-400 text-xs"
+												>
+													This extension declares no
+													permissions.
 												</p>
 											{:else}
+												{@const pending = (
+													permsByPlugin[p.pluginId] ??
+													[]
+												).filter((x) => x.pending)}
+												{#if pending.length}
+													<p
+														class="text-warning-600 text-xs"
+													>
+														{pending.length} of {(
+															permsByPlugin[
+																p.pluginId
+															] ?? []
+														).length}
+														{pending.length === 1
+															? "permission is"
+															: "permissions are"}
+														waiting on you and refused
+														meanwhile — the extension
+														loads and runs, but reaches
+														nothing it asked for. Untick
+														anything you do not want,
+														then approve.
+													</p>
+												{/if}
 												{#each permsByPlugin[p.pluginId] as perm (perm.key)}
-													<label class="flex items-center gap-2 text-sm">
+													<label
+														class="flex items-center gap-2 text-sm"
+													>
 														<input
 															type="checkbox"
 															class="checkbox"
-															checked={perm.granted}
+															checked={perm.granted ||
+																perm.pending}
 															onchange={(e) =>
-																setPerm(p.pluginId, perm.key, e.currentTarget.checked)}
+																setPerm(
+																	p.pluginId,
+																	perm.key,
+																	e
+																		.currentTarget
+																		.checked
+																)}
 														/>
-														<span>{perm.label}</span>
-														{#if perm.accountAffecting}
-															<span class="text-warning-600 text-xs"
-																>(affects user accounts)</span
+														<span>
+															{perm.label}
+														</span>
+														{#if perm.pending}
+															<span
+																class="text-warning-600 text-xs"
+																title="Requested but not in force — it starts working when you approve"
 															>
+																(requested — not
+																in force)
+															</span>
+														{/if}
+														{#if perm.accountAffecting}
+															<span
+																class="text-warning-600 text-xs"
+															>
+																(affects user
+																accounts)
+															</span>
 														{/if}
 													</label>
 												{/each}
+												{#if pending.length}
+													<div>
+														<button
+															class="btn btn-sm preset-filled-primary-500"
+															onclick={() =>
+																reviewPerms(
+																	p.pluginId
+																)}
+														>
+															Approve the ticked
+															permissions
+														</button>
+													</div>
+												{/if}
 											{/if}
 										</div>
 									</td>
@@ -542,26 +879,45 @@
 		{/if}
 	</section>
 
-	<!-- Live runtime monitor -->
+	<!-- Live sandbox monitor -->
 	<section class="card p-4">
 		<h2 class="h4 mb-3">Running now</h2>
 		{#if active.length === 0}
 			<p class="text-surface-600-400 text-sm">Nothing running.</p>
 		{:else}
-			<table class="table table-compact w-full">
+			<table class="table-compact table w-full">
 				<thead>
-					<tr><th>Extension</th><th>Hook</th><th>Backend</th><th>User</th><th>Elapsed</th><th></th></tr>
+					<tr>
+						<th>Extension</th>
+						<th>Hook</th>
+						<th>Backend</th>
+						<th>User</th>
+						<th>Elapsed</th>
+						<th></th>
+					</tr>
 				</thead>
 				<tbody>
 					{#each active as a (a.callId)}
 						<tr>
 							<td>{a.pluginName}</td>
-							<td>{a.hookName}{a.lifecycle ? " (startup)" : ""}</td>
+							<td>
+								{a.hookName}{a.lifecycle ? " (startup)" : ""}
+							</td>
 							<td>{a.backend}</td>
 							<td>{a.user ?? "—"}</td>
 							<td>{elapsed(a.startedAt)}</td>
 							<td class="text-right">
-								<button class="btn btn-sm variant-soft-error" onclick={() => kill(a.callId)}>
+								<button
+									class="btn btn-sm variant-soft-warning"
+									title="Ask the hook to stop itself and wind down"
+									onclick={() => abort(a.callId)}
+								>
+									Ask to stop
+								</button>
+								<button
+									class="btn btn-sm variant-soft-error"
+									onclick={() => kill(a.callId)}
+								>
 									Kill
 								</button>
 							</td>
@@ -576,17 +932,29 @@
 	<section class="card p-4">
 		<div class="mb-3 flex items-center justify-between">
 			<h2 class="h4">Recent hook calls</h2>
-			<button class="btn btn-sm variant-soft" onclick={() => socket.emit("plugins:logs", { limit: 100 })}>
+			<button
+				class="btn btn-sm variant-soft"
+				onclick={() => socket.emit("plugins:logs", { limit: 100 })}
+			>
 				Refresh
 			</button>
 		</div>
 		{#if logs.length === 0}
-			<p class="text-surface-600-400 text-sm">No invocations logged yet.</p>
+			<p class="text-surface-600-400 text-sm">
+				No invocations logged yet.
+			</p>
 		{:else}
 			<div class="overflow-x-auto">
-				<table class="table table-compact w-full text-sm">
+				<table class="table-compact table w-full text-sm">
 					<thead>
-						<tr><th>Extension</th><th>Hook</th><th>Backend</th><th>Mode</th><th>ms</th><th>Outcome</th></tr>
+						<tr>
+							<th>Extension</th>
+							<th>Hook</th>
+							<th>Backend</th>
+							<th>Mode</th>
+							<th>ms</th>
+							<th>Outcome</th>
+						</tr>
 					</thead>
 					<tbody>
 						{#each logs as l (l.id)}
@@ -596,7 +964,11 @@
 								<td>{l.backend}</td>
 								<td>{l.mode}</td>
 								<td>{l.durationMs}</td>
-								<td class={l.ok ? "text-success-600" : "text-error-600"}>
+								<td
+									class={l.ok
+										? "text-success-600"
+										: "text-error-600"}
+								>
 									{l.outcome}{l.reason ? `: ${l.reason}` : ""}
 								</td>
 							</tr>

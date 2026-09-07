@@ -179,6 +179,10 @@ describe("recording what a run did", () => {
 			"gather.worldLore.read",
 			"gather.characterLore.read",
 			"gather.historyEntries.read",
+			// Spec 1.18.0: the third mechanism, retrieving on the names the scene is
+			// using. Inert by default — both its caps ship at 0 — but it is a
+			// node either way, so it is a line in the trail either way.
+			"gather.entities.read",
 			"gather.cast.read",
 			// Spec 1.4.0: the narrative graph's relationship summary, read as
 			// its own node so it shows up here — a block in the prompt that no
@@ -186,6 +190,20 @@ describe("recording what a run did", () => {
 			// than a read inside the context Task.
 			"gather.relationshipsPerspectives.read",
 			"gather.relationshipsKnown.read",
+			// Spec 1.19.0: the fourth mechanism. Its own block rather than a fifth
+			// chain in `gather`, because chains of a parallel block cannot read
+			// each other and this one needs `gather.history`'s messages — and
+			// because the debug preview stops at the first Provider on the
+			// spine, which `embed` would be.
+			//
+			// All three run on an install with no embedding model: `embed`
+			// returns no vectors under its `auto` setting rather than failing
+			// the turn, and `search` is off by default anyway. Present in the
+			// trail either way, which is the point — a retrieval mechanism nobody can
+			// see on the receipt is one nobody can debug.
+			"semantic.arm.queries",
+			"semantic.arm.embed",
+			"semantic.arm.search",
 			// Spec 1.11.0: who speaks is decided (or an explicit pick recorded)
 			// inside the run — the receipt line 19 §5 exists for.
 			"speaker",
@@ -196,6 +214,23 @@ describe("recording what a run did", () => {
 			// decides what fits belongs in the receipt.
 			"contextBudget",
 			"lore",
+			// Spec 1.20.0: the fifth mechanism — entries reached by a
+			// *description* rather than by a name the scene actually said.
+			// Its own block after `lore` for two reasons: its pool **is**
+			// `lore`'s output, which is what makes it structurally unable to
+			// admit anything, and a Provider on the spine would halt the debug
+			// preview.
+			//
+			// All three run on an install with no embedding model:
+			// `mentions` needs none, `embed` returns no vectors under `auto`
+			// rather than failing the turn, and `link` returns empty with the
+			// reason on the receipt. `loreLinked` then concatenates its output
+			// **in front of** `lore.candidates`, so an empty mechanism leaves `rank`
+			// exactly the list it would have had.
+			"names.arm.mentions",
+			"names.arm.embed",
+			"names.arm.link",
+			"loreLinked",
 			"rank",
 			"lines",
 			"prompt",

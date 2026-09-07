@@ -1571,7 +1571,22 @@
 		msg: Sockets.Sessions.TriggerFunction.Response
 	) {
 		if (msg.sessionId !== sessionId) return
-		if (msg.error) {
+		// Cancelled FIRST, and never as an error. Somebody pressing Cancel is
+		// a deliberate act; it used to arrive here as `error: "the run was
+		// cancelled"` and got a red toast for doing exactly what was asked.
+		if (msg.cancelled) {
+			// A supersede is bookkeeping — the client re-sent the same run id,
+			// so the run this replaces is one nobody watched and nobody
+			// stopped. Its replacement is what the person is looking at, and a
+			// notice about the one it displaced would be noise blaming them
+			// for a cancel they did not make.
+			if (msg.cancelledBy !== "system:superseded")
+				toaster.info({ title: msg.function, description: "Cancelled." })
+			// Still re-read: a run stops BETWEEN nodes, so a consumer earlier
+			// in the spec may already have written. "Cancelled" is all this
+			// knows; "nothing happened" is a claim it cannot make.
+			socket.emit("sessions:get", { id: sessionId })
+		} else if (msg.error) {
 			toaster.error({ title: msg.function, description: msg.error })
 		} else if (msg.success) {
 			// The spec's consumers wrote whatever they wrote — re-read the session
@@ -1747,10 +1762,7 @@
 			)
 			socket.off("sessions:triggers", handleSessionsTriggers)
 			socket.off("sessions:view", handleSessionsView)
-			socket.off(
-				"sessions:panelLayout:get",
-				handleSessionsPanelLayoutGet
-			)
+			socket.off("sessions:panelLayout:get", handleSessionsPanelLayoutGet)
 			socket.off("sessions:surfaceIntent", handleSurfaceIntent)
 			socket.off(
 				"sessions:triggerFunction",
@@ -1898,411 +1910,479 @@
 					title={sessionViewFrame.title ?? "Session view"}
 					surface="session-view"
 					session={session
-						? { id: session.id, name: (session as any).name ?? null }
+						? {
+								id: session.id,
+								name: (session as any).name ?? null
+							}
 						: undefined}
 					messages={session?.sessionMessages ?? []}
 					onAction={handleFrameAction}
 				/>
 			</div>
 		{:else}
-		<!-- The modular session layout (mockup 2026-08-28): the conversation
+			<!-- The modular session layout (mockup 2026-08-28): the conversation
 		     is the fixed chat core; widgets live in the free-form zones the
 		     user's layout template declares — pinned rails, icon strips with
 		     pop-overs, and top/bottom strips, all by measured width. -->
-		<SessionLayout
-			manager={surfaceManager}
-			{sessionId}
-			{session}
-			onFrameAction={handleFrameAction}
-		>
-			{#snippet messagesChildren()}
-		<SessionContainer
-			{session}
-			{pagination}
-			{loadingOlderMessages}
-			bind:sessionMessagesContainer
-			onScroll={handleScroll}
-			{getMessageCharacter}
-			{canControlMessage}
-			{showSwipeControls}
-			{canSwipeRight}
-			{canRegenerateLastMessage}
-			onSwipeLeft={swipeLeft}
-			onSwipeRight={swipeRight}
-			onEditMessage={handleEditMessage}
-			onDeleteMessage={handleDeleteMessage}
-			onHideMessage={handleHideMessage}
-			onRegenerateMessage={handleRegenerateMessage}
-			onContinueMessage={handleContinueMessage}
-			onAbortMessage={handleAbortMessage}
-			onBranchMessage={handleBranchMessage}
-			{editSessionMessage}
-			{hasGeneratingMessage}
-			{isGuest}
-			{sceneList}
-			onHistoryEntryClick={({ historyEntryId, lorebookId }) => {
-				panelsCtx.digest.lorebookId = lorebookId
-				panelsCtx.digest.historyEntryId = historyEntryId
-				panelsCtx.digest.historyEntryTab = "content"
-				panelsCtx.openPanel({ key: "lorebooks", toggle: false })
-			}}
-			onSceneClick={({ sceneId, historyEntryId, lorebookId }) => {
-				panelsCtx.digest.lorebookId = lorebookId
-				panelsCtx.digest.historyEntryId = historyEntryId
-				panelsCtx.digest.historyEntryTab = "scenes"
-				panelsCtx.digest.sceneId = sceneId
-				panelsCtx.openPanel({ key: "lorebooks", toggle: false })
-			}}
-			onNewHistoryEntry={({ lorebookId }) => {
-				panelsCtx.digest.lorebookId = lorebookId
-				panelsCtx.digest.historyEntryTab = "content"
-				panelsCtx.openPanel({ key: "lorebooks", toggle: false })
-			}}
-			onAttachLorebook={() => {
-				panelsCtx.openPanel({ key: "lorebooks", toggle: false })
-			}}
-		>
-			{#snippet MessageComponent(props)}
-				<SessionMessage
-					{...props}
-					onCharacterNameClick={handleCharacterNameClick}
-					onAvatarClick={handleAvatarClick}
-					onImageClick={handleImageClick}
-					onCancelEditMessage={handleCancelEditMessage}
-					onSaveEditMessage={handleSaveEditMessage}
-					bind:openMsgControlsMenu
-					{lastPersonaMessage}
-					{isSummarizationMode}
-					isSelected={selectedMessageIds.has(props.msg.id)}
-					onStartSummarization={summarizationEnabled &&
-					!isSummarizationMode
-						? enterSummarizationMode
-						: undefined}
-					menuTriggers={modeTriggers.filter(
-						(t) => t.kind === "menu"
-					)}
-					onFireTrigger={fireMenuTrigger}
-					onBlockAction={fireBlockAction}
->
-					{#snippet GeneratingAnimationComponent()}
-						{@const character = props.getMessageCharacter(
-							props.msg
-						)}
-						{@const speakerName = props.msg.isNarratorResponse
-							? props.msg.metadata?.narratorName || "Narrator"
-							: resolveCharacterName(character, "User")}
-						<GeneratingAnimation
-							text={`${speakerName} is typing`}
-						/>
-					{/snippet}
-					{#snippet messageControls(msg)}
-						{#if isSummarizationMode}
-							{@const isScened = scenedMessageIds.has(msg.id)}
-							<div
-								class="flex gap-2"
-								role="group"
-								aria-label="Selection controls"
-							>
-								{#if isScened}
-									<span
-										class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600 cursor-not-allowed opacity-60"
-										title="Already captured in a scene"
-										aria-label="Already captured in a scene"
-									>
-										<Icons.Film aria-hidden="true" />
-										<span class="hidden lg:inline">
-											In Scene
-										</span>
-									</span>
-								{:else}
-									<button
-										class="btn msg-ctrl-btn-labeled {selectedMessageIds.has(
-											msg.id
-										)
-											? 'preset-filled-secondary-500'
-											: 'preset-filled-surface-400-600'}"
-										title={selectedMessageIds.has(msg.id)
-											? "Deselect message"
-											: "Select message"}
-										aria-label={selectedMessageIds.has(
-											msg.id
-										)
-											? "Deselect message"
-											: "Select message"}
-										aria-pressed={selectedMessageIds.has(
-											msg.id
-										)}
-										onclick={() =>
-											toggleSummarizationMessage(msg.id)}
-									>
-										{#if selectedMessageIds.has(msg.id)}
-											<Icons.CheckSquare
-												aria-hidden="true"
-											/>
-										{:else}
-											<Icons.Square aria-hidden="true" />
-										{/if}
-										<span class="hidden lg:inline">
-											{selectedMessageIds.has(msg.id)
-												? "Deselect"
-												: "Select"}
-										</span>
-									</button>
-									<button
-										class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600"
-										title="Select all above up to nearest selected"
-										aria-label="Select all above up to nearest selected"
-										onclick={() =>
-											selectAllAbove(props.index)}
-									>
-										<Icons.ChevronsUp aria-hidden="true" />
-										<span class="hidden lg:inline">
-											Select All Above
-										</span>
-									</button>
-									<button
-										class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600"
-										title="Select all below up to nearest selected"
-										aria-label="Select all below up to nearest selected"
-										onclick={() =>
-											selectAllBelow(props.index)}
-									>
-										<Icons.ChevronsDown
-											aria-hidden="true"
-										/>
-										<span class="hidden lg:inline">
-											Select All Below
-										</span>
-									</button>
-								{/if}
-							</div>
-						{:else}
-							<MessageControls
-								{msg}
-								isLastMessage={props.isLastMessage}
-								canRegenerateLastMessage={props.canRegenerateLastMessage}
-								editSessionMessage={props.editSessionMessage}
-								hasGeneratingMessage={props.hasGeneratingMessage}
-								onEditMessage={props.onEditMessage}
-								onHideMessage={props.onHideMessage}
-								onDeleteMessage={props.onDeleteMessage}
-								onRegenerateMessage={props.onRegenerateMessage}
-								onContinueMessage={props.onContinueMessage}
-								onAbortMessage={props.onAbortMessage}
-								onBranchMessage={props.onBranchMessage}
-								onStartSummarization={summarizationEnabled
+			<SessionLayout
+				manager={surfaceManager}
+				{sessionId}
+				{session}
+				onFrameAction={handleFrameAction}
+			>
+				{#snippet messagesChildren()}
+					<SessionContainer
+						{session}
+						{pagination}
+						{loadingOlderMessages}
+						bind:sessionMessagesContainer
+						onScroll={handleScroll}
+						{getMessageCharacter}
+						{canControlMessage}
+						{showSwipeControls}
+						{canSwipeRight}
+						{canRegenerateLastMessage}
+						onSwipeLeft={swipeLeft}
+						onSwipeRight={swipeRight}
+						onEditMessage={handleEditMessage}
+						onDeleteMessage={handleDeleteMessage}
+						onHideMessage={handleHideMessage}
+						onRegenerateMessage={handleRegenerateMessage}
+						onContinueMessage={handleContinueMessage}
+						onAbortMessage={handleAbortMessage}
+						onBranchMessage={handleBranchMessage}
+						{editSessionMessage}
+						{hasGeneratingMessage}
+						{isGuest}
+						{sceneList}
+						onHistoryEntryClick={({
+							historyEntryId,
+							lorebookId
+						}) => {
+							panelsCtx.digest.lorebookId = lorebookId
+							panelsCtx.digest.historyEntryId = historyEntryId
+							panelsCtx.digest.historyEntryTab = "content"
+							panelsCtx.openPanel({
+								key: "lorebooks",
+								toggle: false
+							})
+						}}
+						onSceneClick={({
+							sceneId,
+							historyEntryId,
+							lorebookId
+						}) => {
+							panelsCtx.digest.lorebookId = lorebookId
+							panelsCtx.digest.historyEntryId = historyEntryId
+							panelsCtx.digest.historyEntryTab = "scenes"
+							panelsCtx.digest.sceneId = sceneId
+							panelsCtx.openPanel({
+								key: "lorebooks",
+								toggle: false
+							})
+						}}
+						onNewHistoryEntry={({ lorebookId }) => {
+							panelsCtx.digest.lorebookId = lorebookId
+							panelsCtx.digest.historyEntryTab = "content"
+							panelsCtx.openPanel({
+								key: "lorebooks",
+								toggle: false
+							})
+						}}
+						onAttachLorebook={() => {
+							panelsCtx.openPanel({
+								key: "lorebooks",
+								toggle: false
+							})
+						}}
+					>
+						{#snippet MessageComponent(props)}
+							<SessionMessage
+								{...props}
+								onCharacterNameClick={handleCharacterNameClick}
+								onAvatarClick={handleAvatarClick}
+								onImageClick={handleImageClick}
+								onCancelEditMessage={handleCancelEditMessage}
+								onSaveEditMessage={handleSaveEditMessage}
+								bind:openMsgControlsMenu
+								{lastPersonaMessage}
+								{isSummarizationMode}
+								isSelected={selectedMessageIds.has(
+									props.msg.id
+								)}
+								onStartSummarization={summarizationEnabled &&
+								!isSummarizationMode
 									? enterSummarizationMode
 									: undefined}
-								debugMeta={systemSettingsCtx.settings
-									?.contextDebuggingEnabled
-									? (msg.debugMeta ?? null)
-									: null}
-								onShowDebugMeta={systemSettingsCtx.settings
-									?.contextDebuggingEnabled
-									? (meta: any) => {
-											draftCompiledPrompt = {
-												prompt: meta?.prompt,
-												messages: meta?.messages,
-												meta
-											}
-											showDraftCompiledPromptModal = true
-										}
-									: undefined}
-								open={openMsgControlsMenu === msg.id}
-								onOpenChange={(isOpen) =>
-									(openMsgControlsMenu = isOpen
-										? msg.id
-										: undefined)}
-							/>
-						{/if}
-					{/snippet}
-				</SessionMessage>
-			{/snippet}
-			{#snippet NextCharacterComponent()}
-				{#if shouldShowNextCharacterBlock}
-					<NextCharacterBlock
-						{nextCharacter}
-						shouldShow={shouldShowNextCharacterBlock}
-						{canChooseDifferentCharacter}
-						onContinueWithNextCharacter={handleContinueWithNextCharacter}
-						onChooseDifferentCharacter={handleChooseDifferentCharacter}
-					/>
-				{/if}
-			{/snippet}
-		</SessionContainer>
-			{/snippet}
-			{#snippet composerChildren()}
-				{#if isSummarizationMode && summarizationEnabled}
-					<div
-						class="preset-tonal-secondary flex flex-wrap items-center gap-2 p-3 lg:rounded-t-lg"
-					>
-						<span class="text-sm font-semibold">
-							{selectedMessageIds.size}
-							{selectedMessageIds.size === 1
-								? "message"
-								: "messages"} selected
-						</span>
-						<div class="flex gap-2">
-							<button
-								class="btn btn-sm preset-filled-surface-400-600"
-								title="Select All"
-								onclick={() => {
-									selectedMessageIds = new Set(
-										session!.sessionMessages
-											.filter(
-												(m) =>
-													!scenedMessageIds.has(m.id)
-											)
-											.map((m) => m.id)
-									)
-								}}
+								menuTriggers={modeTriggers.filter(
+									(t) => t.kind === "menu"
+								)}
+								onFireTrigger={fireMenuTrigger}
+								onBlockAction={fireBlockAction}
 							>
-								<Icons.CheckSquare size={16} />
-								<span class="hidden sm:inline">Select All</span>
-							</button>
-							<button
-								class="btn btn-sm preset-filled-surface-400-600"
-								title="Select None"
-								onclick={() => (selectedMessageIds = new Set())}
-							>
-								<Icons.Square size={16} />
-								<span class="hidden sm:inline">
-									Select None
-								</span>
-							</button>
+								{#snippet GeneratingAnimationComponent()}
+									{@const character =
+										props.getMessageCharacter(props.msg)}
+									{@const speakerName = props.msg
+										.isNarratorResponse
+										? props.msg.metadata?.narratorName ||
+											"Narrator"
+										: resolveCharacterName(
+												character,
+												"User"
+											)}
+									<GeneratingAnimation
+										text={`${speakerName} is typing`}
+									/>
+								{/snippet}
+								{#snippet messageControls(msg)}
+									{#if isSummarizationMode}
+										{@const isScened = scenedMessageIds.has(
+											msg.id
+										)}
+										<div
+											class="flex gap-2"
+											role="group"
+											aria-label="Selection controls"
+										>
+											{#if isScened}
+												<span
+													class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600 cursor-not-allowed opacity-60"
+													title="Already captured in a scene"
+													aria-label="Already captured in a scene"
+												>
+													<Icons.Film
+														aria-hidden="true"
+													/>
+													<span
+														class="hidden lg:inline"
+													>
+														In Scene
+													</span>
+												</span>
+											{:else}
+												<button
+													class="btn msg-ctrl-btn-labeled {selectedMessageIds.has(
+														msg.id
+													)
+														? 'preset-filled-secondary-500'
+														: 'preset-filled-surface-400-600'}"
+													title={selectedMessageIds.has(
+														msg.id
+													)
+														? "Deselect message"
+														: "Select message"}
+													aria-label={selectedMessageIds.has(
+														msg.id
+													)
+														? "Deselect message"
+														: "Select message"}
+													aria-pressed={selectedMessageIds.has(
+														msg.id
+													)}
+													onclick={() =>
+														toggleSummarizationMessage(
+															msg.id
+														)}
+												>
+													{#if selectedMessageIds.has(msg.id)}
+														<Icons.CheckSquare
+															aria-hidden="true"
+														/>
+													{:else}
+														<Icons.Square
+															aria-hidden="true"
+														/>
+													{/if}
+													<span
+														class="hidden lg:inline"
+													>
+														{selectedMessageIds.has(
+															msg.id
+														)
+															? "Deselect"
+															: "Select"}
+													</span>
+												</button>
+												<button
+													class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600"
+													title="Select all above up to nearest selected"
+													aria-label="Select all above up to nearest selected"
+													onclick={() =>
+														selectAllAbove(
+															props.index
+														)}
+												>
+													<Icons.ChevronsUp
+														aria-hidden="true"
+													/>
+													<span
+														class="hidden lg:inline"
+													>
+														Select All Above
+													</span>
+												</button>
+												<button
+													class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600"
+													title="Select all below up to nearest selected"
+													aria-label="Select all below up to nearest selected"
+													onclick={() =>
+														selectAllBelow(
+															props.index
+														)}
+												>
+													<Icons.ChevronsDown
+														aria-hidden="true"
+													/>
+													<span
+														class="hidden lg:inline"
+													>
+														Select All Below
+													</span>
+												</button>
+											{/if}
+										</div>
+									{:else}
+										<MessageControls
+											{msg}
+											isLastMessage={props.isLastMessage}
+											canRegenerateLastMessage={props.canRegenerateLastMessage}
+											editSessionMessage={props.editSessionMessage}
+											hasGeneratingMessage={props.hasGeneratingMessage}
+											onEditMessage={props.onEditMessage}
+											onHideMessage={props.onHideMessage}
+											onDeleteMessage={props.onDeleteMessage}
+											onRegenerateMessage={props.onRegenerateMessage}
+											onContinueMessage={props.onContinueMessage}
+											onAbortMessage={props.onAbortMessage}
+											onBranchMessage={props.onBranchMessage}
+											onStartSummarization={summarizationEnabled
+												? enterSummarizationMode
+												: undefined}
+											debugMeta={systemSettingsCtx
+												.settings
+												?.contextDebuggingEnabled
+												? (msg.debugMeta ?? null)
+												: null}
+											onShowDebugMeta={systemSettingsCtx
+												.settings
+												?.contextDebuggingEnabled
+												? (meta: any) => {
+														draftCompiledPrompt = {
+															prompt: meta?.prompt,
+															messages:
+																meta?.messages,
+															meta
+														}
+														showDraftCompiledPromptModal = true
+													}
+												: undefined}
+											open={openMsgControlsMenu ===
+												msg.id}
+											onOpenChange={(isOpen) =>
+												(openMsgControlsMenu = isOpen
+													? msg.id
+													: undefined)}
+										/>
+									{/if}
+								{/snippet}
+							</SessionMessage>
+						{/snippet}
+						{#snippet NextCharacterComponent()}
+							{#if shouldShowNextCharacterBlock}
+								<NextCharacterBlock
+									{nextCharacter}
+									shouldShow={shouldShowNextCharacterBlock}
+									{canChooseDifferentCharacter}
+									onContinueWithNextCharacter={handleContinueWithNextCharacter}
+									onChooseDifferentCharacter={handleChooseDifferentCharacter}
+								/>
+							{/if}
+						{/snippet}
+					</SessionContainer>
+				{/snippet}
+				{#snippet composerChildren()}
+					{#if isSummarizationMode && summarizationEnabled}
+						<div
+							class="preset-tonal-secondary flex flex-wrap items-center gap-2 p-3 lg:rounded-t-lg"
+						>
+							<span class="text-sm font-semibold">
+								{selectedMessageIds.size}
+								{selectedMessageIds.size === 1
+									? "message"
+									: "messages"} selected
+							</span>
+							<div class="flex gap-2">
+								<button
+									class="btn btn-sm preset-filled-surface-400-600"
+									title="Select All"
+									onclick={() => {
+										selectedMessageIds = new Set(
+											session!.sessionMessages
+												.filter(
+													(m) =>
+														!scenedMessageIds.has(
+															m.id
+														)
+												)
+												.map((m) => m.id)
+										)
+									}}
+								>
+									<Icons.CheckSquare size={16} />
+									<span class="hidden sm:inline">
+										Select All
+									</span>
+								</button>
+								<button
+									class="btn btn-sm preset-filled-surface-400-600"
+									title="Select None"
+									onclick={() =>
+										(selectedMessageIds = new Set())}
+								>
+									<Icons.Square size={16} />
+									<span class="hidden sm:inline">
+										Select None
+									</span>
+								</button>
+							</div>
+							<div class="ml-auto flex flex-wrap gap-2">
+								<button
+									class="btn btn-sm preset-filled-surface-500"
+									title="Cancel"
+									onclick={exitSummarizationMode}
+								>
+									<Icons.X size={16} />
+									<span class="hidden sm:inline">Cancel</span>
+								</button>
+								<button
+									class="btn btn-sm preset-filled-secondary-500"
+									title="Scene"
+									disabled={selectedMessageIds.size === 0}
+									onclick={() => openSummarizeModal("scene")}
+								>
+									<Icons.Film size={16} />
+									<span class="hidden sm:inline">Scene</span>
+								</button>
+								<button
+									class="btn btn-sm preset-filled-primary-500"
+									title="World Lore"
+									disabled={selectedMessageIds.size === 0}
+									onclick={() => openSummarizeModal("world")}
+								>
+									<Icons.Globe size={16} />
+									<span class="hidden sm:inline">
+										World Lore
+									</span>
+								</button>
+								<button
+									class="btn btn-sm preset-filled-tertiary-500"
+									title="Character Lore"
+									disabled={selectedMessageIds.size === 0}
+									onclick={() =>
+										openSummarizeModal("character")}
+								>
+									<Icons.User size={16} />
+									<span class="hidden sm:inline">
+										Character Lore
+									</span>
+								</button>
+							</div>
 						</div>
-						<div class="ml-auto flex flex-wrap gap-2">
-							<button
-								class="btn btn-sm preset-filled-surface-500"
-								title="Cancel"
-								onclick={exitSummarizationMode}
-							>
-								<Icons.X size={16} />
-								<span class="hidden sm:inline">Cancel</span>
-							</button>
-							<button
-								class="btn btn-sm preset-filled-secondary-500"
-								title="Scene"
-								disabled={selectedMessageIds.size === 0}
-								onclick={() => openSummarizeModal("scene")}
-							>
-								<Icons.Film size={16} />
-								<span class="hidden sm:inline">Scene</span>
-							</button>
-							<button
-								class="btn btn-sm preset-filled-primary-500"
-								title="World Lore"
-								disabled={selectedMessageIds.size === 0}
-								onclick={() => openSummarizeModal("world")}
-							>
-								<Icons.Globe size={16} />
-								<span class="hidden sm:inline">World Lore</span>
-							</button>
-							<button
-								class="btn btn-sm preset-filled-tertiary-500"
-								title="Character Lore"
-								disabled={selectedMessageIds.size === 0}
-								onclick={() => openSummarizeModal("character")}
-							>
-								<Icons.User size={16} />
-								<span class="hidden sm:inline">
-									Character Lore
-								</span>
-							</button>
-						</div>
-					</div>
-				{:else if modeMissing}
-					<!-- Read-only (19 §6, ruled): the mode disappeared, the
+					{:else if modeMissing}
+						<!-- Read-only (19 §6, ruled): the mode disappeared, the
 					     history stays, nothing starts a new turn — and the
 					     server refuses independently at every generation
 					     choke, so this banner is honesty, not the lock. -->
-					<div
-						class="preset-tonal-warning flex items-start gap-3 rounded-t-lg p-4"
-						role="status"
-					>
-						<Icons.Lock size={20} class="mt-0.5 shrink-0" />
-						<div class="text-sm">
-							<p class="font-semibold">
-								This session is read-only.
-							</p>
-							<p>
-								Its mode ({(session as any)?.genreId}) is not
-								installed. Messages are safe to read; new turns
-								resume when the mode returns.
-							</p>
+						<div
+							class="preset-tonal-warning flex items-start gap-3 rounded-t-lg p-4"
+							role="status"
+						>
+							<Icons.Lock size={20} class="mt-0.5 shrink-0" />
+							<div class="text-sm">
+								<p class="font-semibold">
+									This session is read-only.
+								</p>
+								<p>
+									Its mode ({(session as any)?.genreId}) is
+									not installed. Messages are safe to read;
+									new turns resume when the mode returns.
+								</p>
+							</div>
 						</div>
-					</div>
-				{:else}
-					{#each [...typingPersonas.values()] as typingPersona (typingPersona.name)}
-						<div class="flex items-center gap-2 px-2 pb-1">
-							<p
-								class="text-surface-600-400 animate-pulse text-sm"
-							>
-								{typingPersona.name} is typing...
-							</p>
-							<div
-								class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
-							></div>
-						</div>
-					{/each}
-					<SessionComposer
-						bind:newMessage
-						onSend={handleSend}
-						hideCompose={composerHidden}
-						{draftCompiledPrompt}
-						{currentUserPersona}
-						{userPersonasInSession}
-						onSwitchPersona={switchPersona}
-						session={session ?? undefined}
-						{lastMessage}
-						{editSessionMessage}
-						{isGuest}
-						{showAddPersonaCTA}
-						onAddPersonaClick={() => {
-							showAddPersonaModal = true
-						}}
-						onAbortLastMessage={handleAbortLastMessage}
-						extraTabs={isGuest
-							? []
-							: [
-									{
-										value: "extraControls",
-										title: "Extra Controls",
-										control: extraControlsButton,
-										content: extraControlsContent
-									},
-									...(session?.lorebookId
-										? [
-												{
-													value: "workflow",
-													title: "Lore",
-													control: workflowButton,
-													content: workflowContent
-												}
-											]
-										: []),
-									{
-										value: "sceneImages",
-										title: "Pinned Images",
-										control: sceneImagesButton,
-										content: sceneImagesContent
-									},
-									...(systemSettingsCtx.settings
-										?.contextDebuggingEnabled
-										? [
-												{
-													value: "statistics",
-													title: "Statistics",
-													control: statisticsButton,
-													content: statisticsContent
-												}
-											]
-										: [])
-								]}
-					/>
-				{/if}
-			{/snippet}
-		</SessionLayout>
+					{:else}
+						{#each [...typingPersonas.values()] as typingPersona (typingPersona.name)}
+							<div class="flex items-center gap-2 px-2 pb-1">
+								<p
+									class="text-surface-600-400 animate-pulse text-sm"
+								>
+									{typingPersona.name} is typing...
+								</p>
+								<div
+									class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
+								></div>
+							</div>
+						{/each}
+						<SessionComposer
+							bind:newMessage
+							onSend={handleSend}
+							hideCompose={composerHidden}
+							{draftCompiledPrompt}
+							{currentUserPersona}
+							{userPersonasInSession}
+							onSwitchPersona={switchPersona}
+							session={session ?? undefined}
+							{lastMessage}
+							{editSessionMessage}
+							{isGuest}
+							{showAddPersonaCTA}
+							onAddPersonaClick={() => {
+								showAddPersonaModal = true
+							}}
+							onAbortLastMessage={handleAbortLastMessage}
+							extraTabs={isGuest
+								? []
+								: [
+										{
+											value: "extraControls",
+											title: "Extra Controls",
+											control: extraControlsButton,
+											content: extraControlsContent
+										},
+										...(session?.lorebookId
+											? [
+													{
+														value: "workflow",
+														title: "Lore",
+														control: workflowButton,
+														content: workflowContent
+													}
+												]
+											: []),
+										{
+											value: "sceneImages",
+											title: "Pinned Images",
+											control: sceneImagesButton,
+											content: sceneImagesContent
+										},
+										...(systemSettingsCtx.settings
+											?.contextDebuggingEnabled
+											? [
+													{
+														value: "statistics",
+														title: "Statistics",
+														control:
+															statisticsButton,
+														content:
+															statisticsContent
+													}
+												]
+											: [])
+									]}
+						/>
+					{/if}
+				{/snippet}
+			</SessionLayout>
 		{/if}
 	</div>
 
@@ -2522,7 +2602,7 @@
 										</span>
 									{/if}
 									<!--
-										One engine now. Which retrieval *arm*
+										One engine now. Which retrieval *mechanism*
 										ran — keyword, vector, or both — is a
 										per-candidate fact and shows up in the
 										Retrieval section's reasoning, not as a

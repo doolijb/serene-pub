@@ -13,6 +13,8 @@
 	import AdminList, {
 		type AdminColumn
 	} from "$lib/client/components/admin/AdminList.svelte"
+	import RetrievalPanel from "./RetrievalPanel.svelte"
+	import SessionUsagePanel from "./SessionUsagePanel.svelte"
 	import { onDestroy, onMount } from "svelte"
 
 	type Run = Sockets.Pipelines.Runs.Response["runs"][number]
@@ -266,6 +268,16 @@
 				</table>
 			</div>
 		{/if}
+		<!-- The candidate-level half of the same receipt. The table above says
+		     which nodes ran; this says what they decided about each entry,
+		     which is the question the rows cannot answer (design §9). -->
+		<RetrievalPanel runId={openRun.runId} />
+		<!-- And the same question asked of the whole session rather than of
+		     this turn: which entries have ever reached a prompt here. A
+		     decision belongs to a run, so it cannot be answered from the
+		     receipt above — but a reader looking at one receipt is exactly the
+		     person asking. -->
+		<SessionUsagePanel sessionId={openRun.sessionId} />
 		<details>
 			<summary
 				class="text-surface-600-400 cursor-pointer text-xs select-none"

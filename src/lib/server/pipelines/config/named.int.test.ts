@@ -25,12 +25,14 @@ import {
 	RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
 import {
+	acknowledgeNotices,
 	ensureDefaultConfig,
 	reconcileConfigs,
 	pendingNotices,
 	resolveSelectedConfig,
 	selectConfig
 } from "$lib/server/pipelines/config/named"
+import { declarations } from "$lib/server/pipelines/config/panel"
 
 let db: TestDb
 let specId: number
@@ -119,7 +121,9 @@ describe("the shipped default", () => {
 			const [row] = await db
 				.select()
 				.from(schema.pipelineContextTemplates)
-				.where(eq(schema.pipelineContextTemplates.id, v.value as number))
+				.where(
+					eq(schema.pipelineContextTemplates.id, v.value as number)
+				)
 			expect(row, "a template slot points at nothing").toBeTruthy()
 			expect(row.engine, "a template row has no engine").toBeTruthy()
 			checked++
@@ -197,6 +201,12 @@ describe("what a new version does to a tuned config", () => {
 			"set against a field that is going away"
 		)
 		expect(culled[0].specVersionId).toBe(specVersionId)
+		// And it says WHICH control. This one was never declared by any
+		// version here, so the label is the address humanized the way the
+		// panel humanizes every other key — which is still a name a person
+		// recognises, and is the fallback, not the happy path (see the
+		// "naming what was culled" block below for the declared label).
+		expect(culled[0].label).toBe("A Param This Version Does Not Declare")
 	})
 
 	it("never touches a value that still has an address", async () => {
@@ -479,6 +489,24 @@ describe("the narrator split, from an older configuration", () => {
 		expect(byPath.get("exampleDialogue")).toBe(42)
 		expect(byPath.get("speakerRelationships")).toBe(43)
 	})
+
+	it("names the layouts it dropped, not just their addresses", async () => {
+		// "A setting was removed" is barely better than silence. The type that
+		// declared these is gone from this install, so the name comes from the
+		// address — and `exampleDialogue` reads as "Example Dialogue", which is
+		// what the control was called on the screen the user set it from.
+		const notices = await db
+			.select()
+			.from(schema.pipelineConfigNotices)
+			.where(eq(schema.pipelineConfigNotices.configId, configId))
+		const byPath = new Map(
+			(notices as any[])
+				.filter((n) => n.kind === "culled")
+				.map((n) => [n.path, n.label])
+		)
+		expect(byPath.get("exampleDialogue")).toBe("Example Dialogue")
+		expect(byPath.get("speakerRelationships")).toBe("Speaker Relationships")
+	})
 })
 
 /**
@@ -510,7 +538,10 @@ describe("an author preset that sets a whole settings slot", () => {
 		)
 		const rows = await valuesOf(res.configId)
 		return new Map(
-			(rows as any[]).map((r) => [`${r.nodeKey}|${r.slot}|${r.path}`, r.value])
+			(rows as any[]).map((r) => [
+				`${r.nodeKey}|${r.slot}|${r.path}`,
+				r.value
+			])
 		)
 	}
 
@@ -544,5 +575,208 @@ describe("an author preset that sets a whole settings slot", () => {
 			.from(schema.pipelineConfigs)
 			.where(eq(schema.pipelineConfigs.id, res.configId))
 		expect(config.name).toBe("Ask for the prompt")
+	})
+})
+
+/**
+ * A notice that cannot name what was lost is barely better than silence.
+ *
+ * The cull wrote `label: null` for as long as it existed, which left the one
+ * surface that could explain a missing setting able to say only "something at
+ * an address you cannot read is gone". The label is not reachable from the
+ * declarations the reconciler is holding — a cull is *defined* as an address
+ * the new version does not declare — so it comes from the version that did
+ * declare it, and from the address when that version's declarations are gone.
+ *
+ * Both halves are asserted, because the fallback is the one that runs during
+ * pre-release re-projection (0186, 0191) and the declared label is the one that
+ * runs on every version bump after 0.6.0 ships.
+ */
+describe("naming what was culled", () => {
+	let mine: number
+	/** The address only the older version declares, and what it called it. */
+	let retired: { nodeKey: string; slot: string; path: string; label: string }
+
+	beforeAll(async () => {
+		// An earlier published version of this same pipeline, carrying a step
+		// the active version does not have. Built from a type the registry
+		// already holds — one that actually declares a labelled field — so its
+		// declarations, and their labels, are the real ones rather than a
+		// fixture's idea of them.
+		const live = await declarations(db as any, specVersionId)
+		const source = live.find((d) => !!d.path && !!d.label)!
+		const [node] = await db
+			.select()
+			.from(schema.pipelineNodes)
+			.where(
+				and(
+					eq(schema.pipelineNodes.specVersionId, specVersionId),
+					eq(schema.pipelineNodes.nodeKey, source.nodeKey)
+				)
+			)
+
+		const [prior] = await db
+			.insert(schema.pipelineSpecVersions)
+			.values({
+				specId,
+				semver: "0.0.1-before-the-cull",
+				status: "published",
+				canonicalHash: "test-prior-version"
+			})
+			.returning()
+
+		await db.insert(schema.pipelineNodes).values({
+			specVersionId: prior.id,
+			nodeKey: "retiredStep",
+			kind: node.kind,
+			typeId: node.typeId,
+			typeVersion: node.typeVersion,
+			position: 0
+		})
+
+		const decls = await declarations(db as any, prior.id)
+		const d = decls.find(
+			(x) =>
+				x.nodeKey === "retiredStep" &&
+				x.path === source.path &&
+				!!x.label
+		)!
+		expect(d, "the older version declared nothing to cull").toBeTruthy()
+		retired = {
+			nodeKey: d.nodeKey,
+			slot: d.slot,
+			path: d.path,
+			label: d.label
+		}
+
+		const [config] = await db
+			.insert(schema.pipelineConfigs)
+			.values({ specId, name: "Tuned before the step retired" })
+			.returning()
+		mine = config.id
+
+		await db.insert(schema.pipelineConfigValues).values({
+			configId: mine,
+			nodeKey: retired.nodeKey,
+			slot: retired.slot,
+			path: retired.path,
+			value: "set while the step still existed"
+		})
+	}, 60_000)
+
+	it("labels the cull with what the version that declared it called it", async () => {
+		await reconcileConfigs(
+			db as any,
+			specId,
+			specVersionId,
+			RESPOND_SPEC_ID
+		)
+		const culled = (await pendingNotices(db as any, mine)).filter(
+			(n: any) => n.kind === "culled" && n.path === retired.path
+		)
+		expect(culled).toHaveLength(1)
+		expect(culled[0].label).toBe(retired.label)
+		expect(culled[0].previousValue).toBe("set while the step still existed")
+	})
+
+	it("labels a back-fill too, so one list reads as one list", async () => {
+		// Back-fills answer the same question a cull does — "why is this
+		// different today" — and an unlabelled row beside a labelled one reads
+		// as a bug in the screen rather than as a quieter kind of notice.
+		const backfilled = (await pendingNotices(db as any, mine)).filter(
+			(n: any) => n.kind === "backfilled"
+		)
+		expect(backfilled.length).toBeGreaterThan(0)
+		for (const n of backfilled as any[])
+			expect(n.label, `${n.slot}/${n.path} arrived nameless`).toBeTruthy()
+	})
+})
+
+/**
+ * A dismissed notice stays dismissed.
+ *
+ * Acknowledgement is a column on the row rather than anything a client
+ * remembers, because the alternative — a banner that comes back on the next
+ * reload, in the next tab, on the next machine — teaches people to ignore the
+ * one surface that explains a missing setting.
+ */
+describe("dismissing a notice", () => {
+	let configId: number
+	let first: number
+
+	beforeAll(async () => {
+		const [config] = await db
+			.insert(schema.pipelineConfigs)
+			.values({ specId, name: "Notices to dismiss" })
+			.returning()
+		configId = config.id
+		const rows = await db
+			.insert(schema.pipelineConfigNotices)
+			.values([
+				{
+					configId,
+					kind: "culled",
+					nodeKey: "rank",
+					slot: "params",
+					path: "goneOne",
+					label: "Gone One",
+					previousValue: 1 as any,
+					specVersionId
+				},
+				{
+					configId,
+					kind: "culled",
+					nodeKey: "rank",
+					slot: "params",
+					path: "goneTwo",
+					label: "Gone Two",
+					previousValue: 2 as any,
+					specVersionId
+				}
+			])
+			.returning()
+		first = (rows as any[])[0].id
+	})
+
+	it("acknowledges one without touching the other", async () => {
+		expect(await acknowledgeNotices(db as any, configId, first)).toBe(1)
+		const left = await pendingNotices(db as any, configId)
+		expect(left.map((n: any) => n.path)).toEqual(["goneTwo"])
+	})
+
+	it("keeps the row, stamped — the value is still recoverable", async () => {
+		// Dismissing says "I have seen this", not "delete what I had set".
+		const [row] = await db
+			.select()
+			.from(schema.pipelineConfigNotices)
+			.where(eq(schema.pipelineConfigNotices.id, first))
+		expect(row.acknowledgedAt).toBeTruthy()
+		expect(row.previousValue).toBe(1)
+	})
+
+	it("is idempotent, and re-reading does not resurrect it", async () => {
+		expect(await acknowledgeNotices(db as any, configId, first)).toBe(0)
+		const left = await pendingNotices(db as any, configId)
+		expect(left.map((n: any) => n.path)).toEqual(["goneTwo"])
+	})
+
+	it("refuses to reach another configuration's notices", async () => {
+		// The id arrives from a client and a notice id is a small integer
+		// somebody can guess, so the pairing with the config is the guard.
+		const [other] = await db
+			.insert(schema.pipelineConfigs)
+			.values({ specId, name: "Somebody else's tuning" })
+			.returning()
+		expect(await acknowledgeNotices(db as any, other.id, first)).toBe(0)
+		const [row] = await db
+			.select()
+			.from(schema.pipelineConfigNotices)
+			.where(eq(schema.pipelineConfigNotices.id, first))
+		expect(row.configId).toBe(configId)
+	})
+
+	it("clears everything pending when no notice is named", async () => {
+		expect(await acknowledgeNotices(db as any, configId)).toBe(1)
+		expect(await pendingNotices(db as any, configId)).toEqual([])
 	})
 })

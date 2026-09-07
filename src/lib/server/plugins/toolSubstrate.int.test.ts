@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
 import http from "node:http"
-import { RuntimeManager } from "./RuntimeManager"
+import { SandboxManager } from "./SandboxManager"
 
 /**
  * The tool substrate, end to end at the manager (20 §9): a sandboxed plugin
@@ -18,7 +18,7 @@ import { RuntimeManager } from "./RuntimeManager"
 let server: http.Server
 let host: string
 let baseUrl: string
-let mgr: RuntimeManager
+let mgr: SandboxManager
 
 const TOOL = `module.exports = { hooks: {
 	// A realistic tool: authenticated lookup against a granted host, with a
@@ -44,7 +44,7 @@ beforeAll(async () => {
 	const port = (server.address() as any).port
 	baseUrl = `http://${host}:${port}`
 
-	mgr = new RuntimeManager({ onInvocation: () => {} })
+	mgr = new SandboxManager({ onInvocation: () => {} })
 	mgr.register({
 		id: "acme/tools",
 		name: "Acme Tools",
@@ -98,7 +98,7 @@ describe("a sandboxed tool hook", () => {
 			backends: ["ses"],
 			backend: "ses",
 			sequential: false,
-			// No networkHosts: the fetch capability is simply never derived.
+			// No networkHosts: the fetch permission is simply never derived.
 			settings: { apiKey: "x" }
 		})
 		const r = await mgr.callHook(

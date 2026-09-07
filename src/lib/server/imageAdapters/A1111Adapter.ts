@@ -52,7 +52,8 @@ const PROFILE_SCHEMA: SettingsSchema = {
 	restoreFaces: {
 		type: "boolean",
 		label: "Restore faces",
-		description: "Runs the face-restoration pass, where the backend has one.",
+		description:
+			"Runs the face-restoration pass, where the backend has one.",
 		default: false
 	},
 	overrideSettings: {
@@ -92,7 +93,9 @@ const CAPABILITIES: ImageCapabilities = {
 
 function authHeaders(connection: SelectConnection): Record<string, string> {
 	const key = (connection.extraJson as any)?.apiKey
-	return typeof key === "string" && key ? { Authorization: `Bearer ${key}` } : {}
+	return typeof key === "string" && key
+		? { Authorization: `Bearer ${key}` }
+		: {}
 }
 
 function base(connection: SelectConnection): string {
@@ -151,7 +154,19 @@ class A1111Adapter extends BaseImageAdapter {
 
 		const width = t.take("width", req.width)
 		const height = t.take("height", req.height)
-		const batch = t.take("batch", req.batch) ?? 1
+		// Asked for, then reconciled against what this connection type says can
+		// actually come back. No entry declares an output cap today — see the
+		// manifest's note on why claiming `1` for KoboldCPP would be wrong in the
+		// one file that cannot tell it from AUTOMATIC1111 — so this is `req.batch`
+		// unchanged. It is routed through the base class anyway so that a cap,
+		// once somebody sources one, is enforced in one place and reported through
+		// the same `ignored` channel the short-batch check below already uses.
+		const batch = this.cappedOutputCount(
+			"image",
+			t.take("batch", req.batch) ?? 1,
+			"batch",
+			t
+		)
 
 		const overrides: Record<string, unknown> = {
 			...(profile.overrideSettings ?? {})
@@ -195,11 +210,15 @@ class A1111Adapter extends BaseImageAdapter {
 				: "",
 			...(width ? { width: toStep8(width) } : {}),
 			...(height ? { height: toStep8(height) } : {}),
-			...(req.steps !== undefined ? { steps: t.take("steps", req.steps) } : {}),
+			...(req.steps !== undefined
+				? { steps: t.take("steps", req.steps) }
+				: {}),
 			...(req.cfg !== undefined
 				? { cfg_scale: t.take("cfg", req.cfg) }
 				: {}),
-			...(req.seed !== undefined ? { seed: t.take("seed", req.seed) } : {}),
+			...(req.seed !== undefined
+				? { seed: t.take("seed", req.seed) }
+				: {}),
 			...(req.sampler
 				? { sampler_name: t.take("sampler", req.sampler) }
 				: {}),
@@ -270,7 +289,12 @@ class A1111Adapter extends BaseImageAdapter {
 		} catch (e) {
 			if (signal.aborted) {
 				await this.interrupt(root, headers)
-				return { media: [], isAborted: true, applied: t.applied, ignored: t.ignored }
+				return {
+					media: [],
+					isAborted: true,
+					applied: t.applied,
+					ignored: t.ignored
+				}
 			}
 			throw new Error(
 				`Image request failed: ${e instanceof Error ? e.message : String(e)}`
@@ -340,7 +364,10 @@ class A1111Adapter extends BaseImageAdapter {
 					)
 					if (!res.ok) return
 					const p = (await res.json()) as ProgressResponse
-					const pct = Math.max(0, Math.min(100, (p.progress ?? 0) * 100))
+					const pct = Math.max(
+						0,
+						Math.min(100, (p.progress ?? 0) * 100)
+					)
 					onProgress({
 						stage: "sampling",
 						percent: pct,
@@ -389,7 +416,10 @@ class A1111Adapter extends BaseImageAdapter {
 	): Promise<void> {
 		if (!this.inFlight) return
 		try {
-			await fetch(`${root}/sdapi/v1/interrupt`, { method: "POST", headers })
+			await fetch(`${root}/sdapi/v1/interrupt`, {
+				method: "POST",
+				headers
+			})
 		} catch {
 			// The caller has already stopped waiting.
 		}
@@ -408,8 +438,7 @@ function seedFrom(info?: string | null): number | undefined {
 	}
 }
 
-const stripDataUrl = (s: string): string =>
-	s.replace(/^data:[^;]+;base64,/, "")
+const stripDataUrl = (s: string): string => s.replace(/^data:[^;]+;base64,/, "")
 
 /** A cancellable wait, so an abort between polls takes effect at once. */
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -462,8 +491,7 @@ async function testConnection(connection: SelectConnection): Promise<{
 			if (res.status === 404)
 				return {
 					ok: false,
-					error:
-						"Reachable, but it has no image API. If this is KoboldCPP, it needs an image model loaded before it can draw."
+					error: "Reachable, but it has no image API. If this is KoboldCPP, it needs an image model loaded before it can draw."
 				}
 			return { ok: false, error: `HTTP ${res.status}` }
 		}
@@ -485,7 +513,9 @@ async function testConnection(connection: SelectConnection): Promise<{
 				if (Array.isArray(list))
 					extra[key] = list
 						.map((x: any) => x?.name)
-						.filter((n: unknown): n is string => typeof n === "string")
+						.filter(
+							(n: unknown): n is string => typeof n === "string"
+						)
 			} catch {
 				// Not every build has them.
 			}

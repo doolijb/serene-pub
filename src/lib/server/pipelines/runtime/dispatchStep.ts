@@ -28,6 +28,11 @@ import {
 	resolveCapabilityTarget,
 	TEXT_CAPABILITY
 } from "$lib/server/connections/capabilityTarget"
+import {
+	ComposedError,
+	connectionIdentity,
+	type ConnectionIdentity
+} from "$lib/server/connections/visibility"
 import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { runQueuedLLMCall } from "$lib/server/utils/runQueuedLLMCall"
@@ -92,13 +97,23 @@ function minimalSession(userPrompt: string): any {
 	}
 }
 
-export class StepDispatchError extends Error {}
+/**
+ * A dispatch failure, and a marker: this sentence is ours.
+ *
+ * `ComposedError` is what tells `persistGenerationErrorRow` that the message may
+ * be stored and shown to anybody — it names no connection. An adapter's own
+ * error, which names the base URL and the model file, is a plain `Error` and is
+ * replaced there instead. The optional second argument is the identity the
+ * failure was about, carried as a field so the projection can remove it for
+ * everyone who is not an administrator.
+ */
+export class StepDispatchError extends ComposedError {}
 
 /** Run one step. Throws with a sentence a person can act on. */
 export async function dispatchStep(
 	db: any,
 	call: StepCall
-): Promise<{ text: string; via?: string }> {
+): Promise<{ text: string; connection: ConnectionIdentity }> {
 	call.signal?.throwIfAborted()
 
 	// The one chain, not a fourth one of this file's own.
@@ -122,7 +137,11 @@ export async function dispatchStep(
 			samplingConfigId: call.samplingId
 		}
 	})
-	if (!target.ok) throw new StepDispatchError(target.problem.message)
+	if (!target.ok)
+		throw new StepDispatchError(
+			target.problem.message,
+			target.problem.connection
+		)
 	const { connection, sampling } = target
 
 	const AdapterClass = await getConnectionAdapter(connection.type)
@@ -184,9 +203,15 @@ export async function dispatchStep(
 		// stopping for a reason of its own. Not dressed up as a cancellation:
 		// that label means "the user stopped this", and callers key on it.
 		throw new StepDispatchError(
-			"the model call stopped unexpectedly — it reported being aborted with no matching cancellation"
+			"the model call stopped unexpectedly — it reported being aborted with no matching cancellation",
+			connectionIdentity(connection)
 		)
 	}
 
-	return { text: result.text, via: connection.type }
+	// The connection TYPE, under the key the projection removes. It used to be a
+	// bare `via` string, which landed in the node's receipt output and answered
+	// "which provider ran this" for anyone who could read their own run — a
+	// non-admin included. A field can be taken away; a string in a receipt
+	// cannot.
+	return { text: result.text, connection: connectionIdentity(connection) }
 }

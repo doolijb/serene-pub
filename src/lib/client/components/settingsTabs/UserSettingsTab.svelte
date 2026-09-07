@@ -13,6 +13,13 @@
 	} from "$lib/client/accessibility/state.svelte"
 	import { z } from "zod"
 	import * as Icons from "@lucide/svelte"
+	import LanguagePicker from "$lib/client/components/inputs/LanguagePicker.svelte"
+	import { languageDefinition } from "$lib/shared/i18n/languages"
+	// See the note at the `t()` import in `src/routes/+page.svelte`: the English
+	// source is the key, and wrapping a string is the whole cost of translating
+	// it. This card is wrapped because it is the one a user reaches *to change
+	// their language* — the least useful place to be stuck in English.
+	import { t } from "$lib/client/i18n/state.svelte"
 
 	interface Props {
 		hasUnsavedChanges?: boolean
@@ -56,6 +63,16 @@
 			} else {
 				toaster.error({
 					title: "Failed to update easy persona creation setting"
+				})
+			}
+		})
+
+		socket.on("userSettings:updateLanguage", (message) => {
+			if (message.success) {
+				// Names the language that will actually be used, which for the
+				// inherit option is the server's, not "default".
+				toaster.success({
+					title: `Language set to ${languageDefinition(message.effectiveLanguage).name}`
 				})
 			}
 		})
@@ -145,6 +162,7 @@
 		socket?.off("userSettings:updateEasyCharacterCreation")
 		socket?.off("userSettings:updateEasyPersonaCreation")
 		socket?.off("userSettings:updateShowHomePageBanner")
+		socket?.off("userSettings:updateLanguage")
 		socket?.off("users:current:updateDisplayName")
 		socket?.off("users:current:changePassphrase")
 		socket?.off("users:current:logout")
@@ -176,6 +194,24 @@
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
 	)
+
+	// ── Language (R5) ────────────────────────────────────────────────────────
+	// The inherit option names the language it would give you, so "Server
+	// default" is never a choice made blind. `defaultLanguage` rides on the
+	// system settings row every client already receives, admin or not.
+	let serverDefaultOptionLabel = $derived.by(() => {
+		const code = systemSettingsCtx.settings?.defaultLanguage
+		return `${t("Server default")} (${languageDefinition(code).name})`
+	})
+
+	function onLanguageChange(value: string) {
+		// "" is the inherit row, and it is stored as NULL rather than as a copy
+		// of today's server default — that is what keeps this user moving when
+		// an admin changes it later.
+		socket.emit("userSettings:updateLanguage", {
+			language: value === "" ? null : value
+		})
+	}
 
 	// Profile modal state
 	let showChangePasswordModal = $state(false)
@@ -365,6 +401,28 @@
 </script>
 
 <div class="flex flex-col gap-4">
+	<!-- Language -->
+	<div class="card preset-filled-surface-100-900 p-4">
+		<h3 class="mb-2 text-lg font-semibold">{t("Language")}</h3>
+		<p class="text-surface-700-300 mb-3 text-sm">
+			{t(
+				"The language this interface is drawn in. Leave it on the server default to follow whatever an administrator has set for everyone."
+			)}
+		</p>
+		<LanguagePicker
+			label={t("Language")}
+			inheritLabel={serverDefaultOptionLabel}
+			value={userSettingsCtx.settings?.language ?? ""}
+			describedBy="user-language-note"
+			onValueChange={onLanguageChange}
+		/>
+		<p id="user-language-note" class="text-surface-700-300 mt-3 text-sm">
+			{t(
+				"Translations are produced automatically and are only as good as the translation service; text a translation has not reached yet stays in English. Your language also decides which retrieval features apply — see the Languages documentation page."
+			)}
+		</p>
+	</div>
+
 	<div class="card preset-filled-surface-100-900 divide-surface-300-700 divide-y p-4">
 		<div class="flex flex-col gap-2 pb-4">
 			<p class="text-muted-foreground text-sm">

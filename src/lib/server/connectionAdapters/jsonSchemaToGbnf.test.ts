@@ -120,7 +120,7 @@ describe("jsonSchemaToGbnf", () => {
 			).toThrow(/unsupported type "number"/)
 		})
 
-		test("const, which several providers handle poorly", () => {
+		test("const, which several services handle poorly", () => {
 			expect(() =>
 				jsonSchemaToGbnf({
 					type: "string",

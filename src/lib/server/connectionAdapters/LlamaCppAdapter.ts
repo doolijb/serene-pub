@@ -323,22 +323,15 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 		)
 
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
-		let prompt: string
-		if (
-			"prompt" in compiledPrompt &&
-			typeof compiledPrompt.prompt === "string"
-		) {
-			prompt = compiledPrompt.prompt
-		} else if (
-			"messages" in compiledPrompt &&
-			Array.isArray(compiledPrompt.messages)
-		) {
-			prompt = compiledPrompt.messages.map((m) => m.content).join("\n")
-		} else {
-			throw new Error(
-				"CompiledPrompt must have either 'prompt' or 'messages'."
-			)
-		}
+		// Both shapes, through the one accessor the other adapters use.
+		//
+		// The three-branch version this replaced flattened a message array by
+		// joining `m.content` with newlines, which dropped every role marker —
+		// the model was handed the system prompt, the lore and the dialogue as
+		// one unlabelled blob. `promptTextFor` rebuilds the blocks in the
+		// connection's own format instead, and raises the same "neither shape"
+		// error the third branch did.
+		const prompt: string = this.promptTextFor(compiledPrompt)
 
 		const req: CompletionRequest = {
 			prompt,
@@ -350,7 +343,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 			// at the decoder, so non-JSON becomes unrepresentable rather than
 			// merely discouraged. Omitted entirely for plain-text generation.
 			// llama.cpp also accepts a `json_schema` field it converts itself;
-			// this goes through our converter instead so both GBNF providers
+			// this goes through our converter instead so both GBNF services
 			// share one tested path rather than two that can diverge.
 			...(this.responseFormat === "json"
 				? {

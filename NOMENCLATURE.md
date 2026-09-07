@@ -177,7 +177,7 @@ documents; **types** carry an integer major because they are pinned contracts.
 | **signal** | One scored component within a mechanism. |
 | **candidate** | Something that might reach the prompt, carrying signals. |
 | **decision** | Selection's verdict on a candidate: included or not, with a reason. |
-| **block** | A rendered region of the assembled prompt. |
+| **block** | **One message** in the assembled prompt — §15. What assembly places *inside* one is an **allocation**, never a block. |
 | **admission** | Whether a candidate is *considered at all*. |
 | **eligibility** | Whether a candidate *may* be selected — a hard gate, distinct from score. |
 | **evidence** | Non-keyword grounds for admission. |
@@ -190,7 +190,8 @@ documents; **types** carry an integer major because they are pinned contracts.
 
 **The flow, every noun distinct:** a **mechanism** produces **candidates** carrying
 **signals**; ranking **scores** them; selection turns them into **decisions** within a
-**band's** budget; assembly renders them as **blocks**; the **receipt** records it.
+**band's** budget; assembly turns those into **allocations** and renders them into
+**blocks**; the **receipt** records it.
 
 **Resolved collisions**
 
@@ -421,16 +422,28 @@ template".
 
 **Resolved collisions**
 
-- ⚠ **`block`** → **a message**, in the chat sense. The codebase currently uses the word for
-  two things at **different granularities**, which is why it reads as confused:
+- ⚠ **`block`** → **a message**, in the chat sense. The codebase used the word for two
+  things at **different granularities**, which is why it read as confused:
   - `ContextBlock` (`assemble.ts`) — **one retrieved item** with its verdict: source, id,
-    content, tokens, `included`, `why`. → renamed **allocation**.
+    content, tokens, `included`, `why`. → **`Allocation`**, landed. Assemble's out-port
+    `blocks` landed with it, as **`allocations`**.
   - `systemBlock` / `userBlock` / `assistantBlock` — **one message**, formatted by
     `PromptBlockFormatter`. → keeps **block**.
 
   **A dozen allocations are rendered into the variables inside one block.** One is an item,
   the other is a container; they are not two kinds of the same thing. The old "context block"
   name also asserted a message shape that only chat-shaped services have.
+
+  ⏳ **Two spellings of the old word survive the type rename**, both because they are
+  seam vocabulary rather than ours: `AllocatedContext.blocks` and the compiled prompt's
+  `meta.retrieval.blocks`. §24 carries them and says what holds them.
+- · **`allocation`** → the **item**, as above. The ranker's token arithmetic
+  (`allocateBudgets`, `scoreLedAllocation`, `groups[].allocated`) is **budget allocation**
+  and deliberately keeps the word: it is a verb and an adjective over a divided resource,
+  never a countable noun, so *an allocation* has one referent. Checked before the rename
+  rather than after (§23.2) — and in prose, say *budget allocation* when the resource is
+  meant, because that sense **is** countable in English even though the code never spells
+  it as a noun.
 - ⚠ **`seed`** → **three** meanings, all live: the **seed line** (chat), **seeding** (boot
   insertion of shipped rows), and the run's random **seed**. Never bare — say *seed line*,
   *seed rows*, *run seed*.
@@ -511,7 +524,7 @@ Verbs collide as readily as nouns.
 
 | Verb | Means |
 |---|---|
-| **retrieve** | Find candidates. Never "search" — that means the vector arm specifically. |
+| **retrieve** | Find candidates. Never "search" — that means the semantic mechanism specifically. |
 | **admit** | Let a candidate be *considered*. |
 | **score** | Assign a number. |
 | **rank** | Order by score. |
@@ -579,11 +592,37 @@ Recording *why* a word died is what stops it being reinvented.
 | `semantic.arm.*`, `names.arm.*` (node keys) | **`…mechanism…`** | ⏳ a cull, see below |
 | `Band` (capability grade) | **capability band** — frees the bare word for §7 | ⏳ own pass |
 | `binding` (nodes) | **implementation registry** | ⏳ own pass |
+| `AllocatedContext.blocks` (the field) | **`allocations`** | ⏳ held at the SDK seam, below |
+| `meta.retrieval.blocks` (compiled prompt) | **`allocations`** | ⏳ moves with the field above |
+| `pipeline_blocks` (map · async · loop · route frames) | **needs a word** | 🚧 a third live sense of `block` |
 
 **Landed:** `SourceKind` → **band** · `project()` → **toCandidate** · *arm* →
 **mechanism** · `role` (entries) → **field role**, in prose · `grant` (models) →
 **lease** · `lane` (specs, retrieval) → **gather branch** / **mechanism** ·
-`runtime` (plugins) → **sandbox** · `capability` (plugins) → **permission**.
+`runtime` (plugins) → **sandbox** · `capability` (plugins) → **permission** ·
+`ContextBlock` → **`Allocation`**, with assemble's `blocks` out-port → **`allocations`**.
+
+⚠ **What the *allocation* pass could not reach, and why.** The type renamed; two
+fields did not, and neither is a rename this pass was free to make:
+
+- **`AllocatedContext.blocks` is the SDK's word at a seam, not ours.** The object
+  rides the `context` port into the SDK executor, and `isAllocatedContext` — an
+  **exported** predicate, so a third-party node may call it — recognises an
+  allocated context by `Array.isArray(v.blocks)` and nothing else. Renaming the
+  field leaves `receipt.preview.blocks` and `preview.totals` silently empty on
+  every run (verified against a real preview turn: populated before, `[]` after)
+  and breaks the predicate for every plugin. R5 applies — translate at the seam,
+  never merge — and the seam's word is the SDK's. ⚠ The deeper problem underneath
+  it is not a rename either: `sdk/src/wire.ts` exports **its own** `ContextBlock`
+  and `AllocatedContext`, a *different shape* under the same names, which the
+  app's object satisfies only by accident. That wants its own pass.
+- **`meta.retrieval.blocks`** is derived from the field above and typed in the
+  socket contract. Moving it alone would give one array two names on one path, so
+  it moves when the field does.
+- **`pipeline_blocks` is a third live sense**, and the only one with a table: a
+  spec's `map` / `async` / `loop` / `route` frames. It is neither a message nor an
+  allocation, it is schema and wire, and §15's ruling does not reach it. Recorded
+  rather than renamed — picking its word is a design decision, not bookkeeping.
 
 ⚠ **What the *arm* pass could not reach, and why.** Three things still spell it,
 and none of the three is a rename:
@@ -597,6 +636,15 @@ and none of the three is a rename:
 - **The retrieval-explain labels** — "Both arms", "One retrieval arm found it" —
   are prose a user reads, so they are free to change but are a copy change and
   not a rename (§23.6).
+
+⚠ **`arm64` is not an instance of *arm*.** A whole-word search for `arm` returns
+CPU-architecture strings in the tunnel binary manager, where `"arm64"` and
+`"arm"` are values matched against `process.arch`. Renaming them breaks platform
+detection on ARM machines, and it breaks it at *download* time — the failure is a
+wrong binary, not a type error. **Any mechanical `arm` pass must exclude
+`tunnels/`.** Recorded because the residual count looks larger than it is: of the
+hits outside tests, the architecture strings are a meaningful share and none of
+them are this word.
 
 ⚠ **What the *runtime* pass could not reach.** Two things, and neither is a
 rename this pass was free to make:

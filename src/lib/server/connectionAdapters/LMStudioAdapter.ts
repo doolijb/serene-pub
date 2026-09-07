@@ -199,7 +199,9 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		if (useSession && compiledPrompt.messages) {
 			messages = compiledPrompt.messages
 		} else {
-			prompt = compiledPrompt.prompt!
+			// See `promptTextFor`: `compiledPrompt.prompt!` asserted a string
+			// that a chat-shaped payload does not carry.
+			prompt = this.promptTextFor(compiledPrompt)
 		}
 
 		const options: LLMPredictionOpts<unknown> = {

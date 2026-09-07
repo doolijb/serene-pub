@@ -7,10 +7,33 @@
 	import { getContext, onDestroy, onMount, tick } from "svelte"
 	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 	import LoreContentField from "./LoreContentField.svelte"
+	import EntryConditionField from "./EntryConditionField.svelte"
+	import EntryFireTest from "./EntryFireTest.svelte"
 	import { v4 as uuid } from "uuid"
 	import DeleteLorebookEntryConfirmModal from "../modals/DeleteLorebookEntryConfirmModal.svelte"
 	import CompileHistoryEntryModal from "../modals/CompileHistoryEntryModal.svelte"
 	import ProcessSceneModal from "../modals/ProcessSceneModal.svelte"
+	import {
+		HISTORY_TYPE_ID,
+		type LorebookEntry,
+		type NewLorebookEntry
+	} from "$lib/shared/entries/types"
+	import {
+		compareEntriesBy,
+		entryChannel,
+		filterEntriesBySearch,
+		substituteBindings,
+		type BindingWithRelations
+	} from "./entryManager"
+
+	/**
+	 * This tab's one type. It is never rendered; it addresses the namespace.
+	 *
+	 * History keeps its own sort options and its own comparator: it is not
+	 * *named*, it is **dated**, which is what its `order` role declares and
+	 * what makes "Entry Date" the ordering that means anything here.
+	 */
+	type History = LorebookEntry<typeof HISTORY_TYPE_ID>
 
 	interface Props {
 		lorebookId: number
@@ -58,12 +81,17 @@
 		{ value: "updated-asc", label: "Date Updated ↓" }
 	]
 
-	const DefaultHistoryEntry: InsertHistoryEntry = {
+	const DefaultHistoryEntry: NewLorebookEntry<typeof HISTORY_TYPE_ID> = {
+		typeId: HISTORY_TYPE_ID,
 		year: 1,
 		month: null,
 		day: null,
 		content: "",
 		keys: "",
+		// The absence of a condition, spelled the way the column stores it:
+		// no keys and no mode. Either one alone is a rule about nothing.
+		secondaryKeys: "",
+		selectiveLogic: null,
 		useRegex: false,
 		caseSensitive: false,
 		constant: false,
@@ -73,11 +101,7 @@
 	}
 
 	// ── Core list state ───────────────────────────────────────────
-	let historyEntryList: SelectHistoryEntry[] = $state([])
-	type BindingWithRelations = SelectLorebookBinding & {
-		character?: { nickname?: string | null; name: string } | null
-		persona?: { name: string } | null
-	}
+	let historyEntryList: History[] = $state([])
 	let lorebookBindingList: BindingWithRelations[] = $state([])
 	let bindingNameById = $derived.by(() => {
 		const map = new Map<number, string>()
@@ -91,12 +115,16 @@
 	// ── Panel mode: list → view → edit ────────────────────────────
 	type PanelMode = "list" | "view" | "edit"
 	let panelMode = $state<PanelMode>("list")
-	let focusedEntry = $state<SelectHistoryEntry | null>(null)
+	let focusedEntry = $state<History | null>(null)
 	let focusedEntryTab = $state<"content" | "scenes">("content")
 	/** Mutable copy being edited (includes new entries with _uuid) */
-	let editingEntry = $state<(InsertHistoryEntry & { _uuid?: string }) | null>(
-		null
-	)
+	let editingEntry = $state<
+		| (NewLorebookEntry<typeof HISTORY_TYPE_ID> & {
+				id?: number
+				_uuid?: string
+		  })
+		| null
+	>(null)
 	let isNewEntry = $state(false)
 
 	// ── Card `...` menus ─────────────────────────────────────────
@@ -142,7 +170,7 @@
 	let newParticipantId = $state<number | "">("")
 	let newMentionedId = $state<number | "">("")
 	let showCompileModal = $state(false)
-	let compileTargetEntry = $state<SelectHistoryEntry | null>(null)
+	let compileTargetEntry = $state<History | null>(null)
 	let compileActivityId = $state<string | null>(null)
 	let compilePendingResult = $state<{ content: string } | null>(null)
 	let compileInitialStep = $state<"review" | "running" | undefined>(undefined)
@@ -226,49 +254,28 @@
 	})
 
 	// ── List helpers ──────────────────────────────────────────────
-	function getEntryDateValue(entry: SelectHistoryEntry) {
+	function getEntryDateValue(entry: History) {
 		return entry.year * 10000 + (entry.month || 0) * 100 + (entry.day || 0)
 	}
 
+	// The two date orderings are this tab's own — the four shared ones come
+	// from `entryManager`, which is where they stopped being written out three
+	// times.
 	function getSortedEntries() {
+		const byDate = orderBy.startsWith("entry-date")
+		const shared = compareEntriesBy(orderBy)
 		return historyEntryList.slice().sort((a, b) => {
-			const getCreated = (e: SelectHistoryEntry) =>
-				new Date(e.createdAt || 0).getTime()
-			const getUpdated = (e: SelectHistoryEntry) =>
-				new Date(e.updatedAt || 0).getTime()
-			switch (orderBy) {
-				case "entry-date-desc":
-					return getEntryDateValue(b) - getEntryDateValue(a)
-				case "entry-date-asc":
-					return getEntryDateValue(a) - getEntryDateValue(b)
-				case "created-desc":
-					return getCreated(b) - getCreated(a)
-				case "created-asc":
-					return getCreated(a) - getCreated(b)
-				case "updated-desc":
-					return getUpdated(b) - getUpdated(a)
-				case "updated-asc":
-					return getUpdated(a) - getUpdated(b)
-				default:
-					return 0
-			}
+			if (!byDate) return shared(a, b)
+			return orderBy === "entry-date-desc"
+				? getEntryDateValue(b) - getEntryDateValue(a)
+				: getEntryDateValue(a) - getEntryDateValue(b)
 		})
 	}
 
-	function getFilteredEntries() {
-		const lower = search.trim().toLowerCase()
-		if (!lower) return getSortedEntries()
-		return getSortedEntries().filter((entry) => {
-			const content = (entry.content || "").toLowerCase()
-			return (
-				content.includes(lower) ||
-				(entry.keys || "").toLowerCase().includes(lower)
-			)
-		})
-	}
-
-	let filteredEntries: SelectHistoryEntry[] = $derived.by(() =>
-		getFilteredEntries()
+	// The shared search, which also looks at `name` — a no-op here, because a
+	// history entry declares no `title` role and so has none.
+	let filteredEntries: History[] = $derived(
+		filterEntriesBySearch(getSortedEntries(), search)
 	)
 
 	let maxDateValue = $derived.by(() => {
@@ -316,28 +323,16 @@
 		}
 	})
 
-	function previewContent(entry: SelectHistoryEntry): string {
-		let content = entry.content || ""
-		lorebookBindingList.forEach((binding) => {
-			if (binding.characterId) {
-				content = content.replaceAll(
-					binding.binding,
-					binding.character!.nickname ||
-						binding.character!.name ||
-						binding.binding
-				)
-			} else if (binding.personaId) {
-				content = content.replaceAll(
-					binding.binding,
-					binding.persona!.name || binding.binding
-				)
-			}
-		})
-		return content
+	function previewContent(entry: History): string {
+		return substituteBindings(entry.content, lorebookBindingList)
 	}
 
 	function entryIsValid(
-		entry: InsertHistoryEntry | SelectHistoryEntry,
+		entry: {
+			year?: number | null
+			month?: number | null
+			day?: number | null
+		},
 		warn = false
 	): boolean {
 		if (!entry.year) {
@@ -389,7 +384,7 @@
 		}
 	}
 
-	function viewEntry(entry: SelectHistoryEntry) {
+	function viewEntry(entry: History) {
 		focusedEntry = entry
 		focusedEntryTab = "content"
 		focusedSceneId = null
@@ -397,7 +392,7 @@
 		panelMode = "view"
 	}
 
-	function editEntry(entry: SelectHistoryEntry) {
+	function editEntry(entry: History) {
 		focusedEntry = entry
 		editingEntry = { ...entry }
 		focusedEntryTab = "content"
@@ -424,15 +419,9 @@
 			_uuid: undefined
 		}
 
-		if (isNewEntry) {
-			socket.emit("historyEntries:create", {
-				historyEntry: data as InsertHistoryEntry
-			})
-		} else {
-			socket.emit("historyEntries:update", {
-				historyEntry: data as UpdateHistoryEntry
-			})
-		}
+		const { _uuid, ...values } = data
+		if (isNewEntry) channel.create(values)
+		else channel.update(values as typeof values & { id: number })
 		goBack()
 	}
 
@@ -444,7 +433,7 @@
 	function onDeleteConfirm() {
 		showDeleteConfirmModal = false
 		if (deleteEntryId !== null) {
-			socket.emit("historyEntries:delete", { id: deleteEntryId })
+			channel.remove(deleteEntryId)
 			if (focusedEntry?.id === deleteEntryId) goBack()
 		}
 		deleteEntryId = null
@@ -468,9 +457,10 @@
 				getEntryDateValue(entry) > getEntryDateValue(max) ? entry : max,
 			filteredEntries[0]
 		)
-		socket.emit("historyEntries:iterateNext", {
-			id: latestEntry.id
-		} satisfies Sockets.HistoryEntries.IterateNext.Params)
+		socket.emit("entries:iterateNext", {
+			id: latestEntry.id,
+			typeId: HISTORY_TYPE_ID
+		} satisfies Sockets.Entries.IterateNext.Params)
 	}
 
 	// ── Scene actions ─────────────────────────────────────────────
@@ -544,7 +534,7 @@
 	}
 
 	function openCompileModal(
-		entry: SelectHistoryEntry,
+		entry: History,
 		opts?: {
 			activityId?: string | null
 			pendingResult?: { content: string } | null
@@ -565,7 +555,7 @@
 	// Starts a fresh compile, or reopens a pending/running one exactly
 	// where it left off — used by the list card's "..." menu, its status
 	// badges, and the activity-sidebar reopen effect below.
-	function openOrReopenCompile(entry: SelectHistoryEntry) {
+	function openOrReopenCompile(entry: History) {
 		const activity = compileActivityByEntryId.get(entry.id)
 		if (activity) {
 			openCompileModal(entry, {
@@ -589,7 +579,7 @@
 		compileEntriesCtx.setReviewHistoryEntryId(null)
 	})
 
-	function handleCompileSaved(updated: SelectHistoryEntry) {
+	function handleCompileSaved(updated: History) {
 		historyEntryList = historyEntryList.map((e) =>
 			e.id === updated.id ? updated : e
 		)
@@ -597,63 +587,50 @@
 	}
 
 	// ── Socket setup ──────────────────────────────────────────────
-	async function handleHistoryEntriesList(
-		msg: Sockets.HistoryEntries.List.Response
-	) {
-		if (msg.lorebookId === lorebookId) {
-			historyEntryList = msg.historyEntryList
-			// Keep focusedEntry in sync
-			if (focusedEntry) {
-				const updated = msg.historyEntryList.find(
-					(e: SelectHistoryEntry) => e.id === focusedEntry!.id
-				)
-				if (updated) focusedEntry = updated
-			}
+	// ── Socket setup ──────────────────────────────────────────────
+	// The entry half is `entryManager`'s; the scene half below is this tab's
+	// own, because scenes hang off a dated entry and off nothing else.
+	const channel = entryChannel(socket, {
+		lorebookId,
+		typeId: HISTORY_TYPE_ID,
+		// The band the vectorizer reports these rows under. ⚠ `historyEntry`,
+		// not `history`: the index vocabulary and the budget-band vocabulary
+		// are deliberately separate and reconciled at boundaries, never merged.
+		vectorSource: "historyEntry",
+		handlers: {
+			async onList(entries) {
+				historyEntryList = entries
+				// Keep focusedEntry in sync
+				if (focusedEntry) {
+					const updated = entries.find(
+						(e) => e.id === focusedEntry!.id
+					)
+					if (updated) focusedEntry = updated
+				}
+				await tick()
+			},
+			async onBindings(bindings) {
+				lorebookBindingList = bindings
+				await tick()
+			},
+			// The background vectorization queue updates a row's
+			// `embeddingModel` directly in the database — without this the
+			// badge here only refreshes on the next explicit CRUD action.
+			onVectorized(id, embeddingModel) {
+				const target = historyEntryList.find((e) => e.id === id)
+				if (target) (target as any).embeddingModel = embeddingModel
+				if (focusedEntry?.id === id)
+					(focusedEntry as any).embeddingModel = embeddingModel
+			},
+			onCreated: () =>
+				toaster.success({ title: "History Entry created" }),
+			onUpdated: () =>
+				toaster.success({ title: "History Entry updated" }),
+			onDeleted: () => toaster.success({ title: "History Entry deleted" })
 		}
-		await tick()
-	}
+	})
 
-	function handleHistoryEntryCreate(
-		msg: Sockets.HistoryEntries.Create.Response
-	) {
-		if (msg.historyEntry?.lorebookId === lorebookId) {
-			toaster.success({ title: "History Entry created" })
-		}
-	}
-
-	function handleHistoryEntryUpdate(
-		msg: Sockets.HistoryEntries.Update.Response
-	) {
-		if (msg.historyEntry?.lorebookId === lorebookId) {
-			toaster.success({ title: "History Entry updated" })
-		}
-	}
-
-	function handleHistoryEntryDelete(
-		msg: Sockets.HistoryEntries.Delete.Response
-	) {
-		if (
-			(msg as any).id &&
-			historyEntryList.some((e) => e.id === (msg as any).id)
-		) {
-			toaster.success({ title: "History Entry deleted" })
-		}
-	}
-
-	async function handleLorebooksBindingList(
-		msg: Sockets.Lorebooks.BindingList.Response
-	) {
-		if (msg.lorebookId === lorebookId) {
-			lorebookBindingList = [
-				...msg.lorebookBindingList
-			] as BindingWithRelations[]
-		}
-		await tick()
-	}
-
-	function handleIterateNext(
-		_msg: Sockets.HistoryEntries.IterateNext.Response
-	) {
+	function handleIterateNext(_msg: Sockets.Entries.IterateNext.Response) {
 		toaster.success({ title: "The story's date has moved forward" })
 	}
 
@@ -688,57 +665,27 @@
 		})
 	}
 
-	// The background vectorization queue updates a row's embeddingModel
-	// directly in the DB — without this, the badge here only ever refreshes
-	// on the next explicit CRUD action, leaving it stale until a manual refresh.
-	function handleVectorizationItemUpdated(
-		msg: Sockets.Vectorization.ItemUpdated.Response
-	) {
-		if (msg.type !== "historyEntry" || msg.lorebookId !== lorebookId) return
-		const target = historyEntryList.find((e: any) => e.id === msg.id)
-		if (target) (target as any).embeddingModel = msg.embeddingModel
-		if (focusedEntry?.id === msg.id)
-			(focusedEntry as any).embeddingModel = msg.embeddingModel
-	}
-
 	onMount(() => {
-		socket.on("historyEntries:list", handleHistoryEntriesList)
-		socket.on("historyEntries:create", handleHistoryEntryCreate)
-		socket.on("historyEntries:update", handleHistoryEntryUpdate)
-		socket.on("historyEntries:delete", handleHistoryEntryDelete)
-		socket.on("lorebooks:bindingList", handleLorebooksBindingList)
-		socket.on("historyEntries:iterateNext", handleIterateNext)
+		channel.open()
+		socket.on("entries:iterateNext", handleIterateNext)
 		socket.on("scenes:listByLorebook", handleScenesListByLorebook)
 		socket.on("scenes:update", handleSceneUpdate)
 		socket.on("scenes:delete", handleSceneDelete)
 		socket.on("scenes:create", handleSceneCreate)
 		socket.on("scenes:process:error", handleScenesProcessError)
-		socket.on("vectorization:itemUpdated", handleVectorizationItemUpdated)
-
-		socket.emit("historyEntries:list", {
-			lorebookId
-		} satisfies Sockets.HistoryEntries.List.Params)
-		socket.emit("lorebooks:bindingList", {
-			lorebookId
-		} satisfies Sockets.Lorebooks.BindingList.Params)
 		fetchScenes()
 		isReady = true
 	})
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
-		socket.off("historyEntries:list", handleHistoryEntriesList)
-		socket.off("historyEntries:create", handleHistoryEntryCreate)
-		socket.off("historyEntries:update", handleHistoryEntryUpdate)
-		socket.off("historyEntries:delete", handleHistoryEntryDelete)
-		socket.off("lorebooks:bindingList", handleLorebooksBindingList)
-		socket.off("historyEntries:iterateNext", handleIterateNext)
+		channel.close()
+		socket.off("entries:iterateNext", handleIterateNext)
 		socket.off("scenes:listByLorebook", handleScenesListByLorebook)
 		socket.off("scenes:update", handleSceneUpdate)
 		socket.off("scenes:delete", handleSceneDelete)
 		socket.off("scenes:create", handleSceneCreate)
 		socket.off("scenes:process:error", handleScenesProcessError)
-		socket.off("vectorization:itemUpdated", handleVectorizationItemUpdated)
 	})
 </script>
 
@@ -1144,6 +1091,17 @@
 							</span>
 						{/if}
 					</div>
+
+					<!-- Sited in the view rather than the editor: the pipeline
+					     gathers lore out of the database, so this reports on
+					     the saved row and an unsaved draft has no verdict to
+					     give. -->
+					<EntryFireTest
+						entryId={focusedEntry.id}
+						typeId={HISTORY_TYPE_ID}
+						{lorebookId}
+						enabled={!!focusedEntry.enabled}
+					/>
 				</div>
 
 				<!-- Scenes tab (view mode) -->
@@ -1843,7 +1801,7 @@
 
 							     Outside the `!vectorizationEnabled` gate that hides Use Regex and
 							     Case Sensitive, deliberately: recursion is a property of the
-							     keyword arm, and the keyword arm still runs with vectorization
+							     keyword mechanism, and the keyword mechanism still runs with vectorization
 							     on — an entry set to `keyword` or `both`, and every `rag` entry
 							     on an instance whose model is not loaded, goes through it.
 							     Hiding this would repeat the mistake those two are making. -->
@@ -1878,6 +1836,22 @@
 									<option value="3">3 levels deep</option>
 								</select>
 							</div>
+							<!-- The entry's own condition — see `EntryConditionField`.
+
+							     Beside Recursion depth and outside the `!vectorizationEnabled`
+							     gate, for that control's stated reason: this is a property of the
+							     keyword mechanism, and the keyword mechanism still runs with vectorization on.
+							     Hiding it would repeat the mistake Use Regex and Case Sensitive
+							     are making. -->
+							<EntryConditionField
+								bind:selectiveLogic={
+									(editingEntry as any).selectiveLogic
+								}
+								bind:secondaryKeys={
+									(editingEntry as any).secondaryKeys
+								}
+								idPrefix="hee"
+							/>
 							<label
 								class="flex w-full cursor-pointer items-center justify-between gap-2"
 							>

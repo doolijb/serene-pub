@@ -169,7 +169,7 @@
 	}
 
 	/** The counts line: what this construct does, said in its own terms. */
-	const blockMeta = (id: string, fallbackKind: string, lanes: number) => {
+	const blockMeta = (id: string, fallbackKind: string, branches: number) => {
 		const b = blockOf(id)
 		const kind = b?.kind ?? fallbackKind
 		if (kind === "map")
@@ -191,13 +191,13 @@
 		if (kind === "route")
 			return [
 				b?.on ? `on ${b.on}` : null,
-				`${lanes} branch${lanes === 1 ? "" : "es"}`,
+				`${branches} branch${branches === 1 ? "" : "es"}`,
 				"any subset may fire"
 			]
 				.filter(Boolean)
 				.join(" · ")
-		const at = b?.mode === "sequential" ? "in order" : `${lanes} at once`
-		return `${lanes} ${lanes === 1 ? "lane" : "lanes"} · ${at}`
+		const at = b?.mode === "sequential" ? "in order" : `${branches} at once`
+		return `${branches} ${branches === 1 ? "branch" : "branches"} · ${at}`
 	}
 
 	/**
@@ -242,7 +242,7 @@
 	const counts = $derived.by(() => {
 		const nodes = graph?.nodes ?? []
 		const blocks = graph?.blocks ?? []
-		const lanes = new Set(
+		const branches = new Set(
 			nodes
 				.filter((n) => n.blockId)
 				.map((n) => `${n.blockId}/${n.blockChain}`)
@@ -253,7 +253,7 @@
 			maps: blocks.filter((b) => b.kind === "map").length,
 			loops: blocks.filter((b) => b.kind === "loop").length,
 			routes: blocks.filter((b) => b.kind === "route").length,
-			lanes: lanes.size
+			branches: branches.size
 		}
 	})
 
@@ -270,8 +270,8 @@
 			counts.routes
 				? `${counts.routes} route${counts.routes === 1 ? "" : "s"}`
 				: null,
-			counts.lanes
-				? `${counts.lanes} lane${counts.lanes === 1 ? "" : "s"}`
+			counts.branches
+				? `${counts.branches} branch${counts.branches === 1 ? "" : "es"}`
 				: null
 		]
 			.filter(Boolean)

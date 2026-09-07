@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { onMount, onDestroy } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { z } from "zod"
@@ -24,6 +25,11 @@
 
 	const socket = useTypedSocket()
 	let availableLMStudioModels: { model: string; name: string }[] = $state([])
+	// The picker takes { value, label }; LM Studio reports the id under `model`
+	// and the display name under `name`.
+	let modelOptions = $derived(
+		availableLMStudioModels.map((m) => ({ value: m.model, label: m.name }))
+	)
 	let testResult: {
 		ok: boolean
 		error?: string | null
@@ -77,7 +83,9 @@
 		}
 	}
 
-		const onConnectionsRefreshModels = (msg: Sockets.Connections.RefreshModels.Response) => {
+	const onConnectionsRefreshModels = (
+		msg: Sockets.Connections.RefreshModels.Response
+	) => {
 		if (msg.models) availableLMStudioModels = msg.models
 		if (!connection.model && msg.models.length > 0) {
 			connection.model = msg.models[0].model
@@ -107,29 +115,23 @@
 
 <div class="flex flex-col gap-4">
 	<div class="mt-2 flex flex-col gap-1">
-		<label class="font-semibold" for="model">Model</label>
-		<select
-			id="model"
+		<Select
+			label="Model"
+			options={modelOptions}
 			bind:value={connection.model}
-			class="select bg-background border-muted w-full rounded border {validationErrors.model
-				? 'border-error-500'
-				: ''}"
-			aria-invalid={validationErrors.model ? "true" : "false"}
-			aria-describedby={validationErrors.model
-				? "model-error"
-				: undefined}
-			oninput={() => {
+			placeholder="-- Select Model --"
+			emptyMessage="No models — try Refresh Models."
+			clearable
+			required
+			invalid={!!validationErrors.model}
+			describedBy={validationErrors.model ? "model-error" : undefined}
+			onValueChange={() => {
 				if (validationErrors.model) {
 					const { model, ...rest } = validationErrors
 					validationErrors = rest
 				}
 			}}
-		>
-			<option value="">-- Select Model --</option>
-			{#each availableLMStudioModels as m}
-				<option value={m.model}>{m.name}</option>
-			{/each}
-		</select>
+		/>
 		{#if validationErrors.model}
 			<p
 				id="model-error"
@@ -163,35 +165,19 @@
 			</button>
 		</div>
 		{#if !extraFields.useSession}
-			<div class="mt-2 flex flex-col gap-1">
-				<label class="font-semibold" for="promptFormat">
-					Prompt Format
-				</label>
-				<select
-					id="promptFormat"
-					class="select bg-background border-muted w-full rounded border"
-					bind:value={connection.promptFormat}
-				>
-					{#each PromptFormats.options as option}
-						<option value={option.value}>{option.label}</option>
-					{/each}
-				</select>
-			</div>
+			<Select
+				class="mt-2"
+				label="Prompt Format"
+				options={PromptFormats.options}
+				bind:value={connection.promptFormat}
+			/>
 		{/if}
-		<div class="mt-2 flex flex-col gap-1">
-			<label class="font-semibold" for="tokenCounter">
-				Token Counter
-			</label>
-			<select
-				id="tokenCounter"
-				bind:value={connection.tokenCounter}
-				class="select bg-background border-muted w-full rounded border"
-			>
-				{#each TokenCounterOptions.options as t}
-					<option value={t.value}>{t.label}</option>
-				{/each}
-			</select>
-		</div>
+		<Select
+			class="mt-2"
+			label="Token Counter"
+			options={TokenCounterOptions.options}
+			bind:value={connection.tokenCounter}
+		/>
 	</div>
 	<!-- <div class="flex gap-4">
 		<label class="flex items-center gap-2">

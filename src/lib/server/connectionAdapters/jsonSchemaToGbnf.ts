@@ -22,7 +22,7 @@
  *  - **Key order is fixed.** JSON Schema permits object keys in any order; a
  *    grammar cannot express that without a combinatorial blowup. Every parser
  *    in this app reads by key, so the narrowing is invisible downstream, and
- *    providers that take the JSON Schema natively still accept any order.
+ *    services that take the JSON Schema natively still accept any order.
  *  - **All properties are required.** Enforced rather than assumed: a schema
  *    whose `required` omits a key is rejected, so an optional field can never
  *    be silently promoted to mandatory by this converter.
@@ -115,7 +115,7 @@ export function jsonSchemaToGbnf(root: JsonSchemaNode): string {
 		if (node.type === "string") {
 			if ("const" in node) {
 				throw new Error(
-					`jsonSchemaToGbnf: "const" is unsupported at "${hint}" — use a single-element enum, which more providers accept natively`
+					`jsonSchemaToGbnf: "const" is unsupported at "${hint}" — use a single-element enum, which more services accept natively`
 				)
 			}
 			if ("maxLength" in node) {

@@ -142,7 +142,35 @@ export function typeContentHash(entry: RegistryEntry): string {
 		 * everywhere; undefined on every non-mode type, so nothing else
 		 * re-hashes.
 		 */
-		sessionShape: entry.sessionShape
+		sessionShape: entry.sessionShape,
+		/**
+		 * The entry-row contract, hashed whole (Part 1).
+		 *
+		 * Field roles decide where a row competes for budget, how its siblings sort,
+		 * who may see it and where it renders — so moving one changes what an
+		 * untouched install does while every pin keeps resolving, which is the
+		 * shape of silent change this rule exists to stop. The consequence is
+		 * intended and stated in the SDK: **changing a field role forces `@N+1`.**
+		 *
+		 * Stripped like everything else, so a label inside it stays free to
+		 * change; `undefined` on every non-entry type, so nothing else
+		 * re-hashes.
+		 */
+		entryShape: stripI18n(entry.entryShape),
+		/**
+		 * The declared schema of an entry's type-specific half.
+		 *
+		 * Hashed because the constraint projection makes it unavoidable: this
+		 * schema *becomes* a database CHECK, so a schema change is a constraint
+		 * change, and the version bump is what drops the old constraint and
+		 * adds the new one. Display text inside it is stripped, which is what
+		 * keeps copyediting a field's label off the version.
+		 *
+		 * The column has existed and been NULL since the table was created;
+		 * `undefined` for every type that declares nothing, so no existing hash
+		 * moves by this being here.
+		 */
+		configSchema: stripI18n(entry.configSchema)
 	}
 	// Stable key order, recursively. An earlier version passed a sorted key
 	// array as JSON.stringify's replacer, which filters keys at *every* level —
@@ -221,6 +249,12 @@ export async function syncTypeRegistry(
 				semantics: entry.semantics ?? null,
 				scriptPoints: (entry.scriptPoints as any) ?? null,
 				sessionShape: (entry.sessionShape as any) ?? null,
+				// Entry types only. The contract in one column, the declared
+				// schema in the column that already exists for a schema — which
+				// is what the constraint and index projection will read, by
+				// name, without knowing anything about entries.
+				entryShape: (entry.entryShape as any) ?? null,
+				configSchema: (entry.configSchema as any) ?? null,
 				causesEvent: entry.causesEvent ?? null,
 				isPublic: entry.public ?? false,
 				release: opts.release,
@@ -262,7 +296,17 @@ export async function syncTypeRegistry(
 			const pointsChanged =
 				JSON.stringify(sortDeep(row.scriptPoints ?? null)) !==
 				JSON.stringify(sortDeep((entry.scriptPoints as any) ?? null))
+			// An entry type's `fields` are a declared schema on exactly the
+			// same footing as `slots`: hashed apart from their display text, so
+			// a relabelled field must reach installs whose rows predate the
+			// rewording, or the form renders the old words forever. The
+			// contract half (`entry_shape`) needs no such healing — it is
+			// hashed whole, so it cannot move without taking the conflict path.
+			const configSchemaChanged =
+				JSON.stringify(sortDeep(row.configSchema ?? null)) !==
+				JSON.stringify(sortDeep((entry.configSchema as any) ?? null))
 			if (
+				configSchemaChanged ||
 				slotsChanged ||
 				optionalChanged ||
 				i18nChanged ||
@@ -277,6 +321,12 @@ export async function syncTypeRegistry(
 							? { optional: entry.optional ?? false }
 							: {}),
 						...(slotsChanged ? { slots: entry.slots ?? {} } : {}),
+						...(configSchemaChanged
+							? {
+									configSchema:
+										(entry.configSchema as any) ?? null
+								}
+							: {}),
 						...(i18nChanged
 							? { i18n: (entry.i18n as any) ?? null }
 							: {}),
@@ -288,7 +338,7 @@ export async function syncTypeRegistry(
 							: {})
 					})
 					.where(eq(schema.pipelineTypeRegistry.id, row.id))
-				if (slotsChanged) {
+				if (slotsChanged || configSchemaChanged) {
 					result.updated.push(pin)
 					continue
 				}
@@ -335,6 +385,12 @@ export async function readTypeRegistry(db: Db): Promise<RegistryEntry[]> {
 		scriptPoints: r.scriptPoints ?? undefined,
 		// Hashed too (19 §1) — same obligation again.
 		sessionShape: r.sessionShape ?? undefined,
+		// And again for the two an entry type carries. A hashed field the
+		// reader drops makes the same row hash differently depending on which
+		// direction it was travelling, which is what the round-trip test in
+		// `registrySync.int.test.ts` exists to catch.
+		entryShape: r.entryShape ?? undefined,
+		configSchema: r.configSchema ?? undefined,
 		i18n: r.i18n ?? undefined,
 		causesEvent: r.causesEvent ?? undefined,
 		// ⚠ `|| undefined`, matching `optional` two lines up, and for a reason

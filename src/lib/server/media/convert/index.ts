@@ -22,7 +22,10 @@
  * with the pair named. In particular a source that is ALREADY an accepted
  * format is passed through untouched (`passthrough: true`) rather than
  * re-encoded: a JPEG → JPEG round trip would lose a generation of quality for
- * no reason at all, and nobody would ever see it happen.
+ * no reason at all, and nobody would ever see it happen. That passthrough is
+ * asked FIRST, before "can this build decode it" and before "would this lose
+ * the animation", because both are questions about a conversion and this is the
+ * case where none happens.
  *
  * **3. Order is load-bearing in a batch.** `attachments` is a list precisely
  * because interleaving is ordered — a single ref could not express "these
@@ -302,13 +305,22 @@ function withNote(
 }
 
 /**
- * Source-level checks, run once before any target is considered.
+ * Is the source mime in the vocabulary at all — the one source-level check that
+ * runs before EVERYTHING, the negotiated passthrough included.
  *
- * Separate because these answers do not change with the target: an unknown or
- * undecodable source is refused for every candidate, so walking the accepted
- * list would produce N identical refusals and report whichever came last.
+ * Ahead of the passthrough where `checkSourceDecodable` deliberately is not,
+ * because the two answer different questions. Whether this build can READ the
+ * bytes is a fact about converting them, and a passthrough converts nothing;
+ * whether the table names the format is not, because the table entry is where a
+ * passthrough's `ext` comes from and where the kind comparison reads its kinds.
+ * There is nothing to hand back for a mime nothing was ever declared about.
+ *
+ * Separate from the target checks because the answer does not change with the
+ * target: an unknown source is refused for every candidate, so walking the
+ * accepted list would produce N identical refusals and report whichever came
+ * last.
  */
-function checkSource(
+function checkSourceKnown(
 	source: string,
 	considered: readonly string[]
 ):
@@ -327,22 +339,41 @@ function checkSource(
 			)
 		}
 	}
-	if (!format.decode) {
-		return {
-			ok: false,
-			refusal: refuse(
-				"no-converter",
-				source,
-				null,
-				considered,
-				withNote(
-					`${source} cannot be decoded by this build, so nothing can be converted from it.`,
-					format
-				)
-			)
-		}
-	}
 	return { ok: true, format }
+}
+
+/**
+ * Can this build read the source — asked only once a CONVERSION is actually on
+ * the table.
+ *
+ * This used to run with the vocabulary check, above negotiation, and that was
+ * an ordering bug: a PDF offered `["application/pdf"]` came back
+ * `no-converter` for being undecodable when nothing needed decoding, because it
+ * was already in an accepted format. So it sits below the passthrough and above
+ * the converter lookup. A source that is undecodable AND unacceptable still
+ * refuses with the same code and the same words it always did — the accepted
+ * list is the only thing that changed answer.
+ *
+ * Target-independent for the same reason as the check above, and returned as a
+ * bare refusal-or-null rather than a result wrapper because there is nothing to
+ * carry forward on success.
+ */
+function checkSourceDecodable(
+	format: MediaFormat,
+	source: string,
+	considered: readonly string[]
+): ConversionRefused | null {
+	if (format.decode) return null
+	return refuse(
+		"no-converter",
+		source,
+		null,
+		considered,
+		withNote(
+			`${source} cannot be decoded by this build, so nothing can be converted from it.`,
+			format
+		)
+	)
 }
 
 /**
@@ -400,8 +431,13 @@ export async function convertMedia(
 	const target = normalizeMime(targetMime)
 	const considered = [target]
 
-	const checked = checkSource(source, considered)
+	// Both source checks, in the order they have always run here: this entry
+	// point encodes unconditionally, so there is no passthrough for the
+	// decodability check to sit below and nothing to reorder.
+	const checked = checkSourceKnown(source, considered)
 	if (!checked.ok) return { ...checked.refusal, targetMime: target }
+	const undecodable = checkSourceDecodable(checked.format, source, considered)
+	if (undecodable) return { ...undecodable, targetMime: target }
 
 	const targetFormat = formatByMime(target)
 	if (!targetFormat) {
@@ -448,14 +484,16 @@ export async function convertMedia(
  * Convert to the FIRST of `accepted` this build can actually reach, and say
  * which that was (`result.mime`).
  *
- * This is the function a provider's "I accept these formats" list calls. The
+ * This is the function a service's "I accept these formats" list calls. The
  * order of `accepted` is the caller's preference and is honoured strictly — a
  * backend listing WebP before PNG gets WebP when both are reachable.
  *
  * A source already in `accepted` short-circuits to a PASSTHROUGH before any
- * preference is applied. Deliberate: re-encoding a JPEG into a "preferred" WebP
- * would silently spend a generation of quality to satisfy an ordering that only
- * exists to break ties.
+ * preference is applied, and before every check that asks what a conversion
+ * would cost. Deliberate: re-encoding a JPEG into a "preferred" WebP would
+ * silently spend a generation of quality to satisfy an ordering that only
+ * exists to break ties, and a file this build could not re-encode at all is
+ * still a file the backend said it takes.
  */
 export async function convertMediaTo(
 	input: ConvertInput,
@@ -465,21 +503,21 @@ export async function convertMediaTo(
 	const source = normalizeMime(input.mime)
 	const considered = accepted.map(normalizeMime)
 
-	const checked = checkSource(source, considered)
+	const checked = checkSourceKnown(source, considered)
 	if (!checked.ok) return checked.refusal
-
-	if (!considered.length) {
-		return refuse(
-			"no-converter",
-			source,
-			null,
-			considered,
-			`No target formats were offered for ${source}, so there is nothing to convert to.`
-		)
-	}
 
 	// Already acceptable. The bytes are handed back as they are — no decode, no
 	// re-encode, nothing to lose.
+	//
+	// FIRST of the negotiation, ahead of both questions about what a conversion
+	// would cost — can this build decode it, and would that discard motion —
+	// because this path performs no conversion for either to bear on. A PDF
+	// offered `["application/pdf"]` is undecodable here and is exactly the file
+	// a backend accepting PDFs wants handed over; an animated WebP offered
+	// `["image/webp"]` keeps its frames because nothing reads them. Neither is
+	// a flatten in disguise: `considered.includes(source)` is only true when
+	// the format the caller accepts IS the format in hand, so the bytes leaving
+	// are the bytes that arrived.
 	if (considered.includes(source)) {
 		return {
 			ok: true,
@@ -490,6 +528,23 @@ export async function convertMediaTo(
 			height: null,
 			passthrough: true
 		}
+	}
+
+	const undecodable = checkSourceDecodable(checked.format, source, considered)
+	if (undecodable) return undecodable
+
+	// Still below the source checks, where it has always been, so an undecodable
+	// source names the decode rather than the offer whatever it was handed. The
+	// passthrough moved over this line and changed nothing by it: an empty list
+	// contains no source mime to match.
+	if (!considered.length) {
+		return refuse(
+			"no-converter",
+			source,
+			null,
+			considered,
+			`No target formats were offered for ${source}, so there is nothing to convert to.`
+		)
 	}
 
 	const target = considered.find((t) => BY_PAIR.has(pairKey(source, t)))

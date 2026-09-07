@@ -20,6 +20,7 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
 
@@ -140,8 +141,8 @@ describe("sceneCompileHandler — narrowed cancel guard (PGlite integration)", (
 		)[0]
 		const historyEntry = (
 			await testDb
-				.insert(schema.historyEntries)
-				.values({ lorebookId: lorebook.id, year: 1 })
+				.insert(schema.lorebookEntries)
+				.values(historyValues([{ lorebookId: lorebook.id, year: 1 }]))
 				.returning()
 		)[0]
 		await testDb.insert(schema.scenes).values({

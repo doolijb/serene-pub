@@ -221,6 +221,11 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 			if (err?.error?.message) {
 				errorMsg += ` Message: ${err.error.message}`
 			}
+			// `provider_name` is the upstream proxy's own field name, and the
+			// label echoes it verbatim so an administrator can match this line
+			// against that proxy's dashboard. Foreign vocabulary reconciled at
+			// the seam rather than merged (NOMENCLATURE R5); our own word for a
+			// vendor is "service".
 			if (err?.error?.provider_name) {
 				errorMsg += ` Provider: ${err.error.provider_name}`
 			}

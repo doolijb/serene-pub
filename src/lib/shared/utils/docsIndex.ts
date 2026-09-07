@@ -38,6 +38,7 @@ export const DOC_ORDER: string[] = [
 	"tags",
 	"users-and-accounts",
 	"themes-and-settings",
+	"languages",
 	"document-view",
 	"system-settings",
 	"importing-from-sillytavern",

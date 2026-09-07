@@ -13,6 +13,7 @@
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { insertLegacy } from "$lib/server/messages/store"
+import { resolveChannel } from "$lib/server/messages/channels"
 import { InterpolationEngine } from "$lib/server/utils/interpolation/InterpolationEngine"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 
@@ -117,8 +118,13 @@ export async function collectSessionGreetings(
 
 /**
  * Seed the greetings — the write half. One assistant message per entry, the
- * full list as its swipe history, redirected to the genre's declared channel
- * when it is not `main` (the mirror preserves channel once set).
+ * full list as its swipe history, on the genre's declared greeting channel.
+ *
+ * The channel goes on the legacy row, which the mirror carries (20 §7, 0200).
+ * It used to be patched onto `messages` after the insert, because the legacy
+ * row had no channel to write — which made this the one production writer
+ * that reached past the store, and made a lane something the prompt-facing
+ * read could not see.
  */
 export async function writeSessionGreetings(
 	db: Db,
@@ -129,7 +135,7 @@ export async function writeSessionGreetings(
 		channel?: string
 	}
 ): Promise<number[]> {
-	const channel = opts.channel ?? "main"
+	const channel = resolveChannel(opts.channel)
 	const ids: number[] = []
 	for (const entry of opts.entries) {
 		const created = await insertLegacy(db, {
@@ -138,6 +144,7 @@ export async function writeSessionGreetings(
 			personaId: null,
 			characterId: entry.characterId,
 			role: "assistant",
+			channel,
 			content: entry.texts[0],
 			isGenerating: false,
 			metadata: {
@@ -148,11 +155,6 @@ export async function writeSessionGreetings(
 				}
 			}
 		} as InsertSessionMessage)
-		if (channel !== "main")
-			await db
-				.update(schema.messages)
-				.set({ channel })
-				.where(eq(schema.messages.id, created.id))
 		ids.push(created.id)
 	}
 	return ids

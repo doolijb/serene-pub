@@ -1,5 +1,5 @@
 /**
- * A4 fix: historyEntries:iterateNext used to insert the new entry at
+ * A4 fix: `entries:iterateNext` (then `historyEntries:iterateNext`) used to insert the new entry at
  * `existingEntry.position + 1` with no shift of entries already occupying
  * that position (or later) — so calling iterateNext on an entry that wasn't
  * the last one in the list produced two rows sharing the same position,
@@ -12,6 +12,11 @@ import os from "os"
 import path from "path"
 import { asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import {
+	HISTORY_TYPE_ID,
+	inBookOfType
+} from "$lib/server/utils/lorebookEntries"
+import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -48,11 +53,9 @@ function fakeSocket(userId: number) {
 
 const noopEmit = () => {}
 
-describe("historyEntries:iterateNext — position collisions (PGlite integration)", () => {
+describe("entries:iterateNext — position collisions (PGlite integration)", () => {
 	test("inserting after a middle entry shifts later entries instead of colliding", async () => {
-		const { iterateNextHistoryEntryHandler } = await import(
-			"./historyEntries"
-		)
+		const { iterateNextEntryHandler } = await import("./entries")
 
 		const user = await makeUser("history-positions-user")
 		const [lorebook] = await testDb
@@ -62,28 +65,29 @@ describe("historyEntries:iterateNext — position collisions (PGlite integration
 
 		// Three entries at positions 0, 1, 2.
 		const [entry0] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id, position: 0 })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id, position: 0 }]))
 			.returning()
 		await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id, position: 1 })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id, position: 1 }]))
 		await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: lorebook.id, position: 2 })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: lorebook.id, position: 2 }]))
 
 		// iterateNext on the FIRST entry (position 0) — the new entry wants
 		// position 1, which the second entry already occupies.
-		await iterateNextHistoryEntryHandler.handler(
+		await iterateNextEntryHandler.handler(
 			fakeSocket(user.id),
-			{ id: entry0.id } as any,
+			{ id: entry0.id, typeId: HISTORY_TYPE_ID },
 			noopEmit
 		)
 
-		const allEntries = await testDb.query.historyEntries.findMany({
-			where: eq(schema.historyEntries.lorebookId, lorebook.id),
-			orderBy: asc(schema.historyEntries.position)
-		})
+		const allEntries = await testDb
+			.select({ position: schema.lorebookEntries.position })
+			.from(schema.lorebookEntries)
+			.where(inBookOfType(lorebook.id, HISTORY_TYPE_ID))
+			.orderBy(asc(schema.lorebookEntries.position))
 
 		const positions = allEntries.map((e) => e.position)
 		const uniquePositions = new Set(positions)

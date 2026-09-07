@@ -112,11 +112,11 @@ export const parityPipeline = () =>
 				C.sessionHistory.v1({ scope: $.input.sessionScope })
 			)
 			/**
-			 * The three retrieval lanes, mirroring the shipped document.
+			 * The three retrieval gather branches, mirroring the shipped document.
 			 *
 			 * ⚠ This was one `lorebookTriggers` query long after the shipped
 			 * spec had split it, and the divergence hid a real defect for two
-			 * versions: the split left `history` with no lane, so dated
+			 * versions: the split left `history` with no gather branch, so dated
 			 * summaries were dropped from every prompt while this corpus
 			 * stayed green — because `lorebook-triggers@1` returns all three
 			 * sources through one port and this harness was still using it.
@@ -134,8 +134,21 @@ export const parityPipeline = () =>
 			.query("historyEntries", ($) =>
 				C.historyEntries.v1({ scope: $.input.sessionScope })
 			)
+			/**
+			 * Concatenation, mirroring the shipped document's 1.17.0.
+			 *
+			 * ⚠ This was `mergeCandidates`, as the shipped spec was, and the
+			 * two were wrong together — which is the one way a mirror can fail
+			 * to prove anything and still look right. Rank fusion over three
+			 * *disjoint* lore gather branches stamps a `presetScore` that is nothing but
+			 * each entry's position in its own list, and `select` prefers that
+			 * to the weighted signal sum: every signal weight was inert on both
+			 * sides of this comparison. `session/entity-cooccurrence` is the
+			 * fixture that could see it, and it sat in `OPEN` until this line
+			 * changed.
+			 */
 			.task("lore", ($) =>
-				C.mergeCandidates.v1({
+				C.concatCandidates.v1({
 					sources: [
 						$.worldLore.main,
 						$.characterLore.main,
@@ -231,7 +244,22 @@ export const parityPipeline = () =>
 					variables: slot.variables(),
 					// Without this the budget resolves to zero and every block is
 					// excluded — the prompt renders with its lore silently gone.
-					params: slot.params()
+					params: slot.params(),
+					// The wire format, shared with the node that sends — the
+					// shipped specs' construction, mirrored here for the reason
+					// stated above `prompts`: a harness that diverges from the
+					// document it is meant to prove stops proving it.
+					//
+					// ⚠ The corpus registers **no connection at all**, so this
+					// resolves to `null` and the render falls to Vicuna — which
+					// is exactly what it did when the slot did not exist. The
+					// goldens therefore do not move, and this line does not by
+					// itself prove the wiring works: `promptFormat.int.test.ts`
+					// is where a real non-Vicuna connection is bound and the
+					// rendered bytes are checked. This is here so the document
+					// the corpus renders through keeps matching the one it is
+					// meant to prove.
+					connection: slot.connectionOf("generate")
 				})
 			)
 			.provider("generate", ($) =>
@@ -398,8 +426,13 @@ export async function runFixture(
 	// harness has done twice (a template both sides read, a hydration both
 	// sides lacked).
 	//
-	// Re-capture with `PARITY_CAPTURE=1`, and only ever with a deliberate
-	// ruling behind it: rewriting a golden is rewriting what 0.5 did.
+	// ⚠ **There is no re-capture path, and there must not be one.** This said
+	// "re-capture with PARITY_CAPTURE=1" long after the switch was removed:
+	// `resolveGolden` only ever reads or throws, and the 0.5 builder that
+	// produced these was deleted at 7320c4a. A golden is a record of what 0.5
+	// emitted, so the only way to make a new one is a v0.5.1-beta checkout —
+	// which is the point, since anything regenerated from this tree would be
+	// the pipeline grading its own homework.
 	const [legacy, preview] = await Promise.all([
 		resolveGolden(db, fixture, scope, effective),
 		pipelinePreview(db, scope)
@@ -428,7 +461,7 @@ export async function runFixture(
  * Structurally different from `parityPipeline` in one way that matters — the two
  * query windows each run the whole ranking stack and their results are
  * concatenated, because "what is being said now" outranks "what was being said a
- * moment ago" by construction. The arm is one node here (`rank`) that takes both
+ * moment ago" by construction. The mechanism is one node here (`rank`) that takes both
  * windows; splitting it into two nodes would have made that ordering a property
  * of the spec, where a user could get it backwards.
  */
@@ -473,7 +506,18 @@ export const ragParityPipeline = () =>
 							.query("search", ($) =>
 								C.vectorSearch.v1({
 									scope: $.input.sessionScope,
-									vectors: $.gather.current.embed.vectors
+									vectors: $.gather.current.embed
+										.vectors,
+									// ⚠ Wired, and it was not. The mechanism's cap
+									// (`maxEntries`) ships at 0 — off — so a
+									// node whose params slot never resolves
+									// would run this corpus against a mechanism
+									// returning nothing. The 1.16.0 lesson, on
+									// the one spec where it would have shown as
+									// four empty prompts rather than an error.
+									// The fixture pushes a cap high enough not
+									// to truncate; see `harness.rag.int.test`.
+									params: slot.params()
 								})
 							)
 					)
@@ -485,7 +529,8 @@ export const ragParityPipeline = () =>
 							.query("search", ($) =>
 								C.vectorSearch.v1({
 									scope: $.input.sessionScope,
-									vectors: $.gather.recent.embed.vectors
+									vectors: $.gather.recent.embed.vectors,
+									params: slot.params()
 								})
 							)
 					)
@@ -506,7 +551,7 @@ export const ragParityPipeline = () =>
 					params: slot.params()
 				})
 			)
-			// Ordering within the arm is `rank`'s job; fitting the result to a
+			// Ordering within the mechanism is `rank`'s job; fitting the result to a
 			// budget is `select`'s, and it is the same node the keyword path
 			// uses. Two stages rather than one because they answer different
 			// questions — "which of these is most relevant" and "which of them

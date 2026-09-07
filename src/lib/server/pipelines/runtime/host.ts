@@ -19,15 +19,65 @@
  * allowed to see rather than against the query it happened to send (F30).
  */
 
-import { and, asc, desc, eq, inArray } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import type { HostServices, NodeRef } from "@serene-pub/sdk"
+import {
+	BINDING_VISIBILITY_POLICY,
+	DEFAULT_VECTOR_NAME,
+	ENTRY_TYPE_IDS,
+	WORLD_LORE_TYPE_ID,
+	entryInsert,
+	nextPosition,
+	toEntryRow
+} from "$lib/server/utils/lorebookEntries"
+import {
+	entryDeclaration,
+	bandOfType
+} from "$lib/server/entries/declarations"
+import {
+	MENTION_EXTRACTOR_VERSION,
+	extractMentions
+} from "$lib/server/pipelines/ranking/mentions"
+import { buildScanWindow } from "$lib/server/pipelines/ranking/signals"
+import type { HostServices, MediaRef, NodeRef } from "@serene-pub/sdk"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
+import {
+	DEFAULT_CHANNEL,
+	channelRefusal,
+	channelWhere,
+	isAllChannels,
+	resolveChannel
+} from "$lib/server/messages/channels"
 
-type Db = { select: any; insert: any; update: any }
+type Db = {
+	select: any
+	insert: any
+	update: any
+	/** Needed by the writes that allocate a `position` under an advisory lock. */
+	transaction: any
+}
 
 export interface HostScope {
+	/**
+	 * The run these effects belong to.
+	 *
+	 * Read by everything that has to be attributable *outside* the graph: the
+	 * progress an image render reports, which a client keys its card on and
+	 * cancels by, and the run a prompts-slot template renders under — the same
+	 * association `RenderRun` makes for the two rendering bindings, because a
+	 * template naming a plugin's engine is a sandboxed hook call and
+	 * cancellation reaches it only by run id.
+	 *
+	 * **Optional, and legitimately absent.** `createHost` takes no scope at all
+	 * for a caller that has none — the parity harness, a test poking one
+	 * binding — and a host with no run is one nothing is trying to attribute.
+	 * `runSpec` always has a run and always passes it, so an absent id here
+	 * means a host wired by hand rather than a run that lost its name; an id
+	 * invented to satisfy the type would be worse than the absence, since it
+	 * would name a run nobody can find.
+	 */
+	runId?: string
 	/** The session this run belongs to. Reads outside it are refused, not filtered. */
 	sessionId?: number
 	/** Who triggered the run, for authorship on writes. */
@@ -121,7 +171,8 @@ const refId = (v: unknown): number | null => {
 	// accepts a numeric string; this one used to demand a number, and the
 	// executor hands back `{id}` where the id is a STRING — so every resolved
 	// slot became null here, in the one function whose whole job is to read one.
-	if (v && typeof v === "object") return refId((v as any).ref ?? (v as any).id)
+	if (v && typeof v === "object")
+		return refId((v as any).ref ?? (v as any).id)
 	return null
 }
 
@@ -177,6 +228,42 @@ function assertScoped(
 			`${node.key} (${node.typeId}) asked for session ${wanted}, but this run is scoped to ` +
 				`${allowed ?? "no session"}. A pipeline may only read the session it was triggered in.`
 		)
+}
+
+/**
+ * One eager-indexing pass, in words, for the receipt.
+ *
+ * The rule this serves is the one a mechanism that cannot run keeps breaking: *an
+ * unavailable mechanism subtracts a signal, and the receipt has to say so where
+ * a person reads it.* A promotion that indexed nothing because the model was not
+ * resident, and a promotion that indexed nothing because there was nothing to
+ * do, produce identical search results and are completely different facts. So
+ * both get a sentence, and a bound that bound says it bound — a slow turn and a
+ * partially-covered one are the two things a person needs to be able to explain.
+ *
+ * Deliberately not emitted at all when there was nothing to index: a note per
+ * turn saying "nothing to do" is noise that would train people to stop reading
+ * the notes.
+ */
+function describePromotion(
+	what: string,
+	report: {
+		requested: number
+		processed: number
+		remaining: number
+		boundHit: boolean
+		reason: string
+	}
+): string | undefined {
+	if (report.requested === 0) return undefined
+	if (report.processed === 0)
+		return `${report.requested} ${what} were missing and none were indexed — ${report.reason}`
+	if (report.boundHit || report.remaining > 0)
+		return (
+			`indexed ${report.processed} of ${report.requested} missing ${what} before searching — ` +
+			`${report.reason}; the rest stay queued`
+		)
+	return `indexed ${report.processed} missing ${what} before searching`
 }
 
 /**
@@ -287,39 +374,42 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					assertScoped(node, q.sessionId, scope.sessionId)
 					if (sessionId === undefined) return []
 
+					/**
+					 * Channel scoping (20 §7, R6) — in the `where`, not after
+					 * the limit.
+					 *
+					 * An omitted channel is the session's default lane,
+					 * `main`, and never a union: see `messages/channels.ts`
+					 * for why an unqualified read resolves rather than
+					 * refuses. `ALL_CHANNELS` is the union and has to be
+					 * asked for by name.
+					 *
+					 * It was a post-filter over ids fetched from the mirror,
+					 * which meant "the last 40 on this lane" was really "how
+					 * many of the last 40 in the session happened to be on
+					 * it" — silently short, and indistinguishable from a lane
+					 * with little history.
+					 */
+					const channel = resolveChannel(q.channel)
+
 					// `isHidden` is the existing convention for a message that should
 					// not reach a model. Honoured here rather than left to each
 					// binding, so a new Query type cannot forget it.
-					let rows = await db
+					const rows = await db
 						.select()
 						.from(schema.sessionMessages)
 						.where(
 							and(
 								eq(schema.sessionMessages.sessionId, sessionId),
-								eq(schema.sessionMessages.isHidden, false)
+								eq(schema.sessionMessages.isHidden, false),
+								channelWhere(
+									schema.sessionMessages.channel,
+									channel
+								)
 							)
 						)
 						.orderBy(desc(schema.sessionMessages.id))
 						.limit(Math.min(q.limit ?? 100, 500))
-
-					// Channel filtering (20 §7): 'main' — and absent — is the
-					// legacy read exactly, because every legacy row lives on
-					// 'main' by migration. Another value narrows through the
-					// message model's channel column. The intersection is by
-					// id, which the mirror keeps identical across both tables.
-					if (typeof q.channel === "string" && q.channel !== "main") {
-						const laneIds: Array<{ id: number }> = await db
-							.select({ id: schema.messages.id })
-							.from(schema.messages)
-							.where(
-								and(
-									eq(schema.messages.sessionId, sessionId),
-									eq(schema.messages.channel, q.channel)
-								)
-							)
-						const lane = new Set(laneIds.map((r) => r.id))
-						rows = rows.filter((r: any) => lane.has(r.id))
-					}
 
 					// Reversed after a descending limit: "the most recent N, in
 					// reading order" is what every caller wants, and doing it here
@@ -328,12 +418,23 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 
 					// The uncommitted draft goes last, where the real message
 					// would be. `id: -1` marks it as belonging to no row.
-					if (scope.draftMessage?.content?.trim())
+					//
+					// Only on a read that includes the composer's own lane:
+					// the draft is what somebody is typing into the session's
+					// main composer, and appending it to a read of `map` would
+					// be the mixing this scoping exists to prevent. A
+					// per-channel composer is later work; when it arrives the
+					// draft grows a channel and this comparison uses it.
+					if (
+						scope.draftMessage?.content?.trim() &&
+						(channel === DEFAULT_CHANNEL || isAllChannels(channel))
+					)
 						history.push(
 							toMessage({
 								id: -1,
 								sessionId,
 								role: "user",
+								channel: DEFAULT_CHANNEL,
 								content: scope.draftMessage.content,
 								personaId: scope.draftMessage.personaId ?? null,
 								characterId: null,
@@ -387,6 +488,13 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * The selection rule mirrors the legacy handler exactly: an
 					 * explicit id list is taken as given (a person picked those
 					 * messages, hidden or not); "everything" filters hidden.
+					 *
+					 * "Everything" means everything *on one channel* (20 §7):
+					 * a summary that quietly folded a side conversation into
+					 * the account of the main one would be wrong in a way
+					 * nothing downstream could detect. A picked list is still
+					 * taken as given — the person picked those rows, lane and
+					 * all.
 					 */
 					const sessionId = q.sessionId ?? scope.sessionId
 					assertScoped(node, q.sessionId, scope.sessionId)
@@ -421,6 +529,10 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 										eq(
 											schema.sessionMessages.isHidden,
 											false
+										),
+										channelWhere(
+											schema.sessionMessages.channel,
+											q.channel
 										)
 									)
 						)
@@ -486,35 +598,65 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						.limit(1)
 					if (!session?.lorebookId) return []
 
-					const [world, character, history] = await Promise.all([
-						db
-							.select()
-							.from(schema.worldLoreEntries)
-							.where(
-								eq(
-									schema.worldLoreEntries.lorebookId,
-									session.lorebookId
-								)
-							),
-						db
-							.select()
-							.from(schema.characterLoreEntries)
-							.where(
-								eq(
-									schema.characterLoreEntries.lorebookId,
-									session.lorebookId
-								)
-							),
-						db
-							.select()
-							.from(schema.historyEntries)
-							.where(
-								eq(
-									schema.historyEntries.lorebookId,
-									session.lorebookId
-								)
+					/**
+					 * One scan of one table, where three used to be.
+					 *
+					 * Ordered by id because the three scans it replaces had no
+					 * `ORDER BY` at all and a single scan interleaves the
+					 * types: partitioning in memory preserves whatever order
+					 * the heap gave, which is arbitrary in both shapes. Id
+					 * order is the one deterministic choice that agrees with
+					 * the old arbitrary one wherever the old one was stable.
+					 */
+					const rows = (await db
+						.select()
+						.from(schema.lorebookEntries)
+						.where(
+							eq(
+								schema.lorebookEntries.lorebookId,
+								session.lorebookId
 							)
-					])
+						)
+						.orderBy(asc(schema.lorebookEntries.id))) as any[]
+
+					/**
+					 * Which entries have a usable vector — the ids, not the
+					 * vectors.
+					 *
+					 * The legacy shape carried `embedding` on the row itself
+					 * and `toLoreEntry` reduced it to a boolean immediately.
+					 * Now that vectors live in their own table, fetching them
+					 * to answer the same boolean would pull every float in the
+					 * lorebook across on every turn.
+					 */
+					const vectored = new Set<number>(
+						(
+							(await db
+								.select({
+									entryId: schema.lorebookEntryVectors.entryId
+								})
+								.from(schema.lorebookEntryVectors)
+								.where(
+									and(
+										inArray(
+											schema.lorebookEntryVectors.entryId,
+											rows.map((r) => r.id)
+										),
+										eq(
+											schema.lorebookEntryVectors
+												.vectorName,
+											DEFAULT_VECTOR_NAME
+										),
+										eq(
+											schema.lorebookEntryVectors
+												.chunkIndex,
+											0
+										),
+										sql`array_length(${schema.lorebookEntryVectors.vector}, 1) > 0`
+									)
+								)) as any[]
+						).map((v) => v.entryId)
+					)
 
 					/**
 					 * Normalized here, at the read, for the same reason
@@ -547,6 +689,27 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							)
 						)
 					const hydrated = await hydrateBindings(db, bindings)
+					/**
+					 * Which character each binding names, for character lore's
+					 * co-occurrence signal.
+					 *
+					 * Resolved here because the rows are already in hand — the
+					 * ranker asking for them again would be a second query per
+					 * turn for a fact this read has already paid for. A binding
+					 * naming a persona, or naming nobody, resolves to null,
+					 * which is what legacy's `binding?.characterId` test does.
+					 */
+					const bindingCharacter = new Map<number, number | null>(
+						(bindings as any[]).map((b) => [
+							b.id,
+							b.characterId ?? null
+						])
+					)
+					const boundCharacterOf = (e: any) =>
+						e?.lorebookBindingId != null
+							? (bindingCharacter.get(e.lorebookBindingId) ??
+								null)
+							: null
 					// The visibility rule below reads the session's personas, so
 					// they are part of the shape it is handed.
 					const sessionPersonas = await db
@@ -576,6 +739,16 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						populateLorebookEntryBindings(e, asSession)
 
 					/**
+					 * The annotation lane's own content hash, borrowed whole —
+					 * see `entrySourceHash`. Imported the way this case imports
+					 * everything else it needs, so the module graph a socket
+					 * pulls in is unchanged.
+					 */
+					const { entrySourceHash } = await import(
+						"$lib/server/annotations"
+					)
+
+					/**
 					 * Character lore is private self-knowledge.
 					 *
 					 * An entry bound to a character is visible only while
@@ -601,19 +774,46 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					// because every consumer downstream — scoring, budgeting, the
 					// receipt — keys on source, and splitting them again at each
 					// step is three chances to forget one.
-					return [
-						...world.map((e: any) =>
-							toLoreEntry(ready(e), "worldLore")
-						),
-						...character
-							.filter(visible)
-							.map((e: any) =>
-								toLoreEntry(ready(e), "characterLore")
-							),
-						...history.map((e: any) =>
-							toLoreEntry(ready(e), "history")
-						)
-					]
+					//
+					// ⚠ World, then character, then history — the order the
+					// three concatenated lists had. Nothing downstream is
+					// documented to depend on it, which is exactly why it is
+					// not the thing to change here.
+					const out: any[] = []
+					for (const typeId of ENTRY_TYPE_IDS) {
+						const decl = entryDeclaration(typeId)
+						// The privacy gate is the type's declared anchor
+						// policy, not a branch on which shape this is. World
+						// lore declares no anchor, so it is not asked; history
+						// declares none either. Types select policies and never
+						// author them, and this is the one core implements.
+						const gated =
+							decl?.roles.anchor?.policy ===
+							BINDING_VISIBILITY_POLICY
+						const source = bandOfType(typeId) as
+							| "worldLore"
+							| "characterLore"
+							| "history"
+						for (const row of rows) {
+							if (row.typeId !== typeId) continue
+							const entry = ready(toEntryRow(row))
+							if (gated && !visible(entry)) continue
+							out.push(
+								toLoreEntry(
+									entry,
+									source,
+									vectored.has(row.id),
+									boundCharacterOf(entry),
+									// ⚠ `row`, not `entry`. The stored columns
+									// are what a later reader can hash again;
+									// the hydrated entry is not reproducible
+									// from the database alone.
+									entrySourceHash(row)
+								)
+							)
+						}
+					}
+					return out
 				}
 
 				case "session_cast": {
@@ -694,9 +894,76 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 								)
 						])
 
+					/**
+					 * The other half of the alias union, per cast member.
+					 *
+					 * `characters.aliases` and `personas.aliases` ride on the
+					 * rows above already; `lorebook_bindings.absorbedAliases` —
+					 * where `narrativeGraph:mergeNode` puts the identity a merge
+					 * absorbed — does not, and that column's schema note makes
+					 * reading **both** mandatory for any consumer matching on
+					 * names. It is kept out of `aliases` on purpose: `aliases`
+					 * is a one-directional sync target replaced wholesale on
+					 * every entity edit, so an absorbed name written there would
+					 * vanish the next time that sync ran.
+					 *
+					 * Read here rather than at each consumer because this is the
+					 * one place that already knows both the session and its
+					 * lorebook. Attached per row and inert to the prompt path —
+					 * `resolveContextInput` picks fields by name, as it does
+					 * with `position` and `removedAt`.
+					 */
+					const absorbedByCharacter = new Map<number, string[]>()
+					const absorbedByPersona = new Map<number, string[]>()
+					if ((session as any).lorebookId) {
+						const bindings = await db
+							.select({
+								characterId:
+									schema.lorebookBindings.characterId,
+								personaId: schema.lorebookBindings.personaId,
+								absorbedAliases:
+									schema.lorebookBindings.absorbedAliases
+							})
+							.from(schema.lorebookBindings)
+							.where(
+								eq(
+									schema.lorebookBindings.lorebookId,
+									(session as any).lorebookId
+								)
+							)
+						for (const b of bindings as any[]) {
+							const names = Array.isArray(b.absorbedAliases)
+								? b.absorbedAliases
+								: []
+							if (!names.length) continue
+							const into =
+								b.characterId != null
+									? absorbedByCharacter
+									: b.personaId != null
+										? absorbedByPersona
+										: null
+							if (!into) continue
+							const id = b.characterId ?? b.personaId
+							into.set(id, [...(into.get(id) ?? []), ...names])
+						}
+					}
+
 					return {
-						sessionCharacters,
-						sessionPersonas,
+						sessionCharacters: (sessionCharacters as any[]).map(
+							(cc) => ({
+								...cc,
+								absorbedAliases:
+									absorbedByCharacter.get(cc.character?.id) ??
+									[]
+							})
+						),
+						sessionPersonas: (sessionPersonas as any[]).map(
+							(cp) => ({
+								...cp,
+								absorbedAliases:
+									absorbedByPersona.get(cp.persona?.id) ?? []
+							})
+						),
 						sessionScenario: (session as any).scenario ?? null,
 						isGroup: Boolean((session as any).isGroup)
 					}
@@ -821,7 +1088,12 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							? [q.vector]
 							: []
 					if (sessionId === undefined || vectors.length === 0)
-						return { lists: [], similarity: [], candidates: [] }
+						return {
+							lists: [],
+							similarity: [],
+							candidates: [],
+							truncated: []
+						}
 
 					const {
 						getSessionRagContext,
@@ -832,19 +1104,77 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 
 					const modelId = getLoadedModelId()
 					if (!modelId)
-						return { lists: [], similarity: [], candidates: [] }
+						return {
+							lists: [],
+							similarity: [],
+							candidates: [],
+							truncated: []
+						}
 
 					const context = await getSessionRagContext(sessionId)
-					const candidates = await fetchScopedCandidates(context, {
+
+					/**
+					 * **Index what this search is about to look at and cannot
+					 * see, before it looks.**
+					 *
+					 * A row in scope with no current vector is invisible to the
+					 * fetch below — it is not ranked low, it is not there — so a
+					 * lorebook saved a moment ago contributes nothing at all
+					 * until the background pass reaches it. The fix is not a
+					 * second synchronous embed path beside the queue: these rows
+					 * are **promoted to the front of the existing queue**, and
+					 * the node resumes once its scope is covered. Fairness,
+					 * failure backoff and model handling stay in one place.
+					 *
+					 * Bounded twice — the scan caps how many rows may be named,
+					 * the lane caps how many are indexed and for how long —
+					 * because this is synchronous work inside a turn.
+					 *
+					 * ⚠ Never throws into the turn. A promotion that cannot
+					 * complete degrades to a report, which is the governing
+					 * rule's "subtracts a signal, never halts": the search runs
+					 * over whatever is indexed and the receipt says what was
+					 * missing.
+					 */
+					const { promoteScopedVectors } = await import(
+						"$lib/server/embedding/vectorizationQueue"
+					)
+					const promotion = await promoteScopedVectors(
+						context,
 						modelId,
-						sources: q.sources,
-						excludeRecentMessages: q.excludeRecentMessages ?? 10
-					})
+						{
+							excludeRecentMessages:
+								q.excludeRecentMessages ?? 10,
+							channel: resolveChannel(q.channel)
+						}
+					)
+					/**
+					 * `truncated` rides back out untouched.
+					 *
+					 * The fetch is capped per source and scores nothing, so a
+					 * capped source hands back its newest rows rather than its
+					 * closest ones. Dropping that here would leave the mechanism
+					 * reporting a `considered` count for a pool it silently
+					 * never saw the whole of.
+					 */
+					const { candidates, truncated } =
+						await fetchScopedCandidates(context, {
+							modelId,
+							sources: q.sources,
+							excludeRecentMessages:
+								q.excludeRecentMessages ?? 10,
+							// The semantic mechanism reaches the prompt, so it is
+							// scoped exactly like the history read (20 §7): an
+							// omitted channel is `main`, never every lane at
+							// once. Lore is not lane-scoped — an entry belongs
+							// to the world, not to a conversation.
+							channel: resolveChannel(q.channel)
+						})
 
 					const topK = q.topK ?? 40
 					const lists = vectors.map((vector) =>
 						rankScopedCandidates(candidates, vector, topK).map(
-							project
+							toCandidate
 						)
 					)
 
@@ -855,7 +1185,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * candidates resemble each other, and this answers that
 					 * without any embedding leaving the host. N² is real — a topK
 					 * in the thousands would want a different shape — but at the
-					 * tens this arm works in it is smaller than two raw vectors.
+					 * tens this mechanism works in it is smaller than two raw vectors.
 					 */
 					const union = new Map<string, any>()
 					for (const list of lists)
@@ -883,7 +1213,426 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						similarity,
 						// The fused-set order the matrix is indexed against, so a
 						// Task can line the two up without guessing.
-						candidates: order.map((k) => union.get(k))
+						candidates: order.map((k) => union.get(k)),
+						truncated,
+						/**
+						 * What the eager pass did, for the receipt. A turn that
+						 * took a second longer because it embedded twelve
+						 * entries first has to be able to say so.
+						 */
+						indexing: describePromotion("vectors", promotion)
+					}
+				}
+
+				case "entity_annotations": {
+					/**
+					 * The entity mechanism's index — design §13.5, and the IO half of
+					 * it. Scoring is `ranking/entitySearch.ts`; the two are
+					 * split for the reason the cosine pass is not: this one
+					 * reads rows and returns keys, which is a small answer, and
+					 * keeping the arithmetic pure is what makes it testable
+					 * without a database.
+					 *
+					 * **One vocabulary for both sides.** The window's entities
+					 * and the corpus's annotations are keys out of the same
+					 * gazetteer, or they are two alphabets that never meet — a
+					 * window resolving "Alice" to `character:5` would not find
+					 * an entry annotated `open:alice`. It is built from the
+					 * session's **lorebook**, so every session over one book
+					 * agrees and the identity of that vocabulary rides on every
+					 * stored row.
+					 *
+					 * **Which entries.** The caller passes the ids, and that is
+					 * the privacy gate rather than a second one: `entryIds`
+					 * comes from this host's own `lorebook_entries` read, which
+					 * has already withheld character lore that is not the
+					 * speaker's own. Re-deriving visibility here would be a
+					 * second implementation of the rule bug 2 was about, free
+					 * to disagree with the first.
+					 */
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+
+					const {
+						loadVocabulary,
+						readEntryAnnotations,
+						searchMessageAnnotations
+					} = await import("$lib/server/annotations")
+					const {
+						promoteEntryAnnotations,
+						enqueueSessionAnnotation
+					} = await import("$lib/server/annotations/queue")
+					const { extractEntities } = await import(
+						"$lib/server/pipelines/ranking/entities"
+					)
+
+					const empty = {
+						entities: [],
+						entries: [],
+						messages: [],
+						diagnostics: {
+							annotatedEntries: 0,
+							rewroteEntries: 0,
+							deferredEntries: 0,
+							messagesFound: 0
+						}
+					}
+					if (sessionId === undefined) return empty
+
+					const [session] = await db
+						.select()
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
+						.limit(1)
+					if (!session) return empty
+
+					const vocabulary = await loadVocabulary(
+						db,
+						(session as any).lorebookId ?? null
+					)
+
+					const entryIds: number[] = Array.isArray(q.entryIds)
+						? q.entryIds.map(Number).filter(Number.isFinite)
+						: []
+
+					/**
+					 * Entries are repaired before they are read — §13.4's
+					 * small-N regime — but **through the annotation lane's
+					 * queue, not beside it**. The ids this query scoped are
+					 * promoted to the front of that queue, indexed, and the node
+					 * resumes when its scope is covered.
+					 *
+					 * Bounded twice, because this is synchronous work inside a
+					 * turn: the lane caps how many items one promotion may
+					 * process and how long it may take, so a book with two
+					 * hundred un-annotated entries cannot silently stall a first
+					 * message. Whatever the bound left is still queued and the
+					 * background pass finishes it, which is why a partial
+					 * promotion costs a smaller search rather than a wrong one.
+					 *
+					 * ⚠ Never throws and never blocks indefinitely: a promotion
+					 * that cannot complete comes back as a report, and its
+					 * `reason` goes on the receipt below.
+					 */
+					const pass = await promoteEntryAnnotations(
+						entryIds,
+						vocabulary,
+						(session as any).lorebookId ?? null
+					)
+					const index = await readEntryAnnotations(
+						db,
+						entryIds,
+						vocabulary
+					)
+
+					const window: string =
+						typeof q.window === "string" ? q.window : ""
+					const { entities, extractorVersion } = extractEntities(
+						window,
+						vocabulary.gazetteer
+					)
+
+					const maxMessages = Math.max(0, Number(q.maxMessages) || 0)
+					/**
+					 * Fetched far wider than it is returned, and deliberately.
+					 *
+					 * The rows come back newest-first, so fetching exactly
+					 * `maxMessages` would take the most *recent* matches and
+					 * then rank them — truncating before scoring, which is bug
+					 * 3's shape in a new place. Widened to the annotation
+					 * batch's ceiling so the ranking has a pool, and capped
+					 * rather than unbounded because a session's whole history
+					 * can match on one common name.
+					 */
+					const found =
+						maxMessages > 0
+							? await searchMessageAnnotations(
+									db,
+									sessionId,
+									entities.map((e) => e.key),
+									vocabulary,
+									{ beforeId: q.beforeId }
+								)
+							: { hits: [], truncated: false }
+					const messages = found.hits
+
+					/**
+					 * The transcript's own annotations, **queued** and not
+					 * waited for — the one hard rule §13.4 states for this side,
+					 * now expressed as a group on the annotation lane instead of
+					 * a detached promise. Same "never blocks a turn" guarantee,
+					 * with the work visible, bounded and interleaved with
+					 * everything else that lane owes.
+					 *
+					 * Only when the message half is switched on: an install that
+					 * has not asked for retrieval over its transcript should not
+					 * be writing an index for it. That first write is also what
+					 * opts the session into the lane's background sweep.
+					 */
+					if (maxMessages > 0)
+						enqueueSessionAnnotation(
+							sessionId,
+							(session as any).lorebookId ?? null,
+							(session as any).name ?? `Session #${sessionId}`
+						)
+
+					return {
+						extractorVersion,
+						gazetteerHash: vocabulary.hash,
+						entities,
+						entries: [...index].map(([id, keys]) => ({
+							id,
+							keys
+						})),
+						messages,
+						diagnostics: {
+							annotatedEntries: index.size,
+							rewroteEntries: pass.processed,
+							deferredEntries: pass.remaining,
+							/**
+							 * What the eager pass did, in words, for the
+							 * receipt. A slow turn has to be explicable and so
+							 * does a partial one — *"indexed 25 of 60 entries
+							 * before searching (bounded)"* is the difference
+							 * between a mechanism degrading and a mechanism
+							 * disappearing.
+							 */
+							entityIndexing: describePromotion(
+								"entry names",
+								pass
+							),
+							messagesFound: messages.length,
+							/**
+							 * The message search hit its ceiling, so what it
+							 * ranked is not the whole matching corpus.
+							 * Reported for `vector-search`'s reason: a
+							 * truncated retrieval and a complete one produce
+							 * results that look exactly alike.
+							 */
+							messagesTruncated: found.truncated
+						}
+					}
+				}
+
+				case "mention_spans": {
+					/**
+					 * What the scene refers to by **describing** it — the query
+					 * half of the entity-vector space (retrieval plan phase 4).
+					 *
+					 * A host read rather than a pure Task, and the vocabulary is
+					 * why: a definite description that turns out to be an
+					 * authored lower-case name — *"the ashguard"* — must be
+					 * dropped here, because the exact matcher owns it. A Task
+					 * cannot know that, and a linker that received it would be
+					 * offering a vector opinion about something already matched
+					 * exactly.
+					 *
+					 * The same `loadVocabulary` the entity mechanism uses, so the two
+					 * mechanisms cannot disagree about what counts as a name.
+					 */
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+
+					const empty = {
+						extractorVersion: MENTION_EXTRACTOR_VERSION,
+						gazetteerHash: undefined as string | undefined,
+						mentions: [] as any[],
+						diagnostics: { claimed: 0 }
+					}
+					if (sessionId === undefined) return empty
+
+					const [session] = await db
+						.select()
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
+						.limit(1)
+					if (!session) return empty
+
+					const { loadVocabulary } = await import(
+						"$lib/server/annotations"
+					)
+					const vocabulary = await loadVocabulary(
+						db,
+						(session as any).lorebookId ?? null
+					)
+
+					const scanDepth = Math.max(1, Number(q.scanDepth) || 10)
+					/**
+					 * The guaranteed window, read the same way `keywordQuery`
+					 * and the entity mechanism read it — newest `scanDepth` messages,
+					 * in reading order. Not the whole history: a description is
+					 * a reference to what is *being* discussed, and *"the
+					 * captain"* from forty turns ago is a different captain.
+					 */
+					const rows = await db
+						.select({ content: schema.sessionMessages.content })
+						.from(schema.sessionMessages)
+						.where(
+							and(
+								eq(schema.sessionMessages.sessionId, sessionId),
+								eq(schema.sessionMessages.isHidden, false),
+								channelWhere(
+									schema.sessionMessages.channel,
+									resolveChannel(q.channel)
+								)
+							)
+						)
+						.orderBy(desc(schema.sessionMessages.id))
+						.limit(scanDepth)
+					const window = buildScanWindow(rows.reverse(), scanDepth).raw
+
+					const all = extractMentions(window, vocabulary.gazetteer)
+					const limit = Math.max(0, Number(q.limit) || 0)
+					return {
+						extractorVersion: all.extractorVersion,
+						gazetteerHash: vocabulary.hash,
+						mentions: limit
+							? all.mentions.slice(0, limit)
+							: all.mentions,
+						diagnostics: {
+							/**
+							 * Descriptions an authored name was already sitting
+							 * on — the exact matcher's, and correctly not this
+							 * mechanism's. Counted by the detector rather than by
+							 * scanning twice.
+							 */
+							claimed: all.claimed,
+							windowChars: window.length
+						}
+					}
+				}
+
+				case "entity_link": {
+					/**
+					 * Mention → name, measured — the retrieval half of the
+					 * entity-vector mechanism.
+					 *
+					 * The cosine pass runs here for `vector_search`'s reason and
+					 * not a new one: a vector is a few hundred floats, and
+					 * moving candidate vectors along a data edge would put them
+					 * in the run's values, in its receipt and in every
+					 * downstream node's input. What crosses the edge is a name,
+					 * a mention and a number.
+					 *
+					 * ## The index is repaired before it is read
+					 *
+					 * §13.4's small-N regime: entries are few and change rarely,
+					 * so a bounded pass brings the name vectors up to date in
+					 * place rather than hoping a background job got there first.
+					 * The pass is capped, so a book nobody has indexed converges
+					 * over a turn or two instead of one reply paying for all of
+					 * it — and `readEntityVectors` re-checks every identity
+					 * afterwards, because "the repair ran" is an assumption and
+					 * this is the reader.
+					 */
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+
+					const empty = {
+						hits: [] as any[],
+						diagnostics: {
+							names: 0,
+							indexed: 0,
+							reindexed: 0,
+							deferredEntries: 0
+						}
+					}
+					if (sessionId === undefined) return empty
+
+					const entryIds: number[] = Array.isArray(q.entryIds)
+						? q.entryIds.map(Number).filter(Number.isFinite)
+						: []
+					const mentions: Array<{ text: string; position: number }> =
+						Array.isArray(q.mentions) ? q.mentions : []
+					const vectors: number[][] = Array.isArray(q.vectors)
+						? q.vectors.filter(Array.isArray)
+						: []
+					if (
+						!entryIds.length ||
+						!mentions.length ||
+						vectors.length !== mentions.length
+					)
+						return empty
+
+					const [session] = await db
+						.select()
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
+						.limit(1)
+					if (!session) return empty
+
+					const { getLoadedModelId, batchEmbed } = await embeddingApi()
+					const modelId = getLoadedModelId()
+					if (!modelId) return empty
+
+					const { loadVocabulary } = await import(
+						"$lib/server/annotations"
+					)
+					const { ensureEntityVectors, readEntityVectors } =
+						await import("$lib/server/embedding/entityVectors")
+					const vocabulary = await loadVocabulary(
+						db,
+						(session as any).lorebookId ?? null
+					)
+
+					const pass = await ensureEntityVectors(db, {
+						lorebookId: (session as any).lorebookId ?? null,
+						entryIds,
+						gazetteerHash: vocabulary.hash,
+						modelId,
+						batchEmbed
+					})
+					const names = await readEntityVectors(
+						db,
+						entryIds,
+						vocabulary.hash,
+						modelId
+					)
+
+					/**
+					 * Every mention against every name, and the honest bound on
+					 * that is the two caps above it: `MAX_MENTIONS` on one side
+					 * and `MAX_NAMES_PER_ENTRY` per entry on the other, over a
+					 * pool that is already the ranker's candidate list. No
+					 * threshold is applied — ruling R4 — so what comes back is
+					 * every positive comparison and the ranking is the mechanism's.
+					 */
+					const hits: any[] = []
+					for (const name of names)
+						for (let i = 0; i < mentions.length; i++) {
+							const mention = mentions[i]!
+							const score = cosine(vectors[i], name.vector)
+							if (!(score > 0)) continue
+							hits.push({
+								entryId: name.entryId,
+								mention: mention.text,
+								name: name.name,
+								nameKind: name.kind,
+								// Clamped, not rescaled: a similarity above 1 is
+								// floating-point noise and one below 0 is "less
+								// alike than unrelated", which is not evidence
+								// and must never subtract from a score.
+								score: Math.min(1, score),
+								position: Number(mention.position) || 0
+							})
+						}
+
+					return {
+						hits,
+						diagnostics: {
+							/** Name vectors this turn could actually compare. */
+							names: names.length,
+							indexed: new Set(names.map((n) => n.entryId)).size,
+							reindexed: pass.written,
+							/**
+							 * Entries the batch cap left for the next pass. Not
+							 * an error — the mechanism links fewer entries this turn
+							 * and the same number more next turn, which is
+							 * staleness degrading to correct-and-verbose rather
+							 * than to silently-wrong.
+							 */
+							deferredEntries: pass.deferred
+						}
 					}
 				}
 
@@ -966,6 +1715,14 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							null,
 						generatingMessageMetadata:
 							p.generatingMessageMetadata ?? {},
+						// The `attachments` in-port: media REFERENCES, in the
+						// order they are to be sent. `dispatch` turns them into
+						// bytes — checking each one against this run's session
+						// and user on the way, the same rule `mediaParts` above
+						// applies to media posted into a message.
+						attachments: Array.isArray(p.attachments)
+							? (p.attachments as unknown[] as MediaRef[])
+							: undefined,
 						// Tier 2 — this node's own slots, exactly as the
 						// `generate-image` sibling below already forwards them.
 						// Omitting them was why the panel's Connection and
@@ -1002,18 +1759,32 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						samplingId: refId(p.sampling),
 						sessionId: scope.sessionId ?? null,
 						userId: scope.userId ?? null,
+						// The run, for the prompts-slot render. Inert while that
+						// slot renders in core's engine and load-bearing the
+						// moment it names a plugin's — see `dispatchImage`'s
+						// `render`.
+						runId: scope.runId,
 						signal: scope.signal,
-						// Forwarded only when somebody is listening, so an adapter
-						// that can report progress does not pay to compute it for
-						// a run nobody is watching (a background trigger, a test).
-						onProgress: scope.sink?.onProgress
-							? (e) =>
-									scope.sink!.onProgress!({
-										runId: "",
-										nodeKey: node.key,
-										...e
-									})
-							: undefined
+						// Forwarded only when somebody is listening AND the run
+						// can be named. The first half is so an adapter that can
+						// report progress does not pay to compute it for a run
+						// nobody is watching (a background trigger, a test); the
+						// second is because `runId` is what a client keys its
+						// progress card on and what Cancel sends back, so an
+						// event carrying one that identifies nothing opens a card
+						// nobody can clear and nobody can stop. It used to stamp
+						// `""` here — the socket that listens today overwrites
+						// that with its own id, which is exactly why the hole was
+						// invisible.
+						onProgress:
+							scope.sink?.onProgress && scope.runId
+								? (e) =>
+										scope.sink!.onProgress!({
+											runId: scope.runId!,
+											nodeKey: node.key,
+											...e
+										})
+								: undefined
 					})
 				}
 
@@ -1030,7 +1801,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						const { dispatchStep } = await import(
 							"$lib/server/pipelines/runtime/dispatchStep"
 						)
-						const { text, via } = await dispatchStep(db, {
+						const { text, connection } = await dispatchStep(db, {
 							systemPrompt: String(p.systemPrompt ?? ""),
 							userPrompt: stepUserPrompt(p),
 							connectionId: refId(p.connection),
@@ -1041,7 +1812,13 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						// Steps that ask for JSON get it parsed here rather than
 						// in each binding: the models wrap it in prose often
 						// enough that every caller would need the same salvage.
-						return { text, via, json: tryJson(text) }
+						//
+						// `connection` rather than the old `via` string: this
+						// value is the node's receipt output, and a non-admin can
+						// read their own receipt (`pipelines:run`). Under this key
+						// the projection takes it away from them and leaves it for
+						// an administrator.
+						return { text, connection, json: tryJson(text) }
 					}
 
 					throw new Error(
@@ -1062,6 +1839,25 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						throw new HostScopeError(
 							`${node.key} has no session to write to — the run was started without a session scope`
 						)
+					/**
+					 * Which lane it lands on (20 §7). Absent is `main`, so a
+					 * pipeline that has never heard of channels writes where
+					 * it always did.
+					 *
+					 * A lane the session does not have is refused rather than
+					 * coerced: a message on a channel no surface subscribes to
+					 * is a message nobody will ever see, which is the shape of
+					 * data loss even though the row is right there. Same
+					 * posture as `assertScoped` — refused, not filtered.
+					 */
+					const refusal = await channelRefusal(
+						db as any,
+						sessionId,
+						p.channel
+					)
+					if (refusal)
+						throw new HostScopeError(`${node.key}: ${refusal}`)
+
 					const { insertLegacy } = await import(
 						"$lib/server/messages/store"
 					)
@@ -1071,6 +1867,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						characterId: p.characterId ?? null,
 						personaId: p.personaId ?? null,
 						role: p.role ?? "assistant",
+						channel: resolveChannel(p.channel),
 						content: String(p.text ?? ""),
 						metadata: p.metadata ?? {},
 						isGenerating: false
@@ -1300,15 +2097,41 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					const name = String(p.name ?? "").trim() || "Untitled"
 					const content = String(p.content ?? "")
 
-					const [row] = await db
-						.insert(schema.worldLoreEntries)
-						.values({
-							lorebookId: session.lorebookId,
-							name,
-							content
-						})
-						.returning()
-					return { id: row.id, lorebookId: session.lorebookId }
+					/**
+					 * ⚠ `position` is allocated rather than left at the old
+					 * column default of `0`.
+					 *
+					 * It is unique per `(lorebook_id, type_id)` on the unified
+					 * table, so the second summary written into a lorebook
+					 * would collide on `0` where it used to land beside the
+					 * first. The allocator is the socket handlers' — first free
+					 * slot from 1 — under the same advisory lock, so a summary
+					 * written while somebody is adding an entry by hand cannot
+					 * race it.
+					 */
+					const lorebookId = session.lorebookId
+					const [row] = await db.transaction(async (tx: any) => {
+						await tx.execute(
+							sql`select pg_advisory_xact_lock(${lorebookId})`
+						)
+						return tx
+							.insert(schema.lorebookEntries)
+							.values(
+								entryInsert({
+									typeId: WORLD_LORE_TYPE_ID,
+									lorebookId,
+									name,
+									content,
+									position: await nextPosition(
+										tx,
+										lorebookId,
+										WORLD_LORE_TYPE_ID
+									)
+								})
+							)
+							.returning()
+					})
+					return { id: row.id, lorebookId }
 				}
 
 				case "core:consumer/graph-proposal": {
@@ -1392,16 +2215,33 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
  * never put them in the value (F30).
  */
 /** What leaves the host for one hit: an id, a score and the text. */
-function project(item: any) {
+function toCandidate(item: any) {
 	return {
 		id: item.id,
 		source: item.source,
 		score: item.score,
 		name: item.name ?? null,
-		content: item.content ?? "",
+		content: textOf(item),
 		lorebookId: item.lorebookId ?? null,
 		priority: item.priority ?? 1
 	}
+}
+
+/**
+ * The hit's text, whichever column its source keeps it in.
+ *
+ * `content` is not universal across `ScopedRagItem`: a graph node keeps its
+ * text in `summary`, a relationship in `description`, and so do a character and
+ * a persona. Reading `content` alone published all four with an empty string —
+ * which the vector mechanism then costed at zero tokens, so they took result slots
+ * and carried nothing into the prompt.
+ *
+ * A coalesce and not a wider projection: the row's other exclusive fields
+ * (`year`, `fromNodeId`, `status`, `reason`) still do not cross the edge,
+ * because nothing downstream reads them off a vector hit.
+ */
+function textOf(item: any): string {
+	return item.content ?? item.summary ?? item.description ?? ""
 }
 
 /** Cosine similarity, host-side, so no embedding reaches a data edge. */
@@ -1429,6 +2269,11 @@ function toMessage(r: any) {
 		characterId: r.characterId ?? null,
 		personaId: r.personaId ?? null,
 		isNarratorResponse: r.isNarratorResponse,
+		// Which lane it came from, carried rather than dropped (20 §7). Every
+		// read is scoped to one channel, so this is constant across a result
+		// today — it is here so a receipt says which, and so a Task that ever
+		// sees a union can tell the lanes apart without a second read.
+		channel: r.channel ?? DEFAULT_CHANNEL,
 		createdAt: r.createdAt
 	}
 }
@@ -1487,18 +2332,52 @@ async function hydrateBindings(db: Db, bindings: any[]): Promise<any[]> {
 
 function toLoreEntry(
 	row: any,
-	source: "worldLore" | "characterLore" | "history"
+	source: "worldLore" | "characterLore" | "history",
+	/** Whether this entry has a usable vector, not the vector itself. */
+	hasEmbedding: boolean,
+	/**
+	 * The character this entry's binding names, already resolved.
+	 *
+	 * Read by character lore's co-occurrence signal, which asks whether that
+	 * character spoke recently — see `speakerCooccurrenceSignal`. Null for
+	 * every entry that is not a character's.
+	 */
+	bindingCharacterId: number | null = null,
+	/**
+	 * What this entry said when the run read it — `entrySourceHash` over the
+	 * **stored** title, keys and content (16 §7c).
+	 *
+	 * Sixteen characters, computed once at the one read every mechanism shares, and
+	 * carried from here into each candidate's `payload` and so into the
+	 * receipt. That is the whole mechanism: a receipt records *what it decided*
+	 * and never the text it decided about, so the explanation panel reads the
+	 * live rows for titles and keys — and a rename after the run renders the
+	 * new title against the old decision, silently. The fingerprint is what
+	 * lets the panel tell those apart without storing a second copy of
+	 * anybody's lore.
+	 *
+	 * Passed in rather than computed here because this function is handed the
+	 * *hydrated* entry — bindings substituted, decorators stripped — and the
+	 * fingerprint is over the stored row, which is the only shape the panel
+	 * can recompute later. See `entrySourceHash`.
+	 */
+	fingerprint?: string
 ) {
 	return {
 		id: row.id,
 		source,
+		fingerprint,
 		name: row.name ?? null,
 		content: row.content ?? "",
 		keys: row.keys ?? "",
 		caseSensitive: row.caseSensitive ?? false,
 		useRegex: row.useRegex ?? false,
 		matchMode: row.matchMode ?? null,
-		retrievalStrategy: row.retrievalStrategy ?? null,
+		// `?? null` for the mode and `?? ""` for the keys, because the two
+		// absences mean the same thing and the matcher tests both: no mode is
+		// no condition, and no condition keys is no condition either.
+		secondaryKeys: row.secondaryKeys ?? "",
+		selectiveLogic: row.selectiveLogic ?? null,
 		// `?? null` and not `?? 0`, because null is a value here: it means the
 		// entry has no opinion and the node's ceiling decides. Coalescing to
 		// zero would pin every untouched entry to "conversation only" and make
@@ -1509,11 +2388,11 @@ function toLoreEntry(
 		enabled: row.enabled ?? true,
 		position: row.position ?? 0,
 		lorebookBindingId: row.lorebookBindingId ?? null,
+		bindingCharacterId,
 		/** History entries only; used for the recency signal. */
 		year: row.year ?? null,
 		month: row.month ?? null,
 		day: row.day ?? null,
-		/** Whether this entry has a usable vector, not the vector itself. */
-		hasEmbedding: Array.isArray(row.embedding) && row.embedding.length > 0
+		hasEmbedding
 	}
 }

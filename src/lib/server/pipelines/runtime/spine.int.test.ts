@@ -2,7 +2,7 @@
  * The whole prompt path, as one pipeline.
  *
  * Every other test in this directory checks one node. This one checks that they
- * compose: an event arrives, history and lore are retrieved, the arms are fused
+ * compose: an event arrives, history and lore are retrieved, the mechanisms are fused
  * and ranked, a template context is built, a prompt is assembled and sent, and a
  * message is written back — all from a stored document, through the executor,
  * against real rows.
@@ -27,6 +27,7 @@ import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { spec, compile, run, slot } from "@serene-pub/sdk"
 import * as C from "@serene-pub/contracts"
 import * as schema from "$lib/server/db/schema"
+import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 
 /** What the fake model was asked to say, so a test can read the prompt back. */
@@ -78,7 +79,7 @@ vi.mock("$lib/server/utils/getUserConfigurations", () => ({
 	})
 }))
 vi.mock("$lib/server/embedding", () => ({
-	// No embedding model: the keyword arm carries the turn on its own, which is
+	// No embedding model: the keyword mechanism carries the turn on its own, which is
 	// the configuration most installs are actually in.
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -214,13 +215,16 @@ beforeAll(async () => {
 		.insert(schema.sessionPersonas)
 		.values({ sessionId, personaId: persona.id })
 
-	await db.insert(schema.worldLoreEntries).values({
-		lorebookId: lorebook.id,
-		name: "The Ashguard",
-		keys: "ashguard",
-		content: "Riders who patrol the ash wastes.",
-		retrievalStrategy: "keyword"
-	})
+	await db.insert(schema.lorebookEntries).values(
+		worldLoreValues([
+			{
+				lorebookId: lorebook.id,
+				name: "The Ashguard",
+				keys: "ashguard",
+				content: "Riders who patrol the ash wastes."
+			}
+		])
+	)
 
 	await db
 		.insert(schema.sessionMessages)
@@ -373,7 +377,7 @@ describe("the prompt path, end to end", () => {
 		expect(ctx.characterNames).toBe("Alice")
 	})
 
-	it("the lore the keyword arm matched is in the receipt with its reason", async () => {
+	it("the lore the keyword mechanism matched is in the receipt with its reason", async () => {
 		const receipt = await execute()
 		const lore = receipt.nodes.find((n) => n.nodeKey === "lore")!
 			.output as any

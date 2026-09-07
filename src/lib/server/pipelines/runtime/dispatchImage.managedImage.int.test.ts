@@ -324,13 +324,33 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 		expect(stages[0]).toBe("loading")
 	})
 
-	it("names the model it is loading, so a long wait is explicable", async () => {
-		const messages: string[] = []
+	it("says which model to an administrator and nothing to anybody else", async () => {
+		// The model is a PATH on the administrator's disk, and this event fans
+		// out to everyone watching the session — so it cannot be in the
+		// sentence, where no projection could reach it. It travels as a field
+		// under `connection` instead, and the redaction that already runs at
+		// every egress decides who is told.
+		const events: any[] = []
 		await dispatch({
 			connectionId: 5,
-			onProgress: (p: any) => p.message && messages.push(p.message)
+			onProgress: (p: any) => p.message && events.push(p)
 		})
-		expect(messages[0]).toContain("sdxl-turbo-q8.gguf")
+
+		// Still explicable: a person who cannot be told WHICH model is at least
+		// told that a model is loading, which is the whole point of the stage.
+		expect(events[0].message).toMatch(/loading the image model/i)
+		expect(events[0].message).not.toContain("sdxl-turbo-q8.gguf")
+		expect(events[0].connection.model).toBe("sdxl-turbo-q8.gguf")
+
+		const { redactConnections } = await import(
+			"$lib/server/connections/visibility"
+		)
+		expect(
+			JSON.stringify(redactConnections(events[0], { isAdmin: false }))
+		).not.toContain("sdxl-turbo-q8.gguf")
+		expect(
+			redactConnections(events[0], { isAdmin: true }).connection.model
+		).toBe("sdxl-turbo-q8.gguf")
 	})
 
 	it("loads inside the render queue, so nothing can swap the model in between", async () => {

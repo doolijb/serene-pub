@@ -25,10 +25,19 @@
 	 * ## Scope is a fact, not a question
 	 *
 	 * The server decides where an edit lands from where the panel was opened —
-	 * user scope from the list, session scope from inside a session you own (05 §0a) —
-	 * and says so in `writeScope`. This shows it rather than asking, because a
-	 * scope picker asks the user to understand the resolution chain before they
-	 * can change a prompt.
+	 * the configuration itself from the list, session scope from inside a
+	 * session you own (05 §0a) — and says so in `writeScope`. This shows it
+	 * rather than asking, because a scope picker asks the user to understand
+	 * the resolution chain before they can change a prompt.
+	 *
+	 * ## Nobody but an administrator owns a configuration (R8)
+	 *
+	 * Which is why there are no configuration verbs on this panel and never
+	 * were: an administrator curates the set, and what reaches here is a
+	 * *selection* — for a session you are in, or, outside one, a statement of
+	 * which configuration the instance is on. The "Manage pipeline" link below
+	 * is the whole of the admin's extra surface, and it is a link, not a
+	 * disabled control.
 	 */
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getContext, onDestroy, onMount } from "svelte"

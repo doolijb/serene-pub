@@ -6,16 +6,16 @@ import type {
 	PluginHookDispatch,
 	PluginHookRequest
 } from "./pluginDispatch"
-import { RuntimeManager } from "$lib/server/plugins/RuntimeManager"
+import { SandboxManager } from "$lib/server/plugins/SandboxManager"
 import { makePluginHookDispatch } from "$lib/server/plugins/hookDispatch"
 
 /**
  * The unification, end to end: a chain link whose script type is plugin-owned
- * (`transport: 'process'`) is dispatched to the plugin runtime through the same
+ * (`transport: 'process'`) is dispatched to the plugin sandbox through the same
  * applier, and its result folds through the same transform/verdict/skip law as
  * a core script. Two proofs: the applier's routing against a fake port (fast,
  * exact), and a real plugin hook firing through `makePluginHookDispatch` + a
- * live `RuntimeManager` (the whole path, callHook and all).
+ * live `SandboxManager` (the whole path, callHook and all).
  */
 
 let db: TestDb
@@ -180,7 +180,7 @@ describe("a real plugin hook fires through the applier", () => {
 	const BUNDLE = `module.exports = { hooks: {
 		shout: function (input, ctx) { return String(input.value).toUpperCase() + "!"; }
 	} }`
-	let manager: RuntimeManager
+	let manager: SandboxManager
 
 	afterAll(async () => {
 		await manager?.dispose()
@@ -213,7 +213,7 @@ describe("a real plugin hook fires through the applier", () => {
 		})
 		const rowId = await scriptRow(typeId, "value")
 
-		manager = new RuntimeManager()
+		manager = new SandboxManager()
 		manager.register({
 			id: "beta/tool",
 			name: "Beta Tool",

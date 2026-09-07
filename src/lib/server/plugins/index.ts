@@ -1,5 +1,5 @@
 /**
- * The plugin subsystem's public entry point: one process-wide `RuntimeManager`
+ * The plugin subsystem's public entry point: one process-wide `SandboxManager`
  * and the startup bootstrap that hydrates it from the database.
  *
  * Everything here is inert unless `SP_PLUGINS_ENABLED` is set — the manager
@@ -8,14 +8,23 @@
  * ship in 0.6.0 turned off.
  */
 
-import { RuntimeManager, type InvocationRecord } from "./RuntimeManager"
+import { SandboxManager, type InvocationRecord } from "./SandboxManager"
 import { loadEnabledPlugins, writeInvocation } from "./store"
+import { makePluginRowPort } from "./rowStore"
 import { pluginsEnabled } from "./flag"
 import { syncPluginEngines } from "./engineHost"
+import { pluginEvents, syncPluginEventHooks } from "./eventHost"
+import { setRunStopObserver } from "$lib/server/pipelines/runtime/runRegistry"
 
-type Db = { select: any; insert: any; update: any; delete: any }
+type Db = {
+	select: any
+	insert: any
+	update: any
+	delete: any
+	transaction: any
+}
 
-let manager: RuntimeManager | null = null
+let manager: SandboxManager | null = null
 let dbRef: Db | null = null
 
 /** Best-effort, fire-and-forget: a failed log write never affects a hook. */
@@ -27,8 +36,16 @@ function persist(rec: InvocationRecord): void {
 }
 
 /** The process-wide manager. Lazily created; safe to call before bootstrap. */
-export function getManager(): RuntimeManager {
-	if (!manager) manager = new RuntimeManager({ onInvocation: persist })
+export function getManager(): SandboxManager {
+	if (!manager)
+		manager = new SandboxManager({
+			onInvocation: persist,
+			// The handle is resolved per call, exactly as the invocation log's
+			// is: the manager can be constructed by an admin route long before
+			// `bootstrapPlugins` has attached a database, and a store that
+			// captured `dbRef` at construction would be permanently null.
+			rows: makePluginRowPort(() => dbRef)
+		})
 	return manager
 }
 
@@ -41,6 +58,17 @@ export function getManager(): RuntimeManager {
 export async function bootstrapPlugins(db: Db): Promise<void> {
 	const mgr = getManager()
 	dbRef = db
+
+	// Cancelling a run reaches the hooks that run started. Registered against
+	// *this* manager rather than through `getManager()`, so a shutdown cannot
+	// leave a stale observer that lazily resurrects one; and registered
+	// unconditionally, because a manager with nothing in flight answers a stop
+	// with nothing, and wiring that depended on the sandbox flag would be
+	// wiring that had never run the day somebody turned the flag on.
+	setRunStopObserver({
+		stopped: (runId, stop) => mgr.stopRun(runId, stop),
+		finished: (runId) => mgr.forgetRun(runId)
+	})
 
 	if (pluginsEnabled()) {
 		const descriptors = await loadEnabledPlugins(db)
@@ -73,6 +101,16 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 		} catch (e) {
 			console.warn("[plugins] template-engine sync failed:", e)
 		}
+		// Manifest-declared event subscriptions, projected into the registry
+		// core fans an occurrence out through. Best-effort for the same reason
+		// as the engines above — a plugin whose declarations are refused costs
+		// itself its subscriptions and nobody else theirs, and neither may
+		// stall boot.
+		try {
+			await syncPluginEventHooks(db)
+		} catch (e) {
+			console.warn("[plugins] event-subscription sync failed:", e)
+		}
 	}
 
 	mgr.markReady()
@@ -80,10 +118,16 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 
 /** Tear down the manager (tests / shutdown). */
 export async function shutdownPlugins(): Promise<void> {
+	// First: the observer closes over the manager being disposed, and a run
+	// cancelled after this point has no hooks left to stop.
+	setRunStopObserver(null)
+	// Subscriptions outlive nothing: a registry left populated would answer the
+	// next emit with subscribers whose sandbox is gone.
+	pluginEvents().clear()
 	if (manager) await manager.dispose()
 	manager = null
 	dbRef = null
 }
 
 export { pluginsEnabled } from "./flag"
-export type { RuntimeManager } from "./RuntimeManager"
+export type { SandboxManager } from "./SandboxManager"

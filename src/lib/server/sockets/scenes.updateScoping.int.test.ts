@@ -12,6 +12,7 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -63,12 +64,12 @@ describe("scenes:update — scoping (PGlite integration)", () => {
 			.values({ name: "Attacker's Book", userId: attacker.id })
 			.returning()
 		const [ownHistoryEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: ownLorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: ownLorebook.id }]))
 			.returning()
 		const [foreignHistoryEntry] = await testDb
-			.insert(schema.historyEntries)
-			.values({ lorebookId: foreignLorebook.id })
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: foreignLorebook.id }]))
 			.returning()
 		const [scene] = await testDb
 			.insert(schema.scenes)

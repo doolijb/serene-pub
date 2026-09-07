@@ -8,11 +8,23 @@
  * check then reads as "already current," permanently skipping real
  * embedding for that entry. Fixed by applying the same denylist CREATE
  * already didn't have to UPDATE.
+ *
+ * ⚠ The three embedding fields are a *vector row* now, not columns on the
+ * entry, so the wire assertions below can no longer fail on their own — the
+ * adapter has nowhere to put a forged value even if the denylist let one
+ * through. `noVectorFor` is what still carries the claim: the forged payload
+ * must not leave a `lorebook_entry_vectors` row behind, because that row is
+ * what the queue's staleness check actually reads.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
+import {
+	CHARACTER_LORE_TYPE_ID,
+	WORLD_LORE_TYPE_ID
+} from "$lib/shared/entries/types"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -59,18 +71,26 @@ async function makeLorebook(userId: number, name: string) {
 
 const FORGED_DATE = new Date("2000-01-01")
 
-describe("worldLoreEntries:create — mass-assignment denylist", () => {
+/** The claim the wire assertions used to carry on their own. */
+async function noVectorFor(entryId: number) {
+	const rows = await testDb
+		.select()
+		.from(schema.lorebookEntryVectors)
+		.where(eq(schema.lorebookEntryVectors.entryId, entryId))
+	return rows.length === 0
+}
+
+describe("entries:create — mass-assignment denylist, world lore", () => {
 	test("ignores a forged id/vectorizedAt/embedding/embeddingModel/createdAt/updatedAt", async () => {
-		const { createWorldLoreEntryHandler } = await import(
-			"./worldLoreEntries"
-		)
+		const { createEntryHandler } = await import("./entries")
 		const user = await makeUser("world-lore-create-massassign-user")
 		const lorebook = await makeLorebook(user.id, "World Lore Book")
 
-		const res = await createWorldLoreEntryHandler.handler(
+		const res = await createEntryHandler.handler(
 			fakeSocket(user.id),
 			{
-				worldLoreEntry: {
+				entry: {
+					typeId: WORLD_LORE_TYPE_ID,
 					lorebookId: lorebook.id,
 					name: "Entry",
 					content: "x",
@@ -85,26 +105,26 @@ describe("worldLoreEntries:create — mass-assignment denylist", () => {
 			noopEmit
 		)
 
-		expect(res.worldLoreEntry.id).not.toBe(999999)
-		expect(res.worldLoreEntry.vectorizedAt).toBeNull()
-		expect(res.worldLoreEntry.embedding).toBeNull()
-		expect(res.worldLoreEntry.embeddingModel).toBeNull()
-		expect(res.worldLoreEntry.createdAt).not.toBe(FORGED_DATE.toISOString())
+		expect(res.entry.id).not.toBe(999999)
+		expect(res.entry.vectorizedAt).toBeNull()
+		expect(res.entry.embedding).toBeNull()
+		expect(res.entry.embeddingModel).toBeNull()
+		expect(res.entry.createdAt).not.toBe(FORGED_DATE.toISOString())
+		expect(await noVectorFor(res.entry.id)).toBe(true)
 	})
 })
 
-describe("characterLoreEntries:create — mass-assignment denylist", () => {
+describe("entries:create — mass-assignment denylist, character lore", () => {
 	test("ignores a forged id/vectorizedAt/embedding/embeddingModel/createdAt/updatedAt", async () => {
-		const { createCharacterLoreEntryHandler } = await import(
-			"./characterLoreEntries"
-		)
+		const { createEntryHandler } = await import("./entries")
 		const user = await makeUser("character-lore-create-massassign-user")
 		const lorebook = await makeLorebook(user.id, "Character Lore Book")
 
-		const res = await createCharacterLoreEntryHandler.handler(
+		const res = await createEntryHandler.handler(
 			fakeSocket(user.id),
 			{
-				characterLoreEntry: {
+				entry: {
+					typeId: CHARACTER_LORE_TYPE_ID,
 					lorebookId: lorebook.id,
 					name: "Entry",
 					content: "x",
@@ -119,12 +139,11 @@ describe("characterLoreEntries:create — mass-assignment denylist", () => {
 			noopEmit
 		)
 
-		expect(res.characterLoreEntry.id).not.toBe(999999)
-		expect(res.characterLoreEntry.vectorizedAt).toBeNull()
-		expect(res.characterLoreEntry.embedding).toBeNull()
-		expect(res.characterLoreEntry.embeddingModel).toBeNull()
-		expect(res.characterLoreEntry.createdAt).not.toBe(
-			FORGED_DATE.toISOString()
-		)
+		expect(res.entry.id).not.toBe(999999)
+		expect(res.entry.vectorizedAt).toBeNull()
+		expect(res.entry.embedding).toBeNull()
+		expect(res.entry.embeddingModel).toBeNull()
+		expect(res.entry.createdAt).not.toBe(FORGED_DATE.toISOString())
+		expect(await noVectorFor(res.entry.id)).toBe(true)
 	})
 })

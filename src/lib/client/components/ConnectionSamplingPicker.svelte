@@ -41,8 +41,8 @@
 			)
 	)
 
-	// Grouped by provider, so a long list reads by kind — "per provider".
-	const byProvider = $derived.by(() => {
+	// Grouped by service, so a long list reads by kind — "per service".
+	const byService = $derived.by(() => {
 		const groups = new Map<string, typeof eligible>()
 		for (const c of eligible) {
 			const label =
@@ -65,8 +65,8 @@
 	<span class="text-muted-foreground text-xs">Connection</span>
 	<select class="select text-xs" bind:value={connectionId} {disabled}>
 		<option value={null}>System default</option>
-		{#each byProvider as [provider, conns] (provider)}
-			<optgroup label={provider}>
+		{#each byService as [service, conns] (service)}
+			<optgroup label={service}>
 				{#each conns as c (c.id)}
 					<option value={c.id}>{c.name ?? c.id}</option>
 				{/each}

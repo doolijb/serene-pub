@@ -7,7 +7,7 @@
  * Stability work continues into 0.7.0 behind this flag.
  *
  * Enable for development / preview by setting `SP_PLUGINS_ENABLED=1` (or
- * `true`). Releases leave it unset and the entire surface — runtime, admin
+ * `true`). Releases leave it unset and the entire surface — sandbox, admin
  * routes, hook dispatch — stays inert. This is the single choke point: every
  * entry (a socket handler, a route load, a hook dispatch from the pipeline)
  * checks `pluginsEnabled()` first, so flipping this one value is the whole

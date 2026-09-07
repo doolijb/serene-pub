@@ -17,12 +17,17 @@
  * That belongs with the adapter work, not here.
  */
 
+import {
+	CHARACTER_LORE_TYPE_ID,
+	type LorebookEntry
+} from "$lib/shared/entries/types"
+
 export type TemplateContextCharacter = {
 	name: string
 	nickname?: string
 	description: string
 	personality?: string
-	loreEntries?: SelectCharacterLoreEntry[]
+	loreEntries?: LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>[]
 	category?: string
 	lorebookBindingId?: number | null
 	year?: number
@@ -72,7 +77,7 @@ export type TemplateContext = {
 	/** "A, B, and C" — every persona's display name. */
 	personaNames: string
 	worldLore?: string
-	characterLore?: SelectCharacterLoreEntry[]
+	characterLore?: LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>[]
 	history?: string
 	currentDate?: string
 	narrativeGraph?: string

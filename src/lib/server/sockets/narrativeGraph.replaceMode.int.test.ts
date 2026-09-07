@@ -23,6 +23,10 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import {
+	characterLoreValues,
+	worldLoreValues
+} from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -111,13 +115,17 @@ describe("narrativeGraphApplyProposalHandler — replace mode (PGlite integratio
 				nodeState: "missing"
 			})
 			.returning()
-		await testDb.insert(schema.characterLoreEntries).values({
-			lorebookId: lorebook.id,
-			lorebookBindingId: loreReferencedRow.id,
-			name: "Lore entry",
-			content: "Some private lore.",
-			keys: ""
-		})
+		await testDb.insert(schema.lorebookEntries).values(
+			characterLoreValues([
+				{
+					lorebookId: lorebook.id,
+					lorebookBindingId: loreReferencedRow.id,
+					name: "Lore entry",
+					content: "Some private lore.",
+					keys: ""
+				}
+			])
+		)
 
 		// 3. Token still appears in stored content — must survive.
 		const [tokenReferencedRow] = await testDb
@@ -130,12 +138,16 @@ describe("narrativeGraphApplyProposalHandler — replace mode (PGlite integratio
 				nodeState: "departed"
 			})
 			.returning()
-		await testDb.insert(schema.worldLoreEntries).values({
-			lorebookId: lorebook.id,
-			name: "World entry",
-			content: `Mentions ${tokenReferencedRow.binding} in passing.`,
-			keys: ""
-		})
+		await testDb.insert(schema.lorebookEntries).values(
+			worldLoreValues([
+				{
+					lorebookId: lorebook.id,
+					name: "World entry",
+					content: `Mentions ${tokenReferencedRow.binding} in passing.`,
+					keys: ""
+				}
+			])
+		)
 
 		// 4. True ghost row — none of the above — must still survive, fields
 		// untouched, not be deleted.

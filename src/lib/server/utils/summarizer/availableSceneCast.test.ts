@@ -2,6 +2,11 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
+	HISTORY_TYPE_ID,
+	type NewLorebookEntry
+} from "$lib/shared/entries/types"
+import { historyValues } from "$lib/server/pipelines/testing/fixtures"
+import {
 	createTestDb,
 	createTestUser,
 	type TestDb
@@ -34,19 +39,23 @@ async function makeLorebook(userId: number, name = "Test Book") {
 
 async function makeHistoryEntry(
 	lorebookId: number,
-	overrides: Partial<typeof schema.historyEntries.$inferInsert> = {}
+	overrides: Partial<NewLorebookEntry<typeof HISTORY_TYPE_ID>> = {}
 ) {
 	const [entry] = await testDb
-		.insert(schema.historyEntries)
-		.values({
-			lorebookId,
-			year: 1,
-			month: 1,
-			day: 1,
-			content: "",
-			keys: "",
-			...overrides
-		})
+		.insert(schema.lorebookEntries)
+		.values(
+			historyValues([
+				{
+					lorebookId,
+					year: 1,
+					month: 1,
+					day: 1,
+					content: "",
+					keys: "",
+					...overrides
+				}
+			])
+		)
 		.returning()
 	return entry
 }

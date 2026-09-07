@@ -42,6 +42,10 @@
  */
 
 import { resolveCapabilityTarget } from "$lib/server/connections/capabilityTarget"
+import {
+	ComposedError,
+	connectionIdentity
+} from "$lib/server/connections/visibility"
 import { getImageAdapter } from "$lib/server/utils/getImageAdapter"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -50,7 +54,8 @@ import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
 import { buildImageRequest } from "$lib/server/imageGen/buildRequest"
 import {
 	CORE_TEMPLATE_ENGINE,
-	renderTemplate
+	renderTemplate,
+	type RenderRun
 } from "$lib/server/pipelines/prompt/renderers"
 import type { ImageGenProgress } from "$lib/shared/imageGen/types"
 import type { MediaRef } from "@serene-pub/sdk"
@@ -71,6 +76,15 @@ export interface ImageCall {
 	samplingId?: number | null
 	sessionId?: number | null
 	userId?: number | null
+	/**
+	 * The run this render belongs to, when it belongs to one (`RenderRun`).
+	 *
+	 * Only the prompts-slot render reads it, and only so a template that names
+	 * a *plugin's* engine renders as a hook call cancelling the run can find.
+	 * Absent for a caller with no run — a direct dispatch, a test — which is
+	 * an association that was never made rather than one that went missing.
+	 */
+	runId?: string
 	signal?: AbortSignal
 	onProgress?: (p: ImageGenProgress) => void
 }
@@ -85,7 +99,17 @@ export interface ImageCallResult {
 	isAborted: boolean
 }
 
-export class ImageDispatchError extends Error {}
+/**
+ * A dispatch failure, and a marker: this sentence is ours.
+ *
+ * `ComposedError` is what tells `persistGenerationErrorRow` that the message may
+ * be stored and shown to anybody — it names no connection. An adapter's own
+ * error, which names the base URL and the model file, is a plain `Error` and is
+ * replaced there instead. The optional second argument is the identity the
+ * failure was about, carried as a field so the projection can remove it for
+ * everyone who is not an administrator.
+ */
+export class ImageDispatchError extends ComposedError {}
 
 /**
  * One render at a time per server.
@@ -157,7 +181,10 @@ async function ensureManagedInstanceReady(
 	// pointing at nothing is not worth a spawn and two retries.
 	if (!connection.model)
 		throw new ImageDispatchError(
-			`"${connection.name}" has no image model selected. Pick one in its connection settings, or use "Use for image generation" in the KoboldCPP Manager.`
+			`The connection set for image generation has no image model selected. ` +
+				`Pick one in its connection settings, or use "Use for image ` +
+				`generation" in the KoboldCPP Manager.`,
+			connectionIdentity(connection)
 		)
 
 	// Dynamically imported for the reason the adapter loaders document: these
@@ -180,10 +207,15 @@ async function ensureManagedInstanceReady(
 	const threads = threadsFrom(profile.sdThreads)
 	const quant = sdQuantToInt(profile.sdQuant)
 
+	// The model file is a PATH on a managed connection — the administrator's
+	// directory layout, in a progress line that reaches every viewer of the
+	// session. It rides as a field instead, which `emitToUser` removes for
+	// everyone who is not an administrator; the sentence stands on its own.
 	opts.onProgress?.({
 		stage: "loading",
 		percent: 0,
-		message: `Loading image model "${connection.model}"…`
+		message: "Loading the image model…",
+		connection: connectionIdentity(connection)
 	})
 
 	await ensureManagedReady(
@@ -298,7 +330,11 @@ export async function dispatchImage(
 			samplingConfigId: call.samplingId
 		}
 	})
-	if (!resolved.ok) throw new ImageDispatchError(resolved.problem.message)
+	if (!resolved.ok)
+		throw new ImageDispatchError(
+			resolved.problem.message,
+			resolved.problem.connection
+		)
 	const { connection, sampling } = resolved
 
 	// The prompts slot is a pair of templates over the incoming text. An
@@ -306,8 +342,25 @@ export async function dispatchImage(
 	// all would be a blank prompt, which is the failure that looks like the
 	// backend misbehaving.
 	const vars = { prompt: call.prompt ?? "", negative: call.negative ?? "" }
-	const positive = await render(call.prompts?.positive, vars, vars.prompt)
-	const negative = await render(call.prompts?.negative, vars, vars.negative)
+	// The run the two templates render under, in the shape `renderTemplate`
+	// takes. `user` comes off the call rather than being asked for twice: it is
+	// the same person the media rows are written for.
+	const run: RenderRun = {
+		runId: call.runId,
+		user: call.userId != null ? String(call.userId) : undefined
+	}
+	const positive = await render(
+		call.prompts?.positive,
+		vars,
+		vars.prompt,
+		run
+	)
+	const negative = await render(
+		call.prompts?.negative,
+		vars,
+		vars.negative,
+		run
+	)
 
 	if (!positive.trim())
 		throw new ImageDispatchError(
@@ -400,7 +453,8 @@ export async function dispatchImage(
 
 	if (!result.media.length)
 		throw new ImageDispatchError(
-			`"${connection.name}" completed without returning an image.`
+			"The image connection completed without returning an image.",
+			connectionIdentity(connection)
 		)
 
 	const refs: MediaRef[] = []
@@ -476,18 +530,34 @@ export async function dispatchImage(
  * A template that renders to nothing is treated as absent rather than as an
  * instruction to send an empty prompt — the two are indistinguishable from the
  * author's side and only one of them is ever what was meant.
+ *
+ * ## The run rides along, and today nothing reads it
+ *
+ * The engine below is pinned to `CORE_TEMPLATE_ENGINE`, so this render is
+ * always in-process Handlebars and never a plugin's hook, and core's renderer
+ * ignores both `RenderRun` fields. It is threaded anyway, because the moment a
+ * prompts slot carries an engine of its own that render becomes a sandboxed
+ * hook call and cancelling the run reaches it only by the id the hooks are
+ * grouped under (`hookGrace.ts`) — a thread that has to be added at that point
+ * is one nobody remembers is missing, since the symptom is a render that keeps
+ * going inside a run the person already cancelled.
+ *
+ * `RenderRun` is optional here for the same reason it is optional everywhere
+ * else: a direct dispatch is a render no run owns, not a run that lost its id.
  */
 async function render(
 	source: string | undefined | null,
 	variables: Record<string, unknown>,
-	fallback: string
+	fallback: string,
+	run: RenderRun = {}
 ): Promise<string> {
 	if (!source || !source.trim()) return fallback
 	// The core engine: a prompts slot declares no engine of its own, and the one
 	// core renders is what every seeded template is written in.
 	const out = await renderTemplate(CORE_TEMPLATE_ENGINE, {
 		template: source,
-		variables
+		variables,
+		...run
 	})
 	return out.trim() ? out : fallback
 }

@@ -37,6 +37,11 @@ import {
 	scriptsEnabledFor
 } from "$lib/server/pipelines/scripts/chains"
 import { genreFieldsFor } from "$lib/server/pipelines/entities/sessionGenres"
+// Imported for `tokenizerFor`, and for the eight loaders that module registers
+// with the SDK as it evaluates. Both halves matter: the id below means nothing
+// without a loader behind it, and importing the resolver is what guarantees the
+// registration cannot be tree-shaken out from under it.
+import { tokenizerFor } from "$lib/server/pipelines/runtime/tokenizers"
 import { pluginsEnabled } from "$lib/server/plugins/flag"
 import { getManager } from "$lib/server/plugins"
 import { makePluginHookDispatch } from "$lib/server/plugins/hookDispatch"
@@ -77,9 +82,13 @@ export interface TurnRequest {
 	 * unique index on the receipt table is what caught it.
 	 */
 	runId?: string
+	/** See `SpecRunRequest.overrides` — the comparison tool, and nothing else. */
+	overrides?: SpecRunRequest["overrides"]
 	/** Where streamed tokens go while the model is still generating. */
 	sink?: HostScope["sink"]
 	signal?: AbortSignal
+	/** The same stop in the executor's shape — see `SpecRunRequest`. */
+	cancelSignal?: () => { by: string; reason: string } | undefined
 	/** Stop before the provider call and report what *would* be sent. */
 	preview?: boolean
 	/**
@@ -130,6 +139,20 @@ export interface SpecRunRequest {
 	onNode?: (event: NodeEvent) => void
 	signal?: AbortSignal
 	/**
+	 * The same stop, in the shape the executor speaks (13 §3).
+	 *
+	 * `signal` reaches the *bindings*, which can listen for an event mid-call.
+	 * The executor never listens — it only pauses between nodes — so it polls
+	 * this instead, and a returned `{by, reason}` ends the run as `cancelled`
+	 * with the actor on the receipt. Both are projections of one
+	 * `AbortController`; see `runRegistry.cancellation`, which builds this.
+	 *
+	 * Absent, the run walks to the end whatever happens to `signal` — a node
+	 * whose adapter was aborted but which returns rather than throwing takes
+	 * the next node with it.
+	 */
+	cancelSignal?: () => { by: string; reason: string } | undefined
+	/**
 	 * Stop before a node and report what *would* happen there. `true` stops at
 	 * the first Provider on the spine (debug preview); `{atNode}` stops at a
 	 * named node — which is how a generate-and-review flow runs everything
@@ -137,6 +160,70 @@ export interface SpecRunRequest {
 	 */
 	preview?: boolean | { atNode: string }
 	skipReceipt?: boolean
+	/**
+	 * Node parameters forced on top of everything the world resolved.
+	 *
+	 * For the A/B prompt-diff tool (`pipelines/measure/promptDiff.ts`), which
+	 * runs one real session twice under two configurations and diffs what
+	 * reached the model. It has to run **this** function rather than assembling
+	 * its own world and calling `run()` — a comparison against a different
+	 * substrate (no scripts, no plugin nodes, no tokenizer, no reviewer) would
+	 * be a diff of two things neither of which ships.
+	 *
+	 * ⚠ **They win, and they have to.** Applied at `session` scope — the top of
+	 * `SCOPE_ORDER` — with any existing row at the same address removed first,
+	 * because `resolveConfigSources` takes the *first* candidate it finds at a
+	 * scope and a stored session override would otherwise silently beat the
+	 * value the tool was asked to measure. A measurement that can be overruled
+	 * by the thing it is measuring against is worse than no measurement.
+	 *
+	 * `slot` defaults to `params`, which is where every retrieval and ranking
+	 * control lives. Nothing else may set this: it is not reachable from a
+	 * socket, a route or a trigger, and it must not become a fourth
+	 * user-editable scope — that chain was deliberately narrowed (plan §3,
+	 * phase 5).
+	 */
+	overrides?: Array<{
+		nodeKey: string
+		slot?: string
+		path: string
+		value: unknown
+	}>
+}
+
+/**
+ * Force a run's node parameters, ahead of every stored scope.
+ *
+ * Separate from `buildWorld` deliberately: the world is *what this install is
+ * configured to do*, and this is a caller saying "run it as if it were
+ * configured differently, without changing anything". Nothing is written.
+ */
+function forceOverrides(
+	world: Awaited<ReturnType<typeof buildWorld>>,
+	overrides: SpecRunRequest["overrides"],
+	sessionId: number
+): void {
+	for (const o of overrides ?? []) {
+		const slot = o.slot ?? "params"
+		// Removed rather than shadowed — see the note on `overrides` above.
+		for (let i = world.overrides.length - 1; i >= 0; i--) {
+			const row = world.overrides[i]!
+			if (
+				row.nodeKey === o.nodeKey &&
+				row.slot === slot &&
+				row.path === o.path
+			)
+				world.overrides.splice(i, 1)
+		}
+		world.overrides.push({
+			nodeKey: o.nodeKey,
+			slot,
+			path: o.path,
+			value: o.value,
+			scopeKind: "session",
+			scopeId: sessionId
+		})
+	}
 }
 
 export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
@@ -161,7 +248,22 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 		sessionId: request.sessionId
 	})
 
+	// The same run id the executor stamps below, hoisted so a plugin link's
+	// invocation-log row soft-links to the run that fired it — and so the host
+	// scope built just below can name the run its effects belong to.
+	const runId = request.runId ?? uuidv4()
+	// Who is running it, in the form every hook-facing call takes. Hoisted
+	// beside the run id because the three consumers below — plugin nodes, the
+	// script applier, and the rendering bindings — must name the same person.
+	const user = request.userId != null ? String(request.userId) : undefined
+
 	const scope: HostScope = {
+		// Everything the host does outside the graph is attributed to this run:
+		// the progress an image render reports back to the person watching, and
+		// the run a prompts-slot template renders under. This is the one place
+		// holding both the run and the host wiring, the same reason
+		// `coreBindings` is handed the run rather than reading it off `ctx`.
+		runId,
 		sessionId: request.sessionId,
 		userId: request.userId,
 		currentCharacterId: request.currentCharacterId,
@@ -179,10 +281,6 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 	// and the executor's seam makes that mean "every spec runs exactly as
 	// before scripts existed" — chains and attachments kept, waiting.
 	const scriptsOn = await scriptsEnabledFor(request.db)
-
-	// The same run id the executor stamps below, hoisted so a plugin link's
-	// invocation-log row soft-links to the run that fired it.
-	const runId = request.runId ?? uuidv4()
 
 	// The extension-hook executor. Behind the same seam as core scripts and
 	// gated three ways: chains must be on at all, the plugin subsystem must be
@@ -202,23 +300,26 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 				seed,
 				nowMs: Date.now(),
 				runId,
-				user:
-					request.userId != null
-						? String(request.userId)
-						: undefined
+				user
 			})
 		}
 	}
 
+	const world = await buildWorld(request.db, {
+		sessionId: request.sessionId,
+		// Which pipeline is running, so its own configs and overrides are
+		// read. Without it the run resolves against the legacy projection
+		// only, and everything a person set in the pipeline panel is
+		// invisible to the thing it was supposed to configure.
+		specId
+	})
+	// A no-op on every path but the comparison tool's, which is the only caller
+	// that supplies any. In memory, on this run's copy of the world — nothing
+	// is written and the next turn resolves exactly as it would have.
+	forceOverrides(world, request.overrides, request.sessionId)
+
 	const receipt = await run(doc, {
-		world: await buildWorld(request.db, {
-			sessionId: request.sessionId,
-			// Which pipeline is running, so its own configs and overrides are
-			// read. Without it the run resolves against the legacy projection
-			// only, and everything a person set in the pipeline panel is
-			// invisible to the thing it was supposed to configure.
-			specId
-		}),
+		world,
 		input: request.input,
 		runId,
 		seed,
@@ -227,7 +328,13 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 		// Core's bindings, with a plugin's process-transport nodes beside
 		// them — a collision is impossible by construction (namespaced ids,
 		// core: reserved at registration).
-		bindings: { ...coreBindings(), ...pluginNodes },
+		// The run travels into core's bindings for one reason: a context
+		// template or a variable layout can name a *plugin's* template engine,
+		// and that render is a sandboxed hook call. Without the run id on it,
+		// cancelling this run stops the executor between nodes and leaves the
+		// render going — the SDK's `TaskCtx` carries no run id for a binding to
+		// read, so this is where the association has to be made.
+		bindings: { ...coreBindings({ runId, user }), ...pluginNodes },
 		host: createHost(request.db, scope),
 		// The script engine, behind the executor's seam (18 §4a). Chains are
 		// config, so which ones run is already decided by the world above;
@@ -248,14 +355,19 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 						// the applier runs core scripts exactly as before.
 						pluginDispatch,
 						runId,
-						user:
-							request.userId != null
-								? String(request.userId)
-								: undefined
+						user
 					})
 				}
 			: {}),
 		onNode: request.onNode,
+		cancelSignal: request.cancelSignal,
+		// The connection's `tokenCounter` column, reaching the thing it was
+		// always supposed to configure. An id rather than a function: the SDK
+		// loads it once before the run and counts synchronously afterwards, so
+		// the allocation loop stays a loop. An id nobody can load degrades to the
+		// rough estimate and says so on the receipt — a tokenizer never fails a
+		// turn.
+		tokenizer: await tokenizerFor(request.db, request.sessionId),
 		// Every run can park at a gated node — the review position is a
 		// config option (`settings.review`), so whether it *does* is the
 		// person's to decide in the panel, never the trigger's to wire.
@@ -318,8 +430,10 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 		runId: request.runId,
 		sink: request.sink,
 		signal: request.signal,
+		cancelSignal: request.cancelSignal,
 		preview: request.preview,
-		skipReceipt: request.skipReceipt
+		skipReceipt: request.skipReceipt,
+		overrides: request.overrides
 	})
 }
 

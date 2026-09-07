@@ -318,23 +318,44 @@ describe("the mirror survives concurrent updates (streaming)", () => {
 	})
 })
 
-describe("the mirror preserves a set channel (20 §7 greetings)", () => {
+describe("the mirror carries the legacy row's channel (20 §7 greetings)", () => {
 	it("a non-main channel survives later legacy updates", async () => {
+		// On the legacy row, as `writeSessionGreetings` writes it since 0200.
 		const row = await insertLegacy(db, {
 			sessionId,
 			role: "assistant",
+			channel: "intro",
 			content: "Welcome, traveller.",
 			metadata: { isGreeting: true }
 		})
-		// Redirect natively — as the greeting-on-creation path does.
-		await db
-			.update(schema.messages)
-			.set({ channel: "intro" })
-			.where(eq(schema.messages.id, row.id))
 		expect((await getMessage(db, row.id))!.channel).toBe("intro")
 
 		// A later legacy update (e.g. an edit) must not reset it to 'main'.
 		await updateLegacy(db, row.id, { isEdited: true })
 		expect((await getMessage(db, row.id))!.channel).toBe("intro")
+	})
+
+	it("a lane patched onto the mirror alone does not stick", async () => {
+		/**
+		 * ⚠ This is what the greeting redirect used to do, and it survived
+		 * only because the projection pinned `channel` to whatever the mirror
+		 * already held — the one field of the mirror the legacy row did not
+		 * lead. 0200 gave the legacy row a channel, which makes it the single
+		 * writer again; a lane written only to `messages` is a lane the
+		 * prompt-facing read (which selects from `session_messages`) never saw
+		 * anyway, so it is erased rather than left to disagree.
+		 */
+		const row = await insertLegacy(db, {
+			sessionId,
+			role: "assistant",
+			content: "Written to the chat log."
+		})
+		await db
+			.update(schema.messages)
+			.set({ channel: "intro" })
+			.where(eq(schema.messages.id, row.id))
+
+		await updateLegacy(db, row.id, { isEdited: true })
+		expect((await getMessage(db, row.id))!.channel).toBe("main")
 	})
 })

@@ -32,3 +32,21 @@ export class PromptFormats {
 		// { value: PromptFormats.TEKKEN, label: "Mistral v7 Tekken" } // ← new
 	]
 }
+
+/**
+ * The wire format to render in, from whatever value carried it.
+ *
+ * ⚠ **`||`, never `??`,** and the difference is not stylistic.
+ * `PromptBlockFormatter.makeBlock`'s `default:` arm returns **ChatML**, so an
+ * EMPTY STRING reaching it wraps every block in `<|im_start|>` while an ABSENT
+ * value falls to Vicuna here. `connections.prompt_format` is a nullable text
+ * column with no check constraint, so `""` is a state a row can be in — and
+ * `?? "vicuna"` would send that row a format nobody chose, silently.
+ *
+ * One spelling for every site that has to answer this: the render
+ * (`runtime/bindings.ts`), the receipt (`runtime/dispatch.ts`), and the
+ * adapters' own text fallback. Three copies of an operator is how two of them
+ * end up disagreeing about a cleared column.
+ */
+export const promptFormatOf = (format?: string | null): string =>
+	format || PromptFormats.VICUNA

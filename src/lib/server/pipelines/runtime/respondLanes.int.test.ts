@@ -26,8 +26,13 @@ import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { run } from "@serene-pub/sdk"
 import { respondSpec } from "$lib/server/pipelines/specs/respond"
 import * as schema from "$lib/server/db/schema"
+import {
+	characterLoreValues,
+	historyValues,
+	worldLoreValues
+} from "$lib/server/pipelines/testing/fixtures"
 
-// No embedding model, so the keyword arm runs — which is the arm that tags
+// No embedding model, so the keyword mechanism runs — which is the mechanism that tags
 // candidates with a source in the first place.
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
@@ -70,12 +75,16 @@ beforeAll(async () => {
 
 	// One of each, all keyed on the same word, so a lane that runs at all finds
 	// its entry — and a lane that is missing is the only reason one is absent.
-	await db.insert(schema.worldLoreEntries).values({
-		lorebookId: lorebook.id,
-		name: "The Ashguard",
-		keys: "ashguard",
-		content: "An order of oathbound riders."
-	})
+	await db.insert(schema.lorebookEntries).values(
+		worldLoreValues([
+			{
+				lorebookId: lorebook.id,
+				name: "The Ashguard",
+				keys: "ashguard",
+				content: "An order of oathbound riders."
+			}
+		])
+	)
 	// Bound, because unbound character lore is never visible to anybody —
 	// `isCharacterLoreEntryVisible` returns false on a missing binding, which
 	// is the "private self-knowledge" rule and not an accident. A binding with
@@ -89,21 +98,29 @@ beforeAll(async () => {
 			name: "The Ashguard order"
 		})
 		.returning()
-	await db.insert(schema.characterLoreEntries).values({
-		lorebookId: lorebook.id,
-		lorebookBindingId: binding.id,
-		name: "Vell's oath",
-		keys: "ashguard",
-		content: "She swore it twice."
-	})
+	await db.insert(schema.lorebookEntries).values(
+		characterLoreValues([
+			{
+				lorebookId: lorebook.id,
+				lorebookBindingId: binding.id,
+				name: "Vell's oath",
+				keys: "ashguard",
+				content: "She swore it twice."
+			}
+		])
+	)
 	// No `name`: a history entry is identified by its date, not a title.
-	await db.insert(schema.historyEntries).values({
-		lorebookId: lorebook.id,
-		keys: "ashguard",
-		content: "The siege broke in the spring.",
-		year: 412,
-		month: 3
-	})
+	await db.insert(schema.lorebookEntries).values(
+		historyValues([
+			{
+				lorebookId: lorebook.id,
+				keys: "ashguard",
+				content: "The siege broke in the spring.",
+				year: 412,
+				month: 3
+			}
+		])
+	)
 
 	await db.insert(schema.sessionMessages).values({
 		sessionId,

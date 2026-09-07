@@ -1,5 +1,5 @@
 /**
- * The seam between core's Scripts sandbox and the extension plugin runtime.
+ * The seam between core's Scripts sandbox and the extension plugin sandbox.
  *
  * A chain link is addressed the same way whoever owns it — a `pipeline_scripts`
  * row pinning a script type. When that type is core's own (`transport: 'node'`)
@@ -14,7 +14,7 @@
  *
  * The port is an interface here, in the scripts layer, and implemented in
  * `$lib/server/plugins`. The direction matters: the scripts layer never imports
- * the plugin runtime — the runtime is injected as this capability, absent when
+ * the plugin sandbox — the sandbox is injected as this port, absent when
  * plugins are disabled, so the whole subsystem stays dark behind its flag
  * without the pipeline knowing it exists.
  */
@@ -47,7 +47,7 @@ export interface PluginHookDispatch {
 	/**
 	 * Run one extension hook and return its result in the Scripts sandbox shape.
 	 * Resolution failures (plugin not loaded, hook missing) come back as
-	 * `{ ok: false }` rather than throwing, so a link the runtime cannot serve
+	 * `{ ok: false }` rather than throwing, so a link the sandbox cannot serve
 	 * is absorbed as an error application exactly like a core script that threw
 	 * — a chain never breaks a turn.
 	 */

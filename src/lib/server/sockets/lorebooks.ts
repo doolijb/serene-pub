@@ -9,14 +9,13 @@ import {
 	canViewCharacter,
 	canViewPersona
 } from "$lib/server/utils/sessionAccess"
-import { CharacterBook } from "@lenml/char-card-reader"
 import {
-	mapLorebookEntryToWorldLoreEntry,
-	mapLorebookEntryToCharacterLoreEntry,
-	mapLorebookEntryToHistoryEntry,
-	entryTypeOf,
+	mapImportedEntry,
+	entryTypeIdOf,
 	normalizeLegacyLorebookData,
-	resolveParentNodeLinks
+	parseImportedLorebook,
+	resolveParentNodeLinks,
+	type ParsedImportedLorebook
 } from "$lib/server/utils/lorebookImportMapper"
 import { buildLorebookExportData } from "$lib/server/utils/lorebookExportBuilder"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
@@ -40,6 +39,15 @@ import {
 	overwritePersonaFromParsedData
 } from "./personas"
 import { writeSceneCast } from "$lib/server/utils/sceneCast"
+import {
+	CHARACTER_LORE_TYPE_ID,
+	ENTRY_TYPE_IDS,
+	HISTORY_TYPE_ID,
+	WORLD_LORE_TYPE_ID,
+	entryInsert,
+	loadBookEntries,
+	type EntryTypeId
+} from "$lib/server/utils/lorebookEntries"
 import type { Handler } from "$lib/shared/events"
 // SelectTag/SelectLorebookTag/InsertHistoryEntry are declared globally in
 // $lib/server/db/types.d.ts (ambient `export global {}` block, same pattern
@@ -86,9 +94,15 @@ async function validateBindingCrossRefs(
 		}
 	}
 	if (fields.historyEntryId != null) {
-		const historyEntry = await db.query.historyEntries.findFirst({
-			where: eq(schema.historyEntries.id, fields.historyEntryId)
-		})
+		const [historyEntry] = await db
+			.select({ lorebookId: schema.lorebookEntries.lorebookId })
+			.from(schema.lorebookEntries)
+			.where(
+				and(
+					eq(schema.lorebookEntries.id, fields.historyEntryId),
+					eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
+				)
+			)
 		if (!historyEntry || historyEntry.lorebookId !== lorebookId) {
 			throw new Error("History entry not found.")
 		}
@@ -149,19 +163,10 @@ export const lorebooksListHandler: Handler<
 			where: (l, { eq }) => eq(l.userId, userId),
 			orderBy: (l, { desc }) => desc(l.name),
 			with: {
-				worldLoreEntries: {
+				lorebookEntries: {
 					columns: {
-						id: true
-					}
-				},
-				characterLoreEntries: {
-					columns: {
-						id: true
-					}
-				},
-				historyEntries: {
-					columns: {
-						id: true
+						id: true,
+						typeId: true
 					}
 				},
 				lorebookBindings: {
@@ -177,14 +182,27 @@ export const lorebooksListHandler: Handler<
 			}
 		})
 
-		// Transform lorebook tags to include tags as string array
-		const booksWithTags = books.map((book) => ({
-			...book,
-			tags:
-				book.lorebookTags?.map(
-					(lt: SelectLorebookTag & { tag: SelectTag }) => lt.tag.name
-				) || []
-		}))
+		// Transform lorebook tags to include tags as string array. The three
+		// entry lists are id-only and exist for the card's counts, so they are
+		// split back out of the one relation rather than fetched three times.
+		const booksWithTags = books.map((book) => {
+			const { lorebookEntries, ...rest } = book
+			const idsOf = (typeId: string) =>
+				lorebookEntries
+					.filter((e) => e.typeId === typeId)
+					.map((e) => ({ id: e.id }))
+			return {
+				...rest,
+				worldLoreEntries: idsOf(WORLD_LORE_TYPE_ID),
+				characterLoreEntries: idsOf(CHARACTER_LORE_TYPE_ID),
+				historyEntries: idsOf(HISTORY_TYPE_ID),
+				tags:
+					book.lorebookTags?.map(
+						(lt: SelectLorebookTag & { tag: SelectTag }) =>
+							lt.tag.name
+					) || []
+			}
+		})
 
 		const res = { lorebookList: booksWithTags }
 		emitToUser("lorebooks:list", res)
@@ -241,9 +259,6 @@ export const lorebooksGetHandler: Handler<
 				where: (l, { and, eq }) =>
 					and(eq(l.id, params.id), eq(l.userId, userId)),
 				with: {
-					worldLoreEntries: true,
-					characterLoreEntries: true,
-					historyEntries: true,
 					lorebookBindings: true,
 					lorebookTags: {
 						with: {
@@ -256,9 +271,7 @@ export const lorebooksGetHandler: Handler<
 			if (!book) {
 				const res: Sockets.Lorebooks.Get.Response = {
 					lorebook: null,
-					worldLoreEntries: [],
-					characterLoreEntries: [],
-					historyEntries: []
+					entries: []
 				}
 				emitToUser("lorebooks:get", res)
 				return res
@@ -273,9 +286,7 @@ export const lorebooksGetHandler: Handler<
 
 			const res: Sockets.Lorebooks.Get.Response = {
 				lorebook: bookWithTags,
-				worldLoreEntries: book.worldLoreEntries,
-				characterLoreEntries: book.characterLoreEntries,
-				historyEntries: book.historyEntries
+				entries: await loadBookEntries(db, params.id)
 			}
 			emitToUser("lorebooks:get", res)
 			return res
@@ -404,23 +415,16 @@ export async function syncLorebookBindings({
 		where: (b, { eq }) => eq(b.lorebookId, lorebookId),
 		columns: { id: true, binding: true }
 	})
-	// Query all world, character and history entries for the given lorebook
-	const worldEntries = await db.query.worldLoreEntries.findMany({
-		where: (e, { eq }) => eq(e.lorebookId, lorebookId)
-	})
-	const characterEntries = await db.query.characterLoreEntries.findMany({
-		where: (e, { eq }) => eq(e.lorebookId, lorebookId)
-	})
-	const historyEntries = await db.query.historyEntries.findMany({
-		where: (e, { eq }) => eq(e.lorebookId, lorebookId)
-	})
+	// Every entry of the lorebook, of every type — one scan where three
+	// near-identical ones stood, because the binding scan never cared which
+	// shape the content came out of.
+	const entries = await db
+		.select({ content: schema.lorebookEntries.content })
+		.from(schema.lorebookEntries)
+		.where(eq(schema.lorebookEntries.lorebookId, lorebookId))
 	// Create a list of all unique lorebook bindings from the entries
 	const foundBindings: string[] = []
-	for (const entry of [
-		...worldEntries,
-		...characterEntries,
-		...historyEntries
-	]) {
+	for (const entry of entries) {
 		// use regex to find all {{char:1}}, {{char:2}}, {char:1}, {char:2}, etc. bindings in the entry content
 		const rgx: RegExp = /\{\{?(\w+):(\d+)\}?\}/g // Matches both {{char:1}} and {char:1} (deprecated)
 		let match: RegExpExecArray | null
@@ -963,11 +967,14 @@ export const lorebookExportHandler: Handler<
 }
 
 // Reads scan_depth/token_budget/recursive_scanning from the RAW import
-// payload rather than the parsed CharacterBook instance —
-// CharacterBook.from_json backfills these with hardcoded defaults
+// payload rather than from the parsed book. The card reader this import used
+// to go through backfilled these with hardcoded defaults
 // (recursive_scanning ?? true, scan_depth ?? 10) when absent, which would
-// otherwise get stored as if they were genuine source data and pollute
-// every future re-export/hash-comparison with fabricated values.
+// otherwise get stored as if they were genuine source data and pollute every
+// future re-export/hash-comparison with fabricated values. Reading raw is
+// still the rule now that parseImportedLorebook does not carry them at all:
+// absent in the file means absent from the row, which is the only reading
+// that survives a round trip.
 function extractLorebookLevelExtraJson(rawData: any): Record<string, any> {
 	return {
 		...(rawData?.scan_depth !== undefined
@@ -997,7 +1004,7 @@ const LOREBOOK_IMPORT_LIMITS = {
 
 /** Rejects an oversized import up front, before any DB work begins. */
 function assertLorebookImportWithinLimits(
-	card: CharacterBook,
+	card: ParsedImportedLorebook,
 	lorebookData: any
 ) {
 	const serenepub = (lorebookData as any)?.extensions?.serenepub
@@ -1236,12 +1243,12 @@ async function resolveOrOverwriteEmbeddedPersona(
 }
 
 /**
- * Inserts a parsed CharacterBook's entries into the appropriate table
- * (world/character/history), routed per-entry via entryTypeOf(). Shared by
- * both the "create new" and "overwrite" import paths.
+ * Inserts a parsed lorebook's entries as rows of the declared type, routed
+ * per-entry via `entryTypeIdOf()`. Shared by both the "create new" and
+ * "overwrite" import paths.
  */
 interface RestoredHistoryRefs {
-	// Export-assigned history-entry localId -> real historyEntries.id.
+	// Export-assigned history-entry localId -> real lorebook_entries.id.
 	historyEntryLocalIdToRealId: Map<number, number>
 	// Export-assigned scene localId -> real scenes.id (scenes nest under
 	// their owning history entry on export, but narrativeGraph nodes/
@@ -1255,128 +1262,112 @@ async function insertLorebookEntries(
 	bindingLocalIdToRealId: Map<number, number>,
 	dbOrTx: Executor = db
 ): Promise<RestoredHistoryRefs> {
-	let worldPosition = 0
-	let characterPosition = 0
-	let historyPosition = 0
+	// Position is per `(lorebook, type)`, so each type counts from zero —
+	// which is what the three counters this replaces were doing.
+	const positions = new Map<EntryTypeId, number>(
+		ENTRY_TYPE_IDS.map((t) => [t, 0])
+	)
 	const queries: Promise<any>[] = []
 	const historyEntryLocalIdToRealId = new Map<number, number>()
 	const sceneLocalIdToRealId = new Map<number, number>()
 
 	for (const entry of entries) {
-		const type = entryTypeOf(entry)
-		if (type === "character") {
-			const bindingLocalId = entry.extensions?.serenepub?.bindingLocalId
-			const lorebookBindingId =
+		const typeId = entryTypeIdOf(entry)
+		const position = positions.get(typeId)!
+		positions.set(typeId, position + 1)
+
+		const bindingLocalId = entry.extensions?.serenepub?.bindingLocalId
+		const values = entryInsert({
+			...(mapImportedEntry(entry, typeId, position) as any),
+			typeId,
+			lorebookId,
+			// Ignored by `entryInsert` for a type that declares no anchor, so
+			// it is resolved once here rather than behind a second branch.
+			lorebookBindingId:
 				typeof bindingLocalId === "number"
 					? (bindingLocalIdToRealId.get(bindingLocalId) ?? null)
 					: null
-			queries.push(
-				dbOrTx.insert(schema.characterLoreEntries).values({
-					...mapLorebookEntryToCharacterLoreEntry(
-						entry,
-						characterPosition
-					),
-					lorebookId,
-					lorebookBindingId
-				})
-			)
-			characterPosition++
-		} else if (type === "history") {
-			const meta = entry.extensions?.serenepub ?? {}
-			queries.push(
-				(async () => {
-					const [historyRow] = await dbOrTx
-						.insert(schema.historyEntries)
+		})
+
+		// Only the dated type carries nested scenes and a document-local id, so
+		// only it needs the row back. Everything else is fire-and-forget, which
+		// is what let these run concurrently in the first place.
+		if (typeId !== HISTORY_TYPE_ID) {
+			queries.push(dbOrTx.insert(schema.lorebookEntries).values(values))
+			continue
+		}
+
+		const meta = entry.extensions?.serenepub ?? {}
+		queries.push(
+			(async () => {
+				const [historyRow] = await dbOrTx
+					.insert(schema.lorebookEntries)
+					.values(values)
+					.returning()
+
+				if (typeof meta.localId === "number") {
+					historyEntryLocalIdToRealId.set(meta.localId, historyRow.id)
+				}
+
+				// Nested scenes — each still gets its own document-scoped
+				// localId (see mapEntry) so narrativeGraph can reference one.
+				// sessionId/selectedMessageIds were deliberately never exported
+				// — they're session-instance-specific and can't round-trip.
+				// participantCharacters/mentionedCharacters are binding
+				// localIds now (see the merge plan) — resolve back to real ids
+				// via the same map bindingLocalId elsewhere in this format
+				// uses. A legacy export's name-string arrays silently resolve
+				// to nothing here (every entry fails the `=== "number"` check)
+				// rather than erroring — the scene still imports, just without
+				// its old cast list, consistent with this whole function's
+				// best-effort philosophy.
+				const scenes = Array.isArray(meta.scenes) ? meta.scenes : []
+				const resolveBindingIds = (raw: unknown): number[] =>
+					Array.isArray(raw)
+						? raw
+								.filter(
+									(v): v is number => typeof v === "number"
+								)
+								.map((localId) =>
+									bindingLocalIdToRealId.get(localId)
+								)
+								.filter((id): id is number => id !== undefined)
+						: []
+				for (const scene of scenes) {
+					const participantCharacters = resolveBindingIds(
+						scene?.participantCharacters
+					)
+					const mentionedCharacters = resolveBindingIds(
+						scene?.mentionedCharacters
+					)
+					const [sceneRow] = await dbOrTx
+						.insert(schema.scenes)
 						.values({
-							...mapLorebookEntryToHistoryEntry(
-								entry,
-								historyPosition
-							),
-							lorebookId
+							lorebookId,
+							historyEntryId: historyRow.id,
+							sessionId: null,
+							name: scene?.name ?? null,
+							selectedMessageIds: [],
+							summary: scene?.summary ?? null,
+							// The import file recorded a cast, so this scene
+							// counts as resolved even if every entry was
+							// dropped as unresolvable above.
+							castResolvedAt: new Date()
 						})
 						.returning()
-
-					if (typeof meta.localId === "number") {
-						historyEntryLocalIdToRealId.set(
-							meta.localId,
-							historyRow.id
-						)
+					// Cast lives in scene_characters, so it is written after
+					// the row exists (the FK requires a scene id).
+					await writeSceneCast(
+						sceneRow.id,
+						{ participantCharacters, mentionedCharacters },
+						dbOrTx as any
+					)
+					if (typeof scene?.localId === "number") {
+						sceneLocalIdToRealId.set(scene.localId, sceneRow.id)
 					}
-
-					// Nested scenes — each still gets its own document-scoped
-					// localId (see mapHistoryEntry) so narrativeGraph can
-					// reference one via sceneLocalId. sessionId/
-					// selectedMessageIds were deliberately never exported —
-					// they're session-instance-specific and can't round-trip.
-					// participantCharacters/mentionedCharacters are binding
-					// localIds now (see the merge plan) — resolve back to
-					// real ids via the same map bindingLocalId elsewhere in
-					// this format uses. A legacy export's name-string arrays
-					// silently resolve to nothing here (every entry fails
-					// the `=== "number"` check) rather than erroring — the
-					// scene still imports, just without its old cast list,
-					// consistent with this whole function's best-effort
-					// philosophy.
-					const scenes = Array.isArray(meta.scenes) ? meta.scenes : []
-					const resolveBindingIds = (raw: unknown): number[] =>
-						Array.isArray(raw)
-							? raw
-									.filter(
-										(v): v is number =>
-											typeof v === "number"
-									)
-									.map((localId) =>
-										bindingLocalIdToRealId.get(localId)
-									)
-									.filter(
-										(id): id is number => id !== undefined
-									)
-							: []
-					for (const scene of scenes) {
-						const participantCharacters = resolveBindingIds(
-							scene?.participantCharacters
-						)
-						const mentionedCharacters = resolveBindingIds(
-							scene?.mentionedCharacters
-						)
-						const [sceneRow] = await dbOrTx
-							.insert(schema.scenes)
-							.values({
-								lorebookId,
-								historyEntryId: historyRow.id,
-								sessionId: null,
-								name: scene?.name ?? null,
-								selectedMessageIds: [],
-								summary: scene?.summary ?? null,
-								// The import file recorded a cast, so this
-								// scene counts as resolved even if every entry
-								// was dropped as unresolvable above.
-								castResolvedAt: new Date()
-							})
-							.returning()
-						// Cast lives in scene_characters, so it is written
-						// after the row exists (the FK requires a scene id).
-						await writeSceneCast(
-							sceneRow.id,
-							{ participantCharacters, mentionedCharacters },
-							dbOrTx as any
-						)
-						if (typeof scene?.localId === "number") {
-							sceneLocalIdToRealId.set(scene.localId, sceneRow.id)
-						}
-					}
-				})()
-			)
-			historyPosition++
-		} else {
-			queries.push(
-				dbOrTx.insert(schema.worldLoreEntries).values({
-					...mapLorebookEntryToWorldLoreEntry(entry, worldPosition),
-					lorebookId
-				})
-			)
-			worldPosition++
-		}
+				}
+			})()
+		)
 	}
 
 	await Promise.all(queries)
@@ -1599,14 +1590,14 @@ async function fetchCompletedLorebook(lorebookId: number) {
 	const completedBook = await db.query.lorebooks.findFirst({
 		where: eq(schema.lorebooks.id, lorebookId),
 		with: {
-			lorebookBindings: true,
-			worldLoreEntries: true,
-			characterLoreEntries: true,
-			historyEntries: true
+			lorebookBindings: true
 		}
 	})
 	if (!completedBook) throw new Error("Failed to retrieve lorebook.")
-	return completedBook
+	// One list, of every type — `typeId` is what splits it, and the importer's
+	// caller reads the entries to confirm what landed rather than to render
+	// them per tab.
+	return { ...completedBook, entries: await loadBookEntries(db, lorebookId) }
 }
 
 /**
@@ -1633,9 +1624,9 @@ async function claimIncomingLorebookUuid(
 	return existing ? undefined : incomingUuid
 }
 
-/** Creates a brand-new lorebook (+ bound entities, bindings, entries) from a parsed CharacterBook. */
+/** Creates a brand-new lorebook (+ bound entities, bindings, entries) from a parsed lorebook payload. */
 async function createLorebookFromParsedCard(
-	card: CharacterBook,
+	card: ParsedImportedLorebook,
 	rawData: any,
 	userId: number,
 	uuid?: string
@@ -1726,14 +1717,14 @@ async function createLorebookFromParsedCard(
 
 /**
  * Overwrites an existing lorebook's metadata + entries wholesale from a
- * parsed CharacterBook — simplest, most predictable "Overwrite" semantics.
+ * parsed lorebook payload — simplest, most predictable "Overwrite" semantics.
  * Bindings are wiped and recreated the same way entries are; the bound
  * characters/personas themselves are resolved via restoreBoundEntities's
  * own uuid+hash dedup (reused, not re-created wholesale).
  */
 async function overwriteLorebookFromParsedCard(
 	existingId: number,
-	card: CharacterBook,
+	card: ParsedImportedLorebook,
 	rawData: any,
 	userId: number
 ) {
@@ -1759,15 +1750,11 @@ async function overwriteLorebookFromParsedCard(
 			})
 			.where(eq(schema.lorebooks.id, existingId))
 
+		// One delete where three stood — and it takes the scenes with it, via
+		// the cascade a history entry's scenes have always had.
 		await tx
-			.delete(schema.worldLoreEntries)
-			.where(eq(schema.worldLoreEntries.lorebookId, existingId))
-		await tx
-			.delete(schema.characterLoreEntries)
-			.where(eq(schema.characterLoreEntries.lorebookId, existingId))
-		await tx
-			.delete(schema.historyEntries)
-			.where(eq(schema.historyEntries.lorebookId, existingId))
+			.delete(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.lorebookId, existingId))
 		// narrativeRelationships before lorebookBindings — relationships FK
 		// straight to bindings, not lorebookId-cascaded on binding deletion
 		// (deleting bindings first would cascade-delete them anyway via
@@ -1834,12 +1821,18 @@ export const lorebookImportHandler: Handler<
 			const userId = socket.user!.id
 
 			// Normalizes legacy shapes (object-keyed entries, singular
-			// key/keysecondary fields) that CharacterBook.from_json() on its
+			// key/keysecondary fields) that parseImportedLorebook() on its
 			// own would silently turn into an empty book rather than error on.
 			const lorebookData = normalizeLegacyLorebookData(
 				params.lorebookData
 			)
-			const card = CharacterBook.from_json(lorebookData)
+			// Reads the payload's own fields rather than handing it to
+			// @lenml/char-card-reader, whose book constructor splits every key
+			// on `[,|;，；]` — which shredded a regex key (`/foo|bar/i` →
+			// `/foo` + `bar/i`) on this door alone, while the bulk import path
+			// read the same file's keys intact. See parseImportedLorebook for
+			// what the reader backfilled and how each of those is supplied.
+			const card = parseImportedLorebook(lorebookData)
 			if (!card) {
 				throw new Error("No lorebook data provided.")
 			}
@@ -1856,20 +1849,17 @@ export const lorebookImportHandler: Handler<
 					where: and(
 						eq(schema.lorebooks.uuid, incomingUuid),
 						eq(schema.lorebooks.userId, userId)
-					),
-					with: {
-						worldLoreEntries: true,
-						characterLoreEntries: true,
-						historyEntries: true
-					}
+					)
 				})
 
 				if (existing) {
 					// Compared against the RAW incoming payload, not the parsed
-					// CharacterBook — CharacterBook.from_json backfills several
-					// fields with hardcoded defaults, which would otherwise make
-					// an untouched re-import look "changed" against a freshly
-					// rebuilt export of the unchanged existing row. Uses the same
+					// book — the parse is a lossy read of the file (it keeps
+					// only the four fields the importer writes from, and drops
+					// scan_depth/token_budget/recursive_scanning entirely),
+					// which would otherwise make an untouched re-import look
+					// "changed" against a freshly rebuilt export of the
+					// unchanged existing row. Uses the same
 					// buildLorebookExportData a real export uses (bindings/
 					// characters/personas/narrativeGraph attached), not a bare
 					// buildSpecV3Lorebook — otherwise a straight, unedited
@@ -1951,7 +1941,9 @@ export const lorebookImportResolveHandler: Handler<
 			const lorebookData = normalizeLegacyLorebookData(
 				params.lorebookData
 			)
-			const card = CharacterBook.from_json(lorebookData)
+			// Same bypass as lorebooks:import above — the reader's key
+			// splitting must not reach either door.
+			const card = parseImportedLorebook(lorebookData)
 			if (!card) {
 				throw new Error("No lorebook data provided.")
 			}

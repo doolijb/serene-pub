@@ -1,7 +1,7 @@
 /**
- * The parity corpus, semantic arm.
+ * The parity corpus, semantic mechanism.
  *
- * Separate from `parity.int.test.ts` because the two arms need opposite worlds:
+ * Separate from `parity.int.test.ts` because the two mechanisms need opposite worlds:
  * that file asserts no embedding model is loaded, this one asserts there is one.
  * Mocking is per-file, and a corpus that flipped the model mid-run would be
  * comparing two different code paths under one name.
@@ -15,6 +15,30 @@
  * Four fixtures, all green: a single semantic hit, a crowded pool where the
  * threshold and MMR decide, a query that matches nothing, and an author's
  * priority tier competing with a better match.
+ *
+ * ## ⚠ What this corpus cannot see
+ *
+ * **Every candidate it produces arrives with the same raw cosine.** The toy
+ * embedding is binary — a text either contains "ashguard" or it does not — so
+ * a fixture's hits all score exactly 1 against the query. That makes the corpus
+ * blind to an entire seam: `core:query/vector-search@1` stamps the raw cosine on
+ * `presetScore`, `select`'s `scoreOf` prefers `presetScore` over anything the
+ * nine ranking stages computed, and here every `presetScore` ties. The stage
+ * ordering then survives on the *stability* of `select`'s sort rather than on
+ * its score, and `rag/priority` renders the author's High tier first for a
+ * reason that has nothing to do with `priorityBoost` having run.
+ *
+ * So these four goldens stayed byte-identical across the fix that writes the
+ * computed score back onto `presetScore` — not because the fix is a no-op, but
+ * because nothing here can tell the two apart. With a real encoder the cosines
+ * differ and the raw one wins. The fix is covered by
+ * `runtime/vector.int.test.ts`, which builds two query lists whose fused ranks
+ * disagree with their cosines on purpose.
+ *
+ * The same shape as the keyword corpus's blindness to the co-occurrence signal:
+ * a fixture that cannot discriminate passes every change to the thing it looks
+ * like it is testing. Worth a fixture whose pool has genuinely different
+ * similarities.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
@@ -28,6 +52,15 @@ import { wrapFor } from "$lib/server/pipelines/entities/variableLayouts"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
+import {
+	WORLD_LORE_TYPE_ID,
+	entryInsert,
+	inBookOfType,
+	ofType,
+	toEntryRow,
+	type LorebookEntry,
+	type SelectLorebookEntry
+} from "$lib/server/utils/lorebookEntries"
 
 /**
  * A toy embedding: one axis per subject, so similarity is readable by eye.
@@ -51,7 +84,7 @@ function vectorFor(text: string): number[] {
  * from the **global** `db` rather than from the session it was handed. Without this
  * mock that read finds nothing, the gate closes, and the legacy path quietly
  * runs the *keyword* engine instead — so a RAG fixture would compare the
- * pipeline's semantic arm against legacy's keyword arm and report a divergence
+ * pipeline's semantic mechanism against legacy's keyword mechanism and report a divergence
  * that is really a misconfiguration. See §18.
  */
 vi.mock("$lib/server/db", async () => {
@@ -90,7 +123,12 @@ let poolRows: any[] = []
 
 vi.mock("$lib/server/embedding/ragContext", () => ({
 	getSessionRagContext: async () => ({ lorebookId: 1, allLorebookIds: [1] }),
-	fetchScopedCandidates: async () => poolRows,
+	// The real one returns the pool alongside a per-source truncation
+	// report; the pool here is never capped, so nothing is truncated.
+	fetchScopedCandidates: async () => ({
+		candidates: poolRows,
+		truncated: []
+	}),
 	rankScopedCandidates: (
 		candidates: any[],
 		query: number[],
@@ -180,7 +218,7 @@ beforeAll(async () => {
  * Rows for one semantic fixture.
  *
  * Keys are deliberately unmatchable across every fixture: a result can only have
- * come from the semantic arm, so a fixture that quietly started matching keys
+ * come from the semantic mechanism, so a fixture that quietly started matching keys
  * would be a keyword test wearing a RAG name.
  */
 async function seedRag(
@@ -214,19 +252,30 @@ async function seedRag(
 		.values({ name: "RAG Lore", userId: user.id })
 		.returning()
 
-	await db.insert(schema.worldLoreEntries).values(
-		lore.map((l) => ({
-			lorebookId: lorebook.id,
-			retrievalStrategy: "rag",
-			keys: "zzz-no-match",
-			...l
-		}))
+	await db.insert(schema.lorebookEntries).values(
+		lore.map((l, i) =>
+			entryInsert({
+				typeId: WORLD_LORE_TYPE_ID,
+				lorebookId: lorebook.id,
+				// ⚠ No `retrievalStrategy`. It said `rag` — "findable by
+				// meaning" — until migration 0204 dropped the column, and the
+				// answer it gave is what every entry gets now. `zzz-no-match`
+				// is what actually keeps the keyword mechanism out of this corpus.
+				keys: "zzz-no-match",
+				// `position` is unique per (lorebook, type) and has no column
+				// default on the one table, so a fixture states it.
+				position: i + 1,
+				...l
+			})
+		)
 	)
-	const rows = await db
-		.select()
-		.from(schema.worldLoreEntries)
-		.where(eq(schema.worldLoreEntries.lorebookId, lorebook.id))
-	poolRows = rows.map((r: any) => ({
+	const rows = (
+		await db
+			.select()
+			.from(schema.lorebookEntries)
+			.where(inBookOfType(lorebook.id, WORLD_LORE_TYPE_ID))
+	).map((r: SelectLorebookEntry) => toEntryRow(r))
+	poolRows = rows.map((r: LorebookEntry<typeof WORLD_LORE_TYPE_ID>) => ({
 		source: "worldLore",
 		id: r.id,
 		name: r.name,
@@ -349,8 +398,12 @@ describe("the semantic parity corpus", () => {
 	it("retrieves by meaning, with keys that cannot match", async () => {
 		// The fixture's own precondition. If a key ever started matching, this
 		// would quietly become a keyword test wearing a RAG name.
-		const rows = await db.select().from(schema.worldLoreEntries)
-		for (const r of rows) expect(r.keys?.includes("ashguard")).toBeFalsy()
+		const rows = await db
+			.select()
+			.from(schema.lorebookEntries)
+			.where(ofType(WORLD_LORE_TYPE_ID))
+		for (const r of rows)
+			expect(r.keys.join(", ").includes("ashguard")).toBeFalsy()
 	})
 
 	it("reports where the paths diverge", async () => {
@@ -405,6 +458,27 @@ describe("the semantic parity corpus", () => {
 				value: CORE_TEMPLATE_ENGINE,
 				scopeKind: "defaults"
 			} as any)
+			// ⚠ The semantic mechanism's own switch, turned on for the corpus that
+			// exists to measure it. `core:query/vector-search@1` ships with
+			// `maxEntries: 0` — off, the `admitThreshold` convention — because
+			// the reply pipeline must not start embedding on upgrade. This
+			// corpus is the mechanism, so it says so out loud rather than relying on
+			// a default that is deliberately the other way.
+			//
+			// 500 rather than a small number, so the cap cannot bite. It bounds
+			// `main`/`hits` — the direct-to-ranker path this corpus does not
+			// use, since it reads `lists` and `similarity` into
+			// `core:task/rank-semantic@1` instead — and a corpus measuring the
+			// nine stages should not be measuring a ceiling on a port it never
+			// reads.
+			for (const chain of ["current", "recent"])
+				world.overrides.push({
+					nodeKey: `gather.${chain}.search`,
+					slot: "params",
+					path: "maxEntries",
+					value: 500,
+					scopeKind: "defaults"
+				} as any)
 			const preview: any = await run(ragParityPipeline(), {
 				world,
 				input: {

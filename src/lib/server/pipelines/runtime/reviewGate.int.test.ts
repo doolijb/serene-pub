@@ -15,6 +15,7 @@ import { describe, it, expect, beforeAll, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
+import { WORLD_LORE_TYPE_ID, ofType } from "$lib/server/utils/lorebookEntries"
 import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 import type { CompiledPrompt } from "$lib/server/connectionAdapters/types"
 
@@ -194,7 +195,12 @@ describe("a run parks at the gate, and a person decides", () => {
 
 		// The run is parked — the write has not happened.
 		const review = await awaitReview()
-		expect(await db.select().from(schema.worldLoreEntries)).toHaveLength(0)
+		expect(
+			await db
+				.select()
+				.from(schema.lorebookEntries)
+				.where(ofType(WORLD_LORE_TYPE_ID))
+		).toHaveLength(0)
 
 		// The form is defined by the data the node received — name and
 		// content, inferred, no bespoke screen.
@@ -211,7 +217,10 @@ describe("a run parks at the gate, and a person decides", () => {
 		const receipt = await running
 		expect(receipt.outcome).toBe("ok")
 
-		const entries = await db.select().from(schema.worldLoreEntries)
+		const entries = await db
+			.select()
+			.from(schema.lorebookEntries)
+			.where(ofType(WORLD_LORE_TYPE_ID))
 		expect(entries).toHaveLength(1)
 		expect(entries[0]!.content).toContain("under it")
 	})
@@ -232,8 +241,11 @@ describe("a run parks at the gate, and a person decides", () => {
 		const receipt = await running
 		expect(receipt.outcome).toBe("ok")
 
-		const entries = await db.select().from(schema.worldLoreEntries)
-		const edited = entries.find((e: any) => e.name === "The Gate Below")
+		const entries = await db
+			.select()
+			.from(schema.lorebookEntries)
+			.where(ofType(WORLD_LORE_TYPE_ID))
+		const edited = entries.find((e: any) => e.title === "The Gate Below")
 		expect(edited?.content).toBe("REVIEWED AND REWRITTEN.")
 	})
 
@@ -243,7 +255,12 @@ describe("a run parks at the gate, and a person decides", () => {
 		const { resolveReview } = await import(
 			"$lib/server/pipelines/runtime/reviewGate"
 		)
-		const before = (await db.select().from(schema.worldLoreEntries)).length
+		const before = (
+			await db
+				.select()
+				.from(schema.lorebookEntries)
+				.where(ofType(WORLD_LORE_TYPE_ID))
+		).length
 
 		const running = runGated()
 		const review = await awaitReview()
@@ -252,7 +269,12 @@ describe("a run parks at the gate, and a person decides", () => {
 		expect(receipt.outcome).toBe("halt")
 		expect(receipt.haltReason).toMatch(/rejected at review/)
 
-		const after = (await db.select().from(schema.worldLoreEntries)).length
+		const after = (
+			await db
+				.select()
+				.from(schema.lorebookEntries)
+				.where(ofType(WORLD_LORE_TYPE_ID))
+		).length
 		expect(after).toBe(before)
 	})
 

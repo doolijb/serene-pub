@@ -2,11 +2,11 @@
  * Admin socket API for the plugin subsystem — the "exposed now" surface.
  *
  * Every handler is admin-only. Management (list/install/enable/dial/sequential/
- * uninstall/logs) always works so an admin can prepare plugins; the *runtime*
- * sync (registering with the live manager, the monitor, the kill) is guarded by
- * `pluginsEnabled()`, so with the flag off the DB changes persist but nothing
- * runs — the whole surface stays inert until the gate is set, then boot loads
- * what's enabled.
+ * uninstall/logs) always works so an admin can prepare plugins; the *sandbox*
+ * sync (registering with the live manager, the monitor, the abort, the kill) is
+ * guarded by `pluginsEnabled()`, so with the flag off the DB changes persist
+ * but nothing runs — the whole surface stays inert until the gate is set, then
+ * boot loads what's enabled.
  *
  * These are linked from the pipeline management page for now (interim home;
  * re-homed under a dedicated admin route later — build self-contained).
@@ -18,8 +18,8 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import type { Handler } from "$lib/shared/events"
 import { getManager, pluginsEnabled } from "$lib/server/plugins"
-import type { PluginDescriptor } from "$lib/server/plugins/RuntimeManager"
-import type { RuntimeKind } from "$lib/server/plugins/types"
+import type { PluginDescriptor } from "$lib/server/plugins/SandboxManager"
+import type { SandboxKind } from "$lib/server/plugins/types"
 import { checkConformance } from "$lib/server/plugins/conformance"
 import {
 	upsertPlugin,
@@ -34,6 +34,10 @@ import {
 	permissionStates,
 	declaredPermissions,
 	effectivePermissions,
+	isReviewMark,
+	needsReview,
+	reviewMark,
+	reviewMarks,
 	storageGrant,
 	networkGrant,
 	normalizeAdminStorageQuota,
@@ -76,9 +80,9 @@ interface Row {
 }
 
 function toPluginRow(r: Row): Sockets.Plugins.PluginRow {
-	const backends = (Array.isArray(r.backends) ? r.backends : ["quickjs"]).filter(
-		(b): b is RuntimeKind => b === "quickjs" || b === "ses"
-	)
+	const backends = (
+		Array.isArray(r.backends) ? r.backends : ["quickjs"]
+	).filter((b): b is SandboxKind => b === "quickjs" || b === "ses")
 	return {
 		pluginId: r.pluginId,
 		name: r.name,
@@ -88,13 +92,20 @@ function toPluginRow(r: Row): Sockets.Plugins.PluginRow {
 		backend: r.backend === "ses" ? "ses" : "quickjs",
 		sequential: r.sequential,
 		enabled: r.enabled,
-		hasSettings: Object.keys(settingsSchemaOf(r.manifest)).length > 0
+		hasSettings: Object.keys(settingsSchemaOf(r.manifest)).length > 0,
+		// How an admin is told a plugin is waiting: a declared permission no one
+		// has decided about yet. Until they do it is refused, so this badge is
+		// also the explanation for a plugin that runs but reaches nothing.
+		needsReview: needsReview(r.manifest, r.adminDenied)
 	}
 }
 
 function toDescriptor(r: Row): PluginDescriptor {
 	const p = toPluginRow(r)
-	const eff = effectivePermissions(declaredPermissions(r.manifest), r.adminDenied)
+	const eff = effectivePermissions(
+		declaredPermissions(r.manifest),
+		r.adminDenied
+	)
 	const settings = hookSettingsFor(r.manifest, r.settings)
 	return {
 		id: r.pluginId,
@@ -116,21 +127,23 @@ async function allRows(): Promise<Row[]> {
 
 async function listPayload(): Promise<Sockets.Plugins.List.Response> {
 	const rows = await allRows()
-	const runtimeEnabled = pluginsEnabled()
-	// Warm/cold is runtime truth, so it is annotated from the live manager
+	const sandboxEnabled = pluginsEnabled()
+	// Warm/cold is live truth, so it is annotated from the live manager
 	// rather than stored: with the gate off nothing is ever loaded.
-	const mgr = runtimeEnabled ? getManager() : null
+	const mgr = sandboxEnabled ? getManager() : null
 	return {
 		plugins: rows.map((r) => ({
 			...toPluginRow(r),
 			warm: mgr ? mgr.isWarm(r.pluginId) : false
 		})),
-		runtimeEnabled
+		sandboxEnabled
 	}
 }
 
 /** After any mutation: refresh the canonical list to the client. */
-async function emitList(emitToUser: Emit): Promise<Sockets.Plugins.PluginRow[]> {
+async function emitList(
+	emitToUser: Emit
+): Promise<Sockets.Plugins.PluginRow[]> {
 	const payload = await listPayload()
 	emitToUser("plugins:list", payload)
 	return payload.plugins
@@ -146,7 +159,7 @@ async function syncManager(pluginId: string): Promise<void> {
 	const mgr = getManager()
 	if (!row || !row.enabled) {
 		mgr.unregister(pluginId)
-		await syncEngines()
+		await syncDeclarations()
 		return
 	}
 	try {
@@ -154,11 +167,20 @@ async function syncManager(pluginId: string): Promise<void> {
 	} catch (e) {
 		console.warn(`[plugins] manager register '${pluginId}' failed:`, e)
 	}
-	await syncEngines()
+	await syncDeclarations()
 }
 
-/** Reconcile manifest-declared template engines with the enabled set. */
-async function syncEngines(): Promise<void> {
+/**
+ * Reconcile the manifest-declared registries with the enabled set: template
+ * engines, and event subscriptions.
+ *
+ * Both are projections of the `plugins` table, so both are stale the moment a
+ * plugin is enabled, disabled, uninstalled or has a permission denied — and the
+ * event half is the one where staleness has teeth, because an admin denying an
+ * `event:` permission has to actually stop the subscription rather than only
+ * change what the audit screen says.
+ */
+async function syncDeclarations(): Promise<void> {
 	try {
 		const { syncPluginEngines } = await import(
 			"$lib/server/plugins/engineHost"
@@ -166,6 +188,14 @@ async function syncEngines(): Promise<void> {
 		await syncPluginEngines(db, getManager())
 	} catch (e) {
 		console.warn("[plugins] template-engine sync failed:", e)
+	}
+	try {
+		const { syncPluginEventHooks } = await import(
+			"$lib/server/plugins/eventHost"
+		)
+		await syncPluginEventHooks(db)
+	} catch (e) {
+		console.warn("[plugins] event-subscription sync failed:", e)
 	}
 }
 
@@ -180,7 +210,7 @@ function storageFacts(r: Row): Sockets.Plugins.StorageQuota | undefined {
 		granted,
 		// The manifest-declared (author-band-clamped) quota, shown even when denied.
 		declaredBytes: (storagePerm.config?.quotaBytes as number) ?? null,
-		// What the runtime will actually enforce right now (override wins) — only
+		// What the sandbox will actually enforce right now (override wins) — only
 		// meaningful while storage is granted.
 		effectiveBytes: granted
 			? (storageGrant(eff, r.storageQuotaOverride) ?? null)
@@ -338,7 +368,7 @@ export const pluginsUninstall: Handler<
 		await db
 			.delete(schema.pluginFiles)
 			.where(eq(schema.pluginFiles.pluginId, params.pluginId))
-		if (pluginsEnabled()) await syncEngines()
+		if (pluginsEnabled()) await syncDeclarations()
 		return { plugins: await emitList(emitToUser) }
 	}
 }
@@ -375,6 +405,31 @@ export const pluginsActive: Handler<
 	}
 }
 
+/**
+ * Ask one in-flight hook to stop itself — the cooperative half of the kill
+ * below, and admin-only for the same reason: stopping somebody else's
+ * extension mid-call is a sandbox intervention whichever way it is done.
+ *
+ * Deliberately the bare ask, with no kill behind it. The escalation from ask to
+ * force is `hookGrace.ts`'s job when *core* stops something automatically (a
+ * cancelled run); here a person is watching the monitor and decides for
+ * themselves whether the call is winding down or stuck.
+ */
+export const pluginsAbort: Handler<
+	Sockets.Plugins.Abort.Params,
+	Sockets.Plugins.Abort.Response
+> = {
+	event: "plugins:abort",
+	handler: async (socket, params, emitToUser) => {
+		requireAdmin(socket, emitToUser)
+		const mgr = pluginsEnabled() ? getManager() : null
+		const aborted = mgr ? await mgr.abortCall(params.callId) : false
+		const res = { aborted, active: mgr ? mgr.activeInvocations() : [] }
+		emitToUser("plugins:active", { active: res.active })
+		return res
+	}
+}
+
 export const pluginsKill: Handler<
 	Sockets.Plugins.Kill.Params,
 	Sockets.Plugins.Kill.Response
@@ -407,7 +462,12 @@ export const pluginsLogs: Handler<
 			? await db
 					.select()
 					.from(schema.pluginHookInvocations)
-					.where(eq(schema.pluginHookInvocations.pluginId, params.pluginId))
+					.where(
+						eq(
+							schema.pluginHookInvocations.pluginId,
+							params.pluginId
+						)
+					)
 					.orderBy(desc(schema.pluginHookInvocations.finishedAt))
 					.limit(limit)
 			: await base
@@ -453,6 +513,18 @@ export const pluginsPermissions: Handler<
 	}
 }
 
+/**
+ * Grant or deny one declared permission.
+ *
+ * Acting on a key is also *reviewing* it: the decision is recorded alongside the
+ * denial, so ticking a box that was waiting on review puts the permission in
+ * force immediately rather than leaving it inert until some later approval.
+ *
+ * Two guards on what may be written. The key must be one the manifest actually
+ * declares — the list is not a scratchpad — and it may never be a reserved
+ * review marker, or an admin denying a plugin's oddly-named "permission" would
+ * be spending that denial forging a review of the real permission behind it.
+ */
 export const pluginsSetPermission: Handler<
 	Sockets.Plugins.SetPermission.Params,
 	Sockets.Plugins.SetPermission.Response
@@ -465,22 +537,77 @@ export const pluginsSetPermission: Handler<
 			.from(schema.plugins)
 			.where(eq(schema.plugins.pluginId, params.pluginId))
 		if (!row) return { pluginId: params.pluginId, permissions: [] }
-		const denied = new Set<string>(row.adminDenied ?? [])
-		if (params.granted) denied.delete(params.key)
-		else denied.add(params.key)
-		await setAdminDenied(db, params.pluginId, [...denied])
-		// Re-derive the live grant (a denied 'storage' drops the plugin's quota).
+		const declared = declaredPermissions(row.manifest as PluginManifest)
+		const known = declared.find((p) => p.key === params.key)
+		if (known && !isReviewMark(params.key)) {
+			const entries = new Set<string>(row.adminDenied ?? [])
+			if (params.granted) entries.delete(params.key)
+			else entries.add(params.key)
+			entries.add(reviewMark(known))
+			await setAdminDenied(db, params.pluginId, [...entries])
+			// Re-derive the live grant (a denied 'storage' drops the plugin's quota).
+			await syncManager(params.pluginId)
+		}
+		const [updated] = await db
+			.select()
+			.from(schema.plugins)
+			.where(eq(schema.plugins.pluginId, params.pluginId))
+		const permissions = updated
+			? permissionStates(
+					updated.manifest as PluginManifest,
+					updated.adminDenied
+				)
+			: []
+		const storage = updated ? storageFacts(updated as Row) : undefined
+		const res = { pluginId: params.pluginId, permissions, storage }
+		emitToUser("plugins:permissions", res)
+		return res
+	}
+}
+
+/**
+ * The consent act: record that an admin has reviewed this plugin's requested
+ * permissions, and put in force everything they left ticked.
+ *
+ * It writes markers only — never a denial and never a removal — so an admin who
+ * unticked a host first keeps that decision, and a key the plugin no longer
+ * declares keeps whatever was decided about it (if it ever comes back, the
+ * marker is still there and nothing re-prompts, which is the same rule as an
+ * update that asks for nothing new).
+ */
+export const pluginsReviewPermissions: Handler<
+	Sockets.Plugins.ReviewPermissions.Params,
+	Sockets.Plugins.ReviewPermissions.Response
+> = {
+	event: "plugins:reviewPermissions",
+	handler: async (socket, params, emitToUser) => {
+		requireAdmin(socket, emitToUser)
+		const [row] = await db
+			.select()
+			.from(schema.plugins)
+			.where(eq(schema.plugins.pluginId, params.pluginId))
+		if (!row) return { pluginId: params.pluginId, permissions: [] }
+		const declared = declaredPermissions(row.manifest as PluginManifest)
+		const entries = new Set<string>(row.adminDenied ?? [])
+		for (const mark of reviewMarks(declared)) entries.add(mark)
+		await setAdminDenied(db, params.pluginId, [...entries])
+		// The grants only exist from here on: re-derive them for the live manager.
 		await syncManager(params.pluginId)
 		const [updated] = await db
 			.select()
 			.from(schema.plugins)
 			.where(eq(schema.plugins.pluginId, params.pluginId))
 		const permissions = updated
-			? permissionStates(updated.manifest as PluginManifest, updated.adminDenied)
+			? permissionStates(
+					updated.manifest as PluginManifest,
+					updated.adminDenied
+				)
 			: []
 		const storage = updated ? storageFacts(updated as Row) : undefined
 		const res = { pluginId: params.pluginId, permissions, storage }
 		emitToUser("plugins:permissions", res)
+		// The waiting badge lives on the list row, so that has to refresh too.
+		await emitList(emitToUser)
 		return res
 	}
 }
@@ -509,7 +636,10 @@ export const pluginsSetStorageQuota: Handler<
 			.from(schema.plugins)
 			.where(eq(schema.plugins.pluginId, params.pluginId))
 		const permissions = updated
-			? permissionStates(updated.manifest as PluginManifest, updated.adminDenied)
+			? permissionStates(
+					updated.manifest as PluginManifest,
+					updated.adminDenied
+				)
 			: []
 		const storage = updated ? storageFacts(updated as Row) : undefined
 		const res = { pluginId: params.pluginId, permissions, storage }
@@ -611,11 +741,16 @@ export const pluginsSetSettings: Handler<
 export function registerPluginHandlers(
 	socket: any,
 	emitToUser: Emit,
-	register: (socket: any, handler: Handler<any, any>, emitToUser: Emit) => void
+	register: (
+		socket: any,
+		handler: Handler<any, any>,
+		emitToUser: Emit
+	) => void
 ) {
 	register(socket, pluginsList, emitToUser)
 	register(socket, pluginsPermissions, emitToUser)
 	register(socket, pluginsSetPermission, emitToUser)
+	register(socket, pluginsReviewPermissions, emitToUser)
 	register(socket, pluginsSetStorageQuota, emitToUser)
 	register(socket, pluginsInstall, emitToUser)
 	register(socket, pluginsSetEnabled, emitToUser)
@@ -624,6 +759,7 @@ export function registerPluginHandlers(
 	register(socket, pluginsUninstall, emitToUser)
 	register(socket, pluginsUnload, emitToUser)
 	register(socket, pluginsActive, emitToUser)
+	register(socket, pluginsAbort, emitToUser)
 	register(socket, pluginsKill, emitToUser)
 	register(socket, pluginsLogs, emitToUser)
 	register(socket, pluginsGetSettings, emitToUser)
