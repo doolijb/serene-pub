@@ -10,6 +10,11 @@
  *   active      — instance.active (seeded from decl + layout row + intents)
  *   placed      — pack(tier, active) — derived, never stored
  */
+import { formatChannel, parseChannel } from "@serene-pub/sdk"
+import type {
+	WidgetEvent,
+	WidgetEventSource
+} from "$lib/shared/widgets/context"
 import { pack } from "./pack"
 import {
 	normalizeLayout,
@@ -60,7 +65,7 @@ function toInstance(p: ModePanel, layout?: LayoutBlob): PanelInstance {
 	}
 }
 
-export class SurfaceManager {
+export class SurfaceManager implements WidgetEventSource {
 	instances = $state<PanelInstance[]>([])
 	tier = $state<Tier>("roomy")
 	/** Which drawered panel is currently slid open (null = rail closed). */
@@ -105,7 +110,8 @@ export class SurfaceManager {
 		sessionId: number | null,
 		modePanels: ModePanel[],
 		layout: LayoutBlob | undefined,
-		save: (blob: LayoutBlob) => void
+		save: (blob: LayoutBlob) => void,
+		baseLayout?: Record<string, unknown>
 	) {
 		this.sessionId = sessionId
 		this.#save = save
@@ -121,6 +127,7 @@ export class SurfaceManager {
 		this.zoneLayout = layout?.zoneLayout
 		this.widgetGrid = layout?.widgetGrid
 		this.arrangedGrid = layout?.arrangedGrid
+		this.baseLayout = baseLayout
 	}
 
 	/** Restore the mode's default layout — activation, order, sizes, all of it. */
@@ -255,10 +262,68 @@ export class SurfaceManager {
 	 * node already makes is the intent. Idempotent; primary is never touched.
 	 */
 	activateForChannel(channel: string | null | undefined) {
-		if (!channel || channel === "main") return
+		if (!channel) return
+		// On the **slug** (ruling 2026-09-09): a panel is a view onto a
+		// channel, and the lanes under it are opened at runtime, so the second
+		// conversation arriving in the cell-phone channel is the same panel
+		// flowing in — matching the whole string would leave it closed while
+		// its own channel filled up. `main` is the anchored log and never
+		// autopopulates, whichever of its lanes the message landed on.
+		const ref = parseChannel(channel)
+		if (ref.slug === "main") return
+		let surfaced = false
 		for (const p of this.instances)
-			if (!p.active && p.role !== "primary" && p.channels.includes(channel))
+			if (
+				!p.active &&
+				p.role !== "primary" &&
+				p.channels.some((c) => parseChannel(c).slug === ref.slug)
+			) {
 				this.activate(p.id)
+				surfaced = true
+			}
+		// `channel:activated` is exactly this transition and nothing looser: a
+		// channel that was not on screen now is. The page calls this method for
+		// EVERY message that lands, so announcing every call would make the
+		// event "a channel had traffic" — which is `message:created`'s job, by a
+		// name that promises something else.
+		if (surfaced)
+			this.#emit({
+				kind: "channel:activated",
+				channel: formatChannel(ref),
+				slug: ref.slug,
+				lane: ref.lane
+			})
+	}
+
+	/* ── the session-level widget event source (PLAN 25) ──────────────────
+	 * Every widget's own bus (`WidgetHost` for a native one, `PluginFrame` for
+	 * a frame) fans out from here and filters to its declared channels. The
+	 * manager is where these are born because it is already the one thing that
+	 * sees session-wide activity — the page hands it every arriving channel —
+	 * so nothing has to open a second subscription to the same facts.
+	 *
+	 * Deliberately a plain Set rather than `$state`: this is a notification
+	 * seam, not derived data. Subscribing must not make a component that
+	 * subscribes a dependency of the manager, or every widget on screen would
+	 * re-run on every other widget's mount. */
+	#subscribers = new Set<(e: WidgetEvent) => void>()
+
+	subscribe(cb: (e: WidgetEvent) => void): () => void {
+		this.#subscribers.add(cb)
+		return () => this.#subscribers.delete(cb)
+	}
+
+	#emit(e: WidgetEvent) {
+		// Copied before iterating, and each call guarded: a widget that
+		// unsubscribes (or throws) inside its own listener must not perturb the
+		// delivery its neighbours are in the middle of.
+		for (const cb of [...this.#subscribers]) {
+			try {
+				cb(e)
+			} catch (err) {
+				console.error("widget event subscriber threw", e.kind, err)
+			}
+		}
 	}
 
 	/**
@@ -296,6 +361,56 @@ export class SurfaceManager {
 		this.#schedulePersist()
 	}
 
+	/**
+	 * The layout preset this session is on, already composed with the user's
+	 * own `layoutSettings` (PLAN 25 redesign). A READ-ONLY floor the three
+	 * courier slots above fall through to when the user has set none.
+	 *
+	 * It is deliberately NOT one of them, and `toBlob` deliberately cannot see
+	 * it. Were the preset merged into the slots, the very next persist would
+	 * copy its content into this user's own `layout` column — turning a
+	 * reference into a snapshot, so later edits to the preset would stop
+	 * reaching them and `toBlob`'s omit-unset-slots property (the thing that
+	 * keeps a never-customised session from writing a row at all) would break.
+	 *
+	 * The same one-way reading is what makes this whole feature compatible: a
+	 * session that already has an arrangement has its own slots set, `??`
+	 * short-circuits, and the preset is never consulted.
+	 */
+	baseLayout = $state<Record<string, unknown> | undefined>(undefined)
+
+	setBaseLayout(base: Record<string, unknown> | undefined) {
+		this.baseLayout = base
+	}
+
+	/** The zone template in force: this user's, else the preset's. */
+	get effectiveZoneLayout(): unknown {
+		return this.zoneLayout ?? this.baseLayout?.zoneLayout
+	}
+
+	/** The chat widget grid in force: this user's, else the preset's. */
+	get effectiveWidgetGrid(): unknown {
+		return this.widgetGrid ?? this.baseLayout?.widgetGrid
+	}
+
+	/** The captured per-zone geometry in force: this user's, else the preset's. */
+	get effectiveArrangedGrid(): unknown {
+		return this.arrangedGrid ?? this.baseLayout?.arrangedGrid
+	}
+
+	/**
+	 * Drop this user's own arrangement so the active preset shows through —
+	 * what "reset to default" and "apply a preset" both mean. The slots go back
+	 * to `undefined`, which `toBlob` omits, so the row stops asserting an
+	 * arrangement rather than storing a copy of the preset's.
+	 */
+	clearArrangement() {
+		this.zoneLayout = undefined
+		this.widgetGrid = undefined
+		this.arrangedGrid = undefined
+		this.#schedulePersist()
+	}
+
 	/** Serialize just the sticky per-panel state (21 §10). */
 	toBlob(): LayoutBlob {
 		return {
@@ -330,6 +445,10 @@ export class SurfaceManager {
 	}
 
 	destroy() {
+		// Subscribers hold a reference to whatever closed over them (a widget
+		// host, a frame); a manager that outlived a session with its listener
+		// list intact would keep those alive and go on calling them.
+		this.#subscribers.clear()
 		if (this.#saveTimer) {
 			clearTimeout(this.#saveTimer)
 			// Flush pending layout on teardown so a quick edit isn't lost.

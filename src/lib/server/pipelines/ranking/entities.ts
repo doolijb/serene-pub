@@ -74,8 +74,37 @@ import { tokenize } from "$lib/server/pipelines/ranking/signals"
  * applies for the same reason: a stored result whose producer moved underneath
  * it is worse than no stored result, because nothing about it looks wrong.
  * Cheap now, expensive to retrofit.
+ *
+ * ## `@2`
+ *
+ * Two defects in tier two, both of which put keys in the store that the
+ * extractor can no longer produce: contractions became entities (`open:i'm`,
+ * because `WORD` keeps the apostrophe and `SENTENCE_OPENERS` holds the stem —
+ * see `stopwordForm`), and a run joined across punctuation, so a dialogue tag
+ * merged the quote with the speaker (`open:lowmarket," cade` — see `JOIN_GAP`).
+ * The third change is the speech-tag exception in `extractEntities`, which
+ * *admits* names the two rules were silent on.
+ *
+ * ⚠ **The bump, not a migration, is the invalidation**, and it is the *only*
+ * thing that invalidates these rows: `gazetteerHash` moves per lorebook when
+ * the world's vocabulary changes and `sourceHash` moves when the text is
+ * edited, so a message annotated once and never touched again would carry
+ * `open:i'm` for the life of the install. `annotations/queue.ts` selects on
+ * `extractorVersion = EXTRACTOR_VERSION`, so every row becomes eligible again;
+ * `writeAnnotations` upserts on `(parent, entityKey)` and then deletes every
+ * key not in the new set, so the junk is removed rather than accumulating
+ * beside its replacement. Re-extraction is the cost, and it is bounded — these
+ * tables arrived in `0094_baseline_0_6`, so no shipped install has rows in them.
+ *
+ * ⚠ `ALIAS_EXTRACTOR_VERSION` and `MENTION_EXTRACTOR_VERSION` are **untouched**
+ * and must stay so. `entityNames.ts` imports nothing at all. `mentions.ts`
+ * imports `SENTENCE_OPENERS` (the set itself, unchanged — `stopwordForm` is
+ * applied at the call site, not to the list) and `gazetteerSpans`, which reads
+ * `buildGazetteer` → `distinctiveTokens` → `compileMatcher`, none of which this
+ * change goes near. Their output is byte-identical, and a bump that re-extracts
+ * work for a producer that did not move is the same lie in the other direction.
  */
-export const EXTRACTOR_VERSION = "core:extract/entities-heuristic@1"
+export const EXTRACTOR_VERSION = "core:extract/entities-heuristic@2"
 
 /** What a gazetteer hit resolved to. Absent on an open-tier entity. */
 export interface EntityRef {
@@ -120,6 +149,52 @@ export interface GazetteerName {
 	ref: EntityRef
 }
 
+/** The columns a `lorebook_bindings` row has to carry to be named from. */
+export interface NameBearingBinding {
+	name?: string | null
+	aliases?: unknown
+	absorbedAliases?: unknown
+}
+
+/**
+ * Every name one binding answers to — `name` ∪ `aliases` ∪ `absorbedAliases`.
+ *
+ * ⚠ **The union is mandatory, and it lives here so there is one of it.**
+ * `lorebook_bindings.absorbedAliases` is where `narrativeGraph:mergeNode` puts
+ * the identity a merge absorbed, and it is deliberately *not* `aliases` —
+ * `aliases` is a one-directional sync target from the bound character, replaced
+ * wholesale on every entity edit, so an absorbed name written there would vanish
+ * the next time that sync ran. The column's own schema note therefore requires
+ * every consumer matching on names to read both. Feeding one half is worse than
+ * feeding neither: the absorbed identity would resolve and the name it was
+ * merged into would not.
+ *
+ * It sits beside `GazetteerName` rather than in either caller because both
+ * callers produce `GazetteerName[]` from it, and because the two that exist
+ * today — `annotations/loadVocabulary` and retrieval's `castEntityRefs` — are
+ * the pair that drifted: annotations read all three columns off every binding
+ * in the book while retrieval read the session cast alone. **Do not spell this
+ * a second time.** Two spellings of *"what names refer to this character"* is
+ * exactly how those two came to disagree about the same lorebook.
+ *
+ * Returns trimmed, non-empty strings; a caller that wants them deduplicated or
+ * length-bounded applies that itself, because those are caller-specific
+ * (`entityNamesFor` caps at eight, `buildGazetteer` has its own minimum) and
+ * folding them in here would make the union answer a question it was not asked.
+ */
+export const bindingNames = (
+	binding: NameBearingBinding | null | undefined
+): string[] =>
+	[
+		binding?.name,
+		...(Array.isArray(binding?.aliases) ? binding.aliases : []),
+		...(Array.isArray(binding?.absorbedAliases)
+			? binding.absorbedAliases
+			: [])
+	].flatMap((name) =>
+		typeof name === "string" && name.trim() ? [name.trim()] : []
+	)
+
 export interface Gazetteer {
 	/** Normalised surface form → what it resolves to. */
 	byName: ReadonlyMap<string, EntityRef>
@@ -149,6 +224,13 @@ export interface Gazetteer {
  * function rather than content"*, which is the same question the
  * sentence-initial rule asks, so the one list serves all three rather than
  * three lists drifting apart. Exported for that reason and no other.
+ *
+ * ⚠ **It is a list of stems, not of words**, and reading it any other way is
+ * how `i'm` became an entity. `don`, `isn`, `haven`, `won`, `couldn`, `didn`,
+ * `wasn` and `aren` are not English words — they are what splitting a
+ * contraction on its apostrophe leaves behind. `WORD` deliberately does not
+ * split there, so every lookup in this file goes through `stopwordForm`, which
+ * puts the token back into the shape the list was written in.
  */
 export const SENTENCE_OPENERS = new Set(
 	`a an the this that these those there here it its
@@ -207,6 +289,56 @@ const NAME_PARTICLES = new Set([
 ])
 
 /**
+ * Verbs that make the capitalised word beside them a speaker.
+ *
+ * The second English-specific list in this file, and unlike `SENTENCE_OPENERS`
+ * it exists to **admit** rather than to suppress.
+ *
+ * Quote-then-tag is the commonest sentence shape in roleplay prose, and it comes
+ * in two halves. In `"Lowmarket," Cade said` the comma keeps `Cade` inside the
+ * sentence, so it needs no corroboration and `JOIN_GAP` is the whole fix. In
+ * `"Run!" Cade shouted` the terminator belongs to the **quoted** sentence while
+ * `Cade` belongs to the outer one — but rule 1 can only see a one-word capital
+ * in sentence-initial position, so it dropped it. The extractor was therefore
+ * silent on exactly the names the open tier exists to catch, in the half of the
+ * shape that carries the most feeling and so occurs most.
+ *
+ * ⚠ Read only through the speech-tag test below, which **also** requires a
+ * quotation mark against the name. The verb alone is far too weak: *"Silence
+ * answered."* is an ordinary sentence, and it is the quote that says a speaker
+ * is being named rather than a subject described.
+ *
+ * Present and past forms both, because roleplay is written in both tenses.
+ * Wrongly listing a verb costs one spurious entity in a rare sentence; omitting
+ * one costs a speaker's name in every line that uses it — so the asymmetry runs
+ * the other way from `SENTENCE_OPENERS`, and the list is generous where that one
+ * is conservative.
+ */
+const SPEECH_VERBS = new Set(
+	`said says asked asks replied replies answered answers
+	 added adds continued continues repeated repeats
+	 shouted shouts yelled yells cried cries called calls
+	 whispered whispers murmured murmurs muttered mutters breathed breathes
+	 growled growls hissed hisses snapped snaps barked barks grunted grunts
+	 laughed laughs sighed sighs
+	 offered offers admitted admits agreed agrees insisted insists
+	 demanded demands warned warns explained explains observed observes
+	 remarked remarks retorted retorts drawled drawls mused muses purred purrs`
+		.split(/\s+/)
+		.filter(Boolean)
+)
+
+/**
+ * A quotation mark of any shape prose uses — straight, curly, guillemet, corner.
+ *
+ * Direction is deliberately not distinguished, because a straight `"` carries
+ * none. The question asked is only *"is this word against a quote"*, which is
+ * true of the speaker in both `"Run!" Cade shouted` and `"Cade said nothing,"
+ * Vell noted`, and both of those name a speaker.
+ */
+const QUOTE = /["'’‘“”«»‹›「」『』]/u
+
+/**
  * The most entities one extraction carries.
  *
  * A ceiling rather than a tuning knob: the matcher compiles one alternation
@@ -263,6 +395,63 @@ const normalise = (text: string) =>
 /** `Kaelen's` names Kaelen. Trailing apostrophes and hyphens are punctuation. */
 const stripPossessive = (word: string) =>
 	word.replace(/['’]s$/iu, "").replace(/['’-]+$/u, "")
+
+/**
+ * A trailing English clitic — the half of a contraction that is not a word.
+ *
+ * ⚠ **This is what makes `SENTENCE_OPENERS` mean what it was written to mean.**
+ * That list holds `don`, `isn`, `haven`, `won`, `couldn` and every other bare
+ * auxiliary stem, which are not words — they are what a tokeniser that splits
+ * on the apostrophe produces. `WORD` deliberately keeps the apostrophe instead,
+ * so `I'm` reached the stoplist as `i'm`, missed the `i` sitting right there in
+ * the list, and became an open-tier entity. Every first-person line in the
+ * corpus therefore contributed junk, and `I` is the one word English capitalises
+ * unconditionally, so it fired constantly.
+ *
+ * The class, not the four examples: `don't`, `we're`, `they'll`, `can't`,
+ * `won't`, `that's`, `you're`, `he'd` all resolve to a stem the list already
+ * holds, because the list was written for exactly this lookup.
+ *
+ * ⚠ **Anchored, and every member a real clitic**, which is the whole guard: a
+ * name that merely contains an apostrophe is untouched. `O'Brien` keeps
+ * `'Brien`, `D'Angelo` keeps `'Angelo`, `Ma'am` keeps `'am`. Cutting at the
+ * first apostrophe instead would delete the Irish and Norman half of most
+ * fantasy casts from the open tier — a false negative bought with a false
+ * positive, which is the trade this module refuses.
+ */
+const CONTRACTION = /['’](?:s|m|d|t|ll|re|ve)$/u
+
+/**
+ * The form of a word to ask the stoplist about. `I'm` asks about `i`.
+ *
+ * Used only where *extraction* consults `SENTENCE_OPENERS`. `distinctiveTokens`
+ * is deliberately left on the raw form: it feeds `buildGazetteer`, whose spans
+ * `ranking/mentions.ts` reads through `gazetteerSpans`, so moving it would
+ * change a second extractor's output under an unchanged
+ * `MENTION_EXTRACTOR_VERSION`. Worth doing, separately, with that bump.
+ */
+const stopwordForm = (word: string) =>
+	normalise(stripPossessive(word)).replace(CONTRACTION, "")
+
+/**
+ * What may separate two words of one name: whitespace, and nothing else.
+ *
+ * ⚠ The run builder used to join any two capitals that no *sentence end* came
+ * between, and `SENTENCE_END` does not list the comma — correctly, a comma does
+ * not end a sentence. So `"Lowmarket," Cade said` produced the single entity
+ * `Lowmarket," Cade`: a key with a quote and a comma inside it, which matches
+ * nothing in any entry, costs a slot in `MAX_ENTITIES`, and loses **both** real
+ * names. The same hole made `Kaelen, Vell` one name, `Kaelen (Vell` one name and
+ * `Kaelen - Vell` one name.
+ *
+ * The fix is a rule about separators rather than about dialogue, because the
+ * defect is: `compileMatcher` joins the words of a name with `[\s\-]+`, so a
+ * run held together by anything else is a key the matcher could never find
+ * again. Whitespace is that join minus the hyphen, which `WORD` already keeps
+ * *inside* a token — `Ash-Guard` stays one word, and only a **spaced** dash is
+ * treated as the separator it is.
+ */
+const JOIN_GAP = /^\s*$/u
 
 const escapeRegex = (text: string) =>
 	text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
@@ -377,8 +566,17 @@ export const entityKey = (ref: EntityRef): string => `${ref.kind}:${ref.id}`
  * stoplist: "keeps" in *"Alice Keeps Vigil"* is the verb "keep", which the list
  * already holds. Names are not stemmed — "Riders" stays "riders" — because a
  * stemmed key would stop matching the word the author wrote.
+ *
+ * ⚠ **Exported for a second reader, and the export changes nothing here.**
+ * `ranking/keyProposal.ts` proposes keys for a passage and wants exactly this
+ * finding: the whole title is what an author types and the distinctive word is
+ * what a scene writes, so a key on the phrase alone is a key the conversation
+ * will not produce. Sharing the function is what stops that becoming a second
+ * opinion about which word of a name is worth indexing. No behaviour, output or
+ * extractor version moves — `buildGazetteer` is still its only caller inside
+ * this file.
  */
-function distinctiveTokens(normalisedName: string): string[] {
+export function distinctiveTokens(normalisedName: string): string[] {
 	const parts = normalisedName.split(" ").filter(Boolean)
 	if (parts.length < 2) return []
 	const out: string[] = []
@@ -487,9 +685,18 @@ export function gazetteerSpans(
  *      every "The", "And" and "Well" opening a line is an entity, and a signal
  *      that fires on everything is worse than one that fires on nothing: it
  *      spends its weight flattening the ordering instead of leaving it alone.
+ *      A **speech tag** is the one other thing that corroborates: a quotation
+ *      mark on one side and a verb of speaking on the other say the capital is
+ *      a speaker, not an accident of position, which is why `"Run!" Cade
+ *      shouted` yields `Cade` even though `!` puts it in sentence-initial
+ *      position. See `SPEECH_VERBS`.
  *   2. Leading openers are dropped before that judgement, so "The Ashguard" is
  *      judged on "Ashguard" — which is not sentence-initial and needs no
- *      corroboration.
+ *      corroboration. The judgement is made on `stopwordForm`, so `I'm` is
+ *      dropped here as the `i` it is.
+ *   3. A run joins across whitespace and nothing else (`JOIN_GAP`), so a name
+ *      never absorbs the punctuation beside it — the rule that stopped
+ *      `"Lowmarket," Cade said` producing the single entity `Lowmarket," Cade`.
  *
  * ## The caveat this cannot fix
  *
@@ -542,16 +749,35 @@ export function extractEntities(
 		claimed.some((c) => start < c.end && c.start < end)
 
 	// ── tier two, pass 1: every capitalised word and where it sat ────────
-	type Word = { text: string; start: number; opensSentence: boolean }
+	type Word = {
+		text: string
+		start: number
+		opensSentence: boolean
+		/** Nothing but whitespace since the previous word — see `JOIN_GAP`. */
+		joinsPrevious: boolean
+		/** A quotation mark sits between this word and the previous one. */
+		afterQuote: boolean
+	}
 	const words: Word[] = []
 	let opensSentence = true
 	let cursor = 0
 	for (const m of text.matchAll(WORD)) {
-		// Everything skipped since the last word: a terminator in there means
-		// the next word opens a sentence. Quotes and brackets between the two
-		// change nothing, which is what makes `?" Alice` behave like `? Alice`.
-		if (SENTENCE_END.test(text.slice(cursor, m.index))) opensSentence = true
-		words.push({ text: m[0]!, start: m.index, opensSentence })
+		// Everything skipped since the last word. A terminator in there means
+		// the next word opens a sentence; quotes and brackets change *that*
+		// answer not at all, which is what makes `?" Alice` behave like
+		// `? Alice`. They are not nothing, though — the same gap decides whether
+		// the two words can be one name (`JOIN_GAP`) and whether the second is
+		// standing against a quote (`QUOTE`), and reading it once is what stopped
+		// `Lowmarket," Cade` being an entity.
+		const gap = text.slice(cursor, m.index)
+		if (SENTENCE_END.test(gap)) opensSentence = true
+		words.push({
+			text: m[0]!,
+			start: m.index,
+			opensSentence,
+			joinsPrevious: JOIN_GAP.test(gap),
+			afterQuote: QUOTE.test(gap)
+		})
 		opensSentence = false
 		cursor = m.index + m[0]!.length
 	}
@@ -586,6 +812,11 @@ export function extractEntities(
 			// nothing, cost a slot in the cap, and made the receipt read like
 			// the extractor was broken, because it was.
 			if (next.opensSentence) break
+			// ⚠ And it never crosses punctuation. `SENTENCE_END` has no comma in
+			// it — a comma does not end a sentence — so the check above saw
+			// nothing wrong with `Lowmarket," Cade` and made one entity of a place
+			// and a speaker, losing both. `JOIN_GAP` is the rest of that answer.
+			if (!next.joinsPrevious) break
 			if (CAPITALISED.test(next.text)) {
 				run.push(next)
 				j++
@@ -595,28 +826,37 @@ export function extractEntities(
 			// "Ashguard of" ends at "Ashguard" while "Order of the Ashguard"
 			// does not.
 			if (!NAME_PARTICLES.has(next.text.toLowerCase())) break
+			// The bridge holds to the same rule at every step, or a run crosses
+			// on a particle what it may not cross directly: `Cade, of the Vell`.
 			let k = j
 			while (
 				k < words.length &&
 				!words[k]!.opensSentence &&
+				words[k]!.joinsPrevious &&
 				NAME_PARTICLES.has(words[k]!.text.toLowerCase())
 			)
 				k++
 			if (
 				k >= words.length ||
 				words[k]!.opensSentence ||
+				!words[k]!.joinsPrevious ||
 				!CAPITALISED.test(words[k]!.text)
 			)
 				break
 			for (let p = j; p <= k; p++) run.push(words[p]!)
 			j = k + 1
 		}
+		/** The word the run stopped at. The speech-tag test below reads it. */
+		const follower = words[j]
 		i = j
 
+		// ⚠ `stopwordForm`, not the raw word: `I'm` has to arrive here as `i`,
+		// or the stoplist misses the one word English always capitalises and
+		// every first-person line contributes a junk entity.
 		let from = 0
 		while (
 			from < run.length &&
-			SENTENCE_OPENERS.has(normalise(stripPossessive(run[from]!.text)))
+			SENTENCE_OPENERS.has(stopwordForm(run[from]!.text))
 		)
 			from++
 		const kept = run.slice(from)
@@ -637,7 +877,35 @@ export function extractEntities(
 		if (gazetteer.byName.has(name)) continue
 
 		const head = kept[0]!
-		if (head.opensSentence && kept.length === 1 && !corroborated.has(name))
+		/**
+		 * Rule 1's one exception: a lone capital in a **speech tag**.
+		 *
+		 * `"Run!" Cade shouted` puts the terminator inside the quote, so `Cade`
+		 * reads as sentence-initial to a rule that only looks at punctuation —
+		 * and a one-word sentence-initial capital the passage never repeats is
+		 * dropped. Grammatically `Cade shouted` is the outer sentence and `Cade`
+		 * is its subject, and the shape says so: a quotation mark on one side, a
+		 * verb of speaking on the other. That is corroboration of the same kind
+		 * rule 1 already accepts — evidence the capital is not an accident of
+		 * position — so it is spent the same way rather than by relaxing the rule.
+		 *
+		 * Both guards are load-bearing and each is mutation-tested. Without the
+		 * quote, *"Silence answered."* becomes an entity; without the verb,
+		 * *"Go home." Silence fell.* does. `joinsPrevious` keeps the verb against
+		 * the name, so `Cade, said the other` is not a tag.
+		 */
+		const speechTag =
+			head.afterQuote &&
+			follower !== undefined &&
+			follower.joinsPrevious &&
+			!follower.opensSentence &&
+			SPEECH_VERBS.has(follower.text.toLowerCase())
+		if (
+			head.opensSentence &&
+			kept.length === 1 &&
+			!corroborated.has(name) &&
+			!speechTag
+		)
 			continue
 
 		const key = `open:${name}`

@@ -54,11 +54,11 @@ import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import {
 	WORLD_LORE_TYPE_ID,
+	entriesOfType,
 	entryInsert,
 	inBookOfType,
 	ofType,
 	toEntryRow,
-	type LorebookEntry,
 	type SelectLorebookEntry
 } from "$lib/server/utils/lorebookEntries"
 
@@ -222,7 +222,7 @@ beforeAll(async () => {
  * would be a keyword test wearing a RAG name.
  */
 async function seedRag(
-	db: any,
+	db: Db,
 	lore: Array<{ name: string; content: string; priority?: number }>,
 	text = "Tell me about the ashguard."
 ) {
@@ -269,13 +269,20 @@ async function seedRag(
 			})
 		)
 	)
-	const rows = (
-		await db
-			.select()
-			.from(schema.lorebookEntries)
-			.where(inBookOfType(lorebook.id, WORLD_LORE_TYPE_ID))
-	).map((r: SelectLorebookEntry) => toEntryRow(r))
-	poolRows = rows.map((r: LorebookEntry<typeof WORLD_LORE_TYPE_ID>) => ({
+	// Narrowed through `entriesOfType` rather than asserted on the map
+	// callback: `toEntryRow` returns the unbranded row, and `priority` is a
+	// world-lore field. The query is already scoped to the type, so this
+	// filters nothing out — it is the brand's runtime half, stated once.
+	const rows = entriesOfType(
+		(
+			await db
+				.select()
+				.from(schema.lorebookEntries)
+				.where(inBookOfType(lorebook.id, WORLD_LORE_TYPE_ID))
+		).map((r) => toEntryRow(r)),
+		WORLD_LORE_TYPE_ID
+	)
+	poolRows = rows.map((r) => ({
 		source: "worldLore",
 		id: r.id,
 		name: r.name,
@@ -322,7 +329,7 @@ async function seedRag(
 /** Lore retrieved by meaning rather than by key. */
 const semanticLore: ParityFixture = {
 	name: "rag/world-lore",
-	seed: (db: any) =>
+	seed: (db) =>
 		seedRag(db, [
 			{ name: "The Ashguard", content: "ashguard riders patrol" },
 			{ name: "Silverwood", content: "a forest of pale trees" }
@@ -338,7 +345,7 @@ const semanticLore: ParityFixture = {
  */
 const semanticCrowd: ParityFixture = {
 	name: "rag/crowded",
-	async seed(db: any) {
+	async seed(db) {
 		const scope = await seedRag(db, [
 			{ name: "Ashguard Riders", content: "ashguard riders patrol" },
 			{ name: "Ashguard Oath", content: "ashguard oath of the wastes" },
@@ -359,7 +366,7 @@ const semanticCrowd: ParityFixture = {
  */
 const semanticMiss: ParityFixture = {
 	name: "rag/no-match",
-	async seed(db: any) {
+	async seed(db) {
 		return await seedRag(
 			db,
 			[
@@ -380,7 +387,7 @@ const semanticMiss: ParityFixture = {
  */
 const semanticPriority: ParityFixture = {
 	name: "rag/priority",
-	async seed(db: any) {
+	async seed(db) {
 		return await seedRag(db, [
 			{ name: "Ashguard Riders", content: "ashguard riders patrol" },
 			{
@@ -424,7 +431,7 @@ describe("the semantic parity corpus", () => {
 
 		const results = []
 		for (const fixture of CORPUS) {
-			const scope = await fixture.seed(db as any)
+			const scope = await fixture.seed(db)
 			// The legacy row holds 0.5's template; the pipeline is handed 0.6's.
 			// The deliberate asymmetry `FixtureScope.pipelineTemplate`
 			// documents — two tables, two releases. This corpus builds its own
@@ -434,7 +441,7 @@ describe("the semantic parity corpus", () => {
 			// The builder these came from is deleted; freezing them first is
 			// what lets this corpus outlive it.
 			const legacy = readFileSync(goldenPathFor(fixture.name), "utf8")
-			const world = await buildWorld(db as any, {
+			const world = await buildWorld(db, {
 				sessionId: scope.sessionId
 			})
 			// `source` and `engine` together, never one alone — the rule
@@ -492,7 +499,7 @@ describe("the semantic parity corpus", () => {
 				triggerSource: "ui",
 				preview: true,
 				bindings: coreBindings(),
-				host: createHost(db as any, {
+				host: createHost(db, {
 					sessionId: scope.sessionId,
 					userId: scope.userId
 				})

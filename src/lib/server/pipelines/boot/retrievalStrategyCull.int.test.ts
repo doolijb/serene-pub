@@ -5,6 +5,8 @@ import os from "os"
 import path from "path"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
+import { sql } from "drizzle-orm"
+import { rawRows } from "$lib/server/db/rawRows"
 
 // The db module is mocked so `defaults.sync()` and `bootstrapPipelines` run
 // against a test database, in the order `db/index.ts` guarantees at boot.
@@ -15,12 +17,14 @@ vi.mock("$lib/server/db", async () => {
 })
 
 /** Does this table have this column, according to the database itself? */
-const hasColumn = async (db: any, table: string, column: string) => {
-	const rows: any = await db.execute(
-		`SELECT 1 FROM information_schema.columns
-		 WHERE table_name = '${table}' AND column_name = '${column}'`
+const hasColumn = async (db: Db, table: string, column: string) => {
+	const rows = rawRows(
+		await db.execute(
+			sql.raw(`SELECT 1 FROM information_schema.columns
+		 WHERE table_name = '${table}' AND column_name = '${column}'`)
+		)
 	)
-	return (rows.rows ?? rows).length > 0
+	return rows.length > 0
 }
 
 describe("the boot that follows", () => {
@@ -46,7 +50,7 @@ describe("the boot that follows", () => {
 		// difference between a column change and a contract change, stated as a
 		// result rather than as reasoning: `registryHashes.test.ts` holds the
 		// four pins 0203 moved, and none of them moves again here.
-		const report = await bootstrapPipelines(db as any)
+		const report = await bootstrapPipelines(db)
 		expect(report.conflict, JSON.stringify(report.conflict)).toBeFalsy()
 		expect(report.specs.length).toBeGreaterThan(0)
 		expect(

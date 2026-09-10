@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
+	import { completionTemplateOptions } from "$lib/client/stores/completionTemplateOptions.svelte"
+	import { connectionWireMode } from "$lib/client/stores/connectionWireMode.svelte"
+	import { usesCompletionTemplate } from "$lib/shared/connectionAdapters/wireMode"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
@@ -10,13 +12,11 @@
 	interface ExtraFieldData {
 		stream: boolean
 		apiKey: string
-		prerenderPrompt: boolean
 	}
 
 	interface ExtraJson {
 		stream?: boolean
 		apiKey?: string
-		prerenderPrompt: boolean
 	}
 
 	// Zod validation schema
@@ -37,11 +37,32 @@
 
 	let { connection = $bindable() } = $props()
 
+	/**
+	 * A completion template only means something in COMPLETION wire mode.
+	 *
+	 * In chat mode the roles carry the structure: no delimiter is emitted and no
+	 * stop string from the template is sent, so the picker below would be a
+	 * saved preference that changes no byte of any request. Same "no control
+	 * without an effect" rule the retrieval audit applied.
+	 *
+	 * Read through the store rather than off `connection.capabilities`, so the
+	 * wire-mode switches in the capability panel underneath take effect here at
+	 * once — that panel deliberately never writes into `connection`.
+	 */
+	const wireMode = connectionWireMode()
+	const showFormat = $derived(usesCompletionTemplate(wireMode.of(connection)))
+
 	const socket = useTypedSocket()
+	/**
+	 * The format picker's options, read from `completion_templates` instead of
+	 * the eight-entry constant that used to sit beside the table — so a template
+	 * an admin authored is offered by the one control that selects it. Falls back
+	 * to the built-ins until the reply lands.
+	 */
+	const formatOptions = completionTemplateOptions()
 	const defaultExtraJson = {
 		stream: false,
-		apiKey: "",
-		prerenderPrompt: false
+		apiKey: ""
 	}
 
 	let availableOpenAIModels: any[] = $state([])
@@ -120,16 +141,14 @@
 	function extraJsonToExtraFields(extraJson: ExtraJson): ExtraFieldData {
 		return {
 			stream: extraJson.stream ?? false,
-			apiKey: extraJson.apiKey || "",
-			prerenderPrompt: extraJson.prerenderPrompt ?? false
+			apiKey: extraJson.apiKey || ""
 		}
 	}
 
 	function extraFieldsToExtraJson(fields: ExtraFieldData): ExtraJson {
 		return {
 			stream: fields.stream,
-			apiKey: fields.apiKey,
-			prerenderPrompt: fields.prerenderPrompt
+			apiKey: fields.apiKey
 		}
 	}
 
@@ -232,11 +251,11 @@
 			{/if}
 		</button>
 	</div>
-	{#if openAIFields?.prerenderPrompt}
+	{#if showFormat}
 		<Select
 			class="mt-2"
 			label="Prompt Format"
-			options={PromptFormats.options}
+			options={formatOptions.value}
 			bind:value={connection.promptFormat}
 		/>
 	{/if}
@@ -327,23 +346,12 @@
 					</Switch.Control>
 					<Switch.HiddenInput />
 				</Switch>
-				<Switch
-					name="prerenderPrompt"
-					checked={openAIFields.prerenderPrompt}
-					onCheckedChange={(e) =>
-						(openAIFields!.prerenderPrompt = e.checked)}
-					class="flex items-center justify-between gap-4"
-				>
-					<Switch.Label class="font-semibold">
-						Prerender Prompt
-					</Switch.Label>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
+				<!-- "Prerender Prompt" lived here. It is a CAPABILITY now —
+				     Text completion, in the Capabilities panel below, graded
+				     through the same four layers as everything else. Both modes
+				     still POST /v1/chat/completions; what the capability selects
+				     is what the MODEL receives, one formatted prompt or
+				     role-tagged turns. -->
 			</section>
 		</details>
 	{/if}

@@ -42,14 +42,14 @@ let narratorPool: { nodeTypeId: string; slot: string }
 
 beforeAll(async () => {
 	db = await createTestDb()
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const { declarations } = await import("$lib/server/pipelines/config/panel")
 	const [respond] = await db
 		.select()
 		.from(schema.pipelineSpecs)
 		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
-	const decl = (await declarations(db as any, respond.activeVersionId!)).find(
+	const decl = (await declarations(db, respond.activeVersionId!)).find(
 		(d) => d.control === "prompts-ref"
 	)!
 	pool = { nodeTypeId: decl.nodeTypeId!, slot: decl.slot }
@@ -60,7 +60,7 @@ beforeAll(async () => {
 		.from(schema.pipelineSpecs)
 		.where(eq(schema.pipelineSpecs.slug, NARRATE_SPEC_ID))
 	const nDecl = (
-		await declarations(db as any, narrate.activeVersionId!)
+		await declarations(db, narrate.activeVersionId!)
 	).find((d) => d.control === "prompts-ref")!
 	narratorPool = { nodeTypeId: nDecl.nodeTypeId!, slot: nDecl.slot }
 }, 60_000)
@@ -79,7 +79,7 @@ describe("what the registry declares", () => {
 		// `transport: 'process'` plugin type has no descriptor in this process,
 		// so a map would silently classify all of its fields as undeclared and
 		// archive every one of them.
-		const declared = await declaredFieldsByPool(db as any)
+		const declared = await declaredFieldsByPool(db)
 		const set = declared.get(promptPoolKeyFor(pool.nodeTypeId, pool.slot))
 		expect(set).toBeTruthy()
 		expect([...set!]).toContain("systemPrompt")
@@ -87,7 +87,7 @@ describe("what the registry declares", () => {
 	})
 
 	it("keeps the two pipelines' field sets apart", async () => {
-		const declared = await declaredFieldsByPool(db as any)
+		const declared = await declaredFieldsByPool(db)
 		const reply = declared.get(
 			promptPoolKeyFor(pool.nodeTypeId, pool.slot)
 		)!
@@ -101,7 +101,7 @@ describe("what the registry declares", () => {
 
 describe("archiving", () => {
 	it("moves an undeclared key out of fields and leaves the declared ones", async () => {
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...pool,
 			name: "Carries a dead key",
 			fields: {
@@ -111,7 +111,7 @@ describe("archiving", () => {
 			}
 		})
 
-		const report = await reconcilePromptFields(db as any)
+		const report = await reconcilePromptFields(db)
 		const mine = report.find((r) => r.promptId === p.id)
 		expect(mine?.archived).toEqual(["narratorName"])
 
@@ -132,7 +132,7 @@ describe("archiving", () => {
 		// `narratorName` is dead on the reply node and load-bearing on the
 		// narrator's — it names the seed line the model continues from — so an
 		// unscoped sweep would leave narrations seeded with a blank speaker.
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...narratorPool,
 			name: "Narrator keeps its name",
 			fields: {
@@ -141,7 +141,7 @@ describe("archiving", () => {
 				narratorName: "The GM"
 			}
 		})
-		await reconcilePromptFields(db as any)
+		await reconcilePromptFields(db)
 		const after = await rowOf(p.id)
 		expect(after.fields.narratorName).toBe("The GM")
 		expect(after.archivedFields).toEqual({})
@@ -151,13 +151,13 @@ describe("archiving", () => {
 		// A plugin somebody switched off. Archiving here would blank every
 		// prompt written for it, and switching it back on would restore them —
 		// with the panel having shown nothing at all in between.
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			nodeTypeId: "plugin:task/not-installed",
 			slot: "prompts",
 			name: "From a disabled plugin",
 			fields: { anything: "mine" }
 		})
-		await reconcilePromptFields(db as any)
+		await reconcilePromptFields(db)
 		const after = await rowOf(p.id)
 		expect(after.fields).toEqual({ anything: "mine" })
 		expect(after.archivedFields).toEqual({})
@@ -187,7 +187,7 @@ describe("archiving", () => {
 			slots
 		} as any)
 
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...pool,
 			name: "Written against the older version",
 			fields: {
@@ -195,7 +195,7 @@ describe("archiving", () => {
 				postHistoryInstructions: "still read by @1"
 			}
 		})
-		await reconcilePromptFields(db as any)
+		await reconcilePromptFields(db)
 		const after = await rowOf(p.id)
 		expect(after.fields.postHistoryInstructions).toBe("still read by @1")
 		expect(after.archivedFields).toEqual({})
@@ -251,12 +251,12 @@ describe("archiving", () => {
 			slots: live.slots
 		} as any)
 
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...pool,
 			name: "Written before the field went away",
 			fields: { systemPrompt: "s", postHistoryInstructions: "keep me" }
 		})
-		await reconcilePromptFields(db as any)
+		await reconcilePromptFields(db)
 
 		const after = await rowOf(p.id)
 		expect(after.fields.postHistoryInstructions).toBeUndefined()
@@ -287,7 +287,7 @@ describe("restoring", () => {
 		// The other direction, and the reason nothing is ever deleted: a field
 		// dropped in one release and restored in the next must bring its text
 		// with it, or the archive is just a slower way of losing the work.
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...pool,
 			name: "Archive restored",
 			fields: { systemPrompt: "s" },
@@ -297,7 +297,7 @@ describe("restoring", () => {
 			}
 		})
 
-		const report = await reconcilePromptFields(db as any)
+		const report = await reconcilePromptFields(db)
 		const mine = report.find((r) => r.promptId === p.id)
 		expect(mine?.restored).toEqual(["postHistoryInstructions"])
 
@@ -314,18 +314,18 @@ describe("restoring", () => {
 		// carried an archived copy. The live text is the one the panel has been
 		// showing and editing, so it stays — and the stale copy is dropped
 		// rather than left for the sweep to trip over on every future boot.
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...pool,
 			name: "Collision",
 			fields: { systemPrompt: "the live one" },
 			archivedFields: { systemPrompt: "the stale one" }
 		})
-		await reconcilePromptFields(db as any)
+		await reconcilePromptFields(db)
 		const after = await rowOf(p.id)
 		expect(after.fields.systemPrompt).toBe("the live one")
 		expect(after.archivedFields).toEqual({})
 
-		const again = await reconcilePromptFields(db as any)
+		const again = await reconcilePromptFields(db)
 		expect(again.find((r) => r.promptId === p.id)).toBeUndefined()
 	})
 })
@@ -334,9 +334,9 @@ describe("it is a fixed point", () => {
 	it("writes nothing on the second run", async () => {
 		// The property that lets this run unconditionally at boot rather than
 		// behind a "have we swept yet" flag — a flag that eventually lies.
-		await reconcilePromptFields(db as any)
+		await reconcilePromptFields(db)
 		const before = await db.select().from(schema.pipelinePrompts)
-		const second = await reconcilePromptFields(db as any)
+		const second = await reconcilePromptFields(db)
 		expect(second).toEqual([])
 		const after = await db.select().from(schema.pipelinePrompts)
 		expect(
@@ -348,17 +348,17 @@ describe("it is a fixed point", () => {
 		// A key somebody is actively editing is by definition a declared one,
 		// which is why "never touch a declared key" is the same rule as "never
 		// undo a person's work".
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...pool,
 			name: "Edited between boots",
 			fields: { systemPrompt: "before" }
 		})
-		await reconcilePromptFields(db as any)
+		await reconcilePromptFields(db)
 		await db
 			.update(schema.pipelinePrompts)
 			.set({ fields: { systemPrompt: "after" } })
 			.where(eq(schema.pipelinePrompts.id, p.id))
-		await reconcilePromptFields(db as any)
+		await reconcilePromptFields(db)
 		expect((await rowOf(p.id)).fields).toEqual({ systemPrompt: "after" })
 	})
 })

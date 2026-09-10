@@ -104,6 +104,305 @@ describe("open extraction", () => {
 	})
 })
 
+/**
+ * D1 — a contraction is not a name.
+ *
+ * Found by a prototype run against real prose, not by inspection: `I'm`, `I've`,
+ * `I'll` and `I'd` were open-tier entities, so **every first-person line**
+ * contributed junk — and `I` is the one word English capitalises
+ * unconditionally, so the shape occurs constantly.
+ *
+ * The cause is a mismatch between two halves of one design. `WORD` keeps the
+ * apostrophe inside a token, while `SENTENCE_OPENERS` is a list of *stems* —
+ * `don`, `isn`, `haven`, `won`, `couldn` are not English words, they are what
+ * splitting a contraction leaves behind. So `i'm` was asked about and `i` was
+ * never consulted. `stopwordForm` is the join.
+ */
+describe("a contraction is not a name", () => {
+	it("drops the defect as reported", () => {
+		// `open:i'm` before this fix, with the surface "I'm".
+		expect(names("He said I'm fine.")).toEqual([])
+	})
+
+	it("drops it however many times the passage corroborates it", () => {
+		/**
+		 * ⚠ The reported example — a bare `I'm going to the market.` — already
+		 * extracted nothing, because rule 1 drops an uncorroborated one-word
+		 * sentence opener. That is *not* the stoplist working; it is a
+		 * different rule masking the defect, and the mask comes off the moment
+		 * the same contraction appears mid-sentence anywhere in the passage,
+		 * because that is exactly what `corroborated` is. Two mentions, one
+		 * junk entity, counted twice.
+		 */
+		expect(names("He said I'm fine. I'm leaving.")).toEqual([])
+	})
+
+	it("never lets one glue itself to the name after it", () => {
+		// `open:i'm kaelen` before — a real name, unfindable, inside a key
+		// nothing will ever match.
+		expect(names("I'm Kaelen, and I ride north.")).toEqual(["Kaelen"])
+	})
+
+	it("handles the class, not the four first-person cases", () => {
+		/**
+		 * The stems are all already in `SENTENCE_OPENERS`, which is the whole
+		 * point: the list was written for this lookup and was never given it.
+		 * Each word sits mid-sentence after an opening quote, which is where a
+		 * capitalised contraction actually occurs in prose.
+		 */
+		for (const word of [
+			"I'm",
+			"I've",
+			"I'll",
+			"I'd",
+			"Don't",
+			"We're",
+			"They'll",
+			"Can't",
+			"Won't",
+			"That's",
+			"You're",
+			"He'd",
+			"She'll",
+			"There's",
+			"Isn't",
+			"Wasn't",
+			"Couldn't"
+		])
+			expect(names(`She heard "${word} coming" through the door.`)).toEqual(
+				[]
+			)
+	})
+
+	it("still names somebody whose name contains an apostrophe", () => {
+		/**
+		 * ⚠ The guard on the clitic rule, and the reason it is anchored to the
+		 * end with a closed alternation rather than cutting at the first
+		 * apostrophe. Cut there and `D'Angelo` becomes `d` and `O'Brien`
+		 * becomes `o`, both below `MIN_ALIAS_LENGTH` — which would delete the
+		 * Irish and Norman half of most fantasy casts from the open tier. A
+		 * false negative bought with a false positive is not a fix.
+		 */
+		expect(names("He met D'Angelo at the gate.")).toEqual(["D'Angelo"])
+		expect(names("The letter was for O'Brien. He met O'Brien later.")).toEqual(
+			["O'Brien"]
+		)
+		/**
+		 * ⚠ The cases that actually kill the loose rule, and the reason the two
+		 * above are not enough on their own: over-stripping only costs a name
+		 * when what is left is *in the stoplist*, and `d` and `o` are not. A
+		 * fantasy name apostrophised on a function word is, and that shape is
+		 * everywhere in the genre this extractor reads.
+		 */
+		expect(names("He met Do'Urden at the gate.")).toEqual(["Do'Urden"])
+		expect(names("He met An'she at the gate.")).toEqual(["An'she"])
+		expect(names("He met We'lan at the gate.")).toEqual(["We'lan"])
+		/**
+		 * ⚠ And the `$`, which is what makes the rule *trailing* clitic rather
+		 * than *any* clitic. Constructed, and said plainly: killing this one
+		 * needs a name whose **internal** fragment is itself a function word,
+		 * and no ordinary English name is. It is here because an untested guard
+		 * is one a later reader deletes as redundant — `He'ver` becomes `her`
+		 * without it, and `her` is in the stoplist.
+		 */
+		expect(names("He met He'ver at the gate.")).toEqual(["He'ver"])
+	})
+
+	it("still strips a possessive rather than reading it as a clitic", () => {
+		// `'s` is in both rules; the possessive one runs first and wins, so the
+		// name survives instead of being cut back to a stem.
+		expect(names("I carried Kaelen's sword.")).toEqual(["Kaelen"])
+	})
+})
+
+/**
+ * D2 — a dialogue tag names a speaker, not a place-and-a-speaker.
+ *
+ * `"Lowmarket," Cade said` produced the single entity `Lowmarket," Cade`.
+ * Measured at 3–8% of open-tier extractions, and it matters far more than that
+ * rate suggests: quote-then-tag is the commonest sentence shape in roleplay
+ * prose, and it fires on exactly the **names** the open tier exists to catch. A
+ * key with a quote and a comma inside it matches nothing in any entry, costs a
+ * slot in `MAX_ENTITIES`, and loses *both* real names.
+ *
+ * The cause is not dialogue. `SENTENCE_END` has no comma in it — correctly, a
+ * comma does not end a sentence — so the run builder saw two capitals with
+ * nothing between them. `JOIN_GAP` is the missing half of that answer: a run
+ * joins across whitespace and nothing else.
+ */
+describe("a run never crosses punctuation", () => {
+	it("splits the defect as reported", () => {
+		expect(names('"Lowmarket," Cade said.')).toEqual(["Cade"])
+		expect(keys('"Lowmarket," Cade said.')).not.toContain(
+			'open:lowmarket," cade'
+		)
+	})
+
+	it("keeps the quoted name too when the quote does not open on it", () => {
+		// Both names, from the sentence that used to yield neither. "Now" is a
+		// sentence opener and "Go" is one as well, so what is left is what was
+		// named.
+		expect(names('"Go to Lowmarket," Cade said. "Now."')).toEqual([
+			"Lowmarket",
+			"Cade"
+		])
+	})
+
+	it("handles the whole tag class", () => {
+		for (const line of [
+			'"Lowmarket," Cade said.',
+			'"Lowmarket," said Cade.',
+			'"Run!" Cade shouted.',
+			'"Where?" Cade asked.',
+			'"Go." Cade said.',
+			'"Cade said nothing," Vell noted.'
+		])
+			expect(names(line)).toContain("Cade")
+	})
+
+	it("splits every separator, not only the one in a dialogue tag", () => {
+		/**
+		 * The defect is a rule about separators, so the class is separators.
+		 * Each of these was one entity before — `Kaelen, Vell`, `Kaelen (Vell`,
+		 * `Kaelen - Vell` — and each is two names.
+		 */
+		expect(names("He met Kaelen, Vell and Bram.")).toEqual([
+			"Kaelen",
+			"Vell",
+			"Bram"
+		])
+		expect(names("He met Kaelen (Vell was late).")).toEqual([
+			"Kaelen",
+			"Vell"
+		])
+		expect(names("He met Kaelen - Vell rode on.")).toEqual([
+			"Kaelen",
+			"Vell"
+		])
+	})
+
+	it("still joins the multi-word names that whitespace holds together", () => {
+		/**
+		 * ⚠ The false-negative direction of the same guard, and the reason it
+		 * is whitespace rather than "no punctuation anywhere". A fix that split
+		 * these would trade a junk key that ranks low for a real name that is
+		 * never extracted at all, which is the worse of the two.
+		 */
+		expect(names("The Ashguard Riders passed at dawn.")).toEqual([
+			"Ashguard Riders"
+		])
+		expect(names("He answers to the Order of the Ashguard now.")).toEqual([
+			"Order of the Ashguard"
+		])
+		expect(names('"Run!" Commander Vell shouted.')).toEqual([
+			"Commander Vell"
+		])
+		// `WORD` keeps a hyphen inside a token, so only a *spaced* dash is a
+		// separator. A hyphenated name is one word and never saw this rule.
+		expect(names("He met Ash-Guard at dawn.")).toEqual(["Ash-Guard"])
+	})
+
+	it("does not let a particle bridge a run across punctuation", () => {
+		/**
+		 * The bridge that admits "Order **of the** Ashguard" has to hold to the
+		 * same rule at every step, or a run crosses on a particle what it may
+		 * not cross directly. Both halves are load-bearing: the first line
+		 * mutation-tests the check inside the walk, the second the check after
+		 * it.
+		 */
+		expect(names("He answers to the Order of, the Ashguard now.")).toEqual([
+			"Order",
+			"Ashguard"
+		])
+		expect(names('He answers to the Order of "Ashguard" now.')).toEqual([
+			"Order",
+			"Ashguard"
+		])
+	})
+})
+
+/**
+ * The half of the tag class that failed in the other direction.
+ *
+ * `"Run!" Cade shouted` never merged — `!` is a sentence end, so the run broke
+ * cleanly — and it extracted **nothing at all**, because `Cade` then looked like
+ * a one-word sentence-initial capital that the passage never repeats. The
+ * terminator belongs to the *quoted* sentence; `Cade shouted` is the outer one
+ * and `Cade` is its subject.
+ *
+ * So the same defect class was silent on the speaker in its most-used half. A
+ * fix for the merge alone would leave that silence in place, and a name that is
+ * never extracted is worse than a junk token that ranks low.
+ */
+describe("a speech tag corroborates the name in it", () => {
+	it("recovers the speaker the sentence-start rule was dropping", () => {
+		expect(names('"Run!" Cade shouted.')).toEqual(["Cade"])
+		expect(names('"Where?" Cade asked.')).toEqual(["Cade"])
+		expect(names('"Go." Cade said.')).toEqual(["Cade"])
+	})
+
+	it("reads the quote whatever shape the client typed it in", () => {
+		// Curly quotes are what most editors and phone keyboards produce, and a
+		// straight-only test would pass while the fix reached almost nobody.
+		expect(names("\u201cRun!\u201d Cade shouted.")).toEqual(["Cade"])
+		expect(names("\u00abRun!\u00bb Cade shouted.")).toEqual(["Cade"])
+	})
+
+	it("needs the quote — a verb of speaking alone is not a tag", () => {
+		/**
+		 * ⚠ Mutation test for the first guard, and the deliberate limit at the
+		 * same time: a paragraph-initial *"Cade said nothing"* is **out of
+		 * scope** and stays silent. Drop the quote requirement to reach it and
+		 * *"Silence answered."* becomes an entity — the quote is what says a
+		 * speaker is being named rather than a subject described.
+		 */
+		expect(names("Cade said nothing at all.")).toEqual([])
+		expect(names("Silence answered.")).toEqual([])
+	})
+
+	it("needs the verb — a capital after a quote is not a speaker", () => {
+		// ⚠ Mutation test for the second guard. Without `SPEECH_VERBS` every
+		// capitalised word opening the sentence after a closed quote is an
+		// entity, which is most narration.
+		expect(names('"Go home." Silence fell.')).toEqual([])
+		expect(names('"Go home." Rain hammered the roof.')).toEqual([])
+	})
+
+	it("needs the verb against the name, with only whitespace between", () => {
+		// ⚠ Mutation test for the third guard. Same principle as `JOIN_GAP`:
+		// punctuation separates, so the verb after a comma is somebody else's.
+		expect(names('"Go home." Silence, said the man.')).toEqual([])
+	})
+
+	it("does not read a verb on the next line as this name's tag", () => {
+		/**
+		 * ⚠ Mutation test for the fourth guard, and the one case the third does
+		 * not cover: a newline is whitespace *and* a sentence end, so it joins
+		 * by `JOIN_GAP` and separates by `SENTENCE_END`. Action and dialogue
+		 * lines in roleplay are newline-separated far more often than they are
+		 * punctuated, which is why `SENTENCE_END` lists `\n` in the first place.
+		 */
+		expect(names('"Go home." Silence\nsaid the man.')).toEqual([])
+	})
+
+	it("keeps the open tier open around the fix", () => {
+		/**
+		 * The whole point of tier two: a name the gazetteer does not know is
+		 * still found. `Alice` resolves to her row, and the two the world has
+		 * never heard of are still extracted — one from inside the quote, one
+		 * from the tag.
+		 */
+		const gaz = buildGazetteer([
+			{ name: "Alice", ref: { kind: "character", id: 1 } }
+		])
+		expect(keys('"Alice, this is Emberfall," Cade said.', gaz)).toEqual([
+			"character:1",
+			"open:emberfall",
+			"open:cade"
+		])
+	})
+})
+
 describe("the gazetteer tier", () => {
 	const gaz = buildGazetteer([
 		{ name: "Alice", ref: { kind: "character", id: 7 } },

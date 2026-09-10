@@ -29,16 +29,39 @@ const CULLED_TYPES = [...LORE_TYPES, VECTOR_TYPE]
 /** The address that goes, on every one of them. */
 const CULLED = "retrievalMode"
 
-/** What each declaration keeps, whole — a control arriving unread fails here. */
+/**
+ * What each declaration keeps, whole — a control arriving unread fails here.
+ *
+ * ⚠ **This list says a control is DECLARED; it cannot say a control is READ**,
+ * and the difference is what an audit later found. `minScore` sat on the vector
+ * list below for as long as this file has existed, surviving the cull with a
+ * test watching it survive, while no line of engine code anywhere consumed it —
+ * and `topK` sat beside it being read off an in-port name the node does not
+ * declare. A whole-set assertion catches a control *appearing*; nothing here can
+ * catch one that does nothing. `runtime/signalWiring.int.test.ts` is the guard
+ * that can, for the ranker's weights, and it works by executing a turn rather
+ * than by reading a declaration.
+ */
 const LORE_PARAMS = [
 	"admitThreshold",
+	// Declared by migration 0099. The mirror-image defect: engine-read since
+	// the scan was written and declared nowhere, so the only value it could
+	// hold was a constant. See its note in the contracts package.
+	"guaranteedMessages",
 	"lexicalScoring",
 	"maxRecursionDepth",
 	"scanDepth",
 	"titleWeight",
 	"trigramFolding"
 ]
-const VECTOR_PARAMS = ["maxEntries", "minScore", "topK"]
+/**
+ * ⚠ `minScore` was here and is gone (0099), replaced by `similarityFalloff`.
+ *
+ * Not a rename. A minimum similarity removes a row from the pool, where no
+ * other mechanism can find it either; the replacement shapes the semantic
+ * signal's contribution and leaves the row where it was, at every setting.
+ */
+const VECTOR_PARAMS = ["maxEntries", "similarityFalloff", "topK"]
 
 let db: TestDb
 let respondSpecRow: { id: number; activeVersionId: number }
@@ -46,7 +69,7 @@ let respondSpecRow: { id: number; activeVersionId: number }
 let nodesByType = new Map<string, string[]>()
 
 const declaredParams = async (typeId: string) => {
-	const decls = await declarations(db as any, respondSpecRow.activeVersionId)
+	const decls = await declarations(db, respondSpecRow.activeVersionId)
 	const keys = new Set(nodesByType.get(typeId) ?? [])
 	return [
 		...new Set(
@@ -63,7 +86,7 @@ beforeAll(async () => {
 	)
 	db = (await import("$lib/server/db")).db as unknown as TestDb
 	await (await import("$lib/server/db/defaults")).sync()
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	respondSpecRow = (
 		await db

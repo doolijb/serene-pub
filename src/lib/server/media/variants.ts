@@ -22,7 +22,6 @@ import crypto from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { and, asc, eq, inArray, sql } from "drizzle-orm"
-import { db as defaultDb } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import {
 	MediaFidelity,
@@ -35,7 +34,20 @@ import type { FileRow, VariantRow } from "./index"
 import { makeThumbnail, WEB_SAFE_IMAGE_MIMES } from "./thumbnail"
 import { convertMedia, MediaDowngradeError, refusalToError } from "./convert"
 
-type Db = typeof defaultDb
+/*
+ * The database handle, and it is the schema-typed global `Db`
+ * (`db/types.d.ts`) rather than `typeof defaultDb` — a **parameter, never an
+ * import**.
+ *
+ * The driver's own type was a decision this module had never actually taken:
+ * nothing here touches anything PGlite-specific (no `$client`, no raw
+ * `execute`), only `select`/`insert`/`update`/`delete`/`query` over this
+ * schema. Naming the driver anyway made media the narrowest link on its own
+ * seam — every caller holding a driver-agnostic handle was refused with
+ * *"`PgQueryResultHKT` is not assignable to `PgliteQueryResultHKT`"* and cast
+ * across it, which is `as any` on a database handle: it re-opens the row hole
+ * from the caller's side for the sake of a constraint media does not have.
+ */
 
 /**
  * Where a derivation reads from, in order, and it is a named constant rather

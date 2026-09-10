@@ -46,6 +46,20 @@ export async function registerCoreServices() {
 	// that a raised THUMB_MAX_EDGE made stale, is `sweepThumbnails()` in
 	// media/backfill.ts and is invoked deliberately.
 
+	// Anywhere after the database, which is all that matters: teardown runs in
+	// reverse, so this stops its timer while the database it dumps is still
+	// open rather than after it closed.
+	const dailyBackup = await import("./dailyBackup")
+	registerService({
+		id: "dailyBackup",
+		label: "Daily backup",
+		// Checks once now and hourly thereafter (ruled 2026-09-10). Never
+		// throws: `maybeTakeDailyBackup` answers an outcome, not an exception,
+		// precisely so a boot cannot be lost to a backup.
+		reconcileOnBoot: () => dailyBackup.reconcileOnBoot(),
+		shutdown: async () => dailyBackup.stop()
+	})
+
 	const koboldcpp = await import("$lib/server/koboldcpp/subprocessManager")
 	registerService({
 		id: "koboldcpp",

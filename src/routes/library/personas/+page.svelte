@@ -125,89 +125,118 @@
 		)
 	})
 
+	// Named so `off` can name them too. A bare `socket.off("personas:searchLibrary")`
+	// removes EVERY listener for that event — including any other open
+	// page's, which then stops updating for the rest of the session.
+	function handlePersonasSearchLibrary(
+		msg: Sockets.Personas.SearchLibrary.Response
+	) {
+		if (msg.requestId !== latestRequestId) return
+		libraryPersonas = msg.personas
+		isLoading = false
+	}
+
+	function handlePersonasSearchLibraryError(
+		msg: Sockets.SearchLibraryErrorResponse
+	) {
+		if (msg.requestId !== latestRequestId) return
+		libraryPersonas = []
+		unreachable = !!msg.unreachable
+		rateLimited = !!msg.rateLimited
+		retryAfterMs = msg.retryAfterMs ?? null
+		isLoading = false
+		if (rateLimited && retryAfterMs) {
+			clearTimeout(retryTimer)
+			retryTimer = setTimeout(() => fetchLibrary(true), retryAfterMs)
+		}
+		if (!unreachable && !rateLimited) {
+			toaster.error({
+				title: msg.error || "Failed to search the persona library"
+			})
+		}
+	}
+
+	function handlePersonasImportFromLibrary(
+		msg: Sockets.Personas.ImportFromLibrary.Response
+	) {
+		toaster.success({ title: `Downloaded ${msg.persona.name}` })
+		downloading = false
+		showDetails = false
+	}
+
+	function handlePersonasImportFromLibraryError(msg: Sockets.ErrorResponse) {
+		toaster.error({
+			title: msg.error || "Failed to download persona"
+		})
+		downloading = false
+	}
+
+	function handleCardSourcesCapabilities(
+		msg: Sockets.CardSources.Capabilities.Response
+	) {
+		capabilities = msg
+	}
+
+	function handleCardSourcesCardDetail(
+		msg: Sockets.CardSources.CardDetail.Response
+	) {
+		if (msg.requestId !== latestDetailRequestId) return
+		loadingDetail = false
+		if (selectedPersona) {
+			selectedPersona = { ...selectedPersona, ...msg }
+		}
+	}
+
+	function handleCardSourcesCardDetailError(msg: any) {
+		if (msg.requestId !== latestDetailRequestId) return
+		loadingDetail = false
+	}
+
 	onMount(() => {
-		socket.on(
-			"personas:searchLibrary",
-			(msg: Sockets.Personas.SearchLibrary.Response) => {
-				if (msg.requestId !== latestRequestId) return
-				libraryPersonas = msg.personas
-				isLoading = false
-			}
-		)
+		socket.on("personas:searchLibrary", handlePersonasSearchLibrary)
 		socket.on(
 			"personas:searchLibrary:error",
-			(msg: Sockets.SearchLibraryErrorResponse) => {
-				if (msg.requestId !== latestRequestId) return
-				libraryPersonas = []
-				unreachable = !!msg.unreachable
-				rateLimited = !!msg.rateLimited
-				retryAfterMs = msg.retryAfterMs ?? null
-				isLoading = false
-				if (rateLimited && retryAfterMs) {
-					clearTimeout(retryTimer)
-					retryTimer = setTimeout(
-						() => fetchLibrary(true),
-						retryAfterMs
-					)
-				}
-				if (!unreachable && !rateLimited) {
-					toaster.error({
-						title:
-							msg.error || "Failed to search the persona library"
-					})
-				}
-			}
+			handlePersonasSearchLibraryError
 		)
-		socket.on(
-			"personas:importFromLibrary",
-			(msg: Sockets.Personas.ImportFromLibrary.Response) => {
-				toaster.success({ title: `Downloaded ${msg.persona.name}` })
-				downloading = false
-				showDetails = false
-			}
-		)
+		socket.on("personas:importFromLibrary", handlePersonasImportFromLibrary)
 		socket.on(
 			"personas:importFromLibrary:error",
-			(msg: Sockets.ErrorResponse) => {
-				toaster.error({
-					title: msg.error || "Failed to download persona"
-				})
-				downloading = false
-			}
+			handlePersonasImportFromLibraryError
 		)
+		socket.on("cardSources:capabilities", handleCardSourcesCapabilities)
+		socket.on("cardSources:cardDetail", handleCardSourcesCardDetail)
 		socket.on(
-			"cardSources:capabilities",
-			(msg: Sockets.CardSources.Capabilities.Response) => {
-				capabilities = msg
-			}
+			"cardSources:cardDetail:error",
+			handleCardSourcesCardDetailError
 		)
-		socket.on(
-			"cardSources:cardDetail",
-			(msg: Sockets.CardSources.CardDetail.Response) => {
-				if (msg.requestId !== latestDetailRequestId) return
-				loadingDetail = false
-				if (selectedPersona) {
-					selectedPersona = { ...selectedPersona, ...msg }
-				}
-			}
-		)
-		socket.on("cardSources:cardDetail:error", (msg: any) => {
-			if (msg.requestId !== latestDetailRequestId) return
-			loadingDetail = false
-		})
 
 		socket.emit("cardSources:capabilities", {})
 		fetchLibrary(true)
 
 		return () => {
 			clearTimeout(retryTimer)
-			socket.off("personas:searchLibrary")
-			socket.off("personas:searchLibrary:error")
-			socket.off("personas:importFromLibrary")
-			socket.off("personas:importFromLibrary:error")
-			socket.off("cardSources:capabilities")
-			socket.off("cardSources:cardDetail")
-			socket.off("cardSources:cardDetail:error")
+			socket.off("personas:searchLibrary", handlePersonasSearchLibrary)
+			socket.off(
+				"personas:searchLibrary:error",
+				handlePersonasSearchLibraryError
+			)
+			socket.off(
+				"personas:importFromLibrary",
+				handlePersonasImportFromLibrary
+			)
+			socket.off(
+				"personas:importFromLibrary:error",
+				handlePersonasImportFromLibraryError
+			)
+			socket.off(
+				"cardSources:capabilities",
+				handleCardSourcesCapabilities
+			)
+			socket.off("cardSources:cardDetail", handleCardSourcesCardDetail)
+			socket.off(
+				"cardSources:cardDetail:error",
+				handleCardSourcesCardDetailError
+			)
 		}
 	})
 </script>

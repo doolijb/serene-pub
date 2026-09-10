@@ -24,22 +24,52 @@
  * legacy table goes read-only.
  */
 
-import { and, eq, gt, inArray, lte, sql } from "drizzle-orm"
+import { and, eq, gt, inArray, lte, sql, type SQL } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	projectLegacy,
 	ORDINAL_MARKDOWN,
 	type LegacyMessageRow,
+	type NewMessage,
 	type NewPart
 } from "./projectLegacy"
 import { textOf, type TextOfOptions } from "./textOf"
-import { channelWhere } from "./channels"
-
-type Db = { select: any; insert: any; update: any; delete: any }
+import { byLaneThenTime, channelSpansLanes, channelWhere } from "./channels"
 
 export { textOf } from "./textOf"
 
 /* ── the phase-1 write path (legacy vocabulary) ─────────────────────────── */
+
+/**
+ * Edge whitespace comes off every **committed** body (ruling 2026-09-08).
+ *
+ * It is never part of the text and it is not merely untidy: a stored body is
+ * fed back to the model as the continue seed's prefill, and on the completion
+ * path that seed's assistant block is rendered open (`prompt/messages.ts`), so
+ * a trailing space lands *inside* the open block. Anthropic's Messages API
+ * refuses a prefill ending in whitespace outright. Mid-word continues cannot be
+ * detected reliably, so trimming at both ends of the round trip — here on save,
+ * and again at compile — is the whole of the fix.
+ *
+ * **A streaming partial is exempt.** A patch that leaves `isGenerating: true`
+ * is a mid-stream frame, and frames split anywhere: `"the sto"` then `" re."`.
+ * Trimming one would delete a separator the next frame depends on and make the
+ * live text differ from the text that lands. The write that closes the same run
+ * carries `isGenerating: false`, so the row that survives the turn — the row a
+ * later continue reads as its prefill — is trimmed either way.
+ *
+ * Only `content` is touched. `metadata.swipes.history` is written verbatim by
+ * its callers and mirrored verbatim; that surface is out of this ruling's
+ * scope.
+ */
+function trimCommittedContent<
+	T extends { content?: unknown; isGenerating?: unknown }
+>(values: T): T {
+	if (values.isGenerating === true) return values
+	if (typeof values.content !== "string") return values
+	const content = values.content.trim()
+	return content === values.content ? values : { ...values, content }
+}
 
 /** Insert one legacy-shaped message; mirrors to the new model. */
 export async function insertLegacy(
@@ -48,7 +78,7 @@ export async function insertLegacy(
 ): Promise<typeof schema.sessionMessages.$inferSelect> {
 	const [row] = await db
 		.insert(schema.sessionMessages)
-		.values(values)
+		.values(trimCommittedContent(values))
 		.returning()
 	await mirrorRow(db, row)
 	return row
@@ -62,7 +92,7 @@ export async function insertLegacyMany(
 	if (!values.length) return []
 	const rows = await db
 		.insert(schema.sessionMessages)
-		.values(values)
+		.values(values.map(trimCommittedContent))
 		.returning()
 	for (const row of rows) await mirrorRow(db, row)
 	return rows
@@ -76,7 +106,7 @@ export async function updateLegacy(
 ): Promise<typeof schema.sessionMessages.$inferSelect | undefined> {
 	const [row] = await db
 		.update(schema.sessionMessages)
-		.set(patch)
+		.set(trimCommittedContent(patch))
 		.where(eq(schema.sessionMessages.id, id))
 		.returning()
 	if (row) await mirrorRow(db, row)
@@ -89,12 +119,12 @@ export async function updateLegacy(
  */
 export async function updateLegacyWhere(
 	db: Db,
-	where: unknown,
+	where: SQL | undefined,
 	patch: Partial<typeof schema.sessionMessages.$inferInsert>
 ): Promise<Array<typeof schema.sessionMessages.$inferSelect>> {
 	const rows = await db
 		.update(schema.sessionMessages)
-		.set(patch)
+		.set(trimCommittedContent(patch))
 		.where(where)
 		.returning()
 	for (const row of rows) await mirrorRow(db, row)
@@ -104,7 +134,7 @@ export async function updateLegacyWhere(
 /** Delete by predicate, from both worlds. */
 export async function deleteLegacyWhere(
 	db: Db,
-	where: unknown
+	where: SQL | undefined
 ): Promise<Array<typeof schema.sessionMessages.$inferSelect>> {
 	const rows = await db
 		.delete(schema.sessionMessages)
@@ -114,7 +144,7 @@ export async function deleteLegacyWhere(
 		await db.delete(schema.messages).where(
 			inArray(
 				schema.messages.id,
-				rows.map((r: any) => r.id)
+				rows.map((r) => r.id)
 			)
 		)
 	return rows
@@ -134,7 +164,10 @@ export async function mirrorRow(
 	row: LegacyMessageRow
 ): Promise<void> {
 	const { message, parts } = projectLegacy(row)
-	await upsertProjection(db, message as any, parts)
+	// Narrowed rather than laundered: `NewMessage.id` is optional because the
+	// column is generated, and `projectLegacy` always sets it from the legacy
+	// row — which is the whole id-allocation rule at the top of this file.
+	await upsertProjection(db, message as NewMessage & { id: number }, parts)
 }
 
 /**
@@ -388,9 +421,13 @@ export async function appendStep(
 				}
 			}
 		}
+		// Through the same trim as every other committed body — this is the one
+		// write in the file that reaches `session_messages` without going via
+		// the legacy helpers, and `textOf` joins parts with blank lines, so a
+		// step whose last part ends in a newline would leave one on the column.
 		await db
 			.update(schema.sessionMessages)
-			.set(patch)
+			.set(trimCommittedContent(patch))
 			.where(eq(schema.sessionMessages.id, messageId))
 	}
 	return step
@@ -479,6 +516,11 @@ export async function getMessage(
  * every other message read obeys (see `messages/channels.ts`). It used to
  * mean "every lane", which is the silent union that scoping exists to
  * prevent; `ALL_CHANNELS` is how a caller asks for that on purpose.
+ *
+ * A **bare slug is the whole channel** and `slug:n` is one lane of it (ruling
+ * 2026-09-09). A whole-channel result comes back in lane-then-time order, so
+ * several conversations under one slug read as several conversations; with only
+ * lane 1 in play that ordering is the `id` ordering it already had.
  */
 export async function listMessages(
 	db: Db,
@@ -489,11 +531,14 @@ export async function listMessages(
 		eq(schema.messages.sessionId, sessionId),
 		channelWhere(schema.messages.channel, opts.channel)
 	)
-	const rows = await db
+	const listed = await db
 		.select()
 		.from(schema.messages)
 		.where(where)
 		.orderBy(schema.messages.id)
+	const rows = channelSpansLanes(opts.channel)
+		? byLaneThenTime(listed)
+		: listed
 	if (!rows.length) return []
 	const parts = await db
 		.select()
@@ -501,7 +546,7 @@ export async function listMessages(
 		.where(
 			inArray(
 				schema.messageParts.messageId,
-				rows.map((r: any) => r.id)
+				rows.map((r) => r.id)
 			)
 		)
 	const byMessage = new Map<number, any[]>()
@@ -510,7 +555,7 @@ export async function listMessages(
 		list.push(p)
 		byMessage.set(p.messageId, list)
 	}
-	return rows.map((r: any) => ({
+	return rows.map((r) => ({
 		...r,
 		parts: sortParts(byMessage.get(r.id) ?? [])
 	}))

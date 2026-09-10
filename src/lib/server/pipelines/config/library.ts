@@ -47,8 +47,6 @@ import {
 	knownEngines
 } from "$lib/server/pipelines/prompt/renderers"
 
-type Db = { select: any; insert: any; update: any; delete: any }
-
 /**
  * An engine id as the name of a language, for a heading.
  *

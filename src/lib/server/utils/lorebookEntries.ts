@@ -404,7 +404,7 @@ export function splitUpdate(
  * against, with a louder failure mode.
  */
 export async function nextPosition(
-	tx: any,
+	tx: Db,
 	lorebookId: number,
 	typeId: string
 ): Promise<number> {
@@ -412,7 +412,7 @@ export async function nextPosition(
 		.select({ position: schema.lorebookEntries.position })
 		.from(schema.lorebookEntries)
 		.where(inBookOfType(lorebookId, typeId))
-	const taken = new Set((rows as any[]).map((r) => r.position))
+	const taken = new Set(rows.map((r) => r.position))
 	let position = 1
 	while (taken.has(position)) position++
 	return position
@@ -443,7 +443,7 @@ export async function nextPosition(
  * disjoint whatever the live values happen to be.
  */
 export async function parkingFloor(
-	tx: any,
+	tx: Db,
 	where: SQL,
 	finals: readonly number[] = []
 ): Promise<number> {

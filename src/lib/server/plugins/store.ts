@@ -22,8 +22,6 @@ import {
 	type PluginManifest
 } from "./permissions"
 
-type Db = { select: any; insert: any; update: any; delete: any }
-
 interface PluginRow {
 	pluginId: string
 	name: string
@@ -137,6 +135,11 @@ export interface InstallInput {
  */
 export async function upsertPlugin(db: Db, input: InstallInput): Promise<void> {
 	const backend = input.backend ?? input.backends[0] ?? "quickjs"
+	// Annotated: the `["quickjs"]` fallback widens to `string[]` on its own,
+	// and `backends` is an enum-typed array column.
+	const backends: SandboxKind[] = input.backends.length
+		? input.backends
+		: ["quickjs"]
 	const prior: { bundleHash: string; enabled: boolean }[] = await db
 		.select({ bundleHash: plugins.bundleHash, enabled: plugins.enabled })
 		.from(plugins)
@@ -151,7 +154,7 @@ export async function upsertPlugin(db: Db, input: InstallInput): Promise<void> {
 		version: input.version ?? "0.0.0",
 		bundleSource: input.bundleSource,
 		bundleHash: input.bundleHash,
-		backends: input.backends.length ? input.backends : ["quickjs"],
+		backends,
 		backend,
 		sequential: input.sequential ?? false,
 		enabled,

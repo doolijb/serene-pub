@@ -1,7 +1,4 @@
-import Handlebars from "handlebars"
-import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import _ from "lodash"
-import { StopStrings } from "../utils/StopStrings"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { TokenCounters } from "../utils/TokenCounterManager"
@@ -16,6 +13,7 @@ import {
 	type BaseLoadModelOpts,
 	type LLM,
 	type LLMLoadModelConfig,
+	type LLMPredictionFragment,
 	type LLMPredictionOpts,
 	LMStudioClient,
 	type OngoingPrediction
@@ -29,6 +27,37 @@ import {
 	LLM_IDLE_TIMEOUT_MS,
 	LLM_NONSTREAMING_TIMEOUT_MS
 } from "./idleTimeout"
+
+/**
+ * Split an LM Studio `PredictionResult` into reply text and native reasoning.
+ *
+ * ⚠ `result.content` is the WHOLE generation, reasoning included — the SDK
+ * documents `reasoningContent` and `nonReasoningContent` as the two halves of
+ * it, not as extras beside it. Returning `content` verbatim while also reporting
+ * `thinkingContent` would show the reader the model's scratchpad twice, once
+ * as prose with its `<think>` markup still around it.
+ *
+ * Substituted ONLY when there is reasoning to split off, so a plain reply — and
+ * an SDK result old enough to carry neither field — comes back byte-for-byte
+ * what it did before.
+ */
+function splitReasoning(result: {
+	content: string
+	reasoningContent?: string
+	nonReasoningContent?: string
+}): { content: string; thinkingContent: string | undefined } {
+	const reasoning = result.reasoningContent
+	if (typeof reasoning === "string" && reasoning) {
+		return {
+			content:
+				typeof result.nonReasoningContent === "string"
+					? result.nonReasoningContent
+					: result.content || "",
+			thinkingContent: reasoning
+		}
+	}
+	return { content: result.content || "", thinkingContent: undefined }
+}
 
 class LMStudioAdapter extends BaseConnectionAdapter {
 	private _client?: LMStudioClient
@@ -166,37 +195,40 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		if (typeof modelName !== "string")
 			throw new Error("LMStudioAdapter: model must be a string")
 
-		// Prepare stop strings for LM Studio
-		const promptFormat = this.connection.promptFormat || "chatml"
-		const stopStrings = StopStrings.get({
-			format: promptFormat,
-			characters:
-				this.session.sessionCharacters?.map((cc) => cc.character) || [],
-			personas:
-				this.session.sessionPersonas?.map((cp) => cp.persona) || [],
-			currentCharacterId: this.currentCharacterId ?? undefined
-		})
-		const characterName = resolveCharacterName(
-			this.session.sessionCharacters?.[0]?.character
-		)
-		const personaName =
-			this.session.sessionPersonas?.[0]?.persona?.name || "user"
-		const stopContext: Record<string, string> = {
-			char: characterName,
-			user: personaName
-		}
-		const stop = stopStrings.map((str) =>
-			Handlebars.compile(str)(stopContext)
-		)
+		// The stop sequences this request will send — composed by
+		// `connections/stops.ts` and handed over at construction, never built
+		// here (ruling 2026-09-10).
+		const stop = this.stops
 
 		// Use PromptBuilder for prompt construction
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
 
-		const useSession = this.connection.extraJson?.useSession ?? true
+		/**
+		 * `.respond()` (messages) or `.complete()` (one prompt) — the connection's
+		 * own answer, not an `extraJson` flag of this adapter's.
+		 *
+		 * This read `extraJson.useSession ?? true` while the payload was built
+		 * from a flag the pipeline never set, so a chat-mode connection reached
+		 * the `&& compiledPrompt.messages` half, found none, and silently fell
+		 * through to the completion branch. That degradation is why LM Studio
+		 * never showed the defect the way Anthropic and KoboldCPP did — the
+		 * prompt still went out, in the wrong shape, with nothing to say so.
+		 */
+		const useSession = this.isChatWire
 		let prompt: string = ""
 		let messages: any[] | undefined = undefined
 
-		if (useSession && compiledPrompt.messages) {
+		if (useSession) {
+			// Checked rather than silently degraded — see above. Not rebuilt
+			// through `promptTextFor`: that is the local decision this change
+			// removes, and it is what hid the fault here for a release.
+			if (!Array.isArray(compiledPrompt.messages))
+				throw new Error(
+					"this LM Studio connection is chat wire mode, but the prompt it was " +
+						"handed carries no messages. The render and the send are reading " +
+						"different wire modes — check that the assemble node's connection " +
+						"slot is wired to the sending Provider (slot.connectionOf)."
+				)
 			messages = compiledPrompt.messages
 		} else {
 			// See `promptTextFor`: `compiledPrompt.prompt!` asserted a string
@@ -235,13 +267,33 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			return {
 				completionResult: async (
 					contentCb: (chunk: string) => void,
-					_thinkingCb?: (chunk: string) => void
+					thinkingCb?: (chunk: string) => void
 				) => {
 					let idleTimedOut = false
 					const idle = createIdleWatchdog(LLM_IDLE_TIMEOUT_MS, () => {
 						idleTimedOut = true
 						this.prediction?.cancel()
 					})
+					// Native reasoning, LM Studio's way: there is no wire field
+					// to read, because the SDK tags every FRAGMENT instead.
+					const route = (part: LLMPredictionFragment | undefined) => {
+						if (!part?.content) return
+						switch (part.reasoningType) {
+							case "reasoning":
+								thinkingCb?.(part.content)
+								return
+							// The literal <think>/</think> tokens. Structure, not
+							// prose — the reasoning is already on its own channel,
+							// so forwarding these as content would only show the
+							// reader raw markup with nothing between it.
+							case "reasoningStartTag":
+							case "reasoningEndTag":
+								return
+							// "none", and an SDK old enough not to tag at all.
+							default:
+								contentCb(part.content)
+						}
+					}
 					try {
 						if (useSession && messages) {
 							this.prediction = modelClient.respond(
@@ -256,9 +308,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 								// per-chunk, in case cancel() doesn't reliably
 								// unblock this loop on its own.
 								if (this.isAborting) break
-								if (part?.content) {
-									contentCb(part.content)
-								}
+								route(part)
 							}
 						} else {
 							this.prediction = modelClient.complete(
@@ -268,9 +318,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 							for await (const part of this.prediction) {
 								idle.poke()
 								if (this.isAborting) break
-								if (part?.content) {
-									contentCb(part.content)
-								}
+								route(part)
 							}
 						}
 					} catch (e: any) {
@@ -291,7 +339,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 				isAborted: this.isAborting
 			}
 		} else {
-			const content = await (async () => {
+			const { content, thinkingContent } = await (async () => {
 				// No intermediate chunks to reset an idle timer against for a
 				// non-streaming response — a genuine, documented exception to
 				// the idle-based design used in the streaming branch above: a
@@ -311,7 +359,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 							typeof result === "object" &&
 							"content" in result
 						) {
-							return result.content || ""
+							return splitReasoning(result)
 						} else {
 							throw new Error(
 								"Unexpected LM Studio session result type"
@@ -325,7 +373,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 							typeof result === "object" &&
 							"content" in result
 						) {
-							return result.content || ""
+							return splitReasoning(result)
 						} else {
 							throw new Error("Unexpected LM Studio result type")
 						}
@@ -336,7 +384,8 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 							`LM Studio did not respond within ${LLM_NONSTREAMING_TIMEOUT_MS / 60_000} minutes.`
 						)
 					}
-					if (this.isAborting) return ""
+					if (this.isAborting)
+						return { content: "", thinkingContent: undefined }
 					throw e
 				} finally {
 					clearTimeout(idleTimer)
@@ -345,7 +394,8 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			return {
 				completionResult: content ?? "",
 				compiledPrompt,
-				isAborted: this.isAborting
+				isAborted: this.isAborting,
+				thinkingContent
 			}
 		}
 	}

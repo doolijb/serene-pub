@@ -171,3 +171,97 @@ describe("runQueuedLLMCall — signal bridge", () => {
 		await blockerPromise
 	})
 })
+
+/**
+ * Everything this wrapper answers goes somewhere durable — a lore summary, a
+ * graph node, a session title, a generated field. None of those has a reader
+ * that could tell reasoning from what the model meant to say, and there is no
+ * later stage that could take it back out.
+ */
+describe("runQueuedLLMCall — reasoning never reaches the text", () => {
+	const run = (adapter: any) =>
+		runQueuedLLMCall({
+			adapter,
+			taskType: "summarize_batch",
+			connectionName: "test",
+			samplingName: "test"
+		})
+
+	test("lifts an inline block out of a non-streamed answer", async () => {
+		const adapter = makeMockAdapter({
+			onGenerate: async () => ({
+				completionResult: "<think>weighing it</think>The summary.",
+				compiledPrompt: NO_PAYLOAD,
+				isAborted: false
+			})
+		})
+		expect(await run(adapter)).toEqual({
+			text: "The summary.",
+			thinkingContent: "weighing it",
+			isAborted: false
+		})
+	})
+
+	test("handles a prefilled opening tag", async () => {
+		const adapter = makeMockAdapter({
+			onGenerate: async () => ({
+				completionResult: "weighing it</think>The summary.",
+				compiledPrompt: NO_PAYLOAD,
+				isAborted: false
+			})
+		})
+		expect(await run(adapter)).toEqual({
+			text: "The summary.",
+			thinkingContent: "weighing it",
+			isAborted: false
+		})
+	})
+
+	test("lifts an inline block out of a streamed answer", async () => {
+		const adapter = makeMockAdapter({
+			onGenerate: async () => ({
+				compiledPrompt: NO_PAYLOAD,
+				isAborted: false,
+				completionResult: async (onContent: (c: string) => void) => {
+					for (const chunk of [
+						"<thi",
+						"nk>weighing it</think>The ",
+						"summary."
+					])
+						onContent(chunk)
+				}
+			})
+		})
+		expect(await run(adapter)).toEqual({
+			text: "The summary.",
+			thinkingContent: "weighing it",
+			isAborted: false
+		})
+	})
+
+	test("native reasoning leads the trace, and the text is still cleaned", async () => {
+		const adapter = makeMockAdapter({
+			onGenerate: async () => ({
+				completionResult: "<think>stray</think>The summary.",
+				compiledPrompt: NO_PAYLOAD,
+				isAborted: false,
+				thinkingContent: "the native trace"
+			})
+		})
+		expect(await run(adapter)).toEqual({
+			text: "The summary.",
+			// Kept behind the native trace, not deleted.
+			thinkingContent: "the native trace\n\nstray",
+			isAborted: false
+		})
+	})
+
+	test("an answer with no delimiters is untouched", async () => {
+		const adapter = makeMockAdapter()
+		expect(await run(adapter)).toEqual({
+			text: "ok",
+			thinkingContent: undefined,
+			isAborted: false
+		})
+	})
+})

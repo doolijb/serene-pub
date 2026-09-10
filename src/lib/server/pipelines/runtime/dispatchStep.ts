@@ -34,11 +34,14 @@ import {
 	type ConnectionIdentity
 } from "$lib/server/connections/visibility"
 import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
+import { composeStopsFor } from "$lib/server/connections/stops"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { runQueuedLLMCall } from "$lib/server/utils/runQueuedLLMCall"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { SessionTypes } from "$lib/shared/constants/SessionTypes"
+
+// db is the global Db — see db/types.d.ts
 
 export interface StepCall {
 	systemPrompt: string
@@ -111,7 +114,7 @@ export class StepDispatchError extends ComposedError {}
 
 /** Run one step. Throws with a sentence a person can act on. */
 export async function dispatchStep(
-	db: any,
+	db: Db,
 	call: StepCall
 ): Promise<{ text: string; connection: ConnectionIdentity }> {
 	call.signal?.throwIfAborted()
@@ -157,18 +160,37 @@ export async function dispatchStep(
 	// with a different Context Tokens than its neighbours makes a local backend
 	// reload the model between steps, which is why the shipped configs point
 	// every step at the same one.
-	const tokenLimit =
-		(connection as any).tokenLimit ??
-		(connection as any).contextSize ??
-		values.contextTokens ??
-		4096
+	//
+	// ⚠ It used to read `(connection as any).tokenLimit ?? (connection as
+	// any).contextSize` first. `connections` has never had either column, so
+	// both were `undefined` on every row and the expression always fell through
+	// to exactly the two terms left here — the reads were dead, and the cast is
+	// what let them survive. Removing them changes nothing at runtime.
+	// `summarizer/index.ts` and `graphBuilder.ts` carried the same dead pair
+	// and have since had it removed too. What's left is why THIS file still
+	// needs the fallback at all: `dispatchStep` injects a compiled prompt, and
+	// `compilePrompt` returns early on `injectedPrompt` before it overwrites
+	// `this.tokenLimit` with `getContextTokenLimit()` — so `dispatchStep` must
+	// supply the real limit itself, whereas the summarizer's value is
+	// superseded before any prompt is built.
+	//
+	// ⚠ The cast is what the dead reads were hiding, not something they fixed:
+	// `ResolvedSampling` is `Record<string, unknown>` because
+	// `resolveSamplingValues` passes stored values through untouched (coercion
+	// is the WRITE path's, in `normalizeSamplingRow`), so this key is only a
+	// number by the write path's convention. Asserted rather than guarded, to
+	// keep behaviour byte-identical: a `typeof` test would send 4096 where a
+	// row storing "8192" used to send the string on, which is a different
+	// prompt budget and a decision for the sampling contract to make — the same
+	// laundering `summarizer/index.ts` does with `: number` on the same value.
+	const tokenLimit: number = (values.contextTokens ?? 4096) as number
 	const maxTokens = values.responseTokens ?? 512
 
 	// The connection's own configured tokenizer, not a global default — the
 	// identical fix `generateResponse.ts` and `graphBuilder.ts` both carry. A
 	// mismatched counter makes the budget wrong in the direction that truncates.
 	const tokenCounter = new TokenCounters(
-		(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
+		connection.tokenCounter || TokenCounterOptions.ESTIMATE
 	)
 
 	const adapter = new AdapterClass.Adapter({
@@ -186,6 +208,11 @@ export async function dispatchStep(
 		tokenLimit,
 		contextThresholdPercent: 0.9
 	})
+
+	// Composed once and handed over — an adapter builds none of its own (ruling
+	// 2026-09-10). A step's session is minimal and has no cast, so this is the
+	// connection's completion template alone.
+	adapter.withStops(composeStopsFor(connection, minimalSession(call.userPrompt)))
 
 	const result = await runQueuedLLMCall({
 		adapter,

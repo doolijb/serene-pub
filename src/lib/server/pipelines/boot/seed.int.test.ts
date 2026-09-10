@@ -53,7 +53,7 @@ beforeAll(async () => {
 	const dbModule = await import("$lib/server/db")
 	db = dbModule.db as unknown as TestDb
 	await (await import("$lib/server/db/defaults")).sync()
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 }, 120_000)
 
 describe("the core event set", () => {
@@ -117,7 +117,7 @@ describe("the core event set", () => {
 	})
 
 	it("re-syncs to no writes at all", async () => {
-		const again = await syncEventRegistry(db as any)
+		const again = await syncEventRegistry(db)
 		expect(again.inserted).toEqual([])
 		expect(again.updated).toEqual([])
 		expect(again.unchanged.length).toBeGreaterThan(0)
@@ -137,7 +137,7 @@ describe("the core event set", () => {
 				)
 			)
 
-		const res = await syncEventRegistry(db as any)
+		const res = await syncEventRegistry(db)
 		expect(res.updated).toContain("core:event/message-created@1")
 
 		const [row] = await db
@@ -176,7 +176,7 @@ describe("core's specs", () => {
 		// would either clobber a run in flight or need an exception here.
 		const before = await db.select().from(schema.pipelineSpecVersions)
 
-		const report = await seedCoreSpecs(db as any)
+		const report = await seedCoreSpecs(db)
 		expect(report.every((r) => r.action === "present")).toBe(true)
 
 		const after = await db.select().from(schema.pipelineSpecVersions)
@@ -218,7 +218,7 @@ describe("core's specs", () => {
 			// config — a namespace whose steps run without instructions reads
 			// as the model failing, not as a missing selection.
 			expect(spec.activeVersionId).toBeTruthy()
-			const decls = await declarations(db as any, spec.activeVersionId!)
+			const decls = await declarations(db, spec.activeVersionId!)
 			const promptDecls = decls.filter(
 				(d: any) => d.control === "prompts-ref"
 			)
@@ -299,7 +299,7 @@ describe("core's specs", () => {
 		expect(before.length).toBeGreaterThan(0)
 
 		await (await import("$lib/server/db/defaults")).sync()
-		await bootstrapPipelines(db as any)
+		await bootstrapPipelines(db)
 
 		expect(await snapshot()).toEqual(before)
 	}, 120_000)
@@ -320,7 +320,7 @@ describe("core's specs", () => {
 
 describe("bootstrap as a whole", () => {
 	it("reports what it did, and does nothing the second time", async () => {
-		const report = await bootstrapPipelines(db as any)
+		const report = await bootstrapPipelines(db)
 		expect(report.conflict).toBeUndefined()
 		expect(report.events.inserted).toBe(0)
 		expect(report.events.updated).toBe(0)

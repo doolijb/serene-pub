@@ -45,13 +45,6 @@ import { poolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 
 export { poolKeyFor }
 
-type Db = {
-	select: any
-	insert: any
-	update: any
-	delete: any
-}
-
 /** The prompt named nothing here, or nothing this pipeline can use. */
 export class PromptNotFoundError extends Error {}
 

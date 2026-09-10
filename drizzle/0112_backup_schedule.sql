@@ -1,0 +1,2 @@
+ALTER TABLE "system_settings" ADD COLUMN "backup_daily" boolean DEFAULT true NOT NULL;--> statement-breakpoint
+ALTER TABLE "system_settings" ADD COLUMN "backup_include_user_files" boolean DEFAULT false NOT NULL;

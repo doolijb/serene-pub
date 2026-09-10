@@ -142,8 +142,8 @@ const socket = { user: { id: 1, isAdmin: true } } as any
 const noopEmit = () => {}
 
 const modelRow = (filename: string) =>
-	testDb.query.koboldCppModels.findFirst({
-		where: eq(schema.koboldCppModels.filename, filename)
+	testDb.query.localModels.findFirst({
+		where: eq(schema.localModels.filename, filename)
 	})
 
 const imageConnections = () =>
@@ -188,7 +188,7 @@ describe("koboldcpp:listModels — one directory holding two kinds of file", () 
 		// can write one.
 		const filename = "sd_xl_base_1.0.safetensors"
 		await fs.writeFile(path.join(modelsDir, filename), "not really a model")
-		await testDb.insert(schema.koboldCppModels).values({
+		await testDb.insert(schema.localModels).values({
 			filename,
 			modelName: "SDXL Base",
 			status: "complete",
@@ -229,7 +229,7 @@ describe("koboldcpp:listModels — one directory holding two kinds of file", () 
 		// folder corrects itself with nobody told to go looking.
 		const filename = "picx_real_q4_0.gguf"
 		await fs.writeFile(path.join(modelsDir, filename), SD_GGUF)
-		await testDb.insert(schema.koboldCppModels).values({
+		await testDb.insert(schema.localModels).values({
 			filename,
 			modelName: "picx_real_q4_0",
 			status: "complete",
@@ -260,7 +260,7 @@ describe("koboldcpp:listModels — one directory holding two kinds of file", () 
 		// must not have to keep telling it every time the directory is listed.
 		const filename = "user-says-text.gguf"
 		await fs.writeFile(path.join(modelsDir, filename), SD_GGUF)
-		await testDb.insert(schema.koboldCppModels).values({
+		await testDb.insert(schema.localModels).values({
 			filename,
 			modelName: "user-says-text",
 			status: "complete",
@@ -328,7 +328,7 @@ describe("koboldcpp:listModels — two directories", () => {
 		const imageFile = "in-the-image-folder.safetensors"
 		await fs.writeFile(path.join(modelsDir, textFile), TEXT_GGUF)
 		await fs.writeFile(path.join(imageModelsDir, imageFile), "sdxl bytes")
-		await testDb.insert(schema.koboldCppModels).values([
+		await testDb.insert(schema.localModels).values([
 			{
 				filename: textFile,
 				modelName: "In The LLM Folder",
@@ -500,10 +500,10 @@ describe("koboldcpp:downloadModel — declaring a kind and picking a directory",
 		} finally {
 			await setImageModelsDir(null)
 			await testDb
-				.delete(schema.koboldCppModels)
+				.delete(schema.localModels)
 				.where(
 					eq(
-						schema.koboldCppModels.filename,
+						schema.localModels.filename,
 						"lands-in-the-image-folder.gguf"
 					)
 				)
@@ -527,7 +527,7 @@ describe("koboldcpp:connectImageModel — one image model, one connection", () =
 		kind: "image" | "text" = "image"
 	) {
 		await fs.writeFile(path.join(dir, filename), SD_GGUF)
-		await testDb.insert(schema.koboldCppModels).values({
+		await testDb.insert(schema.localModels).values({
 			filename,
 			modelName: filename.replace(/\.[^.]+$/, ""),
 			status: "complete",
@@ -632,7 +632,7 @@ describe("koboldcpp:connectImageModel — one image model, one connection", () =
 
 	test("a model whose file has gone is refused rather than connected", async () => {
 		const filename = "tracked-but-missing.gguf"
-		await testDb.insert(schema.koboldCppModels).values({
+		await testDb.insert(schema.localModels).values({
 			filename,
 			modelName: "Tracked But Missing",
 			status: "complete",
@@ -644,8 +644,8 @@ describe("koboldcpp:connectImageModel — one image model, one connection", () =
 
 		expect(res.error).toMatch(/no longer on disk/i)
 		await testDb
-			.delete(schema.koboldCppModels)
-			.where(eq(schema.koboldCppModels.filename, filename))
+			.delete(schema.localModels)
+			.where(eq(schema.localModels.filename, filename))
 	})
 })
 
@@ -666,7 +666,7 @@ describe("koboldcpp:deleteModel — the connections that named the file", () => 
 		// exactly that.
 		const filename = "about-to-be-deleted.gguf"
 		await fs.writeFile(path.join(modelsDir, filename), SD_GGUF)
-		await testDb.insert(schema.koboldCppModels).values({
+		await testDb.insert(schema.localModels).values({
 			filename,
 			modelName: "About To Be Deleted",
 			status: "complete",
@@ -935,5 +935,123 @@ describe("koboldcpp:searchModels — searching for something that draws", () => 
 			"hum-ma/SDXL-models-GGUF"
 		])
 		expect(res.models[0].pullOptions[0].label).toBe("Q4_K_M")
+	})
+})
+
+/**
+ * `local_models` carries `kind` AND `modality`, and the whole reason that is
+ * safe is that they are never written apart.
+ *
+ * `kind` is the koboldcpp LOADER lane (which of its two directories opens the
+ * file); `modality` is the ROLE, in the vocabulary `connections.modality`
+ * already uses. They are different questions — a BERT `.gguf` is `kind: "text"`
+ * and modality `embeddings` — but on a koboldcpp row one projects onto the
+ * other, and `modalityForKind` is the only thing allowed to do the projecting.
+ * A write site that sets `kind` without it is how the two start disagreeing,
+ * which is the exact defect the vendor-neutral registry exists to avoid, so
+ * every path that touches `kind` is pinned here.
+ *
+ * `format` is the other half of the asymmetry and needs no such care: it is a
+ * property of the bytes, read straight off the name.
+ */
+describe("kind and modality are written together, never apart", () => {
+	test("discovery records the format off the name and the modality off the kind", async () => {
+		const filename = "discovered-pair.safetensors"
+		await fs.writeFile(path.join(imageModelsDir, filename), "not a model")
+		await setImageModelsDir(imageModelsDir)
+		try {
+			await listModels()
+		} finally {
+			await setImageModelsDir(null)
+		}
+
+		const rec = await modelRow(filename)
+		// The extension, not the default. A .safetensors row that took the
+		// column's 'gguf' default would be a falsehood about a file we can
+		// simply look at.
+		expect(rec!.format).toBe("safetensors")
+		expect(rec!.kind).toBe("image")
+		expect(rec!.modality).toBe("image-gen")
+	})
+
+	test("a detected image model moves modality with the kind the header proved", async () => {
+		// The row starts as the upgrade left it — text/assumed, and text-gen
+		// with it — so this pins the UPDATE path, not the insert one.
+		const filename = "pair-detected-image.gguf"
+		await fs.writeFile(path.join(modelsDir, filename), SD_GGUF)
+		await testDb.insert(schema.localModels).values({
+			filename,
+			modelName: "pair-detected-image",
+			status: "complete",
+			kind: "text",
+			kindSource: "assumed",
+			modality: "text-gen"
+		})
+
+		await listModels()
+
+		const rec = await modelRow(filename)
+		expect(rec!.kind).toBe("image")
+		expect(rec!.kindSource).toBe("detected")
+		expect(rec!.modality).toBe("image-gen")
+		expect(rec!.format).toBe("gguf")
+	})
+
+	test("a detected text model lands on text-gen", async () => {
+		const filename = "pair-detected-text.gguf"
+		await fs.writeFile(path.join(modelsDir, filename), TEXT_GGUF)
+
+		await listModels()
+
+		const rec = await modelRow(filename)
+		expect(rec!.kind).toBe("text")
+		expect(rec!.modality).toBe("text-gen")
+	})
+
+	test("a user override carries the modality with it", async () => {
+		// The top of the trust order writes both columns too. Leaving modality
+		// behind here is the worst version of the drift: the user has said what
+		// the file is, and a picker reading modality would still show the old
+		// answer with nothing on screen to explain the disagreement.
+		const filename = "pair-user-override.gguf"
+		await fs.writeFile(path.join(modelsDir, filename), TEXT_GGUF)
+		await listModels()
+		expect((await modelRow(filename))!.modality).toBe("text-gen")
+
+		const { koboldCppSetModelKindHandler } = await import("./koboldcpp")
+		await koboldCppSetModelKindHandler.handler(
+			socket,
+			{ filename, kind: "image" },
+			noopEmit
+		)
+
+		const rec = await modelRow(filename)
+		expect(rec!.kind).toBe("image")
+		expect(rec!.kindSource).toBe("user")
+		expect(rec!.modality).toBe("image-gen")
+	})
+
+	test("a file that cannot be read drops to unknown AND to no modality at all", async () => {
+		// "Looked, couldn't tell" is a state, and it has to be the same state in
+		// both columns. A row left claiming text-gen while its kind says unknown
+		// is offered to a text picker as a working model and fails at load time
+		// with nothing on screen to say why.
+		const filename = "pair-unreadable.gguf"
+		await fs.writeFile(path.join(modelsDir, filename), hex("47 47 55 46"))
+		await testDb.insert(schema.localModels).values({
+			filename,
+			modelName: "pair-unreadable",
+			status: "complete",
+			kind: "text",
+			kindSource: "assumed",
+			modality: "text-gen"
+		})
+
+		await listModels()
+
+		const rec = await modelRow(filename)
+		expect(rec!.kind).toBe("unknown")
+		expect(rec!.kindSource).toBe("assumed")
+		expect(rec!.modality).toBeNull()
 	})
 })

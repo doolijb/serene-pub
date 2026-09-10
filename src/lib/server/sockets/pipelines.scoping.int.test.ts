@@ -342,6 +342,56 @@ describe("run receipts belong to the person whose session they describe", () => 
 		)
 		expect(theirs.runs).toHaveLength(0)
 	})
+
+	/**
+	 * Two gates, and the guest proves they are separate.
+	 *
+	 * Reaching the session is `checkSessionAccess` — owner **or** guest, since
+	 * session access has never been ownership; a local `eq(sessions.userId, …)`
+	 * here silently handed a guest `{ runs: [] }` for receipts that were their
+	 * own. What they may read is still `user_id`: passing the first gate must
+	 * not hand them the owner's receipts, which is the leak the first gate's
+	 * looseness would otherwise become.
+	 */
+	test("a guest sees their own runs in a shared session, not the owner's", async () => {
+		const { pipelinesRuns } = await import("./pipelines")
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const guest = await createTestUser(testDb, "pipe-guest")
+		await testDb.insert(schema.sessionGuests).values({
+			sessionId: ownersSessionId,
+			userId: guest.id
+		})
+
+		const run = (runId: string, userId: number) => ({
+			runId,
+			specSlug: RESPOND_SPEC_ID,
+			specVersion: "1.0.0",
+			sessionId: ownersSessionId,
+			userId,
+			outcome: "ok",
+			triggerSource: "event",
+			seed: "s",
+			startedAt: new Date(),
+			endedAt: new Date(),
+			elapsedMs: 1,
+			receipt: {}
+		})
+		await testDb
+			.insert(schema.pipelineRuns)
+			.values([
+				run("run-scoping-guest", guest.id),
+				run("run-scoping-owner-2", owner.id)
+			])
+
+		const theirs: any = await pipelinesRuns.handler(
+			socketFor(guest.id),
+			{ sessionId: ownersSessionId },
+			noopEmit
+		)
+		expect(theirs.runs.map((r: any) => r.runId)).toEqual([
+			"run-scoping-guest"
+		])
+	}, 60_000)
 })
 
 describe("prompt CRUD is gated on the option, not on ownership", () => {

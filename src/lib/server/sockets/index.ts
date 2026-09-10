@@ -22,6 +22,7 @@ import { registerConnectionDefaultsHandlers } from "./connectionDefaults"
 import { registerImageHandlers } from "./images"
 import { registerPluginHandlers } from "./plugins"
 import { registerSamplingConfigHandlers } from "./samplingConfigs"
+import { registerCompletionTemplateHandlers } from "./completionTemplates"
 import { registerCharacterHandlers } from "./characters"
 import { registerPersonaHandlers } from "./personas"
 import { registerContextConfigHandlers } from "./contextConfigs"
@@ -34,6 +35,7 @@ import { registerUserSettingsHandlers } from "./userSettings"
 import { registerLanguageHandlers } from "./language"
 import { registerLorebookHandlers } from "./lorebooks"
 import { registerEntryHandlers } from "./entries"
+import { registerBindingSuggestionHandlers } from "./bindingSuggestions"
 import { registerMediaHandlers } from "./media"
 import { registerTagHandlers } from "./tags"
 import { registerSystemSettingsHandlers } from "./systemSettings"
@@ -50,11 +52,13 @@ import { registerSetupHandlers } from "./setup"
 import { registerTaskQueueHandlers } from "./taskQueue"
 import { registerActivityHandlers } from "./activity"
 import { registerCustomThemeHandlers } from "./customThemes"
+import { registerWidgetStyleHandlers } from "./widgetStyles"
 import { registerCardSourceHandlers } from "./cardSources"
 import { registerPipelineHandlers } from "./pipelines"
 import { registerSessionAdminHandlers } from "./sessionAdmin"
 import { registerTunnelHandlers } from "./tunnels"
 import { registerAllowedHostHandlers } from "./allowedHosts"
+import { registerBackupHandlers } from "./backups"
 import { registerTotpHandlers } from "./totp"
 import { registerAccountHandlers } from "./account"
 import { registerInviteHandlers } from "./invites"
@@ -109,6 +113,7 @@ export function connectSockets(io: {
 		registerUserSettingsHandlers(socket, emitToUser, register)
 		registerLanguageHandlers(socket, emitToUser, register)
 		registerSamplingConfigHandlers(socket, emitToUser, register)
+		registerCompletionTemplateHandlers(socket, emitToUser, register)
 		registerConnectionHandlers(socket, emitToUser, register)
 		registerConnectionDefaultsHandlers(socket, emitToUser, register)
 		registerImageHandlers(socket, emitToUser, register)
@@ -127,6 +132,7 @@ export function connectSockets(io: {
 		registerSessionHandlers(socket, emitToUser, register)
 		registerLorebookHandlers(socket, emitToUser, register)
 		registerEntryHandlers(socket, emitToUser, register)
+		registerBindingSuggestionHandlers(socket, emitToUser, register)
 		registerTagHandlers(socket, emitToUser, register)
 		registerMediaHandlers(socket, emitToUser, register)
 		registerSummarizeHandlers(socket, emitToUser, register)
@@ -139,10 +145,12 @@ export function connectSockets(io: {
 		registerTaskQueueHandlers(socket, emitToUser, register)
 		registerActivityHandlers(socket)
 		registerCustomThemeHandlers(socket, emitToUser, register)
+		registerWidgetStyleHandlers(socket, emitToUser, register)
 		registerPipelineHandlers(socket, emitToUser, register)
 		registerSessionAdminHandlers(socket, emitToUser, register)
 		registerTunnelHandlers(socket, emitToUser, register)
 		registerAllowedHostHandlers(socket, emitToUser, register)
+		registerBackupHandlers(socket, emitToUser, register)
 		registerTotpHandlers(socket, emitToUser, register)
 		registerAccountHandlers(socket, emitToUser, register)
 		registerInviteHandlers(socket, emitToUser, register)

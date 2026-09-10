@@ -38,7 +38,7 @@ const admin = () => ({ userId: adminId, isAdmin: true })
 /** The chain option on the write consumer — the step whose hook accepts text. */
 async function writeHookOption(): Promise<ConfigOption> {
 	const view = await namespaceView(
-		db as any,
+		db,
 		SECRET,
 		RESPOND_SPEC_ID,
 		admin()
@@ -56,7 +56,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 	const [adminRow] = await db
 		.insert(schema.users)
 		.values({ username: "scripts-chain-admin", isAdmin: true })
@@ -74,17 +74,17 @@ beforeAll(async () => {
 		.from(schema.pipelineSpecs)
 		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
 	const shipped = await resolveSelectedConfig(
-		db as any,
+		db,
 		spec.id,
 		RESPOND_SPEC_ID,
 		{}
 	)
 	const copy = await duplicateConfig(
-		db as any,
+		db,
 		shipped!.configId,
 		"Chain host"
 	)
-	await selectConfig(db as any, spec.id, "instance", 0, copy.id, adminId)
+	await selectConfig(db, spec.id, "instance", 0, copy.id, adminId)
 }, 60_000)
 
 describe("the hook in the panel", () => {
@@ -93,7 +93,7 @@ describe("the hook in the panel", () => {
 		expect(option.writable).toBe(true)
 		expect(option.scripts ?? []).toEqual([])
 		// A non-admin sees prompts and nothing else (§26a) — no chain options.
-		const view = await namespaceView(db as any, SECRET, RESPOND_SPEC_ID, {
+		const view = await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
 			userId: adminId + 1,
 			isAdmin: false
 		})
@@ -104,11 +104,11 @@ describe("the hook in the panel", () => {
 	})
 
 	it("offers only scripts of the accepted types", async () => {
-		const fits = await createScript(db as any, {
+		const fits = await createScript(db, {
 			typeId: "core:script:text/transform@1",
 			name: "Slop killer"
 		})
-		const doesNot = await createScript(db as any, {
+		const doesNot = await createScript(db, {
 			typeId: "core:script:candidates/filter@1",
 			name: "Meta excluder"
 		})
@@ -120,16 +120,16 @@ describe("the hook in the panel", () => {
 	})
 
 	it("stores the ordered list, hydrates it back, and lights up usedBy", async () => {
-		const view = await scriptsView(db as any)
+		const view = await scriptsView(db)
 		const slop = view.scripts.find((s) => s.name === "Slop killer")!
-		const guard = await createScript(db as any, {
+		const guard = await createScript(db, {
 			typeId: "core:script:text/stop@1",
 			name: "ChatML guard"
 		})
 
 		const option = await writeHookOption()
 		await writeOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			admin(),
@@ -146,22 +146,22 @@ describe("the hook in the panel", () => {
 
 		// The scripts page now knows: the chain is the reference (18 §2), so
 		// the row refuses deletion and names the pipeline holding it.
-		const held = await scriptsView(db as any)
+		const held = await scriptsView(db)
 		expect(
 			held.scripts.find((s) => s.id === slop.id)!.usedBy.length
 		).toBeGreaterThan(0)
-		await expect(deleteScript(db as any, slop.id)).rejects.toThrow(
+		await expect(deleteScript(db, slop.id)).rejects.toThrow(
 			ScriptNotUsableError
 		)
 	})
 
 	it("refuses an ill-typed link at attach, not at run time", async () => {
-		const view = await scriptsView(db as any)
+		const view = await scriptsView(db)
 		const wrongKind = view.scripts.find((s) => s.name === "Meta excluder")!
 		const option = await writeHookOption()
 		await expect(
 			writeOption(
-				db as any,
+				db,
 				SECRET,
 				RESPOND_SPEC_ID,
 				admin(),
@@ -172,7 +172,7 @@ describe("the hook in the panel", () => {
 	})
 
 	it("shows the connection's stop guards beside the chain — the effective view (18 §4c)", async () => {
-		const [conn] = await (db as any)
+		const [conn] = await (db)
 			.insert(schema.connections)
 			.values({ name: "Panel Kobold", type: "koboldcpp" })
 			.returning()
@@ -182,24 +182,24 @@ describe("the hook in the panel", () => {
 		// through the same resolver dispatch uses, so the guards shown here are
 		// the guards the run will apply.
 		//
-		// ⚠ This block was `(db as any).insert(systemSettings).values({
+		// ⚠ This block was `(db).insert(systemSettings).values({
 		// defaultConnectionId })` and the cast is why svelte-check did not
 		// enumerate it with the other 69 sites — it would have compiled cleanly
 		// and failed at runtime on a column that no longer exists.
 		const { setCapabilityDefault } = await import(
 			"$lib/server/connections/capabilityDefaults"
 		)
-		await setCapabilityDefault(db as any, "text->text", {
+		await setCapabilityDefault(db, "text->text", {
 			connectionId: conn.id
 		})
-		const guard = await createScript(db as any, {
+		const guard = await createScript(db, {
 			typeId: "core:script:text/stop@1",
 			name: "Panel guard"
 		})
 		const { attachConnectionScript } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)
-		await attachConnectionScript(db as any, conn.id, guard.id)
+		await attachConnectionScript(db, conn.id, guard.id)
 
 		const option = await writeHookOption()
 		expect(option.connectionScripts).toMatchObject({
@@ -210,7 +210,7 @@ describe("the hook in the panel", () => {
 		// The rank hook accepts no stop scripts, so it shows no connection
 		// guards — the effective view only merges where the union is real.
 		const view = await namespaceView(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			admin()
@@ -225,7 +225,7 @@ describe("the hook in the panel", () => {
 		const option = await writeHookOption()
 		await expect(
 			writeOption(
-				db as any,
+				db,
 				SECRET,
 				RESPOND_SPEC_ID,
 				admin(),
@@ -235,7 +235,7 @@ describe("the hook in the panel", () => {
 		).rejects.toThrow(OptionNotWritableError)
 		await expect(
 			writeOption(
-				db as any,
+				db,
 				SECRET,
 				RESPOND_SPEC_ID,
 				admin(),

@@ -50,6 +50,17 @@ export async function warnIfOpenAdminExposure() {
 let attached = false
 
 /**
+ * The HTTP server a database-less boot could not attach sockets to.
+ *
+ * Kept because the recovery path has no other way back to it: the server object
+ * is created outside the SvelteKit bundle and reaches app code exactly once, in
+ * the root layout's load (see `src/routes/+layout.server.ts`) — and in recovery
+ * mode no page renders, so no layout load runs, so nothing hands it over a
+ * second time. See `attachSocketServerAfterRecovery` below.
+ */
+let deferredHttpServer: HttpServer | null = null
+
+/**
  * Attach Socket.IO to the HTTP server that already serves the app.
  *
  * There is no second listener, no second port, and no socket-specific host or
@@ -72,8 +83,27 @@ export async function attachSocketServer(httpServer: HttpServer) {
 	// Handlers query the database the moment a client connects, so startup has
 	// to be finished before any of them are registered — this is the explicit
 	// form of what importing `db` used to do implicitly.
-	const { appReady } = await import("$lib/server/startup")
+	const { appReady, getDatabaseState } = await import("$lib/server/startup")
 	await appReady
+
+	// A database that would not open leaves every handler below with nothing to
+	// query. Attaching them anyway would trade one clear page for a socket that
+	// connects and then fails on each message, so the sockets simply never
+	// attach — the HTTP side explains the situation (see hooks.server.ts).
+	if (!getDatabaseState().ok) {
+		// Not a permanent refusal: a recovery can put a working database in
+		// place inside this same process, and the handlers have to be able to
+		// come up then. Releasing the idempotence latch is what makes that
+		// possible — the alternative is a recovered instance that serves pages
+		// and answers no socket message until it is restarted.
+		attached = false
+		deferredHttpServer = httpServer
+		console.warn(
+			"[db] Socket server not attached: the database could not be opened."
+		)
+		return
+	}
+	deferredHttpServer = null
 
 	const io = new SocketIOServer(httpServer, {
 		// Governs the polling transport's CORS headers (Socket.IO tries polling
@@ -141,6 +171,29 @@ export async function attachSocketServer(httpServer: HttpServer) {
 	// systemSettings:get request needs the localEmbeddingsSupported flag,
 	// instead of that request paying the one-time import cost.
 	warmLocalEmbeddingSupportProbe()
+}
+
+/**
+ * Attach the sockets that a database-less boot skipped.
+ *
+ * Called by `$lib/server/startup`'s `restartAfterRecovery()`, after the
+ * database is open and the startup tasks have run. A no-op on an instance that
+ * never deferred, which is every instance that booted normally.
+ */
+export async function attachSocketServerAfterRecovery(): Promise<void> {
+	// The deferred reference first, and `globalThis` as the fallback: in
+	// recovery mode `hooks.server.ts` answers before SvelteKit resolves a
+	// route, so the root layout load that normally hands the server over may
+	// never have run and nothing would have been deferred. Both the dev Vite
+	// plugin and the production entry publish it there (see vite.config.ts and
+	// scripts/customize-build.js), which is where the layout load gets it from
+	// too.
+	const httpServer =
+		deferredHttpServer ??
+		((globalThis as any).__SERENE_PUB_HTTP_SERVER__ as HttpServer | null)
+	if (!httpServer) return
+	deferredHttpServer = null
+	await attachSocketServer(httpServer)
 }
 
 async function warmLocalEmbeddingSupportProbe() {

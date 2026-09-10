@@ -79,7 +79,7 @@
  */
 
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-import type { AdapterCapabilities } from "@serene-pub/sdk"
+import type { AdapterCapabilities, WireMode } from "@serene-pub/sdk"
 import { cap, mib, type AdapterIo } from "./io"
 
 export interface AdapterManifestEntry {
@@ -105,6 +105,40 @@ export interface AdapterManifestEntry {
 	 * taken and does it with an authoritative-sounding message.
 	 */
 	io?: AdapterIo
+	/**
+	 * Which of this type's wire modes carry a CONTINUATION as a true prefill.
+	 *
+	 * A second field rather than a grade on `continue_reply`, because the two
+	 * answer different questions and the capability vocabulary can only hold one
+	 * of them. `supports.continue_reply` says whether this connection MAY be
+	 * asked to continue — graded through the four layers like everything else,
+	 * which is where a per-model fact such as "Claude 4.6 rejects a prefill"
+	 * belongs. This says whether the CODE can, and it depends on the wire the
+	 * request goes out on:
+	 *
+	 *   - `completion` prefills by construction. The assembled prompt ends with
+	 *     an OPEN assistant block holding the partial, and the adapter sends that
+	 *     string, so the model writes the next characters of it.
+	 *   - `chat` prefills only where the protocol itself accepts a trailing
+	 *     assistant turn as one. Anthropic's Messages API does; an
+	 *     OpenAI-compatible endpoint hands it to a chat template instead, and
+	 *     whether the model carries the turn on is that template's decision.
+	 *
+	 * A grade could not express "in this wire and not that one", and a resolver
+	 * rule that hardcoded "completion always, chat never except Anthropic" would
+	 * be the same table written as a conditional in a file that cannot see an
+	 * adapter. `$lib/shared/connectionAdapters/continueReply` reads this, the
+	 * capability panel and the verb both read that, and
+	 * `BaseConnectionAdapter.continuationRoute` routes on it — one fact, four
+	 * readers, no second spelling.
+	 *
+	 * ⚠ Absent means NO WIRE CARRIES IT, and the conformance test pins that
+	 * against `supports`: a type declaring `continue_reply` with no
+	 * `continuesIn` would offer a switch nothing could honour, and a type with
+	 * `continuesIn` and no capability key would carry a continuation no layer
+	 * could ever grant.
+	 */
+	continuesIn?: readonly WireMode[]
 }
 
 /**
@@ -127,12 +161,12 @@ export interface AdapterManifestEntry {
  *
  * The three shapes of "nothing declared", so the next reader can tell them apart:
  *
- *   - **OPENAI_CHAT** is twenty-four services behind one wire format. OpenAI's
+ *   - **OPENAI** is twenty-four services behind one wire format. OpenAI's
  *     own numbers are published, and they are not OpenRouter's, Groq's, or a
  *     vLLM instance somebody is running on a workstation. A number here would be
  *     right for one preset and wrong for twenty-three; per-service limits belong
  *     to the preset layer (`PRESET_CAPABILITIES`) the day somebody sources them.
- *   - **OLLAMA, KOBOLDCPP, KOBOLDCPP_MANAGED, LLAMACPP_COMPLETION, LM_STUDIO**
+ *   - **OLLAMA, KOBOLDCPP, KOBOLDCPP_MANAGED, LLAMACPP, LM_STUDIO**
  *     point at a process on somebody's own machine. There is no published cap to
  *     find, and the real constraint is that machine's VRAM.
  *   - **A1111 and KOBOLDCPP_MANAGED_IMAGE** have no `out` block, and that one is
@@ -165,8 +199,8 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 	 * back without one. Image generation over an OpenAI-compatible endpoint would
 	 * be `/v1/images/generations` — a different route, hence a different adapter.
 	 */
-	[CONNECTION_TYPE.OPENAI_CHAT]: {
-		id: CONNECTION_TYPE.OPENAI_CHAT,
+	[CONNECTION_TYPE.OPENAI]: {
+		id: CONNECTION_TYPE.OPENAI,
 		capabilities: {
 			supports: {
 				"text->text": "native",
@@ -176,10 +210,59 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				json_schema: { unproven: true, until: "none" },
 				strict_schema: { unproven: true, until: "none" },
 				tools: "native",
-				streaming: "native"
+				streaming: "native",
+				/**
+				 * BOTH wire modes, and the second one needs saying out loud
+				 * because it is not the endpoint you would guess.
+				 *
+				 * `OpenAIChatAdapter` speaks `/v1/chat/completions` and nothing
+				 * else — there is no `/v1/completions` branch in it and this
+				 * change adds none. What `wire_completion` means here is the
+				 * behaviour `extraJson.prerenderPrompt` used to name: render the
+				 * whole prompt flat through the connection's completion template,
+				 * with that template's stop strings, and hand the model that one
+				 * string (carried in a single user turn, because the envelope has
+				 * nowhere else to put it). Which is precisely what the wire mode
+				 * question asks — what the MODEL receives, one formatted prompt or
+				 * role-tagged turns — rather than which route the POST goes to.
+				 *
+				 * So it is `native` unconditionally and never probed: it works
+				 * against every one of the twenty-four services behind this
+				 * format, because it is still an ordinary chat request. Services
+				 * that should not be called that way say so at the PRESET layer,
+				 * where `openai-official` switches it off.
+				 */
+				wire_chat: "native",
+				wire_completion: "native",
+				/**
+				 * And it continues a reply — in ONE of those two wires.
+				 *
+				 * `native` rather than probed, because this is a claim about the
+				 * FORMAT and not about the model behind it: pre-rendering the
+				 * whole prompt flat leaves the assistant block open, whichever of
+				 * the twenty-four services is answering. `continuesIn` below is
+				 * what says the other wire cannot — in chat mode the partial goes
+				 * as a trailing `{role:"assistant"}` message, which this format
+				 * hands to a chat template rather than treating as a prefill.
+				 */
+				continue_reply: "native"
 			},
-			defaults: ["text->text", "json_object", "tools", "streaming"]
-		}
+			defaults: [
+				"text->text",
+				"json_object",
+				"tools",
+				"streaming",
+				// Both on, so the tie-break decides — and it decides `chat`,
+				// which is what `prerenderPrompt ?? false` has always meant.
+				"wire_chat",
+				"wire_completion",
+				// On, and therefore in effect exactly when the resolved wire mode
+				// is the one that carries it. Nothing to switch by hand for
+				// somebody already sending completions.
+				"continue_reply"
+			]
+		},
+		continuesIn: ["completion"]
 	},
 
 	/**
@@ -204,16 +287,69 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				"text+image->text": "native",
 				"text+document->text": "native",
 				tools: "native",
-				streaming: "native"
+				streaming: "native",
+				/**
+				 * Chat and ONLY chat, and the absence is structural rather than a
+				 * default that happens to be off.
+				 *
+				 * The Messages API has no completion form: there is no field on
+				 * the request that takes one flat prompt, so there is nothing for
+				 * a preset, a probe or a person to switch on. `resolveCapabilities`
+				 * iterates `supports`, so leaving `wire_completion` out is what
+				 * makes that unreachable rather than merely unset — the same
+				 * asymmetry `text->image` uses two entries down.
+				 *
+				 * ⚠ This replaces `compilePrompt({useSessionFormat: true})`, which
+				 * was the unconditional-true that hid the defect: the pipeline
+				 * hands its payload over through `withCompiledPrompt` and never
+				 * calls `compilePrompt`'s argument path at all, so the flag was
+				 * never set on a pipeline run and this adapter received a payload
+				 * built for text completion. The empty-messages floor in
+				 * `buildAnthropicMessages` then filled in `"Hello"` and sent that
+				 * instead of the assembled prompt. Do not reintroduce a
+				 * derivation here; the connection answers this question now.
+				 */
+				wire_chat: "native",
+				/**
+				 * The one CHAT wire that genuinely prefills — and the one entry
+				 * whose grade is a question rather than a statement.
+				 *
+				 * The Messages API takes a trailing assistant turn as a prefill:
+				 * the model writes the next characters of that turn rather than
+				 * opening a new one. That is a property of the FORMAT, which is
+				 * what this layer grades, and it is why `continuesIn` below says
+				 * `chat` where every other entry says `completion`.
+				 *
+				 * ⚠ **Whether the MODEL accepts one is per-model, and the answer
+				 * changed.** Claude Opus 4.6, Sonnet 4.6 and everything after
+				 * them REJECT a last-assistant-turn prefill with a 400; Claude
+				 * 4.5 and earlier accept it. Both families are in this adapter's
+				 * own `listModels` today. Per-model is precisely what
+				 * `{unproven: true}` is for — the same reason vision is probed
+				 * everywhere it is not asserted — and `until: "none"` is the only
+				 * honest pessimism here: assuming yes turns every Continue on a
+				 * current model into a 400 mid-session, while assuming no leaves
+				 * the button disabled with a sentence saying which switch to
+				 * flip.
+				 *
+				 * So it is deliberately NOT in `defaults` below. Somebody pointed
+				 * at a 4.5-family model switches it on and it stays on; nothing
+				 * probes it, because `testConnection` here answers with a key
+				 * check rather than a capability report.
+				 */
+				continue_reply: { unproven: true, until: "none" }
 			},
 			defaults: [
 				"text->text",
 				"text+image->text",
 				"text+document->text",
 				"tools",
-				"streaming"
+				"streaming",
+				"wire_chat"
+				// No `continue_reply` — see the note above. Switchable, not on.
 			]
 		},
+		continuesIn: ["chat"],
 		io: {
 			in: {
 				image: {
@@ -362,16 +498,32 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				json_object: "native",
 				json_schema: "native",
 				tools: { unproven: true, until: "emulated" },
-				streaming: "native"
+				streaming: "native",
+				// `ollama.chat()` and `ollama.generate()` — two real methods on
+				// one client, both implemented in `OllamaAdapter`, so both are
+				// declared. This replaces `extraJson.useSession`, which that file
+				// read with two different defaults in two places (`!!x` at
+				// `compilePrompt`, `x ?? true` at the send) and documented as a
+				// bug against itself.
+				wire_chat: "native",
+				wire_completion: "native",
+				// `ollama.generate()` is handed the flat prompt, open assistant
+				// block and all, so completion wire prefills. `ollama.chat()`
+				// takes messages and applies the model's own template to them.
+				continue_reply: "native"
 			},
 			defaults: [
 				"text->text",
 				"json_object",
 				"json_schema",
 				"tools",
-				"streaming"
+				"streaming",
+				"wire_chat",
+				"wire_completion",
+				"continue_reply"
 			]
-		}
+		},
+		continuesIn: ["completion"]
 	},
 
 	/**
@@ -410,10 +562,31 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				"text->image": { unproven: true, until: "none" },
 				grammar: "native",
 				tools: "emulated",
-				streaming: "native"
+				streaming: "native",
+				// `/v1/chat/completions` and `/api/v1/generate`, both spoken by
+				// `KoboldCppAdapter` today. Unconditional rather than probed:
+				// `/api/extra/version` reports which MODELS are loaded (txt2img,
+				// vision, tts) and says nothing about either endpoint, because
+				// both are always there. A probe entry for these would be an
+				// invention rather than a recording — see `probeCapabilities.ts`.
+				wire_chat: "native",
+				wire_completion: "native",
+				// `/api/v1/generate` takes the prompt verbatim — no template is
+				// applied — so the open assistant block reaches the model as
+				// written. `/v1/chat/completions` does not.
+				continue_reply: "native"
 			},
-			defaults: ["text->text", "grammar", "tools", "streaming"]
-		}
+			defaults: [
+				"text->text",
+				"grammar",
+				"tools",
+				"streaming",
+				"wire_chat",
+				"wire_completion",
+				"continue_reply"
+			]
+		},
+		continuesIn: ["completion"]
 	},
 
 	/**
@@ -443,25 +616,81 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				// module without the key, fails the conformance test. Do not "restore" it.
 				grammar: "native",
 				tools: "emulated",
-				streaming: "native"
+				streaming: "native",
+				// The same two endpoints as plain KOBOLDCPP: this type extends
+				// that adapter and inherits its send path unchanged.
+				wire_chat: "native",
+				wire_completion: "native",
+				// Inherited with the send path: this type extends KoboldCppAdapter.
+				continue_reply: "native"
 			},
-			defaults: ["text->text", "grammar", "tools", "streaming"]
-		}
+			defaults: [
+				"text->text",
+				"grammar",
+				"tools",
+				"streaming",
+				"wire_chat",
+				"wire_completion",
+				"continue_reply"
+			]
+		},
+		continuesIn: ["completion"]
 	},
 
-	/** llama.cpp's llama-server completion API. Grammar, and text, and no more. */
-	[CONNECTION_TYPE.LLAMACPP_COMPLETION]: {
-		id: CONNECTION_TYPE.LLAMACPP_COMPLETION,
+	/** llama.cpp's llama-server. Grammar, and text, and no more. */
+	[CONNECTION_TYPE.LLAMACPP]: {
+		id: CONNECTION_TYPE.LLAMACPP,
 		capabilities: {
 			supports: {
 				"text->text": "native",
 				"text+image->text": { unproven: true, until: "none" },
 				grammar: "native",
 				tools: "emulated",
-				streaming: "native"
+				streaming: "native",
+				/**
+				 * Both wires, and the day the key arrived is the day the branch
+				 * did.
+				 *
+				 * This entry used to declare `wire_completion` alone, with a
+				 * paragraph explaining that llama-server exposes
+				 * `/v1/chat/completions` but this TYPE could not reach it — no
+				 * chat branch in `LlamaCppAdapter`, so declaring the key would
+				 * have been a key with no code behind it, which is the
+				 * `text->image` failure this whole file was written to end. The
+				 * branch exists now (`isChatWire`, the same `useSession` idiom
+				 * `OllamaAdapter` and `KoboldCppAdapter` use), so the
+				 * declaration follows it rather than anticipating it.
+				 *
+				 * ⚠ **`wire_chat` is SUPPORTED but not DEFAULTED, and the
+				 * asymmetry is the whole point.** `supports` is a gate and
+				 * `defaults` is a position (`declaredWireModes`): a mode
+				 * declared and not defaulted resolves to 0 until a preset, a
+				 * probe or a person switches it on. Completion is what every
+				 * existing `llamacpp_completion` row was ACTUALLY being called
+				 * by, and the rename in `drizzle/0105_llamacpp_service_type.sql`
+				 * carries those rows over verbatim — so defaulting chat here
+				 * would silently re-tune every install that upgrades, on the
+				 * send path, which is precisely the class of change
+				 * `0098_wire_mode_intent.sql` exists to have prevented.
+				 */
+				wire_chat: "native",
+				wire_completion: "native",
+				// `/completion` takes the raw prompt, so the seed block stays
+				// open. And this type DEFAULTS to completion wire, which makes it
+				// the one backend where Continue works out of the box.
+				continue_reply: "native"
 			},
-			defaults: ["text->text", "grammar", "tools", "streaming"]
-		}
+			defaults: [
+				"text->text",
+				"grammar",
+				"tools",
+				"streaming",
+				// No `wire_chat` — see the note above. Switchable, not on.
+				"wire_completion",
+				"continue_reply"
+			]
+		},
+		continuesIn: ["completion"]
 	},
 
 	/** The LM Studio SDK. Native structured output, emulated tools. */
@@ -474,16 +703,27 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				json_object: "native",
 				json_schema: "native",
 				tools: "emulated",
-				streaming: "native"
+				streaming: "native",
+				// `.respond()` takes messages, `.complete()` takes a prompt; the
+				// adapter branches between them. Replaces `extraJson.useSession`.
+				wire_chat: "native",
+				wire_completion: "native",
+				// `.complete()` is handed the prompt string; `.respond()` is
+				// handed messages and templates them.
+				continue_reply: "native"
 			},
 			defaults: [
 				"text->text",
 				"json_object",
 				"json_schema",
 				"tools",
-				"streaming"
+				"streaming",
+				"wire_chat",
+				"wire_completion",
+				"continue_reply"
 			]
-		}
+		},
+		continuesIn: ["completion"]
 	},
 
 	/**
@@ -570,18 +810,38 @@ export const PRESET_CAPABILITIES: Record<
 	// This used to carry `"text->image": false` as the worked example of the
 	// adapter-gate-versus-preset-default distinction — the toggle existing here
 	// and being off, versus not existing at all on the native Anthropic type.
-	// That key is gone because OPENAI_CHAT no longer declares `text->image` for
+	// That key is gone because OPENAI no longer declares `text->image` for
 	// anyone (see its entry: nothing implements `generateImage` for that type),
 	// and a preset key the adapter does not declare is inert — `resolveCapabilities`
 	// iterates `supports`, so it would have been a line that looked like it did
 	// something. The distinction it illustrated is alive in `json_schema`, one
-	// line down: OPENAI_CHAT declares it probed and a preset may assert it, while
+	// line down: OPENAI declares it probed and a preset may assert it, while
 	// the native ANTHROPIC entry does not declare it at all and no preset can.
 	anthropic: { "text+image->text": true },
 
 	"openai-official": {
 		"text+image->text": true,
-		// No `"text->image": true`. This was the LAYER that turned OPENAI_CHAT's
+		/**
+		 * Chat only — a KNOWN TRUTH about the service, recorded at the layer that
+		 * can hold one.
+		 *
+		 * The OPENAI entry declares `wire_completion` because the FORMAT can
+		 * express it (see there: pre-rendering one flat prompt into a single user
+		 * turn is an ordinary chat request and works against every compatible
+		 * endpoint). Whether it is a sensible way to call a *particular* service is
+		 * exactly what a preset knows and the generic protocol does not, and for
+		 * OpenAI's own API it is not: the models are chat-tuned, the app's own
+		 * default has always been off, and a Vicuna-wrapped blob in one user turn
+		 * is a worse prompt than the turns it was built from.
+		 *
+		 * A DEFAULT and not a gate. Somebody who knows better switches it on by
+		 * hand and that override outranks this line, which is the sentence the
+		 * capability panel already promises. The gate — the thing no layer can
+		 * reach past — is the native ANTHROPIC entry, which declares no
+		 * `wire_completion` at all because the Messages API has no field for one.
+		 */
+		wire_completion: false,
+		// No `"text->image": true`. This was the LAYER that turned OPENAI's
 		// probed key into a resolved `native` — which cleared the bind guard and
 		// let an image slot accept a connection with no image adapter behind it.
 		// Removing the key from `supports` alone would have left this line inert

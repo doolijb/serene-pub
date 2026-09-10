@@ -112,7 +112,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 }, 180_000)
 
 afterAll(async () => {
@@ -183,7 +183,7 @@ describe("a user's own config comes across", () => {
 			"$lib/server/pipelines/config/panel"
 		)
 		const decls = (
-			await declarations(db as any, spec.activeVersionId!)
+			await declarations(db, spec.activeVersionId!)
 		).filter((d: any) => d.control === "prompts-ref")
 		const pools = new Set(
 			decls.map((d: any) => `${d.nodeTypeId}#${d.slot}`)
@@ -380,7 +380,7 @@ describe("the numbers stop travelling with the prompt", () => {
 		const { migrateLegacyParams } = await import(
 			"$lib/server/pipelines/migrate/migrateLegacy"
 		)
-		await migrateLegacyParams(db as any)
+		await migrateLegacyParams(db)
 
 		const rows = await db
 			.select()
@@ -403,7 +403,7 @@ describe("running it again", () => {
 		)
 		const before = await db.select().from(schema.pipelineConfigs)
 
-		const report = await migrateLegacyConfigs(db as any)
+		const report = await migrateLegacyConfigs(db)
 
 		// Idempotent means *already-migrated rows are not copied again* — not
 		// that the pass never writes. A legacy row created since the last run is

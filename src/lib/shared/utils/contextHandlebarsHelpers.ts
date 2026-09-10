@@ -1,10 +1,26 @@
 import type Handlebars from "handlebars"
+import type { CompletionTemplate } from "$lib/shared/constants/completionTemplates"
 import { PromptBlockFormatter } from "./PromptBlockFormatter"
 
 // Shared between the real prompt builder and the isolated preview compiler so both render identically.
+/**
+ * ⚠ **Whatever is passed as `promptFormat` here is FROZEN for this instance.**
+ *
+ * Every registration below is guarded by `if (!handlebars.helpers.X)`, so the
+ * block helpers close over the first value an instance ever saw. Callers create
+ * a fresh `Handlebars.create()` per render (`prompt/renderers.ts`) precisely so
+ * that this cannot pin one connection's framing onto everybody else's prompts —
+ * and, since the framing can now be a row an admin is editing, so that a save
+ * is not invisible until the next restart.
+ *
+ * A resolved `CompletionTemplate` renders from that row directly. A bare string
+ * is a KEY, and a key resolves against the BUILT-INS only — correct for the
+ * eight shipped formats and silently wrong for every other row in
+ * `completion_templates`, which is why the render path passes the row.
+ */
 export function registerContextHandlebarsHelpers(
 	handlebars: typeof Handlebars,
-	{ promptFormat }: { promptFormat: string }
+	{ promptFormat }: { promptFormat: string | CompletionTemplate }
 ) {
 	if (!handlebars.helpers.eq)
 		handlebars.registerHelper("eq", (a, b) => a === b)

@@ -30,7 +30,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -106,7 +106,7 @@ describe("creation as a run (24 §12)", () => {
 		} = await import("$lib/server/sessions/greetings")
 
 		const viaPipeline = await makeSession("via-pipeline")
-		const dispatched = await dispatchSessionEvent(db as any, {
+		const dispatched = await dispatchSessionEvent(db, {
 			sessionId: viaPipeline.id,
 			userId,
 			genreId: "core:genre/chat",
@@ -156,7 +156,7 @@ describe("creation as a run (24 §12)", () => {
 			"$lib/server/pipelines/runtime/sessionEvents"
 		)
 		const session = await makeSession("no-create-genre")
-		const dispatched = await dispatchSessionEvent(db as any, {
+		const dispatched = await dispatchSessionEvent(db, {
 			sessionId: session.id,
 			userId,
 			genreId: "acme:input/crawl@1",
@@ -172,7 +172,7 @@ describe("creation as a run (24 §12)", () => {
 		)
 		expect(
 			await resolveSessionEventSpec(
-				db as any,
+				db,
 				"core:genre/chat",
 				"member-added"
 			)

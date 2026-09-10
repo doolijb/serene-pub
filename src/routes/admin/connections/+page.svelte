@@ -83,12 +83,17 @@
 	</a>
 </div>
 
+<!-- `notes` is in the search haystack below, and that is not the app reading a
+     note: this box is a person looking for their OWN words, the same as
+     searching by endpoint. Nothing interprets one, branches on one, or infers a
+     capability from one — the `connections.notes` column comment draws its line
+     at the app ACTING on the text, and find-my-thing is not acting on it. -->
 <AdminList
 	{rows}
 	{columns}
 	{loading}
 	searchText={(r) =>
-		`${r.name ?? ""} ${r.type ?? ""} ${r.modality ?? ""} ${r.model ?? ""} ${r.baseUrl ?? ""}`}
+		`${r.name ?? ""} ${r.type ?? ""} ${r.modality ?? ""} ${r.model ?? ""} ${r.baseUrl ?? ""} ${r.notes ?? ""}`}
 	searchPlaceholder="Search connections…"
 	defaultSort="name"
 	storageKey="serene-pub:adminView:connections"

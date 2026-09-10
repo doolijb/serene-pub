@@ -18,6 +18,7 @@
 	import TagsSidebar from "./sidebars/TagsSidebar.svelte"
 	import UsersSidebar from "./sidebars/UsersSidebar.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import {
 		registerLanguageSocket,
 		setLanguage
@@ -602,60 +603,65 @@
 			.forEach((el) => el.remove())
 	}
 
-	onMount(() => {
-		socket.on(
-			"customThemes:list",
-			(msg: Sockets.CustomThemes.List.Response) => {
-				const allMeta = [...msg.myThemes, ...msg.instanceThemes]
-				const customNames = new Set(allMeta.map((t) => t.name))
-				const builtinNames = new Set(Theme.options.map(([v]) => v))
+	// Every listener below is named so `off` can name it too. A bare
+	// `socket.off("customThemes:list")` removes EVERY listener for that event —
+	// including the theme manager's and the theme editor's, which then stop
+	// updating for the rest of the session.
+	function handleCustomThemesList(msg: Sockets.CustomThemes.List.Response) {
+		const allMeta = [...msg.myThemes, ...msg.instanceThemes]
+		const customNames = new Set(allMeta.map((t) => t.name))
+		const builtinNames = new Set(Theme.options.map(([v]) => v))
 
-				// Pre-populate cssKey map so data-theme updates before getCss response arrives
-				allMeta.forEach((t) => {
-					if (t.cssKey) customThemeCssKeys[t.name] = t.cssKey
-				})
-
-				// Fall back to hamlindigo if the active theme is a custom theme that no longer exists
-				const currentTheme = userSettingsCtx.settings?.theme
-				if (
-					currentTheme &&
-					!builtinNames.has(currentTheme) &&
-					!customNames.has(currentTheme)
-				) {
-					socket.emit("userSettings:updateTheme", {
-						theme: Theme.HAMLINDIGO
-					})
-				}
-
-				// Fetch CSS for current themes
-				allMeta.forEach((t) =>
-					socket.emit("customThemes:getCss", { name: t.name })
-				)
-			}
-		)
-		socket.on(
-			"customThemes:getCss",
-			(msg: Sockets.CustomThemes.GetCss.Response) => {
-				customThemeCssKeys[msg.name] = msg.cssKey
-				// Filename (element ID) = cssKey — fresh element per cssKey, never stale
-				injectCustomThemeCss(
-					msg.name,
-					msg.cssKey,
-					`[data-theme='${msg.cssKey}'] {\n${msg.css}\n}`
-				)
-			}
-		)
-		socket.on("customThemes:delete", () => {
-			socket.emit("customThemes:list", {})
+		// Pre-populate cssKey map so data-theme updates before getCss response arrives
+		allMeta.forEach((t) => {
+			if (t.cssKey) customThemeCssKeys[t.name] = t.cssKey
 		})
-		socket.on(
-			"customThemes:save",
-			(msg: Sockets.CustomThemes.Save.Response) => {
-				// Update cssKey immediately so data-theme snaps to new selector before CSS arrives
-				customThemeCssKeys[msg.theme.name] = msg.theme.cssKey
-				socket.emit("customThemes:getCss", { name: msg.theme.name })
-			}
+
+		// Fall back to hamlindigo if the active theme is a custom theme that no longer exists
+		const currentTheme = userSettingsCtx.settings?.theme
+		if (
+			currentTheme &&
+			!builtinNames.has(currentTheme) &&
+			!customNames.has(currentTheme)
+		) {
+			socket.emit("userSettings:updateTheme", {
+				theme: Theme.HAMLINDIGO
+			})
+		}
+
+		// Fetch CSS for current themes
+		allMeta.forEach((t) =>
+			socket.emit("customThemes:getCss", { name: t.name })
 		)
+	}
+
+	function handleCustomThemesGetCss(
+		msg: Sockets.CustomThemes.GetCss.Response
+	) {
+		customThemeCssKeys[msg.name] = msg.cssKey
+		// Filename (element ID) = cssKey — fresh element per cssKey, never stale
+		injectCustomThemeCss(
+			msg.name,
+			msg.cssKey,
+			`[data-theme='${msg.cssKey}'] {\n${msg.css}\n}`
+		)
+	}
+
+	function handleCustomThemesDelete() {
+		socket.emit("customThemes:list", {})
+	}
+
+	function handleCustomThemesSave(msg: Sockets.CustomThemes.Save.Response) {
+		// Update cssKey immediately so data-theme snaps to new selector before CSS arrives
+		customThemeCssKeys[msg.theme.name] = msg.theme.cssKey
+		socket.emit("customThemes:getCss", { name: msg.theme.name })
+	}
+
+	onMount(() => {
+		socket.on("customThemes:list", handleCustomThemesList)
+		socket.on("customThemes:getCss", handleCustomThemesGetCss)
+		socket.on("customThemes:delete", handleCustomThemesDelete)
+		socket.on("customThemes:save", handleCustomThemesSave)
 		socket.emit("customThemes:list", {})
 	})
 
@@ -722,189 +728,229 @@
 		}
 	})
 
+	// Every listener below is named so `off` can name it too. A bare
+	// `socket.off("users:current")` removes EVERY listener for that event —
+	// including Document View's AccessibleShell — which then stops updating for
+	// the rest of the session.
+	function handleSystemSettingsGet(
+		message: SocketEventMap["systemSettings:get"]["response"]
+	) {
+		systemSettingsCtx.settings = {
+			...message.systemSettings,
+			isAndroidWrapper: message.isAndroidWrapper,
+			localEmbeddingsSupported: message.localEmbeddingsSupported
+		}
+		systemSettingsCtx.capabilityDefaults = message.capabilityDefaults
+		ollamaSettingsCtx.settings = { ...message.ollamaSettings }
+		koboldCppSettingsCtx.settings = { ...message.koboldCppSettings }
+	}
+
+	function handleUsersCurrent(
+		message: SocketEventMap["users:current"]["response"]
+	) {
+		userCtx.user = message.user
+
+		// userSettings:get is requested by the `hasUser` $effect above;
+		// only the admin-only taskQueue fetch needs to happen here.
+		if (message.user?.isAdmin) {
+			socket.emit("taskQueue:get", {})
+		}
+	}
+
+	function handleUserSettingsGet(
+		message: SocketEventMap["userSettings:get"]["response"]
+	) {
+		userSettingsCtx.settings = message.userSettings
+		// The *resolved* language, not the stored choice — the stored one
+		// may be null meaning "follow the instance default", and the
+		// renderer needs a language rather than an intent (R5).
+		setLanguage(message.userSettings.effectiveLanguage)
+	}
+
+	function handleError(message: SocketEventMap["error"]["response"]) {
+		toaster.error({
+			title: message.error,
+			description: message.description
+		})
+	}
+
+	function handleSuccess(message: SocketEventMap["success"]["response"]) {
+		toaster.success({
+			title: message.title,
+			description: message.description
+		})
+	}
+
+	function handleVectorizationProgress(
+		message: SocketEventMap["vectorization:progress"]["response"]
+	) {
+		vectorizationCtx.status = message.status
+		vectorizationCtx.currentItem = message.currentItem
+		vectorizationCtx.queued = message.queued
+		vectorizationCtx.completed = message.completed
+		vectorizationCtx.priorityQueue = message.priorityQueue ?? []
+		vectorizationCtx.history = message.history ?? []
+	}
+
+	function handleTaskQueueUpdate(
+		message: SocketEventMap["taskQueue:update"]["response"]
+	) {
+		taskQueueCtx.tasks = message.tasks ?? []
+	}
+
+	function handleActivityUpdate(
+		data: SocketEventMap["activity:update"]["response"]
+	) {
+		const activities = data.activities ?? []
+		const graphActivities = activities.filter(
+			(a: any) => a.kind === "graph_build"
+		)
+		const sceneActivities = activities.filter(
+			(a: any) => a.kind === "scene_summarize"
+		)
+
+		// Graph build: take the most recent one
+		const latestGraph = [...graphActivities].sort(
+			(a: any, b: any) =>
+				new Date(b.startedAt).getTime() -
+				new Date(a.startedAt).getTime()
+		)[0] as any
+		if (!latestGraph) {
+			graphBuildsCtx.activeBuild = null
+		} else {
+			const prevTrace =
+				graphBuildsCtx.activeBuild?.activityId === latestGraph.id
+					? graphBuildsCtx.activeBuild?.trace
+					: undefined
+			graphBuildsCtx.activeBuild = {
+				activityId: latestGraph.id,
+				userId: latestGraph.userId,
+				lorebookId: latestGraph.lorebookId,
+				lorebookLabel: latestGraph.lorebookLabel,
+				mode: latestGraph.mode,
+				status: latestGraph.status,
+				phase: latestGraph.phase,
+				sceneIndex: latestGraph.sceneIndex,
+				totalScenes: latestGraph.totalScenes,
+				nodesFound: latestGraph.nodesFound,
+				relsFound: latestGraph.relsFound,
+				currentPair: latestGraph.currentPair,
+				currentSceneLabel: latestGraph.currentSceneLabel,
+				proposal: latestGraph.proposal,
+				sceneLabels: latestGraph.sceneLabels,
+				seedTempIdMap: latestGraph.seedTempIdMap,
+				seedNodeNames: latestGraph.seedNodeNames,
+				relationshipDiagnostics: latestGraph.relationshipDiagnostics,
+				filteredWorldLoreNames: latestGraph.filteredWorldLoreNames,
+				errorMessage: latestGraph.errorMessage,
+				errorRaw: latestGraph.errorRaw,
+				startedAt: latestGraph.startedAt,
+				trace: prevTrace
+			}
+		}
+
+		// Scene summarizations: keep all
+		sceneSummarizesCtx.activities = sceneActivities.map((a: any) => ({
+			activityId: a.id,
+			userId: a.userId,
+			sceneId: a.sceneId,
+			sceneName: a.sceneName,
+			lorebookId: a.lorebookId,
+			lorebookLabel: a.lorebookLabel,
+			historyEntryId: a.historyEntryId,
+			status: a.status,
+			phase: a.phase,
+			batch: a.batch,
+			totalBatches: a.totalBatches,
+			errorMessage: a.errorMessage,
+			pendingResult: a.pendingResult,
+			startedAt: a.startedAt
+		}))
+
+		// Session-side world/character lore summarize activities
+		const sessionSummarizeActivities = activities.filter(
+			(a: any) => a.kind === "session_summarize"
+		)
+		sessionSummarizesCtx.activities = sessionSummarizeActivities.map(
+			(a: any) => ({
+				activityId: a.id,
+				userId: a.userId,
+				sessionId: a.sessionId,
+				sessionLabel: a.sessionLabel,
+				loreType: a.loreType,
+				lorebookId: a.lorebookId,
+				topic: a.topic,
+				status: a.status,
+				phase: a.phase,
+				batch: a.batch,
+				totalBatches: a.totalBatches,
+				errorMessage: a.errorMessage,
+				pendingResult: a.pendingResult,
+				startedAt: a.startedAt
+			})
+		)
+
+		// History entry compile activities
+		const compileActivities = activities.filter(
+			(a: any) => a.kind === "compile_history_entry"
+		)
+		compileEntriesCtx.activities = compileActivities.map((a: any) => ({
+			activityId: a.id,
+			userId: a.userId,
+			historyEntryId: a.historyEntryId,
+			historyEntryDate: a.historyEntryDate,
+			lorebookId: a.lorebookId,
+			lorebookLabel: a.lorebookLabel,
+			status: a.status,
+			phase: a.phase,
+			batch: a.batch,
+			totalBatches: a.totalBatches,
+			errorMessage: a.errorMessage,
+			pendingResult: a.pendingResult,
+			startedAt: a.startedAt
+		}))
+	}
+
+	function handleNarrativeGraphBuildLog(
+		entry: SocketEventMap["narrativeGraph:buildLog"]["response"]
+	) {
+		if (!graphBuildsCtx.activeBuild) return
+		graphBuildsCtx.activeBuild.trace = [
+			...(graphBuildsCtx.activeBuild.trace ?? []),
+			entry
+		]
+	}
+
+	let unregisterLanguageSocket: (() => void) | undefined
+
 	function initializeSocketConnection() {
-		socket.on("systemSettings:get", (message) => {
-			systemSettingsCtx.settings = {
-				...message.systemSettings,
-				isAndroidWrapper: message.isAndroidWrapper,
-				localEmbeddingsSupported: message.localEmbeddingsSupported
-			}
-			systemSettingsCtx.capabilityDefaults = message.capabilityDefaults
-			ollamaSettingsCtx.settings = { ...message.ollamaSettings }
-			koboldCppSettingsCtx.settings = { ...message.koboldCppSettings }
-		})
+		socket.on("systemSettings:get", handleSystemSettingsGet)
 
-		socket.on("users:current", (message) => {
-			userCtx.user = message.user
-
-			// userSettings:get is requested by the `hasUser` $effect above;
-			// only the admin-only taskQueue fetch needs to happen here.
-			if (message.user?.isAdmin) {
-				socket.emit("taskQueue:get", {})
-			}
-		})
+		socket.on("users:current", handleUsersCurrent)
 
 		// Listen for user settings
-		socket.on("userSettings:get", (message) => {
-			userSettingsCtx.settings = message.userSettings
-			// The *resolved* language, not the stored choice — the stored one
-			// may be null meaning "follow the instance default", and the
-			// renderer needs a language rather than an intent (R5).
-			setLanguage(message.userSettings.effectiveLanguage)
-		})
-		registerLanguageSocket()
+		socket.on("userSettings:get", handleUserSettingsGet)
+		// registerLanguageSocket hands back the teardown for its own listener;
+		// blanket-offing "language:catalog" here would also take out Document
+		// View's AccessibleShell listener.
+		unregisterLanguageSocket = registerLanguageSocket()
 
 		// Capture all otherwise-unhandled "*:error" events (see handleAnyEvent
 		// / HANDLED_ERROR_EVENTS above for why this uses onAny rather than a
 		// literal "**:error" listener, which never fires).
 		socket.onAny(handleAnyEvent)
 
-		socket.on("error", (message) => {
-			toaster.error({
-				title: message.error,
-				description: message.description
-			})
-		})
+		socket.on("error", handleError)
 
-		socket.on("success", (message) => {
-			toaster.success({
-				title: message.title,
-				description: message.description
-			})
-		})
+		socket.on("success", handleSuccess)
 
-		socket.on("vectorization:progress", (message) => {
-			vectorizationCtx.status = message.status
-			vectorizationCtx.currentItem = message.currentItem
-			vectorizationCtx.queued = message.queued
-			vectorizationCtx.completed = message.completed
-			vectorizationCtx.priorityQueue = message.priorityQueue ?? []
-			vectorizationCtx.history = message.history ?? []
-		})
+		socket.on("vectorization:progress", handleVectorizationProgress)
 
-		socket.on("taskQueue:update", (message) => {
-			taskQueueCtx.tasks = message.tasks ?? []
-		})
+		socket.on("taskQueue:update", handleTaskQueueUpdate)
 
-		socket.on("activity:update", (data) => {
-			const activities = data.activities ?? []
-			const graphActivities = activities.filter(
-				(a: any) => a.kind === "graph_build"
-			)
-			const sceneActivities = activities.filter(
-				(a: any) => a.kind === "scene_summarize"
-			)
+		socket.on("activity:update", handleActivityUpdate)
 
-			// Graph build: take the most recent one
-			const latestGraph = [...graphActivities].sort(
-				(a: any, b: any) =>
-					new Date(b.startedAt).getTime() -
-					new Date(a.startedAt).getTime()
-			)[0] as any
-			if (!latestGraph) {
-				graphBuildsCtx.activeBuild = null
-			} else {
-				const prevTrace =
-					graphBuildsCtx.activeBuild?.activityId === latestGraph.id
-						? graphBuildsCtx.activeBuild?.trace
-						: undefined
-				graphBuildsCtx.activeBuild = {
-					activityId: latestGraph.id,
-					userId: latestGraph.userId,
-					lorebookId: latestGraph.lorebookId,
-					lorebookLabel: latestGraph.lorebookLabel,
-					mode: latestGraph.mode,
-					status: latestGraph.status,
-					phase: latestGraph.phase,
-					sceneIndex: latestGraph.sceneIndex,
-					totalScenes: latestGraph.totalScenes,
-					nodesFound: latestGraph.nodesFound,
-					relsFound: latestGraph.relsFound,
-					currentPair: latestGraph.currentPair,
-					currentSceneLabel: latestGraph.currentSceneLabel,
-					proposal: latestGraph.proposal,
-					sceneLabels: latestGraph.sceneLabels,
-					seedTempIdMap: latestGraph.seedTempIdMap,
-					seedNodeNames: latestGraph.seedNodeNames,
-					relationshipDiagnostics:
-						latestGraph.relationshipDiagnostics,
-					filteredWorldLoreNames: latestGraph.filteredWorldLoreNames,
-					errorMessage: latestGraph.errorMessage,
-					errorRaw: latestGraph.errorRaw,
-					startedAt: latestGraph.startedAt,
-					trace: prevTrace
-				}
-			}
-
-			// Scene summarizations: keep all
-			sceneSummarizesCtx.activities = sceneActivities.map((a: any) => ({
-				activityId: a.id,
-				userId: a.userId,
-				sceneId: a.sceneId,
-				sceneName: a.sceneName,
-				lorebookId: a.lorebookId,
-				lorebookLabel: a.lorebookLabel,
-				historyEntryId: a.historyEntryId,
-				status: a.status,
-				phase: a.phase,
-				batch: a.batch,
-				totalBatches: a.totalBatches,
-				errorMessage: a.errorMessage,
-				pendingResult: a.pendingResult,
-				startedAt: a.startedAt
-			}))
-
-			// Session-side world/character lore summarize activities
-			const sessionSummarizeActivities = activities.filter(
-				(a: any) => a.kind === "session_summarize"
-			)
-			sessionSummarizesCtx.activities = sessionSummarizeActivities.map(
-				(a: any) => ({
-					activityId: a.id,
-					userId: a.userId,
-					sessionId: a.sessionId,
-					sessionLabel: a.sessionLabel,
-					loreType: a.loreType,
-					lorebookId: a.lorebookId,
-					topic: a.topic,
-					status: a.status,
-					phase: a.phase,
-					batch: a.batch,
-					totalBatches: a.totalBatches,
-					errorMessage: a.errorMessage,
-					pendingResult: a.pendingResult,
-					startedAt: a.startedAt
-				})
-			)
-
-			// History entry compile activities
-			const compileActivities = activities.filter(
-				(a: any) => a.kind === "compile_history_entry"
-			)
-			compileEntriesCtx.activities = compileActivities.map((a: any) => ({
-				activityId: a.id,
-				userId: a.userId,
-				historyEntryId: a.historyEntryId,
-				historyEntryDate: a.historyEntryDate,
-				lorebookId: a.lorebookId,
-				lorebookLabel: a.lorebookLabel,
-				status: a.status,
-				phase: a.phase,
-				batch: a.batch,
-				totalBatches: a.totalBatches,
-				errorMessage: a.errorMessage,
-				pendingResult: a.pendingResult,
-				startedAt: a.startedAt
-			}))
-		})
-
-		socket.on("narrativeGraph:buildLog", (entry) => {
-			if (!graphBuildsCtx.activeBuild) return
-			graphBuildsCtx.activeBuild.trace = [
-				...(graphBuildsCtx.activeBuild.trace ?? []),
-				entry
-			]
-		})
+		socket.on("narrativeGraph:buildLog", handleNarrativeGraphBuildLog)
 
 		socket.emit("activity:get", {})
 		socket.emit("systemSettings:get", {})
@@ -978,20 +1024,22 @@
 
 	onDestroy(() => {
 		keyboardNavManager?.removeGlobalListener()
-		socket.off("users:get")
-		socket.off("systemSettings:get")
-		socket.off("userSettings:get")
-		socket.off("language:catalog")
+		socket.off("systemSettings:get", handleSystemSettingsGet)
+		socket.off("users:current", handleUsersCurrent)
+		socket.off("userSettings:get", handleUserSettingsGet)
+		unregisterLanguageSocket?.()
+		unregisterLanguageSocket = undefined
 		socket.offAny(handleAnyEvent)
-		socket.off("error")
-		socket.off("success")
-		socket.off("vectorization:progress")
-		socket.off("activity:update")
-		socket.off("narrativeGraph:buildLog")
-		socket.off("customThemes:list")
-		socket.off("customThemes:getCss")
-		socket.off("customThemes:save")
-		socket.off("customThemes:delete")
+		socket.off("error", handleError)
+		socket.off("success", handleSuccess)
+		socket.off("vectorization:progress", handleVectorizationProgress)
+		socket.off("taskQueue:update", handleTaskQueueUpdate)
+		socket.off("activity:update", handleActivityUpdate)
+		socket.off("narrativeGraph:buildLog", handleNarrativeGraphBuildLog)
+		socket.off("customThemes:list", handleCustomThemesList)
+		socket.off("customThemes:getCss", handleCustomThemesGetCss)
+		socket.off("customThemes:save", handleCustomThemesSave)
+		socket.off("customThemes:delete", handleCustomThemesDelete)
 	})
 </script>
 

@@ -19,6 +19,23 @@
 
 import type { Bindings } from "@serene-pub/sdk"
 import { ok, halt, roughTokens } from "@serene-pub/sdk"
+/**
+ * The node declarations themselves, as types.
+ *
+ * `import type`, so `verbatimModuleSyntax` erases it outright: importing
+ * contracts for real would run `describeQueryType`'s `register()` for every core
+ * type as a side effect of loading the runtime, which is the boot sequence's job
+ * and not this file's.
+ */
+import type * as C from "@serene-pub/contracts"
+import type {
+	ConsumerCtx,
+	CoreQueryCtx,
+	NodeInput,
+	ProviderCtx,
+	TaskCtx,
+	Unsupplied
+} from "./bindingTypes"
 import {
 	keywordQuery,
 	normaliseTfidf
@@ -40,6 +57,12 @@ import {
 	type EntityLinkHit
 } from "$lib/server/pipelines/ranking/entityLink"
 import { buildScanWindow } from "$lib/server/pipelines/ranking/signals"
+import { bindingNames } from "$lib/server/pipelines/ranking/entities"
+import {
+	proposeKeys,
+	MAX_KEYS,
+	MAX_TERM_KEYS
+} from "$lib/server/pipelines/ranking/keyProposal"
 import {
 	rankSemantic,
 	mergeWindows
@@ -72,7 +95,9 @@ import {
 	type JsonDraft
 } from "$lib/server/utils/summarizer/templates"
 import { parseSummaryOutput } from "$lib/server/utils/summarizer/parser"
+import { resolveBatchBudget } from "$lib/server/utils/summarizer/batchBudget"
 import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
+import { explicitStopsFrom } from "$lib/server/connections/stops"
 
 /** Not built yet, and saying so plainly beats failing like a bug. */
 const notYet = (what: string, where: string) => async () =>
@@ -103,6 +128,29 @@ function retrievalParamsFrom(params: any) {
 	const retrieval: Record<string, unknown> = {}
 	if (typeof params.scanDepth === "number")
 		retrieval.scanDepth = params.scanDepth
+	/**
+	 * ⚠ The other half of the `scanDepth` split, and the one that was engine-read
+	 * and declared nowhere.
+	 *
+	 * `keywordQuery` has always taken this off `RetrievalParams` — it is the
+	 * window `speakerCooccurrenceSignal` asks "did this character speak" over,
+	 * and the term-frequency window tf-idf scores against — while the only
+	 * value it could ever hold was `DEFAULT_RETRIEVAL`'s hardcoded 10. Two live
+	 * signals tuned by a constant nobody could reach: the same defect as a
+	 * control nothing reads, pointed the other way.
+	 *
+	 * Clamped at 1 rather than 0. A window of zero messages makes both signals
+	 * identically 0 for every entry, which is not "off" — it is the pool tied,
+	 * silently, with the receipt still reporting two signals it computed.
+	 */
+	if (
+		typeof params.guaranteedMessages === "number" &&
+		Number.isFinite(params.guaranteedMessages)
+	)
+		retrieval.guaranteedMessages = Math.max(
+			1,
+			Math.floor(params.guaranteedMessages)
+		)
 	if (typeof params.maxRecursionDepth === "number")
 		retrieval.maxRecursionDepth = params.maxRecursionDepth
 	if (typeof params.matchMode === "string")
@@ -155,8 +203,9 @@ const SIGNAL_FIELDS: Array<[param: string, signal: keyof SignalWeights]> = [
 	["signalEntityCooccurrence", "entityCooccurrence"],
 	["signalTfidf", "tfidf"],
 	["signalLastRefRecency", "lastRefRecency"],
-	["signalRecency", "recency"],
-	["signalSceneAffinity", "sceneAffinity"],
+	// ⚠ `signalRecency` and `signalSceneAffinity` were the two rows between
+	// these — declared, transposed, scored, and weighing a signal no mechanism
+	// has ever produced. Removed with their declarations; see `SignalWeights`.
 	["signalDensity", "density"],
 	["signalProximity", "proximity"],
 	["signalSemantic", "semantic"],
@@ -267,7 +316,7 @@ function scoreLedFrom(params: any): boolean {
  * 512 — one number with two homes, free to disagree with the model actually
  * being called, warning nobody when it did.
  */
-function contextBudgetFrom(input: any) {
+function contextBudgetFrom(input: NodeInput<typeof C.contextBudget>) {
 	// Already the *values*, not a `sampling_configs` row: the executor resolves
 	// a `sampling` slot through the world's config values. So a key missing here
 	// is a parameter switched off, and the fallbacks below are what applies.
@@ -307,7 +356,47 @@ function contextBudgetFrom(input: any) {
  */
 
 /**
- * The cast, with the row each name belongs to — the gazetteer's first tier.
+ * What `ctx.read("session_cast")` returns, as much of it as this file names.
+ *
+ * ⚠ **It was `any`, and that is what let a phantom read survive.** A property
+ * misspelt on an `any` is `undefined` at runtime and silent at build, so the
+ * only thing standing between this seam and a vocabulary that quietly contains
+ * nothing is that somebody types the shape out. Optional and nullable
+ * throughout, because the host really can return `null` here — a session that no
+ * longer exists — and every field below is one a caller may not have selected.
+ */
+interface SessionCastRead {
+	sessionCharacters?: Array<{
+		character?: {
+			id?: number | null
+			name?: string | null
+			nickname?: string | null
+			aliases?: unknown
+		} | null
+		/** Attached by the host from `lorebook_bindings`, not a cast column. */
+		absorbedAliases?: unknown
+	} | null> | null
+	sessionPersonas?: Array<{
+		persona?: {
+			id?: number | null
+			name?: string | null
+			aliases?: unknown
+		} | null
+		absorbedAliases?: unknown
+	} | null> | null
+	/** The book's whole roster — see `castEntityRefs`. */
+	lorebookBindings?: Array<{
+		characterId?: number | null
+		personaId?: number | null
+		name?: string | null
+		aliases?: unknown
+		absorbedAliases?: unknown
+	} | null> | null
+}
+
+/**
+ * The names this session's world answers to, with the row each belongs to —
+ * the gazetteer's first tier.
  *
  * **The only cast input the keyword mechanism has**, since plan phase 3 retired the
  * bare-string list beside it. It feeds the admission gate *and* the entity
@@ -317,19 +406,50 @@ function contextBudgetFrom(input: any) {
  * are one entity instead of two and the count of distinct shared entities means
  * what it says.
  *
- * ⚠ **Aliases are in, and the union is why they could not be before.** Two of
- * the three exclusions still stand — no fuzzy matching, no reaching past the
- * session's cast — but the third was never about aliases being risky. It was
- * that `characters.aliases` / `personas.aliases` ride on the cast rows while the
- * other half, `lorebook_bindings.absorbedAliases`, did not reach this seam, and
- * that column's schema note makes reading **both** mandatory: feeding one side
- * would let an absorbed identity resolve while the name it was merged into did
- * not. `session_cast` carries `absorbedAliases` now, so both halves are here.
- * The word boundary in `compileMatcher` retires the other old argument — "Al"
- * does not fire on "Alchemy" — so nothing is left in the way.
+ * ## It reaches past the session's cast now, and why it must
  *
+ * The old exclusion — *"no reaching past the session's cast"* — was the last
+ * thing keeping this seam and `annotations/loadVocabulary` reading two different
+ * vocabularies for one lorebook. Annotations resolve every binding in the book;
+ * retrieval resolved only the seated ones, so a character the book binds but
+ * this scene never seated was a name one subsystem knew and the other did not.
+ * The `gazetteer_hash` those annotations are stored under is computed from the
+ * annotation vocabulary, so the disagreement was not even observable from a
+ * receipt. Both sides read bindings now, through the one `bindingNames` helper.
+ *
+ * ⚠ **Order is load-bearing, and it is: seated cast, then the rest of the
+ * roster, then entry titles** (`keywordQuery` appends the third). `buildGazetteer`
+ * lets the first claimant of a name keep it, so a character called "Vell" resolves
+ * to the character rather than to an entry titled after her — and, between two
+ * bindings claiming one name, to the one actually in the room. Widening the
+ * source must not disturb that, which is why the roster is appended *after* the
+ * cast rather than replacing it: every name the cast used to claim, it still
+ * claims first.
+ *
+ * A binding bound to neither a character nor a persona — a background NPC the
+ * graph minted — contributes nothing, exactly as it contributes nothing to
+ * `loadVocabulary`: `EntityRef` names a character, a persona or an entry, and
+ * there is no row for a fourth kind to resolve *to*. Its name still reaches the
+ * open tier as a string.
+ *
+ * ⚠ **What this does not do is read the clause a name sits in.** Tier one
+ * resolves *"the warden was already there"* and *"the warden was four days up
+ * the road"* identically — measured, in `measure/vocabularyWidening.test.ts`,
+ * along with what that costs. An unseated binding is likelier than a seated one
+ * to be named in the abstract, so the widening loads that failure mode as well
+ * as the recall it buys. The measurement is why it shipped anyway: on the
+ * shipped `admitThreshold` of 0 the gazetteer cannot admit anything the keyword
+ * scan did not, so the change is inert at defaults and priced only where an
+ * install has turned the gate on.
+ *
+ * Exported for `castEntityRefs.test.ts` alone. The order it returns names in is
+ * the whole of the precedence guarantee above and is invisible from the
+ * pipeline's output — the gazetteer reports an entity's *text*, never which row
+ * claimed it — so the only place that property can be asserted is here.
  */
-function castEntityRefs(cast: any): Array<{
+export function castEntityRefs(
+	cast: SessionCastRead | null | undefined
+): Array<{
 	name: string
 	ref: { kind: "character" | "persona" | "entry"; id: number }
 }> {
@@ -362,6 +482,19 @@ function castEntityRefs(cast: any): Array<{
 		add(cp?.persona?.name, ref)
 		for (const alias of list(cp?.persona?.aliases)) add(alias, ref)
 		for (const alias of list(cp?.absorbedAliases)) add(alias, ref)
+	}
+	// The rest of the book, after the room. `bindingNames` is the shared
+	// spelling of the `name` ∪ `aliases` ∪ `absorbedAliases` union the schema
+	// note makes mandatory — the same one `loadVocabulary` calls.
+	for (const b of cast?.lorebookBindings ?? []) {
+		const ref =
+			b?.characterId != null
+				? { kind: "character" as const, id: b.characterId }
+				: b?.personaId != null
+					? { kind: "persona" as const, id: b.personaId }
+					: null
+		if (!ref) continue
+		for (const name of bindingNames(b)) add(name, ref)
 	}
 	return out
 }
@@ -404,7 +537,16 @@ function withFingerprints(skipped: any[], entries: any[] | null | undefined) {
  * fact about this query, and reporting it here would tell someone their world
  * lore was skipped when it was a character entry all along.
  */
-async function loreFor(source: string, input: any, ctx: any) {
+async function loreFor(
+	source: string,
+	/**
+	 * The three lore lanes declare the same two in-ports (`text`, `scope`) and
+	 * the same `params` slot, so one type covers all three callers — and the
+	 * `limit` below is the one key none of them declares. See `Unsupplied`.
+	 */
+	input: NodeInput<typeof C.worldLore, Unsupplied<"limit">>,
+	ctx: CoreQueryCtx
+) {
 	const params = withDefaults(retrievalParamsFrom(input?.params))
 	const [entries, messages, embedding, cast] = await Promise.all([
 		ctx.read("lorebook_entries", {
@@ -463,6 +605,10 @@ async function loreFor(source: string, input: any, ctx: any) {
 		 */
 		diagnostics: {
 			scanDepth: result.diagnostics.scanDepth,
+			// The other window. Two numbers on one line is the only way a
+			// reader can tell a deep scan with a short guarantee from the
+			// shared constant these were before they were split.
+			guaranteedMessages: result.diagnostics.guaranteedMessages,
 			recursionDepth: result.diagnostics.recursionDepth,
 			windowChars: result.diagnostics.windowChars,
 			considered: mine.length + mineSkipped.length,
@@ -581,7 +727,13 @@ function toBudgetGroups(candidates: any[]): any[] {
  * weighted and laid out independently. They sit in the same `async` block, so
  * the cost is concurrency rather than wall-clock.
  */
-async function readGraph(input: any, ctx: any) {
+async function readGraph(
+	input: NodeInput<
+		typeof C.relationshipsPerspectives,
+		Unsupplied<"currentCharacterId">
+	>,
+	ctx: CoreQueryCtx
+) {
 	const summary = await ctx.read("graph_context", {
 		sessionId: input?.scope?.sessionId,
 		currentCharacterId:
@@ -648,7 +800,7 @@ function capRelationships(
  *    the legacy path handed on, so nothing here halts.
  */
 function pickSpeaker(strategy: string) {
-	return async (input: any, ctx: any) => {
+	return async (input: NodeInput<typeof C.turnRoundRobin>, ctx: TaskCtx) => {
 		const done = (characterId: number | null, via: string) =>
 			ok({
 				main: { characterId, strategy, via },
@@ -694,6 +846,31 @@ function pickSpeaker(strategy: string) {
 }
 
 /**
+ * A step's own Connection and Sampling, on the way to `ctx.call`.
+ *
+ * ⚠ Neither was forwarded at all, and `dispatchStep` reads them off exactly
+ * this payload — so every summarize and graph step ran on the capability
+ * default no matter what its pickers said, while `core:task/batch-messages@1`
+ * cut the transcript against the window of the config that WAS picked (it takes
+ * the drafting step's slot by reference for that very purpose). The prompt was
+ * sized for one model and sent to another.
+ *
+ * The two travel together on purpose: sending a config's temperature and
+ * context window to a connection it was never chosen for is the same
+ * divergence, one field along.
+ *
+ * Values, not ids — the host reduces them (`refId`), and for sampling that
+ * reduction reads the row reference the executor carries beside the values.
+ */
+const stepSlots = (input: {
+	connection?: unknown
+	sampling?: unknown
+}) => ({
+	connection: input?.connection ?? null,
+	sampling: input?.sampling ?? null
+})
+
+/**
  * @param run Which run these bindings are executing for.
  *
  * Only the two rendering nodes read it, and only so a template that names a
@@ -711,9 +888,22 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		// carried. Core hands the trigger payload in as the run's input, so the
 		// binding is the identity — and that is not a placeholder, it is what an
 		// Input *is* (01 §2).
-		"core:input/user-message@1": async (input: any) => ok(input),
-		"core:input/message-created@1": async (input: any) => ok(input),
-		"core:input/session-created@1": async (input: any) => ok(input),
+		"core:input/user-message@1": async (
+			input: NodeInput<typeof C.userMessage>
+		) => ok(input),
+		"core:input/message-created@1": async (
+			input: NodeInput<typeof C.messageCreated>
+		) => ok(input),
+		"core:input/session-created@1": async (
+			input: NodeInput<typeof C.sessionCreated>
+		) => ok(input),
+		// The side-character turn (ruling 2026-09-07). Identity like its
+		// siblings: the trigger already decided who speaks and whether the
+		// lorebook knows them — `sideCharacterFact` in `sessions.ts` is what
+		// resolved it, once, before the run started.
+		"core:input/side-character-turn@1": async (
+			input: NodeInput<typeof C.sideCharacterTurn>
+		) => ok(input),
 
 		// ── Queries ─────────────────────────────────────────────────────────
 		/**
@@ -721,21 +911,62 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * first. The host owns the implementation (interpolation, group
 		 * greetings, the fallback line) — see sessions/greetings.ts.
 		 */
-		"core:query/session-greetings@1": async (input: any, ctx: any) => {
+		"core:query/session-greetings@1": async (
+			input: NodeInput<typeof C.sessionGreetings>,
+			ctx: CoreQueryCtx
+		) => {
 			const greetings = await ctx.read("session_greetings", {
 				sessionId: input?.scope?.sessionId
 			})
 			return ok({ main: greetings, greetings })
 		},
 
-		"core:query/session-history@1": async (input: any, ctx: any) => {
+		"core:query/session-history@1": async (
+			// Both names stay in the `Unsupplied` set, and now for the same
+			// reason: each is a dead top-level spelling kept only so a stored
+			// config carried forward from an older document still resolves.
+			// `limit` was a *finding* here until this ruling — the live read
+			// with no supplier — and is now what `channel` already was.
+			input: NodeInput<
+				typeof C.sessionHistory,
+				Unsupplied<"limit" | "channel">
+			>,
+			ctx: CoreQueryCtx
+		) => {
 			const messages = await ctx.read("session_messages", {
 				sessionId: input?.scope?.sessionId,
-				limit: input?.limit ?? 100,
+				/**
+				 * `topK`'s twin, closed on the same terms (ruling 2026-09-09).
+				 *
+				 * `limit` is a declared *parameter* of this node — "How many
+				 * recent messages are considered for the context" — and it
+				 * arrives at `input.params.limit`. This read the top level,
+				 * which nothing sets, so every run took the literal 100 and the
+				 * control did nothing.
+				 *
+				 * The declared default is **100** now, not 40: the number the
+				 * declaration carried had never been the number a run used, and
+				 * wiring the control while leaving it at 40 would have shrunk
+				 * the transcript window on every install at defaults — a
+				 * retrieval change wearing a typing fix. Today's effective value
+				 * is declared first; moving it is a separate decision against
+				 * the measure corpus.
+				 *
+				 * `input.limit` stays behind it as a tolerant read. Nothing in
+				 * this repo writes it, but a stored config carried forward from
+				 * a document that named the key would still resolve here, and a
+				 * fallback that costs a `??` is cheaper than the one turn it
+				 * would otherwise silently re-window.
+				 */
+				limit: input?.params?.limit ?? input?.limit ?? 100,
 				// Which lane builds this context (20 §7). 'main' is the chat
 				// log and today's exact behaviour; another value is a mode's
 				// declared channel, read on purpose by the pipeline that wants
 				// it.
+				//
+				// `input.channel` beside it is a second spelling nothing
+				// supplies, and the fallback is the parameter's own declared
+				// default anyway.
 				channel: input?.params?.channel ?? input?.channel ?? "main"
 			})
 			// `main` and `messages` carry the same value on purpose: `main` is what
@@ -758,19 +989,34 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		// source rather than running a second retrieval — the candidates
 		// already carry which they are, so a separate implementation would be
 		// two things to keep in step for no gain.
-		"core:query/world-lore@1": async (input: any, ctx: any) =>
+		"core:query/world-lore@1": async (
+			input: NodeInput<typeof C.worldLore, Unsupplied<"limit">>,
+			ctx: CoreQueryCtx
+		) =>
 			await loreFor("worldLore", input, ctx),
-		"core:query/character-lore@1": async (input: any, ctx: any) =>
+		"core:query/character-lore@1": async (
+			input: NodeInput<typeof C.characterLore, Unsupplied<"limit">>,
+			ctx: CoreQueryCtx
+		) =>
 			await loreFor("characterLore", input, ctx),
 		// ⚠ The third lane, absent between spec 1.8.0 and 1.10.0. The two lore
 		// queries each filter the shared scan to their own source, and nothing
 		// filtered for `history` — so those candidates were built, scored and
 		// dropped, with the ranker still holding a `history` band and
 		// `assemble` still asking for history blocks.
-		"core:query/history-entries@1": async (input: any, ctx: any) =>
+		"core:query/history-entries@1": async (
+			input: NodeInput<typeof C.historyEntries, Unsupplied<"limit">>,
+			ctx: CoreQueryCtx
+		) =>
 			await loreFor("history", input, ctx),
 
-		"core:query/lorebook-triggers@1": async (input: any, ctx: any) => {
+		"core:query/lorebook-triggers@1": async (
+			input: NodeInput<
+				typeof C.lorebookTriggers,
+				Unsupplied<"limit">
+			>,
+			ctx: CoreQueryCtx
+		) => {
 			const params = withDefaults(retrievalParamsFrom(input?.params))
 			const [entries, messages, embedding, cast] = await Promise.all([
 				ctx.read("lorebook_entries", {
@@ -846,7 +1092,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * rank-hybrid` — is untouched, and the shape that was silently broken
 		 * (`vector-search → rank-hybrid`) is the one that now works.
 		 */
-		"core:query/vector-search@1": async (input: any, ctx: any) => {
+		"core:query/vector-search@1": async (
+			input: NodeInput<
+				typeof C.vectorSearch,
+				Unsupplied<"vector" | "sources">
+			>,
+			ctx: CoreQueryCtx
+		) => {
 			/**
 			 * ⚠ **0 is off, and is the shipped default** — the
 			 * `maxRecursionDepth` / `admitThreshold` convention, and the same
@@ -858,6 +1110,74 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				0,
 				Number(input?.params?.maxEntries) || 0
 			)
+			/**
+			 * ⚠ **Off `params`, and it was read off `input?.topK`.**
+			 *
+			 * `topK` is a declared *parameter* of this node and not an in-port,
+			 * so `input.topK` was a name nothing ever set: the number a reader
+			 * typed resolved through every scope layer, survived a config cull
+			 * with a test watching, and was handed to nothing, while the host
+			 * ran on the literal fallback below. The declared default is 40 for
+			 * that reason — it is what has actually been running — so wiring the
+			 * control re-tunes no install.
+			 *
+			 * Clamped at 1: `topK: 0` asks the host for the top nothing, which
+			 * is the mechanism switched off under a name that does not say so.
+			 * `maxEntries` is the switch, one field up.
+			 */
+			const topK = Math.max(
+				1,
+				Math.floor(Number(input?.params?.topK) || 40)
+			)
+			/**
+			 * How sharply a weak resemblance is discounted, as an exponent.
+			 *
+			 * ⚠ **This is what replaced `minScore`, and it is deliberately not a
+			 * floor.** A minimum similarity takes a row out of the pool, and a
+			 * row that is out of the pool cannot be found by keyword, by name or
+			 * by proximity either — one mechanism's opinion disabling four
+			 * others, which is the governing rule's one prohibition. (`minScore`
+			 * was never read by anything either, so no install has ever had a
+			 * floor to lose.)
+			 *
+			 * `cos ** falloff` is fixed at both ends and strictly monotonic, so
+			 * the mechanism can never reorder or drop its own hits — it only
+			 * decides how much a loose match is allowed to weigh against a
+			 * keyword that actually fired. 1 is the raw cosine.
+			 *
+			 * Clamped below at 1: an exponent under 1 is concave, which
+			 * *amplifies* the noise floor every embedder has, and there is no
+			 * install for which that is the intent.
+			 */
+			const falloff = Math.max(
+				1,
+				Number(input?.params?.similarityFalloff) || 1
+			)
+			/**
+			 * The curve, applied where the cosine becomes a signal.
+			 *
+			 * ⚠ **At the shipped `falloff` of 1 this is the identity for every
+			 * value the mechanism can produce except one**, and the exception is
+			 * a fix rather than a side effect. A *negative* cosine — two
+			 * opposed directions — used to pass straight through onto
+			 * `signals.semantic`, where the weighted sum turned it into a
+			 * penalty: an entry scoring *lower* for having been looked at by a
+			 * mechanism, which is the one thing the governing rule forbids a
+			 * mechanism to do. It reads as 0 now, which is what "this mechanism
+			 * has nothing to say about this entry" has always meant everywhere
+			 * else. Raising it to an odd power would have kept the sign and made
+			 * the penalty configurable, which is worse.
+			 *
+			 * Every non-negative cosine is returned bit-for-bit at 1, so an
+			 * install that never moves this control scores exactly what it
+			 * scored before.
+			 */
+			const attenuate = (raw: number): number =>
+				!Number.isFinite(raw) || raw <= 0
+					? 0
+					: falloff === 1
+						? raw
+						: Math.min(1, raw) ** falloff
 			const off = (reason: string) =>
 				ok({
 					main: [],
@@ -887,7 +1207,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					vectors:
 						input?.vectors ?? (input?.vector ? [input.vector] : []),
 					sources: input?.sources,
-					topK: input?.topK ?? 40
+					topK
 				})
 			])
 
@@ -995,11 +1315,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				 * to reconcile two incomparable scales.
 				 */
 				signals: {
-					semantic:
+					semantic: attenuate(
 						bestScore.get(`${hit.source}:${hit.id}`) ??
-						(Number.isFinite(Number(hit.score))
-							? Number(hit.score)
-							: 0)
+							Number(hit.score)
+					)
 				},
 				priority: hit.priority ?? 1,
 				payload: { ...hit, foundBy: "vector-search" }
@@ -1059,6 +1378,16 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				diagnostics: {
 					vectorSearch: `available (${embedding.model})`,
 					maxEntries,
+					/**
+					 * Both reported, because both were unreadable from the
+					 * outside for as long as one of them was a literal in this
+					 * file and the other was a control nothing consumed. A
+					 * receipt that names the pool width and the curve is what
+					 * lets somebody tell "the model is weak here" from "the
+					 * search only looked at forty rows".
+					 */
+					topK,
+					similarityFalloff: falloff,
 					queries: lists.length,
 					considered: (result?.candidates ?? []).length,
 					matched: flat.length,
@@ -1126,7 +1455,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * them — so this mechanism answers to the same visibility rule the other two
 		 * do, by construction rather than by a rule restated a third time.
 		 */
-		"core:query/entity-search@1": async (input: any, ctx: any) => {
+		"core:query/entity-search@1": async (
+			input: NodeInput<typeof C.entitySearch, Unsupplied<"limit">>,
+			ctx: CoreQueryCtx
+		) => {
 			const params = input?.params ?? {}
 			const maxEntries = Math.max(0, Number(params.maxEntries) || 0)
 			const maxMessages = Math.max(0, Number(params.maxMessages) || 0)
@@ -1349,7 +1681,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * default to off is one where turning the first one on appears to do
 		 * nothing.
 		 */
-		"core:query/mention-spans@1": async (input: any, ctx: any) => {
+		"core:query/mention-spans@1": async (
+			input: NodeInput<typeof C.mentionSpans>,
+			ctx: CoreQueryCtx
+		) => {
 			const params = input?.params ?? {}
 			const maxMentions = Math.max(0, Number(params.maxMentions) || 0)
 			if (maxMentions === 0)
@@ -1443,7 +1778,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * ranker would have seen without it. The governing rule holds by
 		 * construction rather than by a `try`.
 		 */
-		"core:query/entity-link@1": async (input: any, ctx: any) => {
+		"core:query/entity-link@1": async (
+			input: NodeInput<typeof C.entityLink>,
+			ctx: CoreQueryCtx
+		) => {
 			const params = input?.params ?? {}
 			const maxLinks = Math.max(0, Number(params.maxLinks) || 0)
 			const mentions: any[] = Array.isArray(input?.mentions)
@@ -1615,8 +1953,11 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * Query that is genuinely optional.
 		 */
 		"core:query/relationships-perspectives@1": async (
-			input: any,
-			ctx: any
+			input: NodeInput<
+				typeof C.relationshipsPerspectives,
+				Unsupplied<"currentCharacterId">
+			>,
+			ctx: CoreQueryCtx
 		) => {
 			const graph = await readGraph(input, ctx)
 			// Each node takes its own section of one traversal's result, the
@@ -1630,7 +1971,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			return ok({ main: mine, relationshipsPerspectives: mine })
 		},
 
-		"core:query/relationships-known@1": async (input: any, ctx: any) => {
+		"core:query/relationships-known@1": async (
+			input: NodeInput<
+				typeof C.relationshipsKnown,
+				Unsupplied<"currentCharacterId">
+			>,
+			ctx: CoreQueryCtx
+		) => {
 			const graph = await readGraph(input, ctx)
 			const known = capRelationships(
 				graph?.howOthersRegardYou,
@@ -1648,7 +1995,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			return ok({ main: value, relationshipsKnown: value })
 		},
 
-		"core:query/session-cast@1": async (input: any, ctx: any) => {
+		"core:query/session-cast@1": async (
+			input: NodeInput<
+				typeof C.sessionCast,
+				Unsupplied<"currentCharacterId">
+			>,
+			ctx: CoreQueryCtx
+		) => {
 			const cast = await ctx.read("session_cast", {
 				sessionId: input?.scope?.sessionId
 			})
@@ -1657,13 +2010,24 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					"there is no session to build a prompt for — the run is scoped to a " +
 						"session that no longer exists"
 				)
+			// ⚠ The roster the host attaches for retrieval's gazetteer is
+			// dropped here, and deliberately. `lorebookBindings` is every
+			// character the *book* binds, most of whom are not in this scene;
+			// this node's output is the prompt's cast, and a layout that
+			// rendered a field it did not recognise would be putting the whole
+			// book's dramatis personae into the context window. Retrieval reads
+			// the same host row directly (`castEntityRefs`) and needs no help
+			// from the prompt path.
+			const { lorebookBindings: _roster, ...castForPrompt } = cast as {
+				lorebookBindings?: unknown
+			} & Record<string, unknown>
 			// Whose turn it is travels *with* the cast rather than separately.
 			// It is one fact about the session — who is in it and who is speaking —
 			// and splitting it left the context Task unable to resolve the
 			// speaker at all, which the first parity run showed as a missing
 			// scenario and no post-history text.
 			const withSpeaker = {
-				...cast,
+				...castForPrompt,
 				currentCharacterId:
 					input?.scope?.currentCharacterId ??
 					input?.currentCharacterId ??
@@ -1698,7 +2062,9 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * `disjoint` below, and `core:task/concat-candidates@1` for what such a
 		 * pipeline meant.
 		 */
-		"core:task/merge-candidates@1": async (input: any) => {
+		"core:task/merge-candidates@1": async (
+			input: NodeInput<typeof C.mergeCandidates>
+		) => {
 			const orderings: any[][] = (input?.sources ?? []).filter(
 				Array.isArray
 			)
@@ -1815,7 +2181,9 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 *     position said the same thing before this existed; now the rule
 		 *     says it rather than the ordering implying it.
 		 */
-		"core:task/concat-candidates@1": async (input: any) => {
+		"core:task/concat-candidates@1": async (
+			input: NodeInput<typeof C.concatCandidates>
+		) => {
 			const orderings: any[][] = (input?.sources ?? []).filter(
 				Array.isArray
 			)
@@ -1875,7 +2243,9 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * way to tell which is which, and the speaker fallback reaches through
 		 * participants who have left the session.
 		 */
-		"core:task/query-windows@1": async (input: any) => {
+		"core:task/query-windows@1": async (
+			input: NodeInput<typeof C.queryWindows>
+		) => {
 			const params = withDefaults({ semantic: input?.params ?? {} })
 			const windows = queryWindows(
 				input?.messages ?? [],
@@ -1894,7 +2264,12 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * merge's job, and selecting against a budget is the hybrid ranker's.
 		 * Doing all three in one node would make each of them unswappable.
 		 */
-		"core:task/rank-semantic@1": async (input: any) => {
+		"core:task/rank-semantic@1": async (
+			input: NodeInput<
+				typeof C.rankSemantic,
+				Unsupplied<"lists" | "similarity">
+			>
+		) => {
 			const params = withDefaults({ semantic: input?.params ?? {} })
 			const messageOrder = (input?.messages ?? []).map((m: any) => m.id)
 
@@ -1966,12 +2341,19 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * executor resolves a `sampling` slot to the config's *values*, so this
 		 * is handed what it needs rather than looking anything up (F11).
 		 */
-		"core:task/context-budget@1": async (input: any) => {
+		"core:task/context-budget@1": async (
+			input: NodeInput<typeof C.contextBudget>
+		) => {
 			const budget = contextBudgetFrom(input)
 			return ok({ main: budget, available: budget })
 		},
 
-		"core:task/rank-hybrid@1": async (input: any) => {
+		"core:task/rank-hybrid@1": async (
+			input: NodeInput<
+				typeof C.rankHybrid,
+				Unsupplied<"availableTokens">
+			>
+		) => {
 			const params = withDefaults(rankingParamsFrom(input?.params))
 			const candidates = normaliseTfidf(
 				toBudgetGroups(input?.candidates ?? [])
@@ -2027,7 +2409,15 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * different prompts and the receipt cannot say which examples went in. Same
 		 * variety across turns, same answer twice within one.
 		 */
-		"core:task/build-template-context@1": async (input: any, ctx: any) => {
+		"core:task/build-template-context@1": async (
+			input: NodeInput<
+				typeof C.buildTemplateContext,
+				Unsupplied<
+					"main" | "promptConfig" | "narratorName" | "characterLore"
+				>
+			>,
+			ctx: TaskCtx
+		) => {
 			const cast = input?.cast ?? input?.main
 			if (!cast)
 				return halt(
@@ -2049,6 +2439,21 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					null,
 				narratorName:
 					input?.narratorName ?? input?.prompts?.narratorName,
+				// The side-character turn's speaker (ruling 2026-09-07).
+				// Absent on every other pipeline, where both are undefined and
+				// the resolver takes exactly the branches it always did.
+				//
+				// ⚠ Declared in-ports on `build-template-context@1` now (D-I),
+				// which is what makes these four reads typed rather than
+				// exempted. The supplier is still a sibling binding rather than
+				// a spec: the side-character wrapper at the bottom of this file
+				// unwraps its own `speaker` port and calls this handler with the
+				// name and the card spread on. Declaring them is the only place
+				// that fact is written down — an undeclared key arriving at a
+				// handler reads exactly like a typo until someone opens both
+				// files at once.
+				speakerName: input?.speakerName,
+				speakerCharacter: input?.speakerCharacter,
 				relationshipsPerspectives: input?.relationshipsPerspectives,
 				relationshipsKnown: input?.relationshipsKnown,
 				characterLore: input?.characterLore,
@@ -2088,7 +2493,9 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * name snapshotted at removal time, and a second version of that agrees on
 		 * every session until someone leaves one.
 		 */
-		"core:task/process-messages@1": async (input: any) => {
+		"core:task/process-messages@1": async (
+			input: NodeInput<typeof C.processMessages>
+		) => {
 			const ctxValue = input?.templateContext ?? {}
 			const result = processMessages({
 				messages: input?.messages ?? [],
@@ -2118,7 +2525,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * path is the generation Provider and a corpus proving the two paths
 		 * render the same bytes; rendering itself is no longer the gap.
 		 */
-		"core:task/assemble@2": async (input: any, ctx: any) => {
+		"core:task/assemble@2": async (
+			input: NodeInput<typeof C.assemble>,
+			ctx: TaskCtx
+		) => {
 			const slot = input?.template
 			/**
 			 * The story string, and **only** a real string.
@@ -2194,6 +2604,19 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				)
 			const allocation = allocate(decisions, {
 				budgetTotal: input?.budget?.total ?? input?.params?.budget ?? 0,
+				// The per-band groups the ranker computed, on a declared
+				// in-port fed by a declared out-port (D-H). It was published by
+				// `core:task/rank-hybrid@1` and wired by nobody, so this read
+				// took `allocate`'s own `{}` on every run — two adjacent nodes,
+				// one computing exactly what the other needed, with no edge
+				// between them and nothing to say so, because neither port was
+				// declared.
+				//
+				// ⚠ It moves no prompt. `allocate` copies this onto
+				// `AllocatedContext.groups` and reads it nowhere else, so
+				// `blocks`, `totalTokens` and `budget` are the same bytes either
+				// way. What it fills in is `dispatch.ts`'s `sources` — the
+				// budget panel's whole data set, empty until now.
 				groups: input?.groups
 			})
 			// The reminder's position, resolved against the messages that are
@@ -2250,6 +2673,42 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				input?.connection?.metadata?.promptFormat
 			)
 
+			/**
+			 * The template ROW, dereferenced by `world.ts` from the key above.
+			 *
+			 * ⚠ The key alone is not enough, and that was the second half of
+			 * the same defect. `completionTemplateOf` resolves a bare key
+			 * against the BUILT-INS, so a template an admin authored named no
+			 * built-in and rendered as Vicuna: the format wire reached the
+			 * render, and then the render could only find eight of the
+			 * templates it might have been pointed at.
+			 *
+			 * Absent for a connection with no format at all, and for a world
+			 * built before this field existed. Both fall through to the key
+			 * below, which is what this path has always done.
+			 */
+			const completionTemplate =
+				input?.connection?.metadata?.completionTemplate
+
+			/**
+			 * Which METHOD the sending connection wants to be called by.
+			 *
+			 * From the SAME slot as the two fields above — `slot.connectionOf(
+			 * "generate")` — so the shape this render produces and the shape the
+			 * Provider sends are one value rather than two that have to agree.
+			 * That they did NOT agree is the defect: the render always produced
+			 * one flat string, while a chat adapter branched on a local
+			 * `extraJson` flag and looked for `messages` that were never built.
+			 * Anthropic's empty-messages floor then filled in the word "Hello"
+			 * and sent that in place of the assembled prompt.
+			 *
+			 * Absent for a caller with no connection in scope (the debug preview,
+			 * the parity harness, a spec that did not wire the slot); `render`
+			 * treats that as "the connection did not say", which leaves the
+			 * template's own `renderMode` deciding exactly as before.
+			 */
+			const wireMode = input?.connection?.metadata?.wireMode
+
 			const rendered = await render({
 				allocation,
 				postHistory,
@@ -2267,6 +2726,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				variables: input?.variables,
 				messages: input?.messages ?? [],
 				promptFormat,
+				completionTemplate,
+				wireMode,
 				// The story string and this node's layouts both render here, and
 				// both can be somebody's engine. Same reason as the context
 				// builder above.
@@ -2286,9 +2747,17 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				 * the preview renders through the world manifest and the send
 				 * resolves its own row. Reporting the value that was USED
 				 * removes the disagreement instead of documenting it.
+				 *
+				 * ⚠ It rides on `rendered`, and the trailing `promptFormat` that
+				 * used to be spread after it is GONE rather than tidied away. The
+				 * render is what picks the template — in chat wire mode it renders
+				 * `split_session` and ignores the connection's delimiters entirely
+				 * — so re-appending the value computed up here would have put the
+				 * connection's format on a receipt for a prompt rendered in
+				 * something else. The same lie, one layer along.
 				 */
-				main: { ...allocation, ...rendered, promptFormat },
-				context: { ...allocation, ...rendered, promptFormat },
+				main: { ...allocation, ...rendered },
+				context: { ...allocation, ...rendered },
 				/**
 				 * ⚠ **Allocations, not blocks** — one retrieved item each, with
 				 * its verdict, where a *block* is one message (NOMENCLATURE
@@ -2349,7 +2818,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * A node whose `params` slot is not wired gets `undefined` here and is
 		 * treated as `auto`, which is the behaviour it had before this existed.
 		 */
-		"core:provider/embed-text@1": async (input: any, ctx: any) => {
+		"core:provider/embed-text@1": async (
+			input: NodeInput<typeof C.embedText>,
+			ctx: ProviderCtx
+		) => {
 			const empty = ok({ main: null, vector: null, vectors: [] })
 			const enabled = input?.params?.enabled ?? "auto"
 			if (enabled === "off") return empty
@@ -2386,7 +2858,15 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * pipeline. Halting says "this run has no answer" where an `err` would send
 		 * whoever is reading the receipt looking for a bug.
 		 */
-		"core:provider/generate-text@1": async (input: any, ctx: any) => {
+		"core:provider/generate-text@1": async (
+			input: NodeInput<
+				typeof C.generateText,
+				Unsupplied<
+					"compiledPrompt" | "main" | "generatingMessageMetadata"
+				>
+			>,
+			ctx: ProviderCtx
+		) => {
 			const result: any = await ctx.call({
 				// The rendered prompt, whatever produced it. Accepting the assemble
 				// node's whole output as well as a bare payload means a spec can wire
@@ -2410,7 +2890,31 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				// substrate turns a uuid into bytes, having first checked it
 				// against the run — a binding never sees the bytes, exactly as it
 				// never sees the connection.
-				attachments: input?.attachments
+				attachments: input?.attachments,
+				/**
+				 * The author's own stop sequences (ruling 2026-09-10).
+				 *
+				 * ⚠ **Declared since this node type was written and read by
+				 * nothing** — the third member of the dead-control family bugs
+				 * 12 and 15 kept finding, and the one `paramsSlotWiring.test.ts`
+				 * carries three ledger lines for. The panel rendered the
+				 * textarea, the scope chain stored the lines, and no request
+				 * ever carried them.
+				 *
+				 * Forwarded rather than composed: this is the EXPLICIT kind, and
+				 * the other two — the completion template's own list and the
+				 * scene's speaker labels — are derived from facts the dispatch
+				 * already holds. `connections/stops.ts` puts all three together
+				 * once and applies the wire rule; an author's sequence is their
+				 * choice rather than the template's, so it is the one kind that
+				 * rides either wire.
+				 *
+				 * ⚠ A spec must NAME the slot (`params: slot.params()`) for this
+				 * to be anything but `undefined` — `resolveInput` resolves only
+				 * the config keys a node's config mentions. The three shipped
+				 * reply specs do not name it yet; that half is core-catalog work.
+				 */
+				stopSequences: explicitStopsFrom(input?.params?.stopSequences)
 			})
 
 			if (result?.isAborted)
@@ -2438,7 +2942,23 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				// fetch their own receipt. Which provider the administrator runs
 				// is still the administrator's business; the projection removes
 				// this key for everyone else.
-				connection: { type: result.via }
+				connection: { type: result.via },
+				/**
+				 * What this request stopped on, and what it was not allowed to.
+				 *
+				 * On the node's OUTPUT because that is where a receipt reader
+				 * looks, and because the failure it reports has no error
+				 * attached to it: a stop sequence the model never saw means a
+				 * reply that runs on past its turn, and one held back by the
+				 * wire rule is a control that looks configured and is not.
+				 * `dropped` is the half that answers "why is my stop sequence
+				 * not working"; `wire` names the rule that decided.
+				 *
+				 * Carries no connection identity — three kinds, some strings the
+				 * user themselves wrote, and the wire mode — so the projection
+				 * has nothing to remove here.
+				 */
+				stops: result.stops
 			})
 		},
 
@@ -2451,7 +2971,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * installs lives in the connection and sampling rows; there is nothing
 		 * left here for a binding to decide.
 		 */
-		"core:provider/generate-image@1": async (input: any, ctx: any) => {
+		"core:provider/generate-image@1": async (
+			input: NodeInput<typeof C.generateImage, Unsupplied<"main">>,
+			ctx: ProviderCtx
+		) => {
 			const result: any = await ctx.call({
 				prompt: input?.prompt ?? input?.main ?? "",
 				negative: input?.negative,
@@ -2492,9 +3015,14 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		// — so a user who retuned "Default World Summarization" gets their
 		// wording here without this file knowing anything about it.
 
-		"core:input/summarize-request@1": async (input: any) => ok(input),
+		"core:input/summarize-request@1": async (
+			input: NodeInput<typeof C.summarizeRequest>
+		) => ok(input),
 
-		"core:query/summarize-source@1": async (input: any, ctx: any) => {
+		"core:query/summarize-source@1": async (
+			input: NodeInput<typeof C.summarizeSource>,
+			ctx: CoreQueryCtx
+		) => {
 			// `summarize_source`, not `session_messages`: a summary wants a chosen
 			// range with sender names resolved, and the host owns both rules so
 			// no binding can get the hidden-message convention wrong.
@@ -2521,7 +3049,9 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * answer is read back. Which door (`style`) is a bind-time match
 		 * against the connection's capability report, never a runtime guess.
 		 */
-		"core:task/advertise-tools@1": async (input: any) => {
+		"core:task/advertise-tools@1": async (
+			input: NodeInput<typeof C.advertiseTools>
+		) => {
 			const tools: any[] = Array.isArray(input?.tools)
 				? input.tools.filter(
 						(t: any) => t && typeof t.name === "string"
@@ -2566,7 +3096,9 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			})
 		},
 
-		"core:task/parse-tool-call@1": async (input: any) => {
+		"core:task/parse-tool-call@1": async (
+			input: NodeInput<typeof C.parseToolCall>
+		) => {
 			const text = String(input?.text ?? "")
 			const known = new Set(
 				(Array.isArray(input?.tools) ? input.tools : [])
@@ -2627,12 +3159,39 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			return ok({ main: call, call, text: stripped })
 		},
 
-		"core:task/batch-messages@1": async (input: any) => {
+		/**
+		 * The cut, and the one decision it is allowed to make.
+		 *
+		 * `batchTokens` is the admin's knob — *how many tokens of chat one draft
+		 * is written against* — and it arrives through the node's `params` slot
+		 * with the declared default already applied by the executor. The
+		 * `sampling` slot is the drafting step's own, shared by reference so the
+		 * window clamped against here is by construction the window the batch is
+		 * sent against; `resolveBatchBudget` holds the arithmetic, shared with
+		 * `summarizer/index.ts` so the two cannot drift again.
+		 *
+		 * ⚠ The reserve is no longer subtracted from the declared size. It was —
+		 * `Math.max(batchTokens - 1500, 500)` — which made an admin asking for
+		 * 2048 tokens of chat receive 548, contradicting the declaration's own
+		 * words. The reserve is what the CLAMP accounts for now, so the number
+		 * an admin types is the number of chat tokens they get.
+		 */
+		"core:task/batch-messages@1": async (
+			input: NodeInput<typeof C.batchMessages>
+		) => {
 			const messages: any[] = Array.isArray(input?.messages)
 				? input.messages
 				: []
-			const limit = Number(input?.params?.batchTokens ?? 2048)
-			const budget = Math.max(limit - 1500, 500)
+			const resolved = resolveBatchBudget({
+				batchTokens: input?.params?.batchTokens,
+				sampling: input?.sampling
+			})
+			// A window too small to hold the reserve plus a batch worth drafting
+			// cannot be summarized against at all. Said out loud, once, rather
+			// than sent as a prompt the model has no room for — which is what
+			// this path did, with no truncation anywhere to catch it.
+			if (!resolved.fits) return halt(resolved.reason)
+			const budget = resolved.tokens
 
 			const batches: any[][] = []
 			let current: any[] = []
@@ -2641,10 +3200,11 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			for (const msg of messages) {
 				// Deliberately the flat estimate rather than the run's
 				// tokenizer. This is not context fitting: it decides how many
-				// messages go into one summarization batch, a chunk size with a
-				// 1500-token safety margin already subtracted from it. Making it
-				// exact would change nothing a person can observe, and it would
-				// make `ctx` a parameter of a binding that otherwise needs none.
+				// messages go into one summarization batch, and the reserve that
+				// keeps room for the prompt and the draft is accounted for in the
+				// budget above. Making it exact would change nothing a person can
+				// observe, and it would make `ctx` a parameter of a binding that
+				// otherwise needs none.
 				const cost =
 					roughTokens(
 						JSON.stringify({
@@ -2682,8 +3242,16 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * `loreType` is authored on the node rather than configured, because
 		 * *which kind of entry this pipeline writes* is what distinguishes the
 		 * four summarize namespaces from each other. It is not a user's to tune.
+		 * A declared in-port carrying an authored literal, not a parameter —
+		 * see the contract, which rules on why the call site settles it.
 		 */
-		"core:provider/summarize-batch@1": async (input: any, ctx: any) => {
+		"core:provider/summarize-batch@1": async (
+			input: NodeInput<
+				typeof C.summarizeBatch,
+				Unsupplied<"topic">
+			>,
+			ctx: ProviderCtx
+		) => {
 			const { systemPrompt, userPrompt } = buildBatchPrompt({
 				jsonMessages: formatMessagesAsJson(
 					Array.isArray(input?.batch) ? input.batch : []
@@ -2704,6 +3272,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			const result: any = await ctx.call({
 				systemPrompt,
 				userPrompt,
+				...stepSlots(input),
 				label: "summarize:batch"
 			})
 			if (!result?.text)
@@ -2725,7 +3294,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		},
 
 		/** Phase 2 — the ordered drafts, merged. */
-		"core:provider/summarize-synth@1": async (input: any, ctx: any) => {
+		"core:provider/summarize-synth@1": async (
+			input: NodeInput<
+				typeof C.summarizeSynth,
+				Unsupplied<"topic">
+			>,
+			ctx: ProviderCtx
+		) => {
 			const raw: any[] = Array.isArray(input?.drafts) ? input.drafts : []
 			// Order is load-bearing: the drafts are chronological slices and the
 			// synthesis prompt asks the model to preserve that order. `part` is
@@ -2758,6 +3333,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			const result: any = await ctx.call({
 				systemPrompt,
 				userPrompt,
+				...stepSlots(input),
 				label: "summarize:synth"
 			})
 			if (!result?.text)
@@ -2768,7 +3344,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			return ok({ main: content, content })
 		},
 
-		"core:provider/name-entry@1": async (input: any, ctx: any) => {
+		"core:provider/name-entry@1": async (
+			input: NodeInput<typeof C.nameEntry>,
+			ctx: ProviderCtx
+		) => {
 			const { systemPrompt, userPrompt } = buildNamePrompt({
 				content: String(input?.content ?? ""),
 				loreType: input?.loreType ?? "world",
@@ -2780,6 +3359,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			const result: any = await ctx.call({
 				systemPrompt,
 				userPrompt,
+				...stepSlots(input),
 				label: "summarize:name"
 			})
 
@@ -2790,7 +3370,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			return ok({ main: name, name })
 		},
 
-		"core:provider/extract-cast@1": async (input: any, ctx: any) => {
+		"core:provider/extract-cast@1": async (
+			input: NodeInput<
+				typeof C.extractCast,
+				Unsupplied<"knownCast">
+			>,
+			ctx: ProviderCtx
+		) => {
 			const knownCast = Array.isArray(input?.request?.knownCast)
 				? input.request.knownCast
 				: Array.isArray(input?.knownCast)
@@ -2807,6 +3393,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			const result: any = await ctx.call({
 				systemPrompt,
 				userPrompt,
+				...stepSlots(input),
 				label: "summarize:cast"
 			})
 
@@ -2824,9 +3411,102 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			})
 		},
 
+		/**
+		 * The keywords an entry is proposed to be found by — no model, no
+		 * network, nothing it can invent.
+		 *
+		 * A wrapper around `proposeKeys`, like every other binding here: the
+		 * rules, the gates and the measurements live in
+		 * `ranking/keyProposal.ts`, and this only decides what the lorebook and
+		 * the cast are.
+		 *
+		 * ⚠ **The reads are the ones `loreFor` makes, with the same arguments.**
+		 * `currentCharacterId` is passed through rather than nulled, so the host
+		 * withholds character lore that is not the speaker's own exactly as it
+		 * does for retrieval. A key proposer that read *more* of the book than
+		 * the ranker can would be a second visibility rule, free to disagree
+		 * with the first — which is the shape of bug 2, arriving from the
+		 * authoring side.
+		 */
+		"core:query/entry-keys@1": async (
+			input: NodeInput<typeof C.entryKeys>,
+			ctx: CoreQueryCtx
+		) => {
+			const content = typeof input?.content === "string" ? input.content : ""
+			const empty = { main: [], keys: [], rejected: [] }
+			if (!content.trim()) return ok(empty)
+
+			const [entries, cast] = await Promise.all([
+				ctx.read("lorebook_entries", {
+					sessionId: input?.scope?.sessionId,
+					currentCharacterId: input?.scope?.currentCharacterId ?? null
+				}),
+				// Read for its names alone — see `castEntityRefs`. A session
+				// that no longer exists reads as `null`, which is an empty cast,
+				// which is a proposer with one of its two guards missing rather
+				// than one that fails.
+				ctx.read("session_cast", { sessionId: input?.scope?.sessionId })
+			])
+			const rows: any[] = entries ?? []
+
+			/**
+			 * ⚠ **The entry being keyed must not be in its own corpus.**
+			 *
+			 * On the summarize path it cannot be — the row does not exist yet.
+			 * On a re-key of a saved entry it would be, and its own text would
+			 * put a guaranteed hit into every key's footprint, which is the one
+			 * count the ceiling is measured against. Dropping the document that
+			 * *contains* the passage is exact for that case and a no-op for the
+			 * one where the row is absent.
+			 */
+			const documents = rows
+				.map((e) => `${e?.name ?? ""} ${e?.content ?? ""}`.trim())
+				.filter((d) => !d.includes(content))
+
+			const proposal = proposeKeys({
+				text: content,
+				corpus: documents,
+				cast: castEntityRefs(cast),
+				// Entry titles are eligible keys and cast names are not: a thing
+				// the book has a row for is a subject, a person in it is a
+				// participant. Appended after the cast because `buildGazetteer`
+				// lets the first claimant keep a name.
+				entryNames: rows.flatMap((e) =>
+					typeof e?.name === "string" && e.name.trim()
+						? [
+								{
+									name: e.name.trim(),
+									ref: { kind: "entry" as const, id: e.id }
+								}
+							]
+						: []
+				),
+				options: {
+					maxKeys: Math.max(0, input?.params?.maxKeys ?? MAX_KEYS),
+					maxTermKeys: Math.max(
+						0,
+						input?.params?.maxOrdinaryWords ?? MAX_TERM_KEYS
+					)
+				}
+			})
+
+			// `main` carries the proposals themselves rather than the bare
+			// strings, for `session-history`'s reason: an unrefined `$.keys`
+			// should resolve to the useful thing, and what a review gate needs
+			// is the evidence beside each key, not a list of words.
+			return ok({
+				main: proposal.keys,
+				keys: proposal.keys,
+				rejected: proposal.rejected
+			})
+		},
+
 		// ── Graph build ─────────────────────────────────────────────────────
 
-		"core:query/graph-scenes@1": async (input: any, ctx: any) => {
+		"core:query/graph-scenes@1": async (
+			input: NodeInput<typeof C.graphScenes>,
+			ctx: CoreQueryCtx
+		) => {
 			const scenes = await ctx.read("graph_scenes", {
 				sessionId: input?.scope?.sessionId
 			})
@@ -2838,17 +3518,32 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		// ── Consumers ───────────────────────────────────────────────────────
 		// The binding describes the write; the host performs it. Returning the
 		// payload unchanged is the correct implementation, not a stub.
-		"core:consumer/create-message@1": async (input: any, ctx: any) =>
+		"core:consumer/create-message@1": async (
+			input: NodeInput<typeof C.createMessage>,
+			ctx: ConsumerCtx
+		) =>
 			ok(await ctx.commit(input)),
-		"core:consumer/seed-greetings@1": async (input: any, ctx: any) =>
+		"core:consumer/seed-greetings@1": async (
+			input: NodeInput<typeof C.seedGreetings>,
+			ctx: ConsumerCtx
+		) =>
 			ok(await ctx.commit(input)),
-		"core:consumer/update-message@1": async (input: any, ctx: any) =>
+		"core:consumer/update-message@1": async (
+			input: NodeInput<typeof C.updateMessage>,
+			ctx: ConsumerCtx
+		) =>
 			ok(await ctx.commit(input)),
-		"core:consumer/create-lore-entry@1": async (input: any, ctx: any) =>
+		"core:consumer/create-lore-entry@1": async (
+			input: NodeInput<typeof C.createLoreEntry>,
+			ctx: ConsumerCtx
+		) =>
 			ok(await ctx.commit(input)),
 		// Gate-eligible, and that is the mechanism behind "a graph build stops at
 		// the review screen": what comes back is a proposal, not rows.
-		"core:consumer/graph-proposal@1": async (input: any, ctx: any) =>
+		"core:consumer/graph-proposal@1": async (
+			input: NodeInput<typeof C.graphProposal>,
+			ctx: ConsumerCtx
+		) =>
 			ok(await ctx.commit(input))
 	}
 
@@ -2864,6 +3559,63 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 	 */
 	bindings["core:task/build-narrator-context@1"] =
 		bindings["core:task/build-template-context@1"]!
+
+	/**
+	 * The third surface, and the one place the implementation genuinely differs.
+	 *
+	 * Not an alias, because this node takes a `speaker` in-port the other two do
+	 * not have and the name on it has to reach `{{char}}` and the seed line.
+	 * Everything after that is the shared builder called with two more fields —
+	 * `resolveContextInput` owns both rules, so a side character's card and a
+	 * cast member's are compiled by one function rather than two.
+	 *
+	 * ⚠ The speaker is read from the port and never invented here. A missing or
+	 * malformed `speaker` degrades to the no-perspective branch — the narrator's
+	 * — rather than halting: a turn with no name is a turn the trigger failed to
+	 * shape, and the receipt shows an empty speaker on the input node, which
+	 * says so far more precisely than a halt in the context builder would.
+	 *
+	 * ⚠ **The name and the card come from the port; the speaker *id* is left
+	 * alone**, and the reason is worth writing down because the obvious code is
+	 * the other one.
+	 *
+	 * An earlier draft also mapped `speaker.characterId` onto
+	 * `currentCharacterId` here, on the "payload wins" principle (19 §5).
+	 * Mutating it back in changes no test and no prompt, which is the honest
+	 * finding: `resolveContextInput` uses that id for exactly one thing —
+	 * looking the speaker up **in the cast** — and a side character is by
+	 * definition not in it, so for every turn this node runs the mapping is a
+	 * no-op. For the one case where it would not be (a cast member picked as a
+	 * side character), the run's scope already carries the same id, because
+	 * `generateResponse` sets it from the same fact it puts on the port.
+	 *
+	 * So the line is not defence in depth, it is a second source for a value
+	 * that has one — and the one it duplicates is the one the HOST read used to
+	 * decide which character lore it was willing to hand over. Two sources that
+	 * agree today are two sources that can drift, and the drift would be a
+	 * prompt in one voice over another's private knowledge.
+	 */
+	bindings["core:task/build-side-character-context@1"] = async (
+		input: NodeInput<typeof C.buildSideCharacterContext>,
+		ctx: TaskCtx
+	) => {
+		const speaker = (input?.speaker ?? {}) as {
+			name?: unknown
+			character?: unknown
+		}
+		const name = typeof speaker.name === "string" ? speaker.name.trim() : ""
+		return await bindings["core:task/build-template-context@1"]!(
+			{
+				...input,
+				speakerName: name || undefined,
+				speakerCharacter:
+					speaker.character && typeof speaker.character === "object"
+						? speaker.character
+						: null
+			},
+			ctx
+		)
+	}
 
 	return bindings
 }
@@ -2903,10 +3655,17 @@ function graphSteps(): Bindings {
 	return Object.fromEntries(
 		steps.map(([typeId, field, label]) => [
 			typeId,
-			async (input: any, ctx: any) => {
+			// The five differ in one string, so one input type covers them:
+			// each declares `scenes` in and the connection/sampling/prompts
+			// slots, and none declares anything the loop reads beyond those.
+			async (
+				input: NodeInput<typeof C.graphPreFilter>,
+				ctx: ProviderCtx
+			) => {
 				const result: any = await ctx.call({
 					systemPrompt: input?.prompts?.[field] ?? "",
 					scenes: input?.scenes ?? [],
+					...stepSlots(input),
 					label
 				})
 				if (!result?.text)

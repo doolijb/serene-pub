@@ -30,15 +30,6 @@ import { reconcileConfigs } from "$lib/server/pipelines/config/named"
 import { seedPipelinePrompts } from "$lib/server/pipelines/boot/seedPrompts"
 import { reconcilePromptFields } from "$lib/server/pipelines/boot/reconcilePromptFields"
 
-/** Loose on purpose — the app db and the test db are passed interchangeably. */
-type Db = {
-	insert: any
-	select: any
-	update: any
-	delete: any
-	transaction: any
-}
-
 /* ------------------------------------------------------------------ *
  * Events
  * ------------------------------------------------------------------ */

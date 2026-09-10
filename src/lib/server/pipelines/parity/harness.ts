@@ -92,7 +92,7 @@ export interface FixtureScope {
  */
 export interface ParityFixture {
 	name: string
-	seed(db: any): Promise<FixtureScope>
+	seed(db: Db): Promise<FixtureScope>
 }
 
 export interface RenderConfigs {
@@ -274,7 +274,7 @@ export const parityPipeline = () =>
  * `preview: true` halts at the Provider with the payload built — so this is the
  * real thing, not a reconstruction of it.
  */
-export async function pipelinePreview(db: any, scope: FixtureScope) {
+export async function pipelinePreview(db: Db, scope: FixtureScope) {
 	const world = await buildWorld(db, {
 		sessionId: scope.sessionId
 	})
@@ -346,7 +346,7 @@ export const goldenPathFor = (name: string): string =>
  * pipeline against itself.
  */
 async function resolveGolden(
-	db: any,
+	db: Db,
 	fixture: ParityFixture,
 	scope: FixtureScope,
 	effective: RenderConfigs
@@ -365,7 +365,7 @@ async function resolveGolden(
 }
 
 export async function runFixture(
-	db: any,
+	db: Db,
 	fixture: ParityFixture,
 	configs: RenderConfigs
 ): Promise<ParityResult> {

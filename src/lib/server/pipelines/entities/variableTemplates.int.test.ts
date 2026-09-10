@@ -49,7 +49,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [admin] = await db
 		.insert(schema.users)
@@ -69,22 +69,22 @@ beforeAll(async () => {
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.slug, slug))
 		const shipped = await resolveSelectedConfig(
-			db as any,
+			db,
 			spec.id,
 			slug,
 			{}
 		)
 		const copy = await duplicateConfig(
-			db as any,
+			db,
 			shipped!.configId,
 			"Layout host"
 		)
-		await selectConfig(db as any, spec.id, "instance", 0, copy.id, adminId)
+		await selectConfig(db, spec.id, "instance", 0, copy.id, adminId)
 	}
 }, 60_000)
 
 const view = (slug: string): Promise<NamespaceView> =>
-	namespaceView(db as any, SECRET, slug, {
+	namespaceView(db, SECRET, slug, {
 		userId: adminId,
 		isAdmin: true
 	}) as Promise<NamespaceView>
@@ -104,7 +104,7 @@ const charactersOption = async (slug: string) => {
 
 describe("what ships", () => {
 	it("seeds an immutable layout for every variable the node renders", async () => {
-		const rows = await listVariableTemplates(db as any, CHARACTERS)
+		const rows = await listVariableTemplates(db, CHARACTERS)
 		expect(rows.length).toBeGreaterThan(0)
 		expect(rows.every((r: any) => r.isImmutable)).toBe(true)
 		// Two rows, and the order is what a picker opens on: the titled block
@@ -164,7 +164,7 @@ describe("what ships", () => {
 	})
 
 	it("resolves assembly's layouts to sources at run time", async () => {
-		const world = await buildWorld(db as any, {
+		const world = await buildWorld(db, {
 			specId: RESPOND_SPEC_ID
 		})
 		const layouts = (resolveConfig(world, ["prompt"]).prompt?.variables ??
@@ -226,7 +226,7 @@ describe("what ships", () => {
 				.where(eq(schema.pipelineConfigValues.id, v.id))
 
 		await reconcileConfigs(
-			db as any,
+			db,
 			spec.id,
 			spec.activeVersionId!,
 			RESPOND_SPEC_ID
@@ -248,7 +248,7 @@ describe("what ships", () => {
 
 describe("the picker", () => {
 	it("offers only layouts for this option's own variable", async () => {
-		const foreign = await createVariableTemplate(db as any, {
+		const foreign = await createVariableTemplate(db, {
 			variableId: "core:var/personas@1",
 			name: "Prose personas",
 			source: "{{#each personas}}{{this.name}}\n{{/each}}"
@@ -257,7 +257,7 @@ describe("the picker", () => {
 		const option = await charactersOption(RESPOND_SPEC_ID)
 		expect(option.choices?.some((c) => c.id === foreign.id)).toBe(false)
 		// And it does offer the ones that belong to it.
-		const mine = await listVariableTemplates(db as any, CHARACTERS)
+		const mine = await listVariableTemplates(db, CHARACTERS)
 		for (const row of mine)
 			expect(option.choices?.some((c) => c.id === row.id)).toBe(true)
 	})
@@ -267,30 +267,30 @@ describe("the picker", () => {
 			"$lib/server/pipelines/entities/variableTemplates"
 		)
 		const [personas] = await listVariableTemplates(
-			db as any,
+			db,
 			"core:var/personas@1"
 		)
 		await expect(
-			assertSelectable(db as any, CHARACTERS, personas!.id)
+			assertSelectable(db, CHARACTERS, personas!.id)
 		).rejects.toBeInstanceOf(VariableTemplateNotUsableError)
 	})
 })
 
 describe("editing", () => {
 	it("refuses to edit or delete what Serene Pub ships", async () => {
-		const [shipped] = await listVariableTemplates(db as any, CHARACTERS)
+		const [shipped] = await listVariableTemplates(db, CHARACTERS)
 		await expect(
-			updateVariableTemplate(db as any, shipped!.id, { source: "x" })
+			updateVariableTemplate(db, shipped!.id, { source: "x" })
 		).rejects.toBeInstanceOf(VariableTemplateNotUsableError)
 		await expect(
-			deleteVariableTemplate(db as any, shipped!.id)
+			deleteVariableTemplate(db, shipped!.id)
 		).rejects.toBeInstanceOf(VariableTemplateNotUsableError)
 	})
 
 	it("duplicates into the same variable, which is what keeps it selectable", async () => {
-		const [shipped] = await listVariableTemplates(db as any, CHARACTERS)
+		const [shipped] = await listVariableTemplates(db, CHARACTERS)
 		const copy = await duplicateVariableTemplate(
-			db as any,
+			db,
 			shipped!.id,
 			"Characters copy"
 		)
@@ -298,10 +298,10 @@ describe("editing", () => {
 		expect(copy.source).toBe(shipped!.source)
 		expect(copy.isImmutable).toBe(false)
 
-		await updateVariableTemplate(db as any, copy.id, {
+		await updateVariableTemplate(db, copy.id, {
 			source: "{{#each characters}}{{this.name}}: {{this.description}}\n{{/each}}"
 		})
-		const after = await resolveVariableTemplate(db as any, copy.id)
+		const after = await resolveVariableTemplate(db, copy.id)
 		expect(after?.source).toContain("{{#each characters}}")
 	})
 })
@@ -317,7 +317,7 @@ describe("cross-pipeline reuse", () => {
 	 * exactly this.
 	 */
 	it("selects one row from two unrelated pipelines", async () => {
-		const prose = await createVariableTemplate(db as any, {
+		const prose = await createVariableTemplate(db, {
 			variableId: CHARACTERS,
 			name: "Prose",
 			source: "{{#each characters}}{{this.name}} — {{this.description}}\n{{/each}}"
@@ -335,7 +335,7 @@ describe("cross-pipeline reuse", () => {
 			[NARRATE_SPEC_ID, narrateOption]
 		] as const)
 			await writeOption(
-				db as any,
+				db,
 				SECRET,
 				slug,
 				{ userId: adminId, isAdmin: true },
@@ -353,14 +353,14 @@ describe("cross-pipeline reuse", () => {
 	})
 
 	it("refuses to delete a layout the other pipeline is still using", async () => {
-		const rows = await listVariableTemplates(db as any, CHARACTERS)
+		const rows = await listVariableTemplates(db, CHARACTERS)
 		const prose = rows.find((r) => r.name === "Prose")!
 
 		// Release only the reply pipeline's selection. The narrator's still
 		// holds the row, and this is the case a per-spec check would miss.
 		const respondOption = await charactersOption(RESPOND_SPEC_ID)
 		await clearOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			{ userId: adminId, isAdmin: true },
@@ -368,7 +368,7 @@ describe("cross-pipeline reuse", () => {
 		)
 
 		await expect(
-			deleteVariableTemplate(db as any, prose.id)
+			deleteVariableTemplate(db, prose.id)
 		).rejects.toThrow(/still in use/)
 	})
 })
@@ -380,7 +380,7 @@ describe("the runtime resolves what the panel shows", () => {
 	 * that what arrives at the node is the template rather than its id.
 	 */
 	const resolvedLayouts = async (slug: string) => {
-		const world = await buildWorld(db as any, {
+		const world = await buildWorld(db, {
 			specId: slug
 		})
 		const config = resolveConfig(world, ["context"])
@@ -444,7 +444,7 @@ describe("the mutation gate", () => {
 			"$lib/server/pipelines/config/panel"
 		)
 		return await variableOptionGate(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer,
@@ -500,7 +500,7 @@ describe("who may change a layout", () => {
 			.values({ username: "layout-plain", isAdmin: false })
 			.returning()
 
-		const v = (await namespaceView(db as any, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
 			userId: plain.id,
 			isAdmin: false
 		})) as NamespaceView
@@ -514,7 +514,7 @@ describe("who may change a layout", () => {
 		// The selections written by the reuse test above live as the mutable
 		// configs' own values — the only global home since the layer
 		// simplification (2026-08-24). No override row exists anywhere.
-		const prose = (await listVariableTemplates(db as any, CHARACTERS)).find(
+		const prose = (await listVariableTemplates(db, CHARACTERS)).find(
 			(r) => r.name === "Prose"
 		)!
 		const values = (
@@ -542,7 +542,7 @@ describe("who may change a layout", () => {
  */
 describe("deleting what you have selected", () => {
 	it("ignores the caller's own rows without releasing them first", async () => {
-		const prose = (await listVariableTemplates(db as any, CHARACTERS)).find(
+		const prose = (await listVariableTemplates(db, CHARACTERS)).find(
 			(r) => r.name === "Prose"
 		)!
 
@@ -554,7 +554,7 @@ describe("deleting what you have selected", () => {
 		// Refused while those rows count — and the rows are still there after,
 		// which is the part that regressed.
 		await expect(
-			deleteVariableTemplate(db as any, prose.id)
+			deleteVariableTemplate(db, prose.id)
 		).rejects.toThrow(/still in use/)
 		const after = (
 			await db.select().from(schema.pipelineConfigValues)
@@ -564,7 +564,7 @@ describe("deleting what you have selected", () => {
 		// Allowed once they are discounted, which is what the socket handler
 		// passes — and only then does it clear them.
 		await expect(
-			deleteVariableTemplate(db as any, prose.id, {
+			deleteVariableTemplate(db, prose.id, {
 				ignoreConfigValueIds: new Set(own.map((v: any) => v.id))
 			})
 		).resolves.toBeUndefined()

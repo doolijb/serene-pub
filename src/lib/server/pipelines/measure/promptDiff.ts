@@ -86,7 +86,7 @@ export interface Variant {
 }
 
 export interface CompareRequest {
-	db: any
+	db: Db
 	sessionId: number
 	/** Defaults to the session's own owner. */
 	userId?: number
@@ -491,7 +491,7 @@ export async function comparePrompts(
 }
 
 /** Every session with at least one message — the default set to compare over. */
-export async function sessionsWithMessages(db: any): Promise<number[]> {
+export async function sessionsWithMessages(db: Db): Promise<number[]> {
 	const rows = await db
 		.select({ id: schema.sessions.id })
 		.from(schema.sessions)
@@ -499,7 +499,7 @@ export async function sessionsWithMessages(db: any): Promise<number[]> {
 			sql`exists (select 1 from session_messages m where m.session_id = ${schema.sessions.id})`
 		)
 		.orderBy(schema.sessions.id)
-	return rows.map((r: { id: number }) => r.id)
+	return rows.map((r) => r.id)
 }
 
 // ─── The report ─────────────────────────────────────────────────────────────

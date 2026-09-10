@@ -294,19 +294,10 @@ export async function deleteCharacterGalleryImage({
 }) {
 	const row = await getMedia(db, mediaId)
 	if (!row || row.characterId !== characterId) return
+	// The deleted image may have been the avatar. Nothing to clear by hand:
+	// `characters.avatarMediaId` is a real FK with `ON DELETE SET NULL` (0109),
+	// so this nulls the pointer in the same statement.
 	await deleteFile(db, mediaId)
-	// The deleted image may have been the avatar. Clearing the pointer is
-	// cheap and keeps a broken image off every card and message; a dangling
-	// pointer elsewhere is tolerated by design, but not one we can see.
-	await db
-		.update(schema.characters)
-		.set({ avatarMediaId: null })
-		.where(
-			and(
-				eq(schema.characters.id, characterId),
-				eq(schema.characters.avatarMediaId, mediaId)
-			)
-		)
 }
 
 export async function deletePersonaGalleryImage({
@@ -319,16 +310,8 @@ export async function deletePersonaGalleryImage({
 }) {
 	const row = await getMedia(db, mediaId)
 	if (!row || row.personaId !== personaId) return
+	// Same as above: `personas.avatarMediaId`'s FK nulls itself on delete.
 	await deleteFile(db, mediaId)
-	await db
-		.update(schema.personas)
-		.set({ avatarMediaId: null })
-		.where(
-			and(
-				eq(schema.personas.id, personaId),
-				eq(schema.personas.avatarMediaId, mediaId)
-			)
-		)
 }
 
 /**

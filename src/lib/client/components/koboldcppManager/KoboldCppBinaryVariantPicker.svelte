@@ -101,60 +101,91 @@
 		downloadStarted = true
 	}
 
+	// Named so `off` can name them too. A bare `socket.off("koboldcpp:listBinaryVariants")`
+	// removes EVERY listener for that event.
+	function handleListReleaseVersions(
+		msg: Sockets.KoboldCPP.ListReleaseVersions.Response
+	) {
+		loadingVersions = false
+		versions = msg.versions
+	}
+
+	function handleListReleaseVersionsError() {
+		loadingVersions = false
+	}
+
+	function handleListBinaryVariants(
+		msg: Sockets.KoboldCPP.ListBinaryVariants.Response
+	) {
+		loading = false
+		variants = msg.variants
+		releaseTag = msg.releaseTag
+		defaultDir = msg.defaultDir
+		if (!destDir) destDir = msg.defaultDir
+	}
+
+	function handleListBinaryVariantsError(msg: Sockets.ErrorResponse) {
+		loading = false
+		error = msg?.error ?? "Failed to fetch releases"
+	}
+
+	function handleBinaryDownloadProgress(
+		msg: Sockets.KoboldCPP.BinaryDownloadProgress.Response
+	) {
+		download = msg.download
+	}
+
+	function handleGetBinaryDownloadProgress(
+		msg: Sockets.KoboldCPP.GetBinaryDownloadProgress.Response
+	) {
+		download = msg.download
+	}
+
 	onMount(() => {
 		socket.emit("koboldcpp:listReleaseVersions", {})
 		socket.emit("koboldcpp:listBinaryVariants", {})
 		socket.emit("koboldcpp:getBinaryDownloadProgress", {})
 
+		socket.on("koboldcpp:listReleaseVersions", handleListReleaseVersions)
 		socket.on(
-			"koboldcpp:listReleaseVersions",
-			(msg: Sockets.KoboldCPP.ListReleaseVersions.Response) => {
-				loadingVersions = false
-				versions = msg.versions
-			}
+			"koboldcpp:listReleaseVersions:error",
+			handleListReleaseVersionsError
 		)
-		socket.on("koboldcpp:listReleaseVersions:error", () => {
-			loadingVersions = false
-		})
 
-		socket.on(
-			"koboldcpp:listBinaryVariants",
-			(msg: Sockets.KoboldCPP.ListBinaryVariants.Response) => {
-				loading = false
-				variants = msg.variants
-				releaseTag = msg.releaseTag
-				defaultDir = msg.defaultDir
-				if (!destDir) destDir = msg.defaultDir
-			}
-		)
+		socket.on("koboldcpp:listBinaryVariants", handleListBinaryVariants)
 		socket.on(
 			"koboldcpp:listBinaryVariants:error",
-			(msg: Sockets.ErrorResponse) => {
-				loading = false
-				error = msg?.error ?? "Failed to fetch releases"
-			}
+			handleListBinaryVariantsError
 		)
 		socket.on(
 			"koboldcpp:binaryDownloadProgress",
-			(msg: Sockets.KoboldCPP.BinaryDownloadProgress.Response) => {
-				download = msg.download
-			}
+			handleBinaryDownloadProgress
 		)
 		socket.on(
 			"koboldcpp:getBinaryDownloadProgress",
-			(msg: Sockets.KoboldCPP.GetBinaryDownloadProgress.Response) => {
-				download = msg.download
-			}
+			handleGetBinaryDownloadProgress
 		)
 	})
 
 	onDestroy(() => {
-		socket.off("koboldcpp:listReleaseVersions")
-		socket.off("koboldcpp:listReleaseVersions:error")
-		socket.off("koboldcpp:listBinaryVariants")
-		socket.off("koboldcpp:listBinaryVariants:error")
-		socket.off("koboldcpp:binaryDownloadProgress")
-		socket.off("koboldcpp:getBinaryDownloadProgress")
+		socket.off("koboldcpp:listReleaseVersions", handleListReleaseVersions)
+		socket.off(
+			"koboldcpp:listReleaseVersions:error",
+			handleListReleaseVersionsError
+		)
+		socket.off("koboldcpp:listBinaryVariants", handleListBinaryVariants)
+		socket.off(
+			"koboldcpp:listBinaryVariants:error",
+			handleListBinaryVariantsError
+		)
+		socket.off(
+			"koboldcpp:binaryDownloadProgress",
+			handleBinaryDownloadProgress
+		)
+		socket.off(
+			"koboldcpp:getBinaryDownloadProgress",
+			handleGetBinaryDownloadProgress
+		)
 	})
 </script>
 

@@ -1,12 +1,12 @@
 /**
- * Flattens CONNECTION_TYPES (native adapters) and OPENAI_CHAT_PRESETS (all
+ * Flattens CONNECTION_TYPES (native adapters) and OPENAI_COMPATIBLE_PRESETS (all
  * backed by the generic OpenAI Session adapter) into one list of pickable
  * "services" for the New Connection modal's searchable picker — so a user
  * looking for Groq/Mistral/DeepSeek/etc. sees them directly instead of
  * having to first guess that they live two levels deep under "OpenAI Session".
  */
 import { CONNECTION_TYPE, CONNECTION_TYPES } from "../constants/ConnectionTypes"
-import { OPENAI_CHAT_PRESETS } from "./connectionDefaults"
+import { OPENAI_COMPATIBLE_PRESETS } from "./connectionDefaults"
 
 export type ConnectionServiceCategory = "cloud" | "local" | "custom"
 
@@ -17,7 +17,7 @@ export interface ConnectionServiceItem {
 	category: ConnectionServiceCategory
 	/** The CONNECTION_TYPE value to store on the connection. */
 	type: string
-	/** Set only for OPENAI_CHAT_PRESETS-backed entries. */
+	/** Set only for OPENAI_COMPATIBLE_PRESETS-backed entries. */
 	presetValue?: number
 	/**
 	 * The preset's capability slug, stored on the connection so the preset layer
@@ -67,7 +67,7 @@ export const CATEGORY_LABELS: Record<ConnectionServiceCategory, string> = {
 	custom: "Custom"
 }
 
-// Two OPENAI_CHAT_PRESETS entries share a name with a native adapter type
+// Two OPENAI_COMPATIBLE_PRESETS entries share a name with a native adapter type
 // that talks to the same underlying software via a different wire protocol
 // (Ollama's/KoboldCPP's own native API vs. their OpenAI-compatible endpoint)
 // — disambiguate just the picker label, not the preset's own `name` field
@@ -84,7 +84,7 @@ export function buildConnectionServiceItems(): ConnectionServiceItem[] {
 	for (const t of CONNECTION_TYPES) {
 		// Represented below by the "Empty" preset (identical connectionDefaults)
 		// as the single "Custom (OpenAI-Compatible)" entry instead.
-		if (t.value === CONNECTION_TYPE.OPENAI_CHAT) continue
+		if (t.value === CONNECTION_TYPE.OPENAI) continue
 		// KoboldCPP Manager connections are never manually created — they're
 		// auto-created by koboldcpp:connectModel / koboldcpp:connectImageModel
 		// when a model is activated from the KoboldCPP Manager page
@@ -103,10 +103,10 @@ export function buildConnectionServiceItems(): ConnectionServiceItem[] {
 	}
 
 	const openaiType = CONNECTION_TYPES.find(
-		(t) => t.value === CONNECTION_TYPE.OPENAI_CHAT
+		(t) => t.value === CONNECTION_TYPE.OPENAI
 	)!
 
-	for (const preset of OPENAI_CHAT_PRESETS) {
+	for (const preset of OPENAI_COMPATIBLE_PRESETS) {
 		const isCustom = preset.category === "custom"
 		items.push({
 			key: `preset:${preset.value}`,
@@ -114,7 +114,7 @@ export function buildConnectionServiceItems(): ConnectionServiceItem[] {
 				? "Custom (OpenAI-Compatible)"
 				: (PRESET_LABEL_OVERRIDES[preset.name] ?? preset.name),
 			category: preset.category as ConnectionServiceCategory,
-			type: CONNECTION_TYPE.OPENAI_CHAT,
+			type: CONNECTION_TYPE.OPENAI,
 			presetValue: preset.value,
 			presetSlug: (preset as { slug?: string }).slug,
 			difficulty: openaiType.difficulty,

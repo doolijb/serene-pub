@@ -59,7 +59,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -89,7 +89,7 @@ beforeAll(async () => {
 	const { setCapabilityDefault } = await import(
 		"$lib/server/connections/capabilityDefaults"
 	)
-	await setCapabilityDefault(db as any, "text->text", {
+	await setCapabilityDefault(db, "text->text", {
 		connectionId: connection.id,
 		samplingConfigId: sampling?.id ?? null
 	})
@@ -163,12 +163,36 @@ const count = async (content = "Have you seen the ashguard?") => {
 	)) as any
 }
 
+/**
+ * The payload's text, whichever wire shape it came back in.
+ *
+ * ⚠ The fixture connection is a plain Ollama row with nothing switched, which
+ * resolves to CHAT wire mode — the default, and what a real user gets. So the
+ * handler answers with `messages`, not with `prompt`, and the response contract
+ * has always carried both (`Sockets.Sessions.PromptTokenCount.Response`) because
+ * the session page renders either.
+ *
+ * These cases are about what the preview CONTAINS — the draft mid-keystroke, a
+ * heading from a `pipeline_variable_templates` row — and that is the same fact
+ * in both shapes. Pinning the fixture to completion mode to keep reading a
+ * string would have tested the shape a default connection does not use.
+ */
+const promptText = (res: any): string =>
+	typeof res.prompt === "string"
+		? res.prompt
+		: (res.messages ?? [])
+				.map((m: { content: string }) => m.content)
+				.join("\n")
+
 describe("sessions:promptTokenCount compiles through the pipeline", () => {
-	test("returns a prompt rather than an error", async () => {
+	test("returns a compiled payload rather than an error", async () => {
 		const res = await count()
 		expect(res.error).toBeUndefined()
-		expect(typeof res.prompt).toBe("string")
-		expect(res.prompt.length).toBeGreaterThan(0)
+		// Chat wire mode, which is what this connection resolves to and what the
+		// session page's preview renders as a list of turns.
+		expect(Array.isArray(res.messages)).toBe(true)
+		expect(res.messages.length).toBeGreaterThan(0)
+		expect(promptText(res).length).toBeGreaterThan(0)
 	})
 
 	test("the prompt is the pipeline's, laid out by the layout rows", async () => {
@@ -176,8 +200,10 @@ describe("sessions:promptTokenCount compiles through the pipeline", () => {
 		// the context template — so finding it proves the config layer resolved,
 		// which is the half a preview could otherwise skip.
 		const res = await count()
-		expect(res.prompt).toContain("Assistant Characters (AI-controlled):")
-		expect(res.prompt).toContain("Ash")
+		expect(promptText(res)).toContain(
+			"Assistant Characters (AI-controlled):"
+		)
+		expect(promptText(res)).toContain("Ash")
 	})
 
 	test("counts tokens against a real budget", async () => {
@@ -199,7 +225,7 @@ describe("sessions:promptTokenCount compiles through the pipeline", () => {
 		// The whole point of the handler: it fires on a debounce mid-keystroke,
 		// so the count has to reflect text that is not a row yet.
 		const res = await count("tell me about the ashguard's brand")
-		expect(res.prompt).toContain("ashguard's brand")
+		expect(promptText(res)).toContain("ashguard's brand")
 	})
 
 	test("writes nothing — it is a preview", async () => {

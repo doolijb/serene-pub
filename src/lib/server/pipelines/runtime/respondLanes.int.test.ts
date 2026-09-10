@@ -139,7 +139,7 @@ const rankedSources = async (): Promise<string[]> => {
 		},
 		seed: "seed:lanes",
 		bindings: coreBindings(),
-		host: createHost(db as any, { sessionId, userId }),
+		host: createHost(db, { sessionId, userId }),
 		// Stops before `generate`, which needs a connection this test has no
 		// business supplying — everything under test happens upstream of it.
 		preview: true

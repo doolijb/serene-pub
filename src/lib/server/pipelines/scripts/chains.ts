@@ -37,8 +37,6 @@ import {
 import { runScriptSource } from "$lib/server/pipelines/scripts/host"
 import type { PluginHookDispatch } from "$lib/server/pipelines/scripts/pluginDispatch"
 
-type Db = { select: any; insert: any; update: any; delete: any }
-
 export interface ScriptApplierOptions {
 	/** The run seed — link streams derive from it (see header). */
 	seed: string
@@ -548,14 +546,51 @@ export function makeScriptApplier(
  *
  * Best-effort on purpose: extras are nullable in the contract and a script
  * must tolerate absence — a failed lookup costs the extras, never the turn.
+ *
+ * ## The new-name fact (ruling 2026-09-07)
+ *
+ * `speakerName`, `speakerCharacterId` and `speakerIsKnown` are what
+ * `core:input/side-character-turn@1` declares on its scripts hook, and this is
+ * where they get values. `speakerIsKnown: false` means a free-form name matched
+ * nothing in the session's lorebook — the fact a script needs to offer adding
+ * them. Core supplies the fact and the hook and stops there: it does not
+ * suggest, notify, or write.
+ *
+ * ⚠ **Through the applier, not beside it.** The extras reach a link the same
+ * way every other extra does — `site.extras` narrows what is serialized, the
+ * one dispatch fork routes core scripts and extension hooks alike, and both
+ * hand back one `ScriptRunResult`. There is deliberately no second path from
+ * here to a script.
+ *
+ * The speaker is passed in rather than looked up: the trigger resolved it once,
+ * before the run, and re-deriving "does the lorebook know this name" here would
+ * be a second implementation of the rule free to disagree with the first.
  */
 export async function scriptExtras(
 	db: Db,
-	scope: { sessionId?: number; currentCharacterId?: number | null }
+	scope: {
+		sessionId?: number
+		currentCharacterId?: number | null
+		speaker?: {
+			name: string
+			characterId: number | null
+			known: boolean
+		} | null
+	}
 ): Promise<Record<string, unknown>> {
 	const out: Record<string, unknown> = {}
+	if (scope.speaker) {
+		out.speakerName = scope.speaker.name
+		out.speakerCharacterId = scope.speaker.characterId
+		out.speakerIsKnown = scope.speaker.known
+	}
 	try {
-		if (scope.currentCharacterId != null) {
+		// The cast member's name, when the trigger did not already name a
+		// speaker. Ordered this way rather than the reverse because a
+		// side-character turn's speaker is the trigger's, and a free-form name
+		// has no row to look up at all — reading the character row second would
+		// overwrite a typed name with whoever the scope happened to carry.
+		if (scope.currentCharacterId != null && out.speakerName == null) {
 			const [c] = await db
 				.select({ name: schema.characters.name })
 				.from(schema.characters)

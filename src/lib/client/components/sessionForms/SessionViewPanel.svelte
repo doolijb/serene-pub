@@ -30,20 +30,26 @@
 	let session = $state<Sockets.Sessions.Get.Response["session"] | null>(null)
 	let isLoading = $state(true)
 
+	// Named so `off` can name it too. A bare `socket.off("sessions:get")`
+	// removes EVERY listener for that event — including other components
+	// listening for the same event — which then stops updating for the rest
+	// of the session.
+	function handleSessionsGet(msg: Sockets.Sessions.Get.Response) {
+		if (msg.session?.id === sessionId) {
+			session = msg.session
+			isLoading = false
+		}
+	}
+
 	onMount(() => {
-		socket.on("sessions:get", (msg: Sockets.Sessions.Get.Response) => {
-			if (msg.session?.id === sessionId) {
-				session = msg.session
-				isLoading = false
-			}
-		})
+		socket.on("sessions:get", handleSessionsGet)
 		socket.emit("sessions:get", {
 			id: sessionId
 		} satisfies Sockets.Sessions.Get.Params)
 	})
 
 	onDestroy(() => {
-		socket.off("sessions:get")
+		socket.off("sessions:get", handleSessionsGet)
 	})
 
 	let characters = $derived(

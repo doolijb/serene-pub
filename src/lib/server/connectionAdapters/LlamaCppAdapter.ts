@@ -1,7 +1,4 @@
-import Handlebars from "handlebars"
-import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import _ from "lodash"
-import { StopStrings } from "../utils/StopStrings"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { TokenCounters } from "../utils/TokenCounterManager"
@@ -300,74 +297,187 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 
 	async generateText(): Promise<TextGenResult> {
 		const stream = this.connection.extraJson?.stream || false
-		// Prepare stop strings
-		const stopStrings = StopStrings.get({
-			format: this.connection.promptFormat || "chatml",
-			characters:
-				this.session.sessionCharacters?.map((cc) => cc.character) || [],
-			personas:
-				this.session.sessionPersonas?.map((cp) => cp.persona) || [],
-			currentCharacterId: this.currentCharacterId ?? undefined
-		})
-		const characterName = resolveCharacterName(
-			this.session.sessionCharacters?.[0]?.character
-		)
-		const personaName =
-			this.session.sessionPersonas?.[0]?.persona?.name || "user"
-		const stopContext: Record<string, string> = {
-			char: characterName,
-			user: personaName
-		}
-		const stop = stopStrings.map((str) =>
-			Handlebars.compile(str)(stopContext)
-		)
+		/**
+		 * Which of llama-server's two endpoints this request goes to.
+		 *
+		 * The same `useSession = this.isChatWire` idiom as `OllamaAdapter` and
+		 * `KoboldCppAdapter`, and it arrived here for the same reason they have
+		 * it: wire mode is a CONNECTION CAPABILITY, resolved once from the row's
+		 * four layers and read by the render as well as by this send, so the
+		 * shape the prompt was built in and the shape it is sent in are one
+		 * value rather than two that have to agree.
+		 *
+		 * Until this branch existed the type id itself said `completion` and
+		 * this adapter had no chat leg at all — the way to reach llama-server's
+		 * chat API was an `openai` connection pointed at the same process.
+		 * `llamacpp` is the SERVICE now (ruling 2026-09-08: one connection type
+		 * per service, wire mode as a property), and the manifest declares
+		 * `wire_chat` as supported-but-not-defaulted so an upgrading install
+		 * keeps the completion leg it was already on.
+		 */
+		const useSession = this.isChatWire
+		// The stop sequences this request will send — composed by
+		// `connections/stops.ts` and handed over at construction, never built
+		// here (ruling 2026-09-10). The chat branch below used to be given
+		// nothing on purpose; it now sends whatever survived the composer's wire
+		// rule, which on that wire is the author's own list and nothing else.
+		const stop = this.stops
 
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
-		// Both shapes, through the one accessor the other adapters use.
-		//
-		// The three-branch version this replaced flattened a message array by
-		// joining `m.content` with newlines, which dropped every role marker —
-		// the model was handed the system prompt, the lore and the dialogue as
-		// one unlabelled blob. `promptTextFor` rebuilds the blocks in the
-		// connection's own format instead, and raises the same "neither shape"
-		// error the third branch did.
-		const prompt: string = this.promptTextFor(compiledPrompt)
-
-		const req: CompletionRequest = {
-			prompt,
-			stream,
-			stop,
-			...this.mapSamplingConfig(),
-			// `grammar` has been declared on CompletionRequest since this
-			// adapter was written and was never populated. llama.cpp applies it
-			// at the decoder, so non-JSON becomes unrepresentable rather than
-			// merely discouraged. Omitted entirely for plain-text generation.
-			// llama.cpp also accepts a `json_schema` field it converts itself;
-			// this goes through our converter instead so both GBNF services
-			// share one tested path rather than two that can diverge.
-			...(this.responseFormat === "json"
-				? {
-						grammar: this.responseSchema
-							? jsonSchemaToGbnf(this.responseSchema)
-							: JSON_OBJECT_GBNF
-					}
-				: {})
-		}
 
 		const baseUrl =
 			normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:8080"
+		const endpoint = useSession
+			? `${baseUrl}/v1/chat/completions`
+			: `${baseUrl}/completion`
+
+		let req: Record<string, any>
+
+		if (useSession) {
+			// Checked rather than asserted, the same way `OllamaAdapter` and
+			// `KoboldCppAdapter` check it. `compiledPrompt.messages!` on a
+			// completion-shaped payload sends `undefined`, `JSON.stringify`
+			// drops the key outright, and llama-server is asked to continue a
+			// conversation it was never shown. A refusal naming the
+			// disagreement is worth more than a request that loses the prompt.
+			//
+			// Deliberately NOT a fallback to `promptTextFor`: rebuilding a flat
+			// prompt here would put an adapter-local wire mode back, which is
+			// the defect rather than the recovery.
+			if (!Array.isArray(compiledPrompt.messages))
+				throw new Error(
+					"this llama.cpp connection is chat wire mode, but the prompt it was " +
+						"handed carries no messages. The render and the send are reading " +
+						"different wire modes — check that the assemble node's connection " +
+						"slot is wired to the sending Provider (slot.connectionOf)."
+				)
+			req = {
+				// llama-server ignores the field — it serves whatever model it
+				// was started with — but a proxy in front of it may not, and
+				// this row often has no model at all (`connectionDefaults` names
+				// none), so it is sent only when there is one to send.
+				...(this.connection.model
+					? { model: this.connection.model }
+					: {}),
+				messages: compiledPrompt.messages,
+				stream,
+				// The composer has already removed what must not be here: in
+				// chat wire mode the roles carry the structure, so the
+				// completion template's role labels have nothing to stop on —
+				// and sending them OVERRIDES the model's native stop tokens
+				// (`<|im_end|>` on a ChatML model), truncating replies for no
+				// gain. What survives is the author's own list, which is their
+				// choice rather than the template's and belongs on either wire;
+				// the old blanket omission here discarded it.
+				//
+				// Placed BEFORE the sampling spread deliberately, matching the
+				// completion branch: no `samplingKeyMap` in this repo produces a
+				// `stop` key today, and if one ever did the user's sampler
+				// should win over a list composed for them.
+				...(stop.length ? { stop } : {}),
+				...this.mapSamplingConfig(),
+				// The OpenAI-compatible mechanism rather than `grammar`, because
+				// this is the OpenAI-compatible route: llama-server implements
+				// `response_format` with both `json_object` and `json_schema`
+				// there and converts the schema to GBNF itself. The `/completion`
+				// branch below still goes through our own converter — that
+				// endpoint has no `response_format` to speak.
+				...(this.responseFormat === "json"
+					? this.responseSchema
+						? {
+								response_format: {
+									type: "json_schema" as const,
+									json_schema: {
+										name: "response",
+										strict: true,
+										schema: this.responseSchema
+									}
+								}
+							}
+						: {
+								response_format: {
+									type: "json_object" as const
+								}
+							}
+					: {})
+			}
+		} else {
+			// Both shapes, through the one accessor the other adapters use.
+			//
+			// The three-branch version this replaced flattened a message array by
+			// joining `m.content` with newlines, which dropped every role marker —
+			// the model was handed the system prompt, the lore and the dialogue as
+			// one unlabelled blob. `promptTextFor` rebuilds the blocks in the
+			// connection's own format instead, and raises the same "neither shape"
+			// error the third branch did.
+			const prompt: string = this.promptTextFor(compiledPrompt)
+
+			req = {
+				prompt,
+				stream,
+				stop,
+				...this.mapSamplingConfig(),
+				// `grammar` has been declared on CompletionRequest since this
+				// adapter was written and was never populated. llama.cpp applies it
+				// at the decoder, so non-JSON becomes unrepresentable rather than
+				// merely discouraged. Omitted entirely for plain-text generation.
+				// llama.cpp also accepts a `json_schema` field it converts itself;
+				// this goes through our converter instead so both GBNF services
+				// share one tested path rather than two that can diverge.
+				...(this.responseFormat === "json"
+					? {
+							grammar: this.responseSchema
+								? jsonSchemaToGbnf(this.responseSchema)
+								: JSON_OBJECT_GBNF
+						}
+					: {})
+			} satisfies CompletionRequest
+		}
 
 		if (stream) {
 			return {
+				/**
+				 * ⚠ `thinkingCb` fires on ONE of this adapter's two routes, and
+				 * which one is the whole of the fact — read both halves before
+				 * concluding anything about whether this connection can reason.
+				 *
+				 * **`/completion` has no reasoning FIELD.** llama.cpp's native
+				 * endpoint carries no structured reasoning channel. Checked
+				 * twice against the current tree rather than from memory: the
+				 * server README's `/completion` response-field list does not
+				 * include `reasoning_content`, and `to_json_non_oaicompat()` —
+				 * both the final and the partial result serializers,
+				 * `tools/server/server-task.cpp` — never sets that key on
+				 * either. `--reasoning-format` and `chat_template_kwargs` are
+				 * `/v1/chat/completions` features; `/completion` runs no chat
+				 * template at all.
+				 *
+				 * The reasoning still COMES BACK on that route.
+				 * `to_json_non_oaicompat()` serializes the raw accumulated text
+				 * — `common_chat_parse()` and the `oaicompat_msg` it fills are
+				 * read only by the OAI-compat serializers — so a reasoning
+				 * model's `<think>` tags arrive inline in `content`, exactly as
+				 * the model wrote them, unstripped. That is the INLINE-TAG path:
+				 * the shared parser's job, not an adapter field's.
+				 *
+				 * **`/v1/chat/completions` DOES have the field**, because it is
+				 * the OAI-compat serializer this adapter could not previously
+				 * reach — `reasoning_content` on the delta, and on the message
+				 * for a non-streaming reply. That is why the callback is named
+				 * rather than `_`-prefixed now: the chat branch feeds it, and no
+				 * field is invented on the native route to match. Which channel
+				 * a given generation uses follows the connection's wire mode,
+				 * one value resolved once (`useSession` above).
+				 */
 				completionResult: async (
 					contentCb: (chunk: string) => void,
-					_thinkingCb?: (chunk: string) => void
+					thinkingCb?: (chunk: string) => void
 				) => {
 					let content = ""
 					this.cancelTokenSource = axios.CancelToken.source()
 					try {
 						const response = await axios.post<CompletionResponse>(
-							baseUrl + "/completion",
+							endpoint,
 							req,
 							{
 								responseType: "stream",
@@ -396,16 +506,50 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 								if (!trimmed || !trimmed.startsWith("data:"))
 									continue
 								const jsonStr = trimmed.slice(5).trim()
-								if (!jsonStr) continue
+								// The OpenAI-compatible route terminates the
+								// stream with a literal sentinel rather than
+								// with JSON; parsing it would throw once per
+								// generation into the swallowing catch below.
+								if (!jsonStr || jsonStr === "[DONE]") continue
 								try {
 									const data = JSON.parse(jsonStr)
+									// Two envelopes, one loop. `/completion`
+									// puts the text at the top level;
+									// `/v1/chat/completions` puts it under
+									// `choices[0].delta`, and puts the model's
+									// reasoning in a SIBLING FIELD there —
+									// which the native route has no equivalent
+									// of at all (see the note on this
+									// callback's `_thinkingCb` history below).
+									const delta = useSession
+										? data.choices?.[0]?.delta
+										: data
+									const thinking = delta?.reasoning_content
 									if (
-										typeof data.content === "string" &&
-										data.content.length > 0
+										typeof thinking === "string" &&
+										thinking.length > 0
+									)
+										thinkingCb?.(thinking)
+									if (
+										typeof delta?.content === "string" &&
+										delta.content.length > 0
 									) {
-										content += data.content
-										contentCb(data.content)
+										content += delta.content
+										contentCb(delta.content)
 									}
+									// The final `/completion` frame names the
+									// sequence it stopped on. Read here rather
+									// than returned, because a stream is
+									// drained AFTER `generateText()` has
+									// already handed its result back — see
+									// `BaseConnectionAdapter.stopHit`.
+									if (
+										!useSession &&
+										typeof data?.stopping_word ===
+											"string" &&
+										data.stopping_word.length > 0
+									)
+										this.stopHit = data.stopping_word
 								} catch (err) {
 									// ignore JSON parse errors
 								}
@@ -446,7 +590,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 			}
 			try {
 				const response = await axios.post<CompletionResponse>(
-					baseUrl + "/completion",
+					endpoint,
 					req,
 					{
 						signal: this.abortController.signal,
@@ -454,11 +598,34 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 					}
 				)
 				const result = response.data
-				const content = result?.content || result?.response || ""
+				// The chat route answers in OpenAI's envelope and carries the
+				// reasoning in its own field; the native route answers flat and
+				// carries it inline in `content`, which is the whole of the
+				// long note on the streaming callback above.
+				const message = useSession
+					? (result as any)?.choices?.[0]?.message
+					: undefined
+				const content = useSession
+					? message?.content || ""
+					: result?.content || result?.response || ""
+				const thinkingContent = useSession
+					? typeof message?.reasoning_content === "string" &&
+						message.reasoning_content.length > 0
+						? message.reasoning_content
+						: undefined
+					: undefined
+				// Which stop sequence actually ended it — llama.cpp's native
+				// route is the ONE service in this app that reports the word
+				// rather than a reason code, so this is the only place `hit`
+				// can be filled honestly (ruling 2026-09-10). The OAI-compat
+				// route answers `finish_reason: "stop"` and names nothing, so
+				// it stays undefined there.
+				this.stopHit = !useSession ? result?.stopping_word : undefined
 				return {
 					completionResult: content,
 					compiledPrompt,
-					isAborted: this.isAborting
+					isAborted: this.isAborting,
+					...(thinkingContent ? { thinkingContent } : {})
 				}
 			} catch (e: any) {
 				// Only a genuine cancellation should report isAborted: true —
@@ -544,7 +711,7 @@ const exports: AdapterExports = {
 	testConnection,
 	listModels,
 	connectionDefaults:
-		CONNECTION_DEFAULTS[CONNECTION_TYPE.LLAMACPP_COMPLETION],
+		CONNECTION_DEFAULTS[CONNECTION_TYPE.LLAMACPP],
 	samplingKeyMap: llamaCppSamplingKeyMap
 }
 

@@ -47,8 +47,6 @@ import {
 } from "$lib/server/pipelines/prompt/renderers"
 import type { SandboxManager } from "./SandboxManager"
 
-type Db = { select: any }
-
 /**
  * Generous against the in-process default (250ms) because a plugin engine is a
  * worker round trip rendering what may be a whole context template; still a
@@ -129,7 +127,20 @@ function forwardingRenderer(
 			{
 				template: ctx.template,
 				variables: ctx.variables,
-				promptFormat: ctx.promptFormat ?? null
+				promptFormat: ctx.promptFormat ?? null,
+				/**
+				 * The template that format NAMES, resolved, so a plugin's
+				 * engine can wrap blocks the way core does.
+				 *
+				 * The key alone cannot answer that: `completion_templates` is a
+				 * table an admin adds rows to, and a sandboxed engine has no
+				 * database to look one up in. Data only — a prefix and a suffix
+				 * per role — so this hands over nothing a plugin could execute.
+				 *
+				 * `null` where the caller had no row to resolve: a preview, the
+				 * parity harness, an admin editing a template.
+				 */
+				completionTemplate: ctx.completionTemplate ?? null
 			},
 			{
 				timeoutMs: ENGINE_TIMEOUT_MS,

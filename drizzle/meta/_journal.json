@@ -673,6 +673,132 @@
       "when": 1788780748673,
       "tag": "0095_prompt_format_reprojection",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1788811320005,
+      "tag": "0096_local_model_registry",
+      "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1788812930130,
+      "tag": "0097_brave_layla_miller",
+      "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1788820690892,
+      "tag": "0098_wire_mode_intent",
+      "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1788823900000,
+      "tag": "0099_signal_wiring_reprojection",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1788827887780,
+      "tag": "0100_narration_split_reprojection",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1788830057137,
+      "tag": "0101_connection_notes",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1788839001227,
+      "tag": "0102_summarize_batch_budget",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1788855043748,
+      "tag": "0103_curvy_cannonball",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1788856635256,
+      "tag": "0104_ice_scene_cast_extraction",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1788871367059,
+      "tag": "0105_llamacpp_service_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1788871427059,
+      "tag": "0106_continuation_prefill_reprojection",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1788886219039,
+      "tag": "0107_pipeline_run_artifacts",
+      "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1788891829380,
+      "tag": "0108_ollama_keep_alive_default",
+      "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1788976726804,
+      "tag": "0109_avatar_media_fk",
+      "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "7",
+      "when": 1789009825327,
+      "tag": "0110_session_history_limit",
+      "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1789014172870,
+      "tag": "0111_reply_slots_and_relationship_cap",
+      "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1789020833437,
+      "tag": "0112_backup_schedule",
+      "breakpoints": true
+    },
+    {
+      "idx": 113,
+      "version": "7",
+      "when": 1789021440337,
+      "tag": "0113_declared_ports_and_rank_groups",
+      "breakpoints": true
     }
   ]
 }

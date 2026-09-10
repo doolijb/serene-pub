@@ -11,7 +11,7 @@ import child_process from "child_process"
 
 import pkg from "../package.json" with { type: "json" }
 import { pruneDist } from "./prune-dist.js"
-import { appDir, bundleRootDir } from "./dist-layout.js"
+import { appDir, bundleRootDir, MACOS_APP_BUNDLE_NAME } from "./dist-layout.js"
 import { isAcceptableLicense, isWhitelisted } from "./licenseExpression.js"
 
 const __filename = fileURLToPath(import.meta.url)
@@ -104,6 +104,46 @@ function checkAllLicensesAcceptable(nodeModulesPath) {
 	return problematic
 }
 
+/**
+ * macOS: give the .app bundle its OWN copy of the forwarder, and make sure
+ * CFBundleExecutable is executable. Pulled out of the darwin branch below so
+ * bundle-dist.test.js can exercise the placement directly rather than
+ * spawning the whole script.
+ *
+ * @param {object} args
+ * @param {string} args.platformDir dist-assets/macos
+ * @param {string} args.bundleRoot stageDir/serene-pub
+ * @param {string} args.payloadDir bundleRoot/Serene Pub.app/Contents/Resources/app
+ */
+export function placeDarwinForwarder({ platformDir, bundleRoot, payloadDir }) {
+	// Beside the payload: payloadDir is the bundle's
+	// Contents/Resources/app, so its parent is Contents/Resources.
+	const bundleForwarder = path.join(path.dirname(payloadDir), "run.sh")
+	fs.copyFileSync(path.join(platformDir, "run.sh"), bundleForwarder)
+	fs.chmodSync(bundleForwarder, 0o755)
+
+	// copyFileSync creates the destination with the source's mode, so
+	// the stub copied with the .app above arrives executable already —
+	// stated here anyway, because a bundle whose CFBundleExecutable is
+	// not executable does not launch at all, and a build machine with
+	// a checkout that lost the bit would ship one silently.
+	const bundleExecutable = path.join(
+		bundleRoot,
+		MACOS_APP_BUNDLE_NAME,
+		"Contents",
+		"MacOS",
+		"serene-pub"
+	)
+	if (fs.existsSync(bundleExecutable)) {
+		fs.chmodSync(bundleExecutable, 0o755)
+	} else {
+		console.warn(
+			`Warning: ${MACOS_APP_BUNDLE_NAME} has no Contents/MacOS/serene-pub — a Dock launch will do nothing.`
+		)
+	}
+	console.log("Copied file: run.sh (into Serene Pub.app/Contents/Resources)")
+}
+
 // Define all target OS/arch combinations
 const targets = [
 	{ name: "linux-x64", platform: "linux", arch: "x64" },
@@ -117,21 +157,28 @@ const targets = [
 	{ name: "windows-arm64", platform: "win32", arch: "arm64" }
 ]
 
-// Accept a single target as a command-line argument
-const argTarget = process.argv[2]
-if (!argTarget) {
-	console.error("Usage: node bundle-dist.js <target>")
-	console.error("Valid targets:", targets.map((t) => t.name).join(", "))
-	process.exit(1)
-}
-const target = targets.find((t) => t.name === argTarget)
-if (!target) {
-	console.error(`Invalid target: ${argTarget}`)
-	console.error("Valid targets:", targets.map((t) => t.name).join(", "))
-	process.exit(1)
-}
+/**
+ * Guards the CLI entry point so importing this module for its exports (e.g.
+ * placeDarwinForwarder, for a test) does not also run the build — only
+ * `node bundle-dist.js <target>` does.
+ */
+const isMain = import.meta.url === `file://${process.argv[1]}`
 
-;(async () => {
+async function main() {
+	// Accept a single target as a command-line argument
+	const argTarget = process.argv[2]
+	if (!argTarget) {
+		console.error("Usage: node bundle-dist.js <target>")
+		console.error("Valid targets:", targets.map((t) => t.name).join(", "))
+		process.exit(1)
+	}
+	const target = targets.find((t) => t.name === argTarget)
+	if (!target) {
+		console.error(`Invalid target: ${argTarget}`)
+		console.error("Valid targets:", targets.map((t) => t.name).join(", "))
+		process.exit(1)
+	}
+
 	try {
 		// 1. License check
 		console.log("Checking licenses...")
@@ -242,6 +289,25 @@ if (!target) {
 			if (!isWindows && runFile.endsWith(".sh")) {
 				fs.chmodSync(dest, 0o755)
 			}
+		}
+
+		// macOS: the .app carries its OWN copy of that same forwarder.
+		//
+		// Info.plist names Contents/MacOS/serene-pub as CFBundleExecutable, so
+		// it is the only thing a Dock or Finder launch runs, and it used to
+		// exec the payload's bare app/run.sh directly. A double-click
+		// therefore got none of the forwarder's startup watch — on the one
+		// launch path that has no terminal to fall back on, a database that
+		// would not open produced no window, no browser tab and no log at all.
+		// The launcher beside the .app could not fix that: nothing invokes it,
+		// and a bundle dragged to /Applications leaves it behind entirely.
+		//
+		// A COPY, not a second script. The forwarder locates the payload
+		// relative to itself, so one text serves both placements — two
+		// divergent launcher texts, each true of one launch path, is the
+		// failure this replaces rather than the fix for it.
+		if (target.platform === "darwin") {
+			placeDarwinForwarder({ platformDir, bundleRoot, payloadDir })
 		}
 
 		// Copy LICENSE, README, etc.
@@ -367,4 +433,8 @@ if (!target) {
 		console.error("Bundle process failed:", err)
 		process.exit(1)
 	}
-})()
+}
+
+if (isMain) {
+	main()
+}

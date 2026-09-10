@@ -8,17 +8,17 @@ import {
 	KOBOLDCPP_MANAGED_TYPES
 } from "./connectionServiceItems"
 import { CONNECTION_TYPE, CONNECTION_TYPES } from "../constants/ConnectionTypes"
-import { OPENAI_CHAT_PRESETS } from "./connectionDefaults"
+import { OPENAI_COMPATIBLE_PRESETS } from "./connectionDefaults"
 
 describe("buildConnectionServiceItems", () => {
 	const items = buildConnectionServiceItems()
 
-	test("has one item per native type (except OPENAI_CHAT and the Manager-owned types) plus one per preset", () => {
+	test("has one item per native type (except OPENAI and the Manager-owned types) plus one per preset", () => {
 		const expectedCount =
 			CONNECTION_TYPES.length -
 			1 -
 			KOBOLDCPP_MANAGED_TYPES.length +
-			OPENAI_CHAT_PRESETS.length
+			OPENAI_COMPATIBLE_PRESETS.length
 		expect(items.length).toBe(expectedCount)
 	})
 
@@ -55,11 +55,11 @@ describe("buildConnectionServiceItems", () => {
 		}
 	})
 
-	test("the bare OPENAI_CHAT type is not present on its own — represented via the Empty preset", () => {
+	test("the bare OPENAI type is not present on its own — represented via the Empty preset", () => {
 		expect(
 			items.find(
 				(i) =>
-					i.type === CONNECTION_TYPE.OPENAI_CHAT &&
+					i.type === CONNECTION_TYPE.OPENAI &&
 					i.presetValue === undefined
 			)
 		).toBeUndefined()
@@ -69,14 +69,14 @@ describe("buildConnectionServiceItems", () => {
 		const custom = items.find((i) => i.category === "custom")
 		expect(custom).toBeDefined()
 		expect(custom!.label).toBe("Custom (OpenAI-Compatible)")
-		expect(custom!.type).toBe(CONNECTION_TYPE.OPENAI_CHAT)
+		expect(custom!.type).toBe(CONNECTION_TYPE.OPENAI)
 		expect(custom!.presetValue).toBe(0)
 	})
 
-	test("every native adapter type (other than OPENAI_CHAT and the Manager-owned types) is present with type === its own value and no presetValue", () => {
+	test("every native adapter type (other than OPENAI and the Manager-owned types) is present with type === its own value and no presetValue", () => {
 		for (const t of CONNECTION_TYPES) {
 			if (
-				t.value === CONNECTION_TYPE.OPENAI_CHAT ||
+				t.value === CONNECTION_TYPE.OPENAI ||
 				isKoboldCppManagedType(t.value)
 			)
 				continue
@@ -88,12 +88,12 @@ describe("buildConnectionServiceItems", () => {
 		}
 	})
 
-	test("every non-Empty preset is present with type === OPENAI_CHAT and its own presetValue", () => {
-		for (const preset of OPENAI_CHAT_PRESETS) {
+	test("every non-Empty preset is present with type === OPENAI and its own presetValue", () => {
+		for (const preset of OPENAI_COMPATIBLE_PRESETS) {
 			if (preset.value === 0) continue
 			const item = items.find((i) => i.key === `preset:${preset.value}`)
 			expect(item).toBeDefined()
-			expect(item!.type).toBe(CONNECTION_TYPE.OPENAI_CHAT)
+			expect(item!.type).toBe(CONNECTION_TYPE.OPENAI)
 			expect(item!.presetValue).toBe(preset.value)
 		}
 	})

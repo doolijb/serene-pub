@@ -48,7 +48,7 @@ beforeAll(async () => {
 	)
 	db = (await import("$lib/server/db")).db as unknown as TestDb
 	await (await import("$lib/server/db/defaults")).sync()
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	respondSpecRow = (
 		await db

@@ -241,20 +241,11 @@ describe("the ranker's signal weights reach the scorer", () => {
 				history: 0.1,
 				relationships: 0
 			},
-			signalRecency: {
-				messages: 0.3,
-				worldLore: 0,
-				characterLore: 0,
-				history: 0.2,
-				relationships: 0
-			},
-			signalSceneAffinity: {
-				messages: 0.15,
-				worldLore: 0,
-				characterLore: 0,
-				history: 0.1,
-				relationships: 0
-			},
+			// ⚠ `signalRecency` and `signalSceneAffinity` were declared here
+			// with non-zero defaults on two bands and are gone: no mechanism
+			// has ever written either signal, so both weights multiplied a
+			// permanent zero. Their producers are a design decision rather than
+			// a wiring job — see the contracts file.
 			signalDensity: {
 				messages: 0.1,
 				worldLore: 0,
@@ -424,9 +415,16 @@ describe("the mechanism weights reach the scorer", () => {
 	})
 
 	it("does not scale the structural signals", async () => {
-		// Recency is not a way of *finding* an entry, so an entry does not
-		// become less recent because a reader turned keyword matching down.
-		const rankRecency = (mechanismWeights: Record<string, number>) =>
+		// Length is not a way of *finding* an entry, so an entry does not get
+		// shorter because a reader turned keyword matching down.
+		//
+		// ⚠ This used `signals: { recency: 1 }` on the messages band, which
+		// asserted the rule against a signal no mechanism produced — the
+		// arithmetic was real and the candidate could not be. `density` is the
+		// structural signal that is produced now (`keywordQuery` writes it on
+		// every candidate), so the same rule is asserted against something a
+		// run can actually carry.
+		const rankStructural = (mechanismWeights: Record<string, number>) =>
 			coreBindings()["core:task/rank-hybrid@1"]!(
 				{
 					candidates: [
@@ -434,7 +432,7 @@ describe("the mechanism weights reach the scorer", () => {
 							id: "m",
 							source: "messages",
 							tokens: 100,
-							signals: { recency: 1 }
+							signals: { density: 1 }
 						}
 					],
 					budget: { remaining: 1000 },
@@ -443,8 +441,8 @@ describe("the mechanism weights reach the scorer", () => {
 				{} as any
 			) as Promise<any>
 
-		const full = await rankRecency({ keyword: 1, semantic: 1, name: 1 })
-		const off = await rankRecency({ keyword: 0, semantic: 0, name: 0 })
+		const full = await rankStructural({ keyword: 1, semantic: 1, name: 1 })
+		const off = await rankStructural({ keyword: 0, semantic: 0, name: 0 })
 		expect(off.value.decisions[0].score).toBe(full.value.decisions[0].score)
 		expect(off.value.decisions[0].score).toBeGreaterThan(0)
 	})
@@ -499,11 +497,14 @@ describe("lore floors cannot be set through the node (R6)", () => {
 						tokens: 100,
 						signals: {}
 					},
+					// `density`, not `recency`: the messages band's structural
+					// signal that something actually produces. See the
+					// mechanism-strength suite above.
 					{
-						id: "m_recent",
+						id: "m_scored",
 						source: "messages",
 						tokens: 100,
-						signals: { recency: 1 }
+						signals: { density: 1 }
 					}
 				],
 				// Room for one, so "kept" is observable as survival.
@@ -527,7 +528,7 @@ describe("lore floors cannot be set through the node (R6)", () => {
 		expect(
 			stale.value.candidates.map((c: any) => c.id),
 			"a lore floor survived and reserved an entry the ranker did not want"
-		).toEqual(["m_recent"])
+		).toEqual(["m_scored"])
 		expect(
 			stale.value.decisions.find(
 				(d: any) => d.candidate.id === "w_unscored"
@@ -538,7 +539,7 @@ describe("lore floors cannot be set through the node (R6)", () => {
 	it("still honours the conversation's floor, which R6 keeps", async () => {
 		const withFloor = await rank({ messages: 1 })
 		const kept = withFloor.value.decisions.find(
-			(d: any) => d.candidate.id === "m_recent"
+			(d: any) => d.candidate.id === "m_scored"
 		)
 		expect(kept.reason).toBe("reserved_minimum")
 	})

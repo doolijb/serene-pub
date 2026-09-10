@@ -29,6 +29,7 @@ export const DOC_ORDER: string[] = [
 	"characters",
 	"personas",
 	"sessions",
+	"session-layout",
 	"lorebooks",
 	"connections",
 	"context-templates",

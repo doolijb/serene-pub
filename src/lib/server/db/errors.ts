@@ -1,0 +1,218 @@
+/**
+ * When the data directory itself will not open.
+ *
+ * PGlite's Postgres is WASM, and a data directory it cannot start on does not
+ * come back as a Postgres error — it comes back as a raw trap out of the
+ * runtime: `RuntimeError: Aborted()`, raised from `_pg_initdb`, with no code,
+ * no SQLSTATE and no message worth showing anyone. Nothing in this codebase
+ * used to look at it, so a force-quit that damaged the directory surfaced as an
+ * unhandled rejection at boot and then `RuntimeError: Aborted()` on every
+ * request thereafter, with no mention of the data directory, the backups beside
+ * it, or the fact that the data is still sitting there intact.
+ *
+ * This module is the classification step and nothing more: it decides whether a
+ * failure to open is *that* failure, and packages the facts an owner needs.
+ * Recovering — restoring a backup, starting fresh, moving the broken directory
+ * aside — is P1 of PLAN-pglite-recovery and is deliberately not here; none of
+ * it may run before the rulings that plan asks for.
+ */
+import fs from "fs"
+import type { LockState } from "./lock.js"
+import type { ShutdownMarker } from "./shutdownMarker"
+
+/** Repo-relative, so it is findable in a checkout, a zip, or the Docker image. */
+export const TROUBLESHOOTING_DOC = "docs/troubleshooting.md#database-wont-open"
+
+export const TROUBLESHOOTING_URL =
+	"https://github.com/doolijb/serene-pub/blob/main/docs/troubleshooting.md#database-wont-open"
+
+/** What `backups/` currently holds, as far as the failure path needs to know. */
+export interface BackupSummary {
+	backupsDir: string
+	backupCount: number
+	/** Filename only, newest by modification time. `null` when there are none. */
+	newestBackup: string | null
+}
+
+export interface DatabaseUnopenableFacts extends BackupSummary {
+	dataDir: string
+	dbPath: string
+	lastShutdown: ShutdownMarker
+	cause: unknown
+}
+
+/**
+ * The database exists and cannot be opened.
+ *
+ * Carries the facts rather than a rendered message so the boot log and the
+ * placeholder page can say the same things in their own shapes without one of
+ * them parsing the other's prose.
+ */
+export class DatabaseUnopenableError
+	extends Error
+	implements DatabaseUnopenableFacts
+{
+	readonly dataDir: string
+	readonly dbPath: string
+	readonly lastShutdown: ShutdownMarker
+	readonly backupsDir: string
+	readonly backupCount: number
+	readonly newestBackup: string | null
+	/**
+	 * Set by hand rather than through `Error`'s `cause` option: this class is
+	 * constructed on a path where the underlying trap is the whole evidence,
+	 * and a `cause` that depends on which lib target a build compiled against
+	 * is not evidence.
+	 */
+	readonly cause: unknown
+
+	constructor(facts: DatabaseUnopenableFacts) {
+		super(`The Serene Pub database at ${facts.dbPath} could not be opened.`)
+		this.name = "DatabaseUnopenableError"
+		this.dataDir = facts.dataDir
+		this.dbPath = facts.dbPath
+		this.lastShutdown = facts.lastShutdown
+		this.backupsDir = facts.backupsDir
+		this.backupCount = facts.backupCount
+		this.newestBackup = facts.newestBackup
+		this.cause = facts.cause
+	}
+}
+
+/**
+ * Recognise the error by its shape rather than by `instanceof`.
+ *
+ * The whole point of this class is to survive a boot that is already going
+ * wrong, and `instanceof` is the one check that fails for a reason unrelated to
+ * the failure being classified — two copies of this module (a dev reload, a
+ * duplicated chunk, a test registry reset) give two distinct constructors.
+ */
+export function isDatabaseUnopenableError(
+	value: unknown
+): value is DatabaseUnopenableError {
+	return (
+		value instanceof Error &&
+		value.name === "DatabaseUnopenableError" &&
+		typeof (value as DatabaseUnopenableError).dbPath === "string"
+	)
+}
+
+/**
+ * Is this the WASM trap PGlite raises when it cannot start on a directory?
+ *
+ * Two halves, and both are load-bearing:
+ *
+ * - **A trap, not an exception.** Emscripten aborts the whole runtime, so there
+ *   is no structured error to test — only `RuntimeError` and one of two
+ *   messages. `Aborted()` is what the four real broken directories collected on
+ *   2026-09-07 produce; `unreachable` is what a bad `PG_VERSION` or a zeroed
+ *   `pg_control` produces. Same trap, same consequence, so both count.
+ * - **From `_pg_initdb`.** This is what separates "this directory will not
+ *   open" from a trap raised later, by a query, on a database that opened
+ *   perfectly well. Only the first is a reason to boot into an explanation
+ *   instead of serving the app.
+ */
+export function isPgliteOpenAbort(error: unknown): boolean {
+	if (!(error instanceof Error)) return false
+	const trapped =
+		error.name === "RuntimeError" ||
+		/\bAborted\(/.test(error.message) ||
+		/\bunreachable\b/.test(error.message)
+	if (!trapped) return false
+	return typeof error.stack === "string" && error.stack.includes("_pg_initdb")
+}
+
+export interface OpenFailureContext {
+	dataDir: string
+	dbPath: string
+	/**
+	 * The lock as it stood **before** this process took it. Read afterwards it
+	 * is always our own, which would make the check meaningless.
+	 */
+	lockState: LockState | null
+	lastShutdown: ShutdownMarker
+	backups: BackupSummary
+}
+
+/**
+ * Decide whether an open failure is a broken data directory, or something else
+ * entirely that must keep propagating untouched.
+ *
+ * Three conditions, and each rules out a different thing that looks the same
+ * from inside the trap:
+ *
+ * 1. **The signature** — see `isPgliteOpenAbort`.
+ * 2. **The database is actually there.** A missing directory is a first run or
+ *    a mistyped `SERENE_PUB_DATA_DIR`, and telling that owner their data is
+ *    damaged would be a lie about data that never existed.
+ * 3. **Nobody else has the lock.** A second live process opening one PGlite
+ *    directory traps identically, and that already has its own handling — the
+ *    refusal to start in `acquireDatabaseLock()`. `"self"` is excluded for the
+ *    same reason one step in: a `vite dev` module re-execution holds its own
+ *    lock and its own PGlite client, and the answer there is "restart the dev
+ *    server", not "restore a backup". Both are named in `./index.ts`, and this
+ *    is the seam that keeps them distinct.
+ */
+export function classifyDatabaseOpenFailure(
+	error: unknown,
+	context: OpenFailureContext
+): DatabaseUnopenableError | null {
+	if (!isPgliteOpenAbort(error)) return null
+	if (!fs.existsSync(context.dbPath)) return null
+	if (context.lockState === "held" || context.lockState === "self")
+		return null
+
+	return new DatabaseUnopenableError({
+		dataDir: context.dataDir,
+		dbPath: context.dbPath,
+		lastShutdown: context.lastShutdown,
+		backupsDir: context.backups.backupsDir,
+		backupCount: context.backups.backupCount,
+		newestBackup: context.backups.newestBackup,
+		cause: error
+	})
+}
+
+const SHUTDOWN_PHRASE: Record<ShutdownMarker, string> = {
+	unclean:
+		"unclean — the last run was force-quit, killed, or lost power, which is the usual cause",
+	clean: "clean — the last run shut down normally, so this is not a force-quit",
+	unknown: "unknown — no marker from the last run"
+}
+
+/**
+ * The boot log's account of the failure, in plain words.
+ *
+ * Multi-line on purpose. This is read by somebody whose app has just stopped
+ * working, quite possibly from a terminal they opened specifically to find out
+ * why, and the three things they need are where the data is, whether there is a
+ * backup, and the reassurance that nothing has been touched.
+ */
+export function describeDatabaseUnopenable(
+	error: DatabaseUnopenableError
+): string {
+	const backups =
+		error.backupCount > 0
+			? `${error.backupsDir} — ${error.backupCount} file(s), newest: ${error.newestBackup}`
+			: `${error.backupsDir} — no backups found`
+
+	return [
+		"[db] The database could not be opened. Serene Pub has started anyway, but",
+		"     nothing that needs the database will work until this is resolved.",
+		"",
+		"     Nothing has been changed, moved or deleted. Your data directory is",
+		"     exactly as it was.",
+		"",
+		`     Data directory:    ${error.dataDir}`,
+		`     Database:          ${error.dbPath}`,
+		`     Previous shutdown: ${SHUTDOWN_PHRASE[error.lastShutdown]}`,
+		`     Backups:           ${backups}`,
+		"",
+		`     What to do:        ${TROUBLESHOOTING_DOC}`,
+		`                        ${TROUBLESHOOTING_URL}`,
+		"",
+		`     Underlying error:  ${String(
+			(error.cause as Error)?.message ?? error.cause
+		)}`
+	].join("\n")
+}

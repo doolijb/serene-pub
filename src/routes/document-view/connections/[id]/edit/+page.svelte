@@ -7,7 +7,16 @@
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { isKoboldCppManagedType } from "$lib/shared/utils/connectionServiceItems"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
+	import {
+		NOTE_MAX_LENGTH,
+		normalizeNote
+	} from "$lib/shared/utils/connectionNotes"
 	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
+	import { completionTemplateOptions } from "$lib/client/stores/completionTemplateOptions.svelte"
+	import {
+		usesCompletionTemplate,
+		wireModeFor
+	} from "$lib/shared/connectionAdapters/wireMode"
 	import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 	import {
 		buildCapabilityRows,
@@ -17,6 +26,13 @@
 	} from "$lib/shared/connectionAdapters/capabilityRows"
 
 	const socket = useTypedSocket()
+	/**
+	 * The format picker's options, read from `completion_templates` instead of
+	 * the eight-entry constant that used to sit beside the table — so a template
+	 * an admin authored is offered by the one control that selects it. Falls back
+	 * to the built-ins until the reply lands.
+	 */
+	const formatOptions = completionTemplateOptions()
 	const connectionId = $derived(Number(page.params.id))
 	let userCtx: UserCtx = getContext("userCtx")
 
@@ -33,6 +49,9 @@
 	let apiKey = $state("")
 	let tokenCounter = $state(TokenCounterOptions.ESTIMATE)
 	let promptFormat = $state(PromptFormats.VICUNA)
+	/** The user's own reminder about this connection; see schema.ts. Free text,
+	 *  read by nobody. */
+	let notes = $state("")
 	/**
 	 * The named service this connection is, carried but never edited here.
 	 *
@@ -79,6 +98,16 @@
 		null
 	)
 	let capabilitiesLoading = $state(true)
+	/**
+	 * Which METHOD this connection is called by, from the same response the
+	 * capability section renders — so the format picker appears and disappears
+	 * with the switch that governs it, in one round trip.
+	 */
+	const showFormat = $derived(
+		usesCompletionTemplate(
+			wireModeFor(type, (capabilities?.capabilities as any)?.resolved)
+		)
+	)
 	/** Radio positions the server has not answered yet. Reassigned, never mutated. */
 	let capabilityPending = $state<Record<string, OverrideState>>({})
 	let lastToggledCapability: string | null = null
@@ -150,6 +179,9 @@
 			model: model.trim(),
 			tokenCounter,
 			promptFormat,
+			// NULL rather than "" for a blank one, so "never wrote a note" has
+			// exactly one spelling in the column.
+			notes: normalizeNote(notes),
 			// Carried, not edited — see handleConnectionsGet.
 			preset,
 			extraJson: apiKey.trim() ? { apiKey: apiKey.trim() } : {}
@@ -203,6 +235,9 @@
 		apiKey = (c.extraJson as any)?.apiKey || ""
 		tokenCounter = c.tokenCounter
 		promptFormat = c.promptFormat || PromptFormats.VICUNA
+		// "" for a NULL note, because a textarea has no null: the save path
+		// turns a blank one back into NULL rather than storing the empty string.
+		notes = (c as { notes?: string | null }).notes ?? ""
 		// Nothing on this page edits the preset, but it has to round-trip: the
 		// test path resolves capabilities against the FORM's type AND preset, so
 		// omitting it drops the preset layer and persists the adapter's bare
@@ -444,18 +479,26 @@
 			</p>
 		{/if}
 
-		<div class="a11y-field">
-			<label for="a11y-conn-prompt-format">Prompt Format</label>
-			<select
-				id="a11y-conn-prompt-format"
-				bind:value={promptFormat}
-				disabled={saving}
-			>
-				{#each PromptFormats.options as opt}
-					<option value={opt.value}>{opt.label}</option>
-				{/each}
-			</select>
-		</div>
+		<!-- A completion template only means something in COMPLETION wire mode:
+		     in chat mode the roles carry the structure, no delimiter is emitted
+		     and no stop string from the template is sent, so this control would
+		     change no byte of any request. The wire-mode switches themselves are
+		     in the Capabilities section, with everything else the connection
+		     declares. -->
+		{#if showFormat}
+			<div class="a11y-field">
+				<label for="a11y-conn-prompt-format">Prompt Format</label>
+				<select
+					id="a11y-conn-prompt-format"
+					bind:value={promptFormat}
+					disabled={saving}
+				>
+					{#each formatOptions.value as opt}
+						<option value={opt.value}>{opt.label}</option>
+					{/each}
+				</select>
+			</div>
+		{/if}
 
 		<div class="a11y-field">
 			<label for="a11y-conn-token-counter">Token Counter</label>
@@ -468,6 +511,22 @@
 					<option value={opt.value}>{opt.label}</option>
 				{/each}
 			</select>
+		</div>
+
+		<div class="a11y-field">
+			<label for="a11y-conn-notes">Notes</label>
+			<p class="a11y-hint">
+				For you, not for the app — "use this one for prose, the other
+				for extraction". Shown beside this connection wherever you pick
+				one. Nothing reads it.
+			</p>
+			<textarea
+				id="a11y-conn-notes"
+				rows="3"
+				maxlength={NOTE_MAX_LENGTH}
+				bind:value={notes}
+				disabled={saving}
+			></textarea>
 		</div>
 
 		<p class="a11y-hint">
@@ -500,6 +559,9 @@
 			choice saves immediately.
 		</p>
 		<p class="a11y-hint">{capabilityRows.testedText}</p>
+		{#if capabilityRows.wireModeText}
+			<p class="a11y-hint">{capabilityRows.wireModeText}</p>
+		{/if}
 		{#if capabilitiesLoading}
 			<p>Loading…</p>
 		{:else if !capabilityRows.declared}

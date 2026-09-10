@@ -1,10 +1,23 @@
 /**
- * Disk-backed cache for individual card bytes (PNG/JSON files fetched from
- * a CardSource's getCardBytes()), keyed by source+ref and stored under the
- * OS temp directory. This is separate from cache.ts's in-memory TtlCache
- * (which caches search *results*, small JSON) — card files are read
- * relatively rarely per key (once per card view/import) but are worth
- * caching on disk rather than in process memory, since:
+ * Disk-backed cache for BROWSE-side card bytes — the thumbnails and detail
+ * PNGs behind a library search grid, fetched from a CardSource and shown to
+ * whoever is browsing. It is the temp-directory half of the card-bytes split
+ * (ruling 2026-09-09): "Image assets do NOT belong in temp and need to be saved
+ * to the persistent Serene Pub users data directory. The exception are external
+ * search results." These ARE the exception. Bytes fetched in order to IMPORT a
+ * card are not, and go through `importCache.ts` instead, under the importing
+ * user's own data directory.
+ *
+ * ⚠ Read the split before adding a caller. This cache is keyed by `source:ref`
+ * ALONE — no user, no instance — which is correct for a public thumbnail and
+ * wrong for anything that becomes a user's own asset. Two Serene Pub instances
+ * on one machine share this directory, which is how a card fetched by one
+ * instance was observed being shown by another; that is tolerable for a search
+ * result and was a real defect for an import.
+ *
+ * Separate from cache.ts's in-memory TtlCache (which caches search *results*,
+ * small JSON) — card files are read relatively rarely per key (once per card
+ * view) but are worth caching on disk rather than in process memory, since:
  *   - They're larger (PNG images) and shouldn't bloat the Node heap.
  *   - They survive a server restart, unlike the in-memory caches.
  *   - Repeat views of the same card's thumbnail (the common case — a card
@@ -26,12 +39,18 @@ import os from "os"
 import path from "path"
 import fs from "fs/promises"
 import crypto from "crypto"
+import { fsLimit } from "./fsLimit"
 import {
 	getOrStartAbortable,
 	type PendingAbortableEntry
 } from "./pendingAbortableFetch"
 
-const CACHE_DIR = path.join(os.tmpdir(), "serene-pub-card-cache")
+// Renamed from "serene-pub-card-cache" when the cache split in two, so a
+// directory listing says which half it is. Deliberately NOT migrated or
+// deleted: the old directory is somebody else's temp files as far as this
+// process knows, and a cache that rebuilds itself on the next page load is
+// not worth reaching into /tmp to tidy. The OS (or the user) reclaims it.
+const CACHE_DIR = path.join(os.tmpdir(), "serene-pub-browse-cache")
 const DEFAULT_TTL_MS = 24 * 60 * 60_000
 // CharaVault images are immutable once published under a given folder/file
 // ref — safe to hold far longer than the general-purpose default, so a
@@ -43,86 +62,6 @@ const SWEEP_INTERVAL_MS = 60 * 60_000
 function keyToFilename(key: string): string {
 	return crypto.createHash("sha256").update(key).digest("hex")
 }
-
-// sweepStaleCacheFiles() below fans out one fs.stat (+ conditionally
-// fs.unlink) per file in the ENTIRE cache directory at once via
-// Promise.all, and the image-proxy route's per-thumbnail reads/writes
-// (getCachedCardBytes/setCachedCardBytes, called directly, not through the
-// deduped getOrFetchCardBytes below) are explicitly not deduped — a single
-// grid of results can fire DEFAULT_LIMIT (24) concurrent thumbnail cache
-// operations from one ordinary page load. Both are uncapped sources of
-// concurrent fs calls, which matters more here than it might elsewhere:
-// this app's PGlite database is file-backed, and its Node storage backend
-// (Emscripten's NODEFS) uses Node's *synchronous* fs calls — readSync/
-// writeSync/etc. — meaning every DB read or write blocks the event loop
-// directly for however long the OS takes to service it. A large burst of
-// concurrent async fs work from this subsystem (which also queues against
-// itself on libuv's thread pool — 4 threads by default, unconfigured)
-// creates real OS-level disk contention that a synchronous PGlite call can
-// get stuck behind, blocking every other request the process is handling,
-// not just CharaVault's own. Bounding this subsystem's own concurrency to
-// a small, fixed ceiling reduces that contention regardless of how much of
-// the effect is thread-pool queueing versus direct disk contention.
-// Deliberately below the pool's own default size (4), not equal to it — at
-// 4 this subsystem could still occupy the entire pool by itself, leaving
-// nothing for any other async fs/dns/crypto call elsewhere in the app;
-// capping at 2 leaves at least half the pool free regardless of how busy
-// this subsystem gets.
-//
-// Side effect worth knowing about, not a bug: sweeping a cache directory
-// with thousands of entries now takes noticeably longer wall-clock time
-// (a slow trickle instead of one big burst) — that's the intended trade
-// (smooth beats spiky for exactly the contention reason this limiter
-// exists), not a regression to "fix" by widening or removing the limit.
-//
-// Invariant: never call fsLimit(...) from inside a function that's already
-// running under fsLimit — getOrFetchCardBytes below deliberately stays
-// unwrapped itself, only calling the two already-wrapped leaf functions,
-// precisely to avoid this. Nesting would let one caller hold an outer slot
-// while waiting on an inner one; at FS_CONCURRENCY_LIMIT = 2, two such
-// nested callers can hold both outer slots and deadlock each other
-// permanently, since neither's inner acquisition can ever be granted.
-const FS_CONCURRENCY_LIMIT = 2
-
-function createLimiter(maxConcurrent: number) {
-	let active = 0
-	const queue: Array<() => void> = []
-	function runNext() {
-		if (queue.length === 0 || active >= maxConcurrent) return
-		active++
-		const run = queue.shift()!
-		run()
-	}
-	return function limit<T>(fn: () => Promise<T>): Promise<T> {
-		return new Promise<T>((resolve, reject) => {
-			queue.push(() => {
-				// try/catch, not just relying on fn() rejecting: if fn() ever
-				// threw synchronously instead of returning a rejected promise,
-				// active would never decrement and this limiter would
-				// permanently deadlock — indistinguishable from the bug this
-				// exists to fix. Every current call site's fn() is an async
-				// arrow (can't throw synchronously), but this makes that an
-				// invariant the limiter itself enforces, not one every future
-				// caller has to remember to uphold.
-				try {
-					fn()
-						.then(resolve, reject)
-						.finally(() => {
-							active--
-							runNext()
-						})
-				} catch (err) {
-					active--
-					reject(err)
-					runNext()
-				}
-			})
-			runNext()
-		})
-	}
-}
-
-const fsLimit = createLimiter(FS_CONCURRENCY_LIMIT)
 
 export async function getCachedCardBytes(
 	key: string,
@@ -171,15 +110,13 @@ export async function setCachedCardBytes(
 const pendingFetches = new Map<string, PendingAbortableEntry<Buffer>>()
 
 /**
- * Wraps a fetcher that produces card bytes with the disk cache — the
- * common shape every CardSource's getCardBytes() wants. (The CharaVault
- * image-proxy route deliberately does NOT use this — it streams the
- * response through rather than buffering, so it can't share this same
- * in-flight-promise de-dup; a concurrent-request stampede there is a
- * known, accepted gap, not covered by this fix.)
+ * Wraps a fetcher that produces card bytes with the browse disk cache — the
+ * common shape a CardSource's BROWSE-side reads want (a thumbnail, a card
+ * detail's embedded description). An import wants
+ * `importCache.getOrFetchImportedCardBytes` instead, which takes a userId.
  *
  * Deliberately not itself wrapped in fsLimit — see the no-nesting
- * invariant above. Its own fs footprint is entirely inside the two
+ * invariant in fsLimit.ts. Its own fs footprint is entirely inside the two
  * already-wrapped functions it calls.
  */
 export async function getOrFetchCardBytes(

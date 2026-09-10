@@ -94,7 +94,12 @@ export const connectionsList: Handler<
 				baseUrl: true,
 				// So a picker can filter by what the endpoint is for (20 §14):
 				// a text-gen slot must not offer the embeddings connection.
-				modality: true
+				modality: true,
+				// The user's own note, for the picker to show BESIDE the row —
+				// the moment of choosing is the only moment it is worth
+				// anything. Nothing on this server reads it; it is carried, not
+				// consulted (see the column comment in schema.ts).
+				notes: true
 			},
 			orderBy: (c, { asc }) => [asc(c.type), asc(c.name)]
 		})
@@ -852,8 +857,8 @@ async function connectionScriptsView(
 	const { listConnectionScripts, scriptsView, STOP_TYPE_ID } = await import(
 		"$lib/server/pipelines/entities/scripts"
 	)
-	const attached = await listConnectionScripts(db as any, connectionId)
-	const all = await scriptsView(db as any)
+	const attached = await listConnectionScripts(db, connectionId)
+	const all = await scriptsView(db)
 	const attachedIds = new Set(attached.map((s) => s.id))
 	return {
 		connectionId,
@@ -905,7 +910,7 @@ export const connectionsAttachScript: Handler<
 			const { attachConnectionScript } = await import(
 				"$lib/server/pipelines/entities/scripts"
 			)
-			await attachConnectionScript(db as any, params.id, params.scriptId)
+			await attachConnectionScript(db, params.id, params.scriptId)
 		} catch (err) {
 			const res = { error: (err as Error).message }
 			emitToUser("connections:attachScript:error", res)
@@ -931,7 +936,7 @@ export const connectionsDetachScript: Handler<
 		const { detachConnectionScript } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)
-		await detachConnectionScript(db as any, params.id, params.scriptId)
+		await detachConnectionScript(db, params.id, params.scriptId)
 		const res = await connectionScriptsView(params.id)
 		emitToUser("connections:detachScript", res)
 		return res

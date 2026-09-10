@@ -39,15 +39,6 @@ import { syncLorebookBindingsForCharacter } from "$lib/server/utils/characterBin
 import { hashCanonicalJson } from "$lib/server/utils/contentHash"
 import { isValidUuid } from "$lib/server/utils/uuid"
 import { findOrCreateTagId } from "$lib/server/utils/tags"
-import type { ExtractTablesWithRelations } from "drizzle-orm"
-import type { PgliteDatabase, PgliteTransaction } from "drizzle-orm/pglite"
-
-type Executor =
-	| PgliteDatabase<typeof schema>
-	| PgliteTransaction<
-			typeof schema,
-			ExtractTablesWithRelations<typeof schema>
-	  >
 
 // Helper function to process tags for character creation/update. Tags are
 // per-user (schema.tags.userId): lookups/creates must stay scoped to the
@@ -60,7 +51,7 @@ async function processCharacterTags(
 	characterId: number,
 	tagNames: string[],
 	userId: number,
-	dbOrTx: Executor = db
+	dbOrTx: Db = db
 ) {
 	const character = await dbOrTx.query.characters.findFirst({
 		where: (c, { and, eq }) =>
@@ -424,7 +415,7 @@ export function extractCharacterUuid(data: any): string | undefined {
 async function claimIncomingCharacterUuid(
 	incomingUuid: string | undefined,
 	userId: number,
-	dbOrTx: Executor
+	dbOrTx: Db
 ): Promise<string | undefined> {
 	if (!incomingUuid) return undefined
 	const existing = await dbOrTx.query.characters.findFirst({
@@ -518,7 +509,7 @@ async function applyAvatarAndTags(
 	avatarBuffer: Buffer | undefined,
 	tags: string[] | undefined,
 	userId: number,
-	dbOrTx: Executor = db
+	dbOrTx: Db = db
 ): Promise<{
 	character: typeof schema.characters.$inferSelect
 	warnings: ImportWarning[]
@@ -569,7 +560,7 @@ export async function createCharacterFromParsedData(
 	data: any,
 	avatarBuffer: Buffer | undefined,
 	userId: number,
-	dbOrTx: Executor = db,
+	dbOrTx: Db = db,
 	warnings?: ImportWarning[]
 ) {
 	const uuidToStamp = await claimIncomingCharacterUuid(
@@ -606,7 +597,7 @@ export async function overwriteCharacterFromParsedData(
 	data: any,
 	avatarBuffer: Buffer | undefined,
 	userId: number,
-	dbOrTx: Executor = db,
+	dbOrTx: Db = db,
 	warnings?: ImportWarning[]
 ) {
 	await dbOrTx
@@ -639,7 +630,7 @@ export async function overwriteCharacterFromParsedData(
  */
 export async function buildExistingCharacterComparisonData(
 	characterId: number,
-	dbOrTx: Executor = db
+	dbOrTx: Db = db
 ) {
 	const character = await dbOrTx.query.characters.findFirst({
 		where: eq(schema.characters.id, characterId),

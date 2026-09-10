@@ -21,21 +21,21 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 }, 120_000)
 
 describe("missingRequirements", () => {
 	test("published specs and genres satisfy; the absent refuse by name", async () => {
 		const { missingRequirements } = await import("./requirements")
 		expect(
-			await missingRequirements(db as any, [
+			await missingRequirements(db, [
 				"core:spec/respond",
 				"core:genre/chat",
 				"core:spec/create-chat"
 			])
 		).toEqual([])
 		expect(
-			await missingRequirements(db as any, [
+			await missingRequirements(db, [
 				"core:genre/chat",
 				"acme.dice:spec/roll",
 				"acme.dice:genre/board"

@@ -34,22 +34,13 @@ import { hashCanonicalJson } from "$lib/server/utils/contentHash"
 import { isValidUuid } from "$lib/server/utils/uuid"
 import { syncLorebookBindingsForPersona } from "$lib/server/utils/characterBindingSync"
 import { findOrCreateTagId } from "$lib/server/utils/tags"
-import type { ExtractTablesWithRelations } from "drizzle-orm"
-import type { PgliteDatabase, PgliteTransaction } from "drizzle-orm/pglite"
-
-type Executor =
-	| PgliteDatabase<typeof schema>
-	| PgliteTransaction<
-			typeof schema,
-			ExtractTablesWithRelations<typeof schema>
-	  >
 
 // Helper function to process tags for persona creation/update
 async function processPersonaTags(
 	personaId: number,
 	tagNames: string[],
 	userId: number,
-	dbOrTx: Executor = db
+	dbOrTx: Db = db
 ) {
 	// Without this, a caller supplying another user's personaId could still
 	// attach its own tags to (or strip tags from) a persona it doesn't own,
@@ -458,7 +449,7 @@ export function extractPersonaUuid(data: any): string | undefined {
 async function claimIncomingPersonaUuid(
 	incomingUuid: string | undefined,
 	userId: number,
-	dbOrTx: Executor
+	dbOrTx: Db
 ): Promise<string | undefined> {
 	if (!incomingUuid) return undefined
 	const existing = await dbOrTx.query.personas.findFirst({
@@ -557,7 +548,7 @@ export type ImportWarning = string
 async function applyPersonaAvatar(
 	persona: typeof schema.personas.$inferSelect,
 	avatarBuffer: Buffer | undefined,
-	dbOrTx: Executor = db
+	dbOrTx: Db = db
 ): Promise<{
 	persona: typeof schema.personas.$inferSelect
 	warnings: ImportWarning[]
@@ -593,7 +584,7 @@ export async function createPersonaFromParsedData(
 	data: any,
 	avatarBuffer: Buffer | undefined,
 	userId: number,
-	dbOrTx: Executor = db,
+	dbOrTx: Db = db,
 	warnings?: ImportWarning[]
 ) {
 	const uuidToStamp = await claimIncomingPersonaUuid(
@@ -619,7 +610,7 @@ export async function overwritePersonaFromParsedData(
 	existingId: number,
 	data: any,
 	avatarBuffer: Buffer | undefined,
-	dbOrTx: Executor = db,
+	dbOrTx: Db = db,
 	warnings?: ImportWarning[]
 ) {
 	await dbOrTx

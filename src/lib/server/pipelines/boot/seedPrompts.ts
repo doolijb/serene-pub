@@ -39,8 +39,6 @@ import {
 	promptPoolKeyFor
 } from "$lib/server/pipelines/entities/promptPool"
 
-type Db = { select: any; insert: any; update: any; delete: any }
-
 export interface PromptSeedResult {
 	/** `<node type>#<slot>` — the pool, for a log line and for the tests. */
 	pool: string

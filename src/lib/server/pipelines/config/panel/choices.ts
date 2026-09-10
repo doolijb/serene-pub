@@ -25,7 +25,7 @@ import {
 	CORE_TEMPLATE_ENGINE,
 	contextPoolKeyFor
 } from "$lib/shared/pipelines/poolKey"
-import { type Db, type Decl } from "$lib/server/pipelines/config/panel/types"
+import { type Decl } from "$lib/server/pipelines/config/panel/types"
 
 /** Exported for `judgeAgainst`'s callers — see the ⚠ on it. */
 export type ChoiceList = Array<{

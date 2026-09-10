@@ -185,7 +185,7 @@ beforeAll(async () => {
 }, 60_000)
 
 const bindings = coreBindings()
-const host = () => createHost(db as any, { sessionId, userId })
+const host = () => createHost(db, { sessionId, userId })
 
 const ctxFor = (key: string, typeId: string) => ({
 	read: (table: string, q: unknown) =>
@@ -309,6 +309,29 @@ describe("the vector query", () => {
 		// it adds to whatever else found the entry instead — see the binding.
 		expect(r.value.hits[0].signals.semantic).toBe(1)
 		expect(r.value.hits[0].presetScore).toBeUndefined()
+	})
+
+	/**
+	 * ⚠ A behaviour change at the shipped default, and the only one the curve
+	 * makes there.
+	 *
+	 * A negative cosine — two opposed directions — used to reach
+	 * `signals.semantic` intact, where the weighted sum turned it into a
+	 * *penalty*: an entry ranked lower for having been looked at by a mechanism.
+	 * That is the one thing the governing rule forbids a mechanism to do, so it
+	 * reads as 0 now, which is what "this mechanism has nothing to say about
+	 * this entry" means everywhere else.
+	 *
+	 * Asserted with an inverted query rather than a contrived score, because the
+	 * point is that the *index* can produce this and no test could see it.
+	 */
+	it("reads an opposed direction as nothing to say, never as a penalty", async () => {
+		const r = await runQuery([-1, 0, 0])
+		const ashguard = r.value.hits.find((h: any) => h.id === 1)
+		expect(ashguard, "the entry left the pool").toBeTruthy()
+		expect(ashguard.signals.semantic).toBe(0)
+		for (const hit of r.value.hits)
+			expect(hit.signals.semantic).toBeGreaterThanOrEqual(0)
 	})
 
 	it("never carries embeddings into the pipeline's values", async () => {

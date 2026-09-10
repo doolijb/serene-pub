@@ -16,7 +16,11 @@
  *    no provenance at all, which is what makes it structurally unreachable by a
  *    provenance query — the replacement for the old trick of leaving a
  *    thumbnail's four columns NULL.
- *  - **No FKs, no cascade.** A stale id keeps an orphan groupable.
+ *  - **No FKs on this table's OWN columns, no cascade.** A stale provenance id
+ *    keeps an orphan groupable. That ruling is about provenance and does not
+ *    reach a role pointer: `characters.avatarMediaId` and
+ *    `personas.avatarMediaId` point INTO `files` and are real foreign keys,
+ *    `ON DELETE SET NULL` since 0109, so deleting a file nulls whoever wore it.
  *  - **`path` never leaves the server.** It only exists on a variant row, and
  *    no payload builder loads one, so that is structural rather than a rule
  *    somebody has to remember.
@@ -25,7 +29,6 @@ import crypto from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { and, eq, isNull, asc, type SQL } from "drizzle-orm"
-import { db as defaultDb } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import {
 	MediaFidelity,
@@ -106,7 +109,20 @@ export type VariantRow = typeof schema.variants.$inferSelect
  *  row — mime, bytes and path moved to a variant. */
 export type MediaRow = FileRow
 
-type Db = typeof defaultDb
+/*
+ * The database handle, and it is the schema-typed global `Db`
+ * (`db/types.d.ts`) rather than `typeof defaultDb` — a **parameter, never an
+ * import**.
+ *
+ * The driver's own type was a decision this module had never actually taken:
+ * nothing here touches anything PGlite-specific (no `$client`, no raw
+ * `execute`), only `select`/`insert`/`update`/`delete`/`query` over this
+ * schema. Naming the driver anyway made media the narrowest link on its own
+ * seam — every caller holding a driver-agnostic handle was refused with
+ * *"`PgQueryResultHKT` is not assignable to `PgliteQueryResultHKT`"* and cast
+ * across it, which is `as any` on a database handle: it re-opens the row hole
+ * from the caller's side for the sake of a constraint media does not have.
+ */
 
 /** What a non-admin client is allowed to know about a file. */
 export interface ClientMedia {
@@ -553,8 +569,13 @@ export async function readMedia(
  * deleting the file is `cullVariant`, which refuses to take the last copy.
  *
  * Deliberately narrow in the other direction: it clears nothing that *points*
- * at the file. A dangling `avatarMediaId` renders as a missing image and is
- * collected by the cleanup tool — the trade 28 §2 makes on purpose.
+ * at the file — and for an avatar it no longer has to. `characters.avatarMediaId`
+ * and `personas.avatarMediaId` became real foreign keys with `ON DELETE SET
+ * NULL` in 0109, so the `delete` below nulls every avatar pointing here as part
+ * of the same statement, for every row rather than the ones a caller happened to
+ * know about. Pointers with no FK behind them — `user_settings.backgroundMediaId`,
+ * a message part naming a file — are still left dangling on purpose (28 §2) and
+ * are the cleanup tool's problem.
  */
 export async function deleteFile(db: Db, fileId: number): Promise<void> {
 	const file = await getMedia(db, fileId)

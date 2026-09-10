@@ -21,6 +21,19 @@
 		onAbortMessage: (e: Event, msg: SelectSessionMessage) => void
 		onBranchMessage?: (e: Event, msg: SelectSessionMessage) => void
 		onContinueMessage?: (e: Event, msg: SelectSessionMessage) => void
+		// Why Continue is unavailable in this session, when it is — the
+		// connection cannot resume a partial reply, or the mode does not offer
+		// the verb. DISABLED and explained rather than hidden: a control that
+		// vanishes teaches nothing, and this sentence names the switch to change
+		// and where it lives. Session-level, so it arrives once (sessions:view)
+		// rather than being asked per message.
+		//
+		// ⚠ It reaches the accessible name as well as the tooltip, not
+		// `aria-description`: that attribute is not supported on the implicit
+		// `button` role (svelte-check fails the build on it), and a `title` is
+		// not reliably announced — least of all on a disabled control, which a
+		// screen reader may skip entirely.
+		continueRefusal?: string
 		onStartSummarization?: (msg: SelectSessionMessage) => void
 		// The contributed menu-trigger set (19 §4, `kind: 'menu'`): presence
 		// is rows, so a retired contributor takes its entry with it. Fired
@@ -55,6 +68,7 @@
 		onAbortMessage,
 		onBranchMessage,
 		onContinueMessage,
+		continueRefusal = undefined,
 		onStartSummarization,
 		menuTriggers = [],
 		onFireTrigger = undefined,
@@ -135,9 +149,13 @@
 						{#if onContinueMessage && (!!msg.characterId || msg.isNarratorResponse) && isLastMessage && !msg.isGenerating && msg.content}
 							<button
 								class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-								title="Continue Response"
-								aria-label="Continue generating this response"
-								disabled={!!editSessionMessage || !canControl}
+								title={continueRefusal ?? "Continue Response"}
+								aria-label={continueRefusal
+									? `Continue generating this response — unavailable. ${continueRefusal}`
+									: "Continue generating this response"}
+								disabled={!!editSessionMessage ||
+									!canControl ||
+									!!continueRefusal}
 								onclick={(e) => {
 									closeMenu()
 									onContinueMessage(e, msg)

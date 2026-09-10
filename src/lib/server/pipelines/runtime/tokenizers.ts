@@ -55,9 +55,6 @@ import {
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 
-/** Reads only — the same shape `resolveCapabilityTarget` accepts. */
-type Db = { select: any }
-
 /**
  * What a counter measures when handed something that is not a string.
  *

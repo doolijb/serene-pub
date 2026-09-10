@@ -1,7 +1,25 @@
-import { PromptFormats } from "$lib/shared/constants/PromptFormats"
-import _ from "lodash"
+import {
+	completionTemplateOf,
+	framingFor,
+	type BlockRole,
+	type CompletionTemplate,
+	CHATML_OPEN,
+	CHATML_CLOSE,
+	BASIC_OPEN,
+	BASIC_CLOSE,
+	VICUNA_OPEN,
+	VICUNA_CLOSE,
+	OPENAI_OPEN,
+	OPENAI_CLOSE,
+	LLAMA2_INST_OPEN,
+	LLAMA2_INST_CLOSE,
+	CLAUDE_OPEN,
+	CLAUDE_CLOSE,
+	INSTRUCT_OPEN,
+	INSTRUCT_CLOSE
+} from "$lib/shared/constants/completionTemplates"
 
-type BlockRole = "user" | "assistant" | "system" | "model" | "tool" | "function"
+export type { BlockRole }
 
 // Single source of truth for the SPLIT_CHAT role-marker pattern, shared
 // between makeBlock (which neutralizes it inside user-controlled content —
@@ -23,69 +41,32 @@ type BlockRole = "user" | "assistant" | "system" | "model" | "tool" | "function"
 export const ROLE_MARKER_PATTERN = "<@role:(user|assistant|system)>"
 
 export class PromptBlockFormatter {
-	static readonly CHATML_OPEN = "<|im_start|>"
-	static readonly CHATML_CLOSE = "<|im_end|>\n"
-	static readonly BASIC_OPEN = "*** "
-	static readonly BASIC_CLOSE = "\n\n"
-	static readonly VICUNA_OPEN = "### "
-	static readonly VICUNA_CLOSE = "\n"
-	static readonly OPENAI_OPEN = "<|"
-	static readonly OPENAI_CLOSE = "\n"
-	static readonly LLAMA2_INST_OPEN = "<s>[INST] "
-	static readonly LLAMA2_INST_CLOSE = " [/INST]</s>\n"
-	static readonly CLAUDE_OPEN = "Human: "
-	static readonly CLAUDE_CLOSE = "\nAssistant: "
-	static readonly INSTRUCT_OPEN = "### Instruction:\n"
-	static readonly INSTRUCT_CLOSE = "\n### Response:\n"
+	// The built-in markers, re-exported from the template data so the seed
+	// rows and these constants cannot drift. Named here because callers and
+	// tests reach for `PromptBlockFormatter.CHATML_OPEN`.
+	static readonly CHATML_OPEN = CHATML_OPEN
+	static readonly CHATML_CLOSE = CHATML_CLOSE
+	static readonly BASIC_OPEN = BASIC_OPEN
+	static readonly BASIC_CLOSE = BASIC_CLOSE
+	static readonly VICUNA_OPEN = VICUNA_OPEN
+	static readonly VICUNA_CLOSE = VICUNA_CLOSE
+	static readonly OPENAI_OPEN = OPENAI_OPEN
+	static readonly OPENAI_CLOSE = OPENAI_CLOSE
+	static readonly LLAMA2_INST_OPEN = LLAMA2_INST_OPEN
+	static readonly LLAMA2_INST_CLOSE = LLAMA2_INST_CLOSE
+	static readonly CLAUDE_OPEN = CLAUDE_OPEN
+	static readonly CLAUDE_CLOSE = CLAUDE_CLOSE
+	static readonly INSTRUCT_OPEN = INSTRUCT_OPEN
+	static readonly INSTRUCT_CLOSE = INSTRUCT_CLOSE
 
-	static chatmlOpen(role: BlockRole) {
-		return `${PromptBlockFormatter.CHATML_OPEN}${role}\n`
-	}
-	static chatmlClose = PromptBlockFormatter.CHATML_CLOSE
-	static basicOpen(role: BlockRole) {
-		return `${PromptBlockFormatter.BASIC_OPEN}${role}\n`
-	}
-	static basicClose = PromptBlockFormatter.BASIC_CLOSE
-	static vicunaOpen(role: BlockRole) {
-		return `${PromptBlockFormatter.VICUNA_OPEN}${_.capitalize(role)}:\n`
-	}
-	static vicunaClose = PromptBlockFormatter.VICUNA_CLOSE
-	static openaiOpen(role: BlockRole) {
-		return `${PromptBlockFormatter.OPENAI_OPEN}${role}|>\n`
-	}
-	static openaiClose = PromptBlockFormatter.OPENAI_CLOSE
-	static llama2InstOpen(role: BlockRole) {
-		switch (role) {
-			case "system":
-				return "<s>[INST] <<SYS>>\n"
-			case "user":
-				return "<s>\n"
-			case "assistant":
-				return "<s>\n"
-		}
-		return PromptBlockFormatter.LLAMA2_INST_OPEN
-	}
-	static llama2InstClose(role: BlockRole) {
-		switch (role) {
-			case "system":
-				return "\n<</SYS>> [/INST]</s>\n"
-			case "user":
-				return "\n</s>\n"
-			case "assistant":
-				return "\n</s>\n"
-		}
-		return PromptBlockFormatter.LLAMA2_INST_CLOSE
-	}
-	static claudeOpen(role: BlockRole) {
-		return role === "user"
-			? PromptBlockFormatter.CLAUDE_OPEN
-			: PromptBlockFormatter.CLAUDE_CLOSE
-	}
-	static claudeClose = "\n"
-	static instructOpen() {
-		return PromptBlockFormatter.INSTRUCT_OPEN
-	}
-	static instructClose = PromptBlockFormatter.INSTRUCT_CLOSE
+	/**
+	 * ⚠ Whole-conversation, not per-block, and therefore NOT a template row.
+	 *
+	 * Unreachable from `makeBlock` and absent from every picker — see
+	 * `PromptFormats.TEKKEN` for why the limit is recorded rather than designed
+	 * around. Kept because deleting a public static is a wider change than the
+	 * one this file is making; it renders nothing today either way.
+	 */
 	static tekkenBlock({
 		system,
 		user,
@@ -101,111 +82,93 @@ export class PromptBlockFormatter {
 		return `<s>${inst}\n${reply}</s>\n`
 	}
 
+	/**
+	 * The role-array emitter, HAND-WRITTEN AND DELIBERATELY NOT DATA-DRIVEN.
+	 *
+	 * The split-session template row carries empty framing (see
+	 * `completionTemplates.ts`) precisely so that nothing here can read a marker
+	 * out of a row an admin edited. The emitted marker, `ROLE_MARKER_PATTERN`
+	 * and `parseSplitChatPrompt` are a three-way correspondence maintained by
+	 * hand; making any leg of it authorable severs it by design.
+	 *
+	 * Byte-identical to the `case PromptFormats.SPLIT_CHAT:` arm it was lifted
+	 * out of — only the leading indentation changed.
+	 */
+	private static splitSessionBlock(role: BlockRole, content: string): string {
+		// Use /<@role:(user|assistant|system)>\s*/g, i.e. <@role:user>\n {content} \n
+		//
+		// content is user-controlled (chat messages, character/persona
+		// fields, world-lore/history entries all flow through here via
+		// the systemBlock/userBlock/assistantBlock Handlebars helpers)
+		// and parseSplitChatPrompt re-derives message role boundaries by
+		// searching the ENTIRE rendered prompt string for
+		// ROLE_MARKER_PATTERN, with no way to distinguish a marker WE
+		// inserted from one embedded in someone's message/field/entry.
+		// Left unescaped, a chat participant typing the literal text
+		// "<@role:system>" would have it parsed as a real system-role
+		// message sent to the LLM API — for Anthropic, promoted straight
+		// into the top-level system prompt. Neutralize any occurrence in
+		// content before wrapping, by inserting a zero-width space
+		// (written as an explicit \u200B escape, never pasted as a
+		// literal invisible character — an actually-invisible character
+		// in source is un-greppable and one "strip weird whitespace"
+		// cleanup away from silently reopening this) between "role" and
+		// the colon, breaking ROLE_MARKER_PATTERN's exact match while
+		// staying visually identical to a human reader.
+		//
+		// This is sufficient even against an attacker trying to split
+		// the marker across two adjacent blocks (e.g. ending one
+		// message with "<@role:sys" hoping the next block's content
+		// completes it) — every block is wrapped with a literal "\n" on
+		// both sides here, and the pattern has no "s" flag, so it can't
+		// match across the newline boundary between two blocks. Per-block
+		// neutralization is therefore sufficient by construction, not
+		// just in practice; if this wrapper's whitespace ever changes,
+		// re-verify this property.
+		//
+		// Durable-fix note: the root cause is in-band signaling through
+		// a concatenate-then-reparse round-trip. The correct long-term
+		// architecture builds the messages[] array as structured data
+		// end-to-end instead of serializing through one searchable
+		// string — this neutralization is the correct fix to ship now
+		// (minimal, contained, doesn't touch every adapter/format), not
+		// a claim that this is the final design.
+		const safeContent = content.replace(
+			new RegExp(ROLE_MARKER_PATTERN, "g"),
+			`<@role${"\u200B"}:$1>`
+		)
+		return `<@role:${role}>\n${safeContent}\n`
+	}
+
+	/**
+	 * One block, wrapped in whatever the template says wraps it.
+	 *
+	 * `format` takes a key (resolved against the built-ins) or an already
+	 * resolved row, so a caller holding a `completion_templates` row renders
+	 * from it directly. Everything about which markers are used is a lookup;
+	 * the switch this replaced had nine arms and two of them — the empty string
+	 * and any unrecognised name — silently rendered ChatML while every other
+	 * layer in the app called that same input Vicuna.
+	 */
 	static makeBlock({
 		format,
 		role,
 		content,
 		includeClose = true
 	}: {
-		format: string
+		format: string | CompletionTemplate | null | undefined
 		role: BlockRole
 		content: string
 		includeClose?: boolean
 	}) {
-		switch (format) {
-			case PromptFormats.CHATML:
-				return (
-					this.chatmlOpen(role) +
-					content +
-					(includeClose ? this.chatmlClose : "")
-				)
-			case PromptFormats.BASIC:
-				return (
-					this.basicOpen(role) +
-					content +
-					(includeClose ? this.basicClose : "")
-				)
-			case PromptFormats.VICUNA:
-				return (
-					this.vicunaOpen(role) +
-					content +
-					(includeClose ? this.vicunaClose : "")
-				)
-			case PromptFormats.OPENAI:
-				return (
-					this.openaiOpen(role) +
-					content +
-					(includeClose ? this.openaiClose : "")
-				)
-			case PromptFormats.LLAMA2_INST:
-				return (
-					this.llama2InstOpen(role) +
-					content +
-					(includeClose ? this.llama2InstClose(role) : "")
-				)
-			case PromptFormats.CLAUDE:
-				return (
-					this.claudeOpen(role) +
-					content +
-					(includeClose ? this.claudeClose : "")
-				)
-			case PromptFormats.INSTRUCT:
-				return (
-					this.instructOpen() +
-					content +
-					(includeClose ? this.instructClose : "")
-				)
-			case PromptFormats.SPLIT_CHAT: {
-				// Use /<@role:(user|assistant|system)>\s*/g, i.e. <@role:user>\n {content} \n
-				//
-				// content is user-controlled (chat messages, character/persona
-				// fields, world-lore/history entries all flow through here via
-				// the systemBlock/userBlock/assistantBlock Handlebars helpers)
-				// and parseSplitChatPrompt re-derives message role boundaries by
-				// searching the ENTIRE rendered prompt string for
-				// ROLE_MARKER_PATTERN, with no way to distinguish a marker WE
-				// inserted from one embedded in someone's message/field/entry.
-				// Left unescaped, a chat participant typing the literal text
-				// "<@role:system>" would have it parsed as a real system-role
-				// message sent to the LLM API — for Anthropic, promoted straight
-				// into the top-level system prompt. Neutralize any occurrence in
-				// content before wrapping, by inserting a zero-width space
-				// (written as an explicit \u200B escape, never pasted as a
-				// literal invisible character — an actually-invisible character
-				// in source is un-greppable and one "strip weird whitespace"
-				// cleanup away from silently reopening this) between "role" and
-				// the colon, breaking ROLE_MARKER_PATTERN's exact match while
-				// staying visually identical to a human reader.
-				//
-				// This is sufficient even against an attacker trying to split
-				// the marker across two adjacent blocks (e.g. ending one
-				// message with "<@role:sys" hoping the next block's content
-				// completes it) — every block is wrapped with a literal "\n" on
-				// both sides here, and the pattern has no "s" flag, so it can't
-				// match across the newline boundary between two blocks. Per-block
-				// neutralization is therefore sufficient by construction, not
-				// just in practice; if this wrapper's whitespace ever changes,
-				// re-verify this property.
-				//
-				// Durable-fix note: the root cause is in-band signaling through
-				// a concatenate-then-reparse round-trip. The correct long-term
-				// architecture builds the messages[] array as structured data
-				// end-to-end instead of serializing through one searchable
-				// string — this neutralization is the correct fix to ship now
-				// (minimal, contained, doesn't touch every adapter/format), not
-				// a claim that this is the final design.
-				const safeContent = content.replace(
-					new RegExp(ROLE_MARKER_PATTERN, "g"),
-					`<@role${"\u200B"}:$1>`
-				)
-				return `<@role:${role}>\n${safeContent}\n`
-			}
-			default:
-				return (
-					this.chatmlOpen(role) +
-					content +
-					(includeClose ? this.chatmlClose : "")
-				)
-		}
+		const template = completionTemplateOf(format)
+
+		// `renderMode`, never a substring test on the name. `/split/i` used to
+		// decide this, so a template called "my split format" took this branch.
+		if (template.renderMode === "role_array")
+			return PromptBlockFormatter.splitSessionBlock(role, content)
+
+		const { prefix, suffix } = framingFor(template, role)
+		return prefix + content + (includeClose ? suffix : "")
 	}
 }

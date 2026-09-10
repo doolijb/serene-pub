@@ -45,7 +45,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 }, 180_000)
 
 afterAll(async () => {
@@ -143,9 +143,12 @@ describe("every provider has a dispatch path", () => {
 
 describe("the summarize batching", () => {
 	it("cuts messages into batches that leave the model room to answer", async () => {
-		// The 1500-token reserve is the legacy headroom for the prompt template
-		// and the draft written back. Without it a batch sized exactly to the
-		// window leaves nowhere for the answer to go.
+		// `batchTokens` is the CHAT half of a batch prompt; the template around
+		// it and the room the draft is written back into are
+		// `BATCH_RESERVE_TOKENS` on top, which is what the window has to hold
+		// besides. It used to be subtracted from the declared size instead, so
+		// asking for 2048 tokens of chat got 548 — see
+		// `summarizeBatchBudget.test.ts` for the clamp this became.
 		const { coreBindings } = await import(
 			"$lib/server/pipelines/runtime/bindings"
 		)

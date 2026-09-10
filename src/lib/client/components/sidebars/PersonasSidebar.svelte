@@ -21,6 +21,7 @@
 	import ImportConflictModal from "../modals/ImportConflictModal.svelte"
 	import PersonaExportModal from "../modals/PersonaExportModal.svelte"
 	import { downloadBlob } from "$lib/client/utils/downloadBlob"
+	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -155,108 +156,129 @@
 		showImportModal = false
 	}
 
+	// Named so `off` can name them too. A bare `socket.off("personas:list")`
+	// removes EVERY listener for that event — including any other open
+	// personas UI, not just this sidebar's.
+	function handlePersonasList(msg: Sockets.Personas.List.Response) {
+		personaList = msg.personaList
+		isLoading = false
+	}
+
+	// The generic **:error listener in Layout.svelte already toasts this —
+	// this just stops the spinner from spinning forever if the initial
+	// fetch fails, so it settles into the (accurate enough) empty state.
+	function handlePersonasListError() {
+		isLoading = false
+	}
+
+	function handlePersonasImportCard(
+		msg: Sockets.Personas.ImportCard.Response
+	) {
+		if (msg.status === "conflict" && msg.conflict) {
+			personaImportConflict = msg.conflict
+			showPersonaImportConflictModal = true
+			return
+		}
+		if (msg.status === "unchanged") {
+			toaster.success({
+				title: "Persona Already Imported",
+				description: `"${msg.persona?.name}" is unchanged — using the existing persona.`
+			})
+			return
+		}
+		// A warning means the persona DID import, but part of the card
+		// (usually an over-sized image) had to be skipped. Not an
+		// error toast — this flow used to report a failure for a
+		// persona that was in fact imported.
+		if (msg.warnings?.length) {
+			toaster.warning({
+				title: `Persona Imported With Warnings`,
+				description: `${msg.persona!.name} was imported. ${msg.warnings.join(" ")}`
+			})
+		} else {
+			toaster.success({
+				title: `Persona Imported`,
+				description: `Persona ${msg.persona!.name} imported successfully.`
+			})
+		}
+	}
+
+	function handlePersonasImportResolve(
+		msg: Sockets.Personas.ImportResolve.Response
+	) {
+		if (msg.warnings?.length) {
+			toaster.warning({
+				title: `Persona Imported With Warnings`,
+				description: `${msg.persona.name} was imported. ${msg.warnings.join(" ")}`
+			})
+		} else {
+			toaster.success({
+				title: `Persona Imported`,
+				description: `Persona ${msg.persona.name} imported successfully.`
+			})
+		}
+	}
+
+	function handlePersonasImportResolveError(msg: Sockets.ErrorResponse) {
+		toaster.error({
+			title: msg.error || "Failed to resolve persona import"
+		})
+	}
+
+	function handlePersonasExportCard(
+		msg: SocketEventMap["personas:exportCard"]["response"]
+	) {
+		downloadBlob(msg)
+		toaster.success({
+			title: "Persona Exported",
+			description: `Persona card exported as ${msg.filename}`
+		})
+	}
+
+	function handlePersonasExportCardError(msg: Sockets.ErrorResponse) {
+		toaster.error({ title: msg.error || "Failed to export persona" })
+	}
+
+	// The background vectorization queue updates a row's embeddingModel
+	// directly in the DB — without this, the list here only ever refreshes
+	// on the next explicit personas:list, leaving the embedding-status
+	// badge showing stale info until a manual refresh.
+	function handleVectorizationItemUpdated(
+		msg: Sockets.Vectorization.ItemUpdated.Response
+	) {
+		if (msg.type !== "persona") return
+		const target = personaList.find((p: any) => p.id === msg.id)
+		if (target) (target as any).embeddingModel = msg.embeddingModel
+	}
+
 	onMount(() => {
-		socket.on("personas:list", (msg: Sockets.Personas.List.Response) => {
-			personaList = msg.personaList
-			isLoading = false
-		})
-		// The generic **:error listener in Layout.svelte already toasts this —
-		// this just stops the spinner from spinning forever if the initial
-		// fetch fails, so it settles into the (accurate enough) empty state.
-		socket.on("personas:list:error", () => {
-			isLoading = false
-		})
-		socket.on(
-			"personas:importCard",
-			(msg: Sockets.Personas.ImportCard.Response) => {
-				if (msg.status === "conflict" && msg.conflict) {
-					personaImportConflict = msg.conflict
-					showPersonaImportConflictModal = true
-					return
-				}
-				if (msg.status === "unchanged") {
-					toaster.success({
-						title: "Persona Already Imported",
-						description: `"${msg.persona?.name}" is unchanged — using the existing persona.`
-					})
-					return
-				}
-				// A warning means the persona DID import, but part of the card
-				// (usually an over-sized image) had to be skipped. Not an
-				// error toast — this flow used to report a failure for a
-				// persona that was in fact imported.
-				if (msg.warnings?.length) {
-					toaster.warning({
-						title: `Persona Imported With Warnings`,
-						description: `${msg.persona!.name} was imported. ${msg.warnings.join(" ")}`
-					})
-				} else {
-					toaster.success({
-						title: `Persona Imported`,
-						description: `Persona ${msg.persona!.name} imported successfully.`
-					})
-				}
-			}
-		)
-		socket.on(
-			"personas:importResolve",
-			(msg: Sockets.Personas.ImportResolve.Response) => {
-				if (msg.warnings?.length) {
-					toaster.warning({
-						title: `Persona Imported With Warnings`,
-						description: `${msg.persona.name} was imported. ${msg.warnings.join(" ")}`
-					})
-				} else {
-					toaster.success({
-						title: `Persona Imported`,
-						description: `Persona ${msg.persona.name} imported successfully.`
-					})
-				}
-			}
-		)
+		socket.on("personas:list", handlePersonasList)
+		socket.on("personas:list:error", handlePersonasListError)
+		socket.on("personas:importCard", handlePersonasImportCard)
+		socket.on("personas:importResolve", handlePersonasImportResolve)
 		socket.on(
 			"personas:importResolve:error",
-			(msg: Sockets.ErrorResponse) => {
-				toaster.error({
-					title: msg.error || "Failed to resolve persona import"
-				})
-			}
+			handlePersonasImportResolveError
 		)
-		socket.on("personas:exportCard", (msg) => {
-			downloadBlob(msg)
-			toaster.success({
-				title: "Persona Exported",
-				description: `Persona card exported as ${msg.filename}`
-			})
-		})
-		socket.on("personas:exportCard:error", (msg: Sockets.ErrorResponse) => {
-			toaster.error({ title: msg.error || "Failed to export persona" })
-		})
-		// The background vectorization queue updates a row's embeddingModel
-		// directly in the DB — without this, the list here only ever refreshes
-		// on the next explicit personas:list, leaving the embedding-status
-		// badge showing stale info until a manual refresh.
-		socket.on(
-			"vectorization:itemUpdated",
-			(msg: Sockets.Vectorization.ItemUpdated.Response) => {
-				if (msg.type !== "persona") return
-				const target = personaList.find((p: any) => p.id === msg.id)
-				if (target) (target as any).embeddingModel = msg.embeddingModel
-			}
-		)
+		socket.on("personas:exportCard", handlePersonasExportCard)
+		socket.on("personas:exportCard:error", handlePersonasExportCardError)
+		socket.on("vectorization:itemUpdated", handleVectorizationItemUpdated)
 		socket.emit("personas:list", {})
 		onclose = handleOnClose
 	})
 
 	onDestroy(() => {
-		socket.off("personas:list")
-		socket.off("personas:list:error")
-		socket.off("personas:importCard")
-		socket.off("personas:importResolve")
-		socket.off("personas:importResolve:error")
-		socket.off("personas:exportCard")
-		socket.off("personas:exportCard:error")
-		socket.off("vectorization:itemUpdated")
+		socket.off("personas:list", handlePersonasList)
+		socket.off("personas:list:error", handlePersonasListError)
+		socket.off("personas:importCard", handlePersonasImportCard)
+		socket.off("personas:importResolve", handlePersonasImportResolve)
+		socket.off(
+			"personas:importResolve:error",
+			handlePersonasImportResolveError
+		)
+		socket.off("personas:exportCard", handlePersonasExportCard)
+		socket.off("personas:exportCard:error", handlePersonasExportCardError)
+		socket.off("vectorization:itemUpdated", handleVectorizationItemUpdated)
 		onclose = undefined
 	})
 

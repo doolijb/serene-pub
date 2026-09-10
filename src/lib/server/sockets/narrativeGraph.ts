@@ -62,6 +62,16 @@ import {
 	repointSceneCast,
 	writeSceneCast
 } from "$lib/server/utils/sceneCast"
+import {
+	deriveSceneMentions,
+	mentionedSoFar,
+	type SceneMentions
+} from "$lib/server/utils/sceneMentions"
+import {
+	inferredRelationshipVisibility,
+	sanitizeRelationshipVisibility,
+	type ObjectPresence
+} from "$lib/server/utils/relationshipVisibility"
 import { verifyBindingTargetAccess } from "./lorebooks"
 
 // Resume states saved before each scene — keyed by "userId:lorebookId"
@@ -540,10 +550,49 @@ export const narrativeGraphBuildHandler: Handler<
 			filteredRawScenes.map((s) => s.id)
 		)
 
+		/**
+		 * The other half of the cast, DERIVED rather than read (plan §1).
+		 *
+		 * `mentioned` is exactly *(scene text × vocabulary)*, and
+		 * `message_annotations` already holds that more precisely than a scene
+		 * row ever did. Deriving it here is what makes a widened vocabulary
+		 * reach every historical scene at once, and what lets an absorb stop
+		 * remapping mentioned ids by hand — the annotations resolve through a
+		 * gazetteer that already reflects the merge.
+		 *
+		 * ⚠ Annotation is a background lane, so a scene can legitimately answer
+		 * "not yet" instead of "nobody". That is reported rather than flattened:
+		 * an incomplete list silently presented as complete is the one outcome
+		 * worse than a stale one. The build still runs on what is known — the
+		 * proposal is reviewed by a person before anything is written — but the
+		 * log names how many scenes were answered short.
+		 */
+		const sceneMentions = await deriveSceneMentions(
+			db,
+			params.lorebookId,
+			filteredRawScenes.map((s) => ({
+				id: s.id,
+				selectedMessageIds: s.selectedMessageIds ?? null
+			}))
+		)
+		const pendingMentionScenes = [...sceneMentions.values()].filter(
+			(m) => m.status === "pending"
+		).length
+		if (pendingMentionScenes > 0) {
+			console.warn(
+				`[narrativeGraph] ${pendingMentionScenes} of ${filteredRawScenes.length} scene(s) in lorebook ${params.lorebookId} ` +
+					`are not fully annotated yet; their mentioned cast is a floor, not an answer. ` +
+					`Re-run the build once the annotation lane has caught up to widen it.`
+			)
+		}
+
 		// Map scenes to GraphBuilderScene format with binding substitution applied
 		const scenes: GraphBuilderScene[] = [
 			...filteredRawScenes.map((s) => {
 				const cast = castFor(sceneCasts, s.id)
+				const mentions: SceneMentions | undefined = sceneMentions.get(
+					s.id
+				)
 				return {
 					id: s.id,
 					name: s.name,
@@ -556,7 +605,12 @@ export const narrativeGraphBuildHandler: Handler<
 							}
 						: null,
 					participantCharacters: cast.participantCharacters,
-					mentionedCharacters: cast.mentionedCharacters,
+					// Derived, never `cast.mentionedCharacters` — see above.
+					// Any `mentioned` rows still in `scene_characters` are
+					// pre-icing leftovers and are deliberately not read.
+					mentionedCharacters: mentions
+						? mentionedSoFar(mentions)
+						: [],
 					sessionId: s.sessionId ?? null,
 					selectedMessageIds: s.selectedMessageIds?.length
 						? s.selectedMessageIds
@@ -887,7 +941,7 @@ export const narrativeGraphBuildHandler: Handler<
 				const { v4: uuidv4 } = await import("uuid")
 				const endedAt = Date.now()
 				await saveReceipt(
-					db as any,
+					db,
 					{
 						runId: uuidv4(),
 						specId: GRAPH_BUILD_SPEC_ID,
@@ -992,11 +1046,10 @@ const VALID_NODE_STATES = new Set<NodeState>([
 	"missing",
 	"departed"
 ])
-const VALID_RELATIONSHIP_VISIBILITIES = new Set<RelationshipVisibility>([
-	"secret",
-	"acknowledged",
-	"public"
-])
+// `VALID_RELATIONSHIP_VISIBILITIES` / `sanitizeRelationshipVisibility` moved to
+// `utils/relationshipVisibility.ts`, beside the bound that now caps what an
+// inference may claim — the two answer one question and had to stop being
+// reachable separately.
 
 function capText(value: string, maxLength: number): string {
 	return value.slice(0, maxLength)
@@ -1022,14 +1075,6 @@ function parseExistingTempId(tempId: string): number | null {
 	if (!/^[1-9]\d*$/.test(raw)) return null
 	const id = Number(raw)
 	return Number.isSafeInteger(id) ? id : null
-}
-
-function sanitizeRelationshipVisibility(
-	value: string | undefined | null
-): RelationshipVisibility {
-	return VALID_RELATIONSHIP_VISIBILITIES.has(value as RelationshipVisibility)
-		? (value as RelationshipVisibility)
-		: "acknowledged"
 }
 
 export const narrativeGraphApplyProposalHandler: Handler<
@@ -1354,6 +1399,71 @@ export const narrativeGraphApplyProposalHandler: Handler<
 				}
 			}
 
+			/**
+			 * Who was actually THERE, per scene — what bounds an inferred
+			 * relationship's publicity (plan §6).
+			 *
+			 * Built before the relationship loop because that loop needs it, and
+			 * from `participantTempIds` rather than from the derived mentions:
+			 * presence is the stored decision, so the bound is unaffected by how
+			 * far the annotation lane has got. A scene whose mentions are still
+			 * `pending` still bounds its edges correctly.
+			 *
+			 * `resolvedSceneCast` covers the scenes this build re-derived; every
+			 * other scene keeps whatever cast it already had, so its stored
+			 * participants are read. Both are needed — a build in extend mode
+			 * legitimately updates an edge belonging to a scene it did not touch.
+			 */
+			const presentBySceneId = new Map<number, Set<number>>()
+			for (const resolved of proposal.resolvedSceneCast ?? []) {
+				if (resolved.sceneId == null) continue
+				presentBySceneId.set(
+					resolved.sceneId,
+					new Set(
+						resolved.participantTempIds
+							.map((t) => tempIdMap.get(t))
+							.filter((id): id is number => id != null)
+					)
+				)
+			}
+			{
+				const unresolved = [...referencedSceneIds].filter(
+					(id) => !presentBySceneId.has(id)
+				)
+				if (unresolved.length > 0) {
+					const stored = await readSceneCasts(unresolved, tx)
+					for (const id of unresolved)
+						presentBySceneId.set(
+							id,
+							new Set(castFor(stored, id).participantCharacters)
+						)
+				}
+			}
+			/**
+			 * Where the OBJECT of an edge stood in the scene it came from.
+			 *
+			 * `unknown` for an edge with no scene — a direct history entry has
+			 * no cast row to read, and inventing privacy from an absence of
+			 * evidence would hide edges nobody claimed were private. `public` is
+			 * refused in every case; that rule does not depend on provenance.
+			 *
+			 * ⚠ Also `unknown` for a scene the map does not hold, which is a
+			 * scene the proposal never referenced — reachable only through an
+			 * update falling back to the stored `sceneId`. Deliberately not
+			 * "absent": failing to *resolve* a cast is not evidence the object
+			 * was missing from it, and this bound must only ever err wide, never
+			 * tighten an existing row on a fact it could not establish.
+			 */
+			const presenceOf = (
+				sceneId: number | null | undefined,
+				objectId: number
+			): ObjectPresence => {
+				if (sceneId == null) return "unknown"
+				const present = presentBySceneId.get(sceneId)
+				if (!present) return "unknown"
+				return present.has(objectId) ? "present" : "absent"
+			}
+
 			// Insert (or update) relationships
 			for (const rel of proposal.relationships) {
 				const fromId = tempIdMap.get(rel.fromTempId)
@@ -1409,6 +1519,26 @@ export const narrativeGraphApplyProposalHandler: Handler<
 						})
 
 					if (existing) {
+						/**
+						 * ⚠ A CEILING on the proposal, never an assignment onto
+						 * the row (plan §6).
+						 *
+						 * `undefined` means *leave the column alone*, which is
+						 * what an author's `public` gets: `public` is never
+						 * inferred, so a row holding it was widened by a person,
+						 * and a re-scan must not quietly pull it back down.
+						 * Writing `sanitize(...)` unconditionally — what this
+						 * did — demoted exactly that edge on every build.
+						 */
+						const boundedVisibility =
+							inferredRelationshipVisibility({
+								claim: rel.visibility ?? existing.visibility,
+								objectPresence: presenceOf(
+									rel.sceneId ?? existing.sceneId,
+									toId
+								),
+								stored: existing.visibility
+							})
 						await tx
 							.update(schema.narrativeRelationships)
 							.set({
@@ -1419,9 +1549,9 @@ export const narrativeGraphApplyProposalHandler: Handler<
 									rel.description ?? existing.description,
 									MAX_NODE_TEXT_LENGTH
 								),
-								visibility: sanitizeRelationshipVisibility(
-									rel.visibility ?? existing.visibility
-								),
+								...(boundedVisibility === undefined
+									? {}
+									: { visibility: boundedVisibility }),
 								status: rel.status ?? existing.status,
 								reason: rel.reason
 									? capText(rel.reason, MAX_NODE_TEXT_LENGTH)
@@ -1446,7 +1576,14 @@ export const narrativeGraphApplyProposalHandler: Handler<
 						rel.description ?? "",
 						MAX_NODE_TEXT_LENGTH
 					),
-					visibility: sanitizeRelationshipVisibility(rel.visibility),
+					// Born bounded. The column's `"acknowledged"` default is
+					// precisely the over-scoping plan §6 names: an edge formed
+					// in a scene its object was not in must not assert that
+					// they know about it.
+					visibility: inferredRelationshipVisibility({
+						claim: rel.visibility,
+						objectPresence: presenceOf(rel.sceneId, toId)
+					}),
 					status: rel.status ?? "active",
 					reason: rel.reason
 						? capText(rel.reason, MAX_NODE_TEXT_LENGTH)
@@ -1484,8 +1621,12 @@ export const narrativeGraphApplyProposalHandler: Handler<
 					)
 				]
 				const participantCharacters = toIds(resolved.participantTempIds)
-				const mentionedCharacters = toIds(resolved.mentionedTempIds)
-				// castResolvedAt is set even when both lists are empty — that
+				// ⚠ `resolved.mentionedTempIds` is deliberately NOT resolved or
+				// written. `mentioned` is derived from annotations now (plan
+				// §1) and storing a second, weaker copy is what this lane
+				// removed; the proposal still carries the field so reviving the
+				// stored form is a one-line change rather than a re-derivation.
+				// castResolvedAt is set even when the list is empty — that
 				// is the marker's entire purpose. A scene that genuinely
 				// features nobody must be distinguishable from one never
 				// processed, or it re-extracts on every build forever.
@@ -1502,10 +1643,14 @@ export const narrativeGraphApplyProposalHandler: Handler<
 						columns: { id: true }
 					})
 					if (!owned) continue
+					// Participants only — `writeSceneCast` rewrites exactly the
+					// roles it is handed, so any pre-icing `mentioned` rows are
+					// left where they are rather than being clobbered by a
+					// build that no longer has an opinion about them.
 					await writeSceneCast(
 						resolved.sceneId,
-						{ participantCharacters, mentionedCharacters },
-						tx as any
+						{ participantCharacters },
+						tx
 					)
 					await tx
 						.update(schema.scenes)
@@ -1957,8 +2102,13 @@ export const narrativeGraphUpdateRelationshipHandler: Handler<
 		if (r.description !== undefined) fields.description = r.description
 		if (r.reason !== undefined) fields.reason = r.reason
 		if (r.status !== undefined) fields.status = r.status
+		// Sanitised, never *bounded*. This is the authoring path: a person may
+		// still set `public`, which `inferredRelationshipVisibility`'s ceiling
+		// makes unreachable by inference precisely because only an author can
+		// claim it. All this does is refuse a value the enum does not have —
+		// see `relationshipVisibility.ts` on why conflating the two is the bug.
 		if (r.visibility !== undefined)
-			fields.visibility = r.visibility as RelationshipVisibility
+			fields.visibility = sanitizeRelationshipVisibility(r.visibility)
 
 		// historyEntryId/sceneId are FKs — must stay scoped to this
 		// relationship's own lorebook, same reasoning as updateNode.
@@ -2768,32 +2918,53 @@ export const narrativeGraphMergeNodeHandler: Handler<
 			// existed as well as new ones.
 			const lorebookScenes = await tx.query.scenes.findMany({
 				where: eq(schema.scenes.lorebookId, lorebook.id),
-				columns: { id: true }
+				columns: { id: true, selectedMessageIds: true }
 			})
 			const castsBefore = await readSceneCasts(
 				lorebookScenes.map((s) => s.id),
-				tx as any
+				tx
+			)
+			const affectedScenes = lorebookScenes.filter((scene) => {
+				const cast = castFor(castsBefore, scene.id)
+				return (
+					cast.participantCharacters.includes(absorbedId) ||
+					cast.mentionedCharacters.includes(absorbedId)
+				)
+			})
+			/**
+			 * ⚠ The mentioned half is SNAPSHOTTED, not read back later.
+			 *
+			 * A merge log is a point-in-time record by definition, and
+			 * `mentioned` is derived now — re-deriving it at undo time would
+			 * answer about the vocabulary as it stands *then*, which is not the
+			 * cast this merge saw. Freezing it here is what keeps the record
+			 * true; it is not a reason to make the stored row primary again.
+			 */
+			const mentionsBefore = await deriveSceneMentions(
+				tx,
+				lorebook.id,
+				affectedScenes.map((s) => ({
+					id: s.id,
+					selectedMessageIds: s.selectedMessageIds ?? null
+				}))
 			)
 			const sceneSnapshots: {
 				sceneId: number
 				participantCharacters: number[]
 				mentionedCharacters: number[]
 			}[] = []
-			for (const scene of lorebookScenes) {
+			for (const scene of affectedScenes) {
 				const cast = castFor(castsBefore, scene.id)
-				if (
-					!cast.participantCharacters.includes(absorbedId) &&
-					!cast.mentionedCharacters.includes(absorbedId)
-				)
-					continue
-				sceneSnapshots.push({ sceneId: scene.id, ...cast })
+				const mentions = mentionsBefore.get(scene.id)
+				sceneSnapshots.push({
+					sceneId: scene.id,
+					participantCharacters: cast.participantCharacters,
+					mentionedCharacters: mentions
+						? mentionedSoFar(mentions)
+						: cast.mentionedCharacters
+				})
 			}
-			await repointSceneCast(
-				lorebook.id,
-				absorbedId,
-				survivorId,
-				tx as any
-			)
+			await repointSceneCast(lorebook.id, absorbedId, survivorId, tx)
 
 			// 4. Reassign character-lore entries (onDelete: "set null" —
 			// without this, private lore attached to the absorbed row goes
@@ -3059,16 +3230,24 @@ export const narrativeGraphUndoMergeHandler: Handler<
 			// the recreated row's new id). The snapshot format is unchanged —
 			// still the two id arrays — so logs written before scene_characters
 			// existed replay identically; only the write target moved.
+			//
+			// ⚠ **Participants only, and the mentioned remap is deleted.**
+			// `mentioned` is derived from annotations now, and the derivation
+			// reverts by itself: this same transaction recreates the absorbed
+			// binding and strips the names it lent the survivor's
+			// `absorbedAliases`, so the gazetteer the next read resolves through
+			// is the pre-merge one again. Remapping ids into a row nothing reads
+			// would be work whose only effect is to look like an answer.
+			// `sceneSnapshots.mentionedCharacters` stays in the log as the
+			// frozen record of what the merge saw.
 			for (const sceneSnap of log.sceneSnapshots) {
 				await writeSceneCast(
 					sceneSnap.sceneId,
 					{
 						participantCharacters:
-							sceneSnap.participantCharacters.map(remapId),
-						mentionedCharacters:
-							sceneSnap.mentionedCharacters.map(remapId)
+							sceneSnap.participantCharacters.map(remapId)
 					},
-					tx as any
+					tx
 				)
 			}
 

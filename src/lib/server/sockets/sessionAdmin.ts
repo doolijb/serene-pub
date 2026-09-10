@@ -32,6 +32,7 @@ const presetRow = (
 	primarySlug: p.primarySlug ?? null,
 	configSelections: (p.configSelections ?? {}) as Record<string, number>,
 	includedActions: (p.includedActions ?? null) as string[] | null,
+	defaults: (p.defaults ?? null) as Record<string, unknown> | null,
 	enabled: p.enabled,
 	isDefault: p.isDefault,
 	isImmutable: p.isImmutable
@@ -46,7 +47,7 @@ export const sessionGenresList: Handler<
 	event: "sessionGenres:list",
 	handler: async (socket, _params, emitToUser) => {
 		adminOnly(socket)
-		const modes = await listSessionGenres(db as any)
+		const modes = await listSessionGenres(db)
 		const settings = await db.select().from(schema.sessionGenreSettings)
 		const presets = await db
 			.select({
@@ -146,7 +147,7 @@ export const sessionGenresDetail: Handler<
 	event: "sessionGenres:detail",
 	handler: async (socket, params, emitToUser) => {
 		adminOnly(socket)
-		const genres = await listSessionGenres(db as any)
+		const genres = await listSessionGenres(db)
 		const genre = genres.find((g) => g.genreId === params.genreId)
 		if (!genre) {
 			const res: Sockets.SessionAdmin.GenreDetail.Response = {
@@ -244,9 +245,7 @@ export const sessionPresetsList: Handler<
 		let out = (rows as any[]).map(presetRow)
 		// The picker's cut: a non-admin sees only what they may start.
 		if (!socket.user?.isAdmin) {
-			const settings = await db
-				.select()
-				.from(schema.sessionGenreSettings)
+			const settings = await db.select().from(schema.sessionGenreSettings)
 			const disabledTypes = new Set(
 				(settings as any[])
 					.filter((s) => !s.enabled)
@@ -537,7 +536,7 @@ export const sessionsAdminList: Handler<
 			})
 			.from(schema.sessionPresets)
 		const presetBy = new Map(presets.map((p) => [p.id, p.name]))
-		const modes = await listSessionGenres(db as any)
+		const modes = await listSessionGenres(db)
 		const modeBy = new Map(modes.map((m) => [m.genreId, m.name]))
 
 		const counts = async (table: any, col: any) => {

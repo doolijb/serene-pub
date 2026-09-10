@@ -62,17 +62,17 @@ beforeAll(async () => {
 
 describe("running a pipeline in core", () => {
 	it("reads real messages and writes a real one back", async () => {
-		const saved = await saveDocument(db as any, readAndWrite(), {
+		const saved = await saveDocument(db, readAndWrite(), {
 			publish: true
 		})
-		const doc = await loadDocument(db as any, saved.specVersionId)
+		const doc = await loadDocument(db, saved.specVersionId)
 
 		const receipt = await run(doc, {
 			input: { text: "third", sessionScope: { sessionId } },
 			seed: "seed:core",
 			triggerSource: "event",
 			bindings: coreBindings(),
-			host: createHost(db as any, { sessionId, userId })
+			host: createHost(db, { sessionId, userId })
 		})
 
 		expect(receipt.outcome).toBe("ok")
@@ -92,30 +92,30 @@ describe("running a pipeline in core", () => {
 	it("a hidden message never reaches the pipeline", async () => {
 		// Honoured in the host rather than in each binding, so a Query type added
 		// later cannot forget it.
-		const saved = await saveDocument(db as any, readAndWrite(), {
+		const saved = await saveDocument(db, readAndWrite(), {
 			publish: true
 		})
-		const doc = await loadDocument(db as any, saved.specVersionId)
+		const doc = await loadDocument(db, saved.specVersionId)
 		const receipt = await run(doc, {
 			input: { text: "x", sessionScope: { sessionId } },
 			seed: "seed:core",
 			bindings: coreBindings(),
-			host: createHost(db as any, { sessionId, userId })
+			host: createHost(db, { sessionId, userId })
 		})
 		const history = receipt.nodes.find((n) => n.nodeKey === "history")!
 		expect(JSON.stringify(history.output)).not.toContain("hidden one")
 	})
 
 	it("the write lands as a discriminated result carrying the real row id", async () => {
-		const saved = await saveDocument(db as any, readAndWrite(), {
+		const saved = await saveDocument(db, readAndWrite(), {
 			publish: true
 		})
-		const doc = await loadDocument(db as any, saved.specVersionId)
+		const doc = await loadDocument(db, saved.specVersionId)
 		const receipt = await run(doc, {
 			input: { text: "fourth", sessionScope: { sessionId } },
 			seed: "seed:core",
 			bindings: coreBindings(),
-			host: createHost(db as any, { sessionId, userId })
+			host: createHost(db, { sessionId, userId })
 		})
 		const save = receipt.nodes.find((n) => n.nodeKey === "save")!
 		expect((save.output as any).status).toBe("committed")
@@ -123,15 +123,15 @@ describe("running a pipeline in core", () => {
 	})
 
 	it("core emits the event the write causes — the node never does (F8)", async () => {
-		const saved = await saveDocument(db as any, readAndWrite(), {
+		const saved = await saveDocument(db, readAndWrite(), {
 			publish: true
 		})
-		const doc = await loadDocument(db as any, saved.specVersionId)
+		const doc = await loadDocument(db, saved.specVersionId)
 		const receipt = await run(doc, {
 			input: { text: "fifth", sessionScope: { sessionId } },
 			seed: "seed:core",
 			bindings: coreBindings(),
-			host: createHost(db as any, { sessionId, userId })
+			host: createHost(db, { sessionId, userId })
 		})
 		expect(receipt.emitted.map((e) => e.event)).toContain(
 			"core:event/message-created@1"
@@ -142,7 +142,7 @@ describe("running a pipeline in core", () => {
 		// Returning [] would let a mis-scoped pipeline look like a working one with
 		// a quiet session, and "the bot forgot everything" points at retrieval rather
 		// than at permissions.
-		const host = createHost(db as any, { sessionId, userId })
+		const host = createHost(db, { sessionId, userId })
 		await expect(
 			host.read!(
 				"session_messages",
@@ -179,7 +179,7 @@ describe("running a pipeline in core", () => {
 			input: { text: "x", sessionScope: { sessionId } },
 			seed: "seed:core",
 			bindings: coreBindings(),
-			host: createHost(db as any, { sessionId, userId })
+			host: createHost(db, { sessionId, userId })
 		})
 
 		expect(receipt.outcome).toBe("halt")
@@ -231,15 +231,15 @@ describe("running a pipeline in core", () => {
 	})
 
 	it("replay reproduces the run without touching the database again", async () => {
-		const saved = await saveDocument(db as any, readAndWrite(), {
+		const saved = await saveDocument(db, readAndWrite(), {
 			publish: true
 		})
-		const doc = await loadDocument(db as any, saved.specVersionId)
+		const doc = await loadDocument(db, saved.specVersionId)
 		const first = await run(doc, {
 			input: { text: "sixth", sessionScope: { sessionId } },
 			seed: "seed:replay",
 			bindings: coreBindings(),
-			host: createHost(db as any, { sessionId, userId })
+			host: createHost(db, { sessionId, userId })
 		})
 
 		const before = await db

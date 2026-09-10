@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest"
 import {
 	CONNECTION_DEFAULTS,
-	OPENAI_CHAT_PRESETS,
+	OPENAI_COMPATIBLE_PRESETS,
 	getConnectionDefaults
 } from "./connectionDefaults"
 import { normalizeBaseUrl } from "./normalizeBaseUrl"
@@ -21,14 +21,14 @@ const NEW_EXPERIMENTAL_PRESET_NAMES = [
 	"Aphrodite Engine (Experimental)"
 ]
 
-describe("OPENAI_CHAT_PRESETS", () => {
+describe("OPENAI_COMPATIBLE_PRESETS", () => {
 	test("every preset has a unique `value`", () => {
-		const values = OPENAI_CHAT_PRESETS.map((p) => p.value)
+		const values = OPENAI_COMPATIBLE_PRESETS.map((p) => p.value)
 		expect(new Set(values).size).toBe(values.length)
 	})
 
 	test("every preset has a unique, non-empty `name`", () => {
-		const names = OPENAI_CHAT_PRESETS.map((p) => p.name)
+		const names = OPENAI_COMPATIBLE_PRESETS.map((p) => p.name)
 		expect(new Set(names).size).toBe(names.length)
 		for (const name of names) {
 			expect(name.trim().length).toBeGreaterThan(0)
@@ -36,7 +36,7 @@ describe("OPENAI_CHAT_PRESETS", () => {
 	})
 
 	test("every non-empty baseUrl is a well-formed, parseable URL", () => {
-		for (const preset of OPENAI_CHAT_PRESETS) {
+		for (const preset of OPENAI_COMPATIBLE_PRESETS) {
 			const url = preset.connectionDefaults.baseUrl
 			if (!url) continue // "Empty" preset intentionally has no baseUrl
 			expect(() => new URL(url)).not.toThrow()
@@ -44,7 +44,7 @@ describe("OPENAI_CHAT_PRESETS", () => {
 	})
 
 	test("every preset's baseUrl already round-trips cleanly through normalizeBaseUrl (no double-normalization surprises)", () => {
-		for (const preset of OPENAI_CHAT_PRESETS) {
+		for (const preset of OPENAI_COMPATIBLE_PRESETS) {
 			const url = preset.connectionDefaults.baseUrl
 			if (!url) continue
 			// Every stored default keeps its trailing slash (the established
@@ -55,7 +55,7 @@ describe("OPENAI_CHAT_PRESETS", () => {
 	})
 
 	test("all 11 new experimental presets are present, each with the (Experimental) suffix", () => {
-		const names = OPENAI_CHAT_PRESETS.map((p) => p.name)
+		const names = OPENAI_COMPATIBLE_PRESETS.map((p) => p.name)
 		for (const expected of NEW_EXPERIMENTAL_PRESET_NAMES) {
 			expect(names).toContain(expected)
 		}
@@ -64,7 +64,7 @@ describe("OPENAI_CHAT_PRESETS", () => {
 	test.each(NEW_EXPERIMENTAL_PRESET_NAMES)(
 		"%s has an apiKey field and a normalizable baseUrl",
 		(name) => {
-			const preset = OPENAI_CHAT_PRESETS.find((p) => p.name === name)!
+			const preset = OPENAI_COMPATIBLE_PRESETS.find((p) => p.name === name)!
 			expect(preset).toBeDefined()
 			expect(preset.connectionDefaults.extraJson).toHaveProperty("apiKey")
 			expect(preset.connectionDefaults.baseUrl).toBeTruthy()

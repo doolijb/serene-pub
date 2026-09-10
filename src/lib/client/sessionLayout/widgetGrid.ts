@@ -12,7 +12,14 @@
  * enough to prove the normal chat (messages GROW + composer FIXED bottom)
  * falls out of the model. Side-by-side placement, tab groups, pinning and the
  * drag editor are later increments and deliberately not here yet.
+ *
+ * It is also where a widget's geometry becomes the `layout.v1` its ctx carries
+ * (`placementOf` / `stackPlacements`) — the same cells the grid solves,
+ * packaged for the data contract rather than re-derived by each renderer.
  */
+import type { LayoutV1, PlacementInput } from "$lib/shared/widgets/context"
+import type { WidgetTier } from "$lib/shared/widgets/types"
+import { tierFor } from "$lib/client/surfaces/types"
 
 export type Zone = "left" | "middle" | "right"
 
@@ -172,6 +179,131 @@ export function loadChatLayout(saved: unknown): GridLayout {
 	const cell =
 		typeof saved.cell === "number" && saved.cell > 0 ? saved.cell : base.cell
 	return { version: 1, cell, widgets }
+}
+
+// ─── Placement → the widget data contract (PLAN 25) ──────────────────────────
+
+/** A widget's cells in its zone: 0-based origin + span, the arranged GsPos shape. */
+export interface CellBox {
+	x: number
+	y: number
+	w: number
+	h: number
+}
+
+export interface PlacementOpts {
+	/** The zone's own cell grid, as measured/arranged now. */
+	zone: { cols: number; rows: number }
+	box: CellBox
+	/** The widget box's measured inline size, for its tier. 0 = not yet measured. */
+	widthPx: number
+	/**
+	 * The cell height to REPORT, when it differs from the rows the box occupies.
+	 * `null` is the contract's "grows / is unbounded" (a `1fr` or `auto` track);
+	 * omitted means `box.h`, which is right wherever a zone's rows are uniform
+	 * cells (every arranged zone). The MVP stack is the exception — there a row
+	 * IS a widget, so its occupancy and its cell height are different numbers.
+	 */
+	rows?: number | null
+	pinned?: boolean
+	collapsed?: boolean
+	drawered?: boolean
+	chrome?: Partial<LayoutV1["chrome"]>
+}
+
+/**
+ * The width class of a widget's OWN box.
+ *
+ * The same breakpoints the surface grid uses for the whole content box, applied
+ * one level down — which is the point of the field: a widget in a 240px rail is
+ * `compact` however wide the window is, and that is what it should reflow
+ * against. Sharing `tierFor` keeps the two from drifting apart.
+ */
+export function widgetTier(widthPx: number): WidgetTier {
+	return tierFor(widthPx)
+}
+
+/**
+ * A widget's cells → the `PlacementInput` its ctx is projected from.
+ *
+ * `zone` carries the grid's dims AND this widget's 1-based start cell, so
+ * `zone.column`/`zone.row` with `box.cols`/`box.rows` is the whole geometry —
+ * the same numbers the renderer put in `grid-column` / `grid-row`.
+ *
+ * `edges` is computed here rather than declared: "does this box touch that edge
+ * of its zone" is a fact about the two, and a widget asking it (to drop a
+ * border, to round only the outer corners) must not have to recompute it from
+ * numbers the host already holds. `>=` rather than `===` on the far edges
+ * because a restored arrangement can overhang the zone it lands in — a box the
+ * grid clamps to the edge is touching it, not floating short of it.
+ */
+export function placementOf(o: PlacementOpts): PlacementInput {
+	const { cols, rows } = o.zone
+	const { x, y, w, h } = o.box
+	return {
+		zone: { columns: cols, column: x + 1, rows, row: y + 1 },
+		box: {
+			cols: w,
+			rows: o.rows === undefined ? h : o.rows,
+			edges: {
+				top: y <= 0,
+				left: x <= 0,
+				right: x + w >= cols,
+				bottom: y + h >= rows
+			}
+		},
+		tier: widgetTier(o.widthPx),
+		pinned: o.pinned ?? false,
+		collapsed: o.collapsed ?? false,
+		drawered: o.drawered ?? false,
+		...(o.chrome ? { chrome: o.chrome } : {})
+	}
+}
+
+/**
+ * A height spec → its cell count, or `null` when the track is unbounded.
+ *
+ * `grow` (a `1fr` track) and `fixed` (an `auto` track) are both "however tall
+ * the content and the leftover space make it", which the contract spells
+ * `rows: null`. Only a cell-bounded spec has a number worth reporting, and the
+ * floor (`cells`, else `minCells`) is the one the grid actually reserves.
+ */
+export function cellRowsOf(size: SizeSpec): number | null {
+	if (size === "grow" || size === "fixed") return null
+	return size.cells ?? size.minCells ?? null
+}
+
+/**
+ * Placements for one zone's stack — the MVP zone grid (§13.1), where widgets
+ * are rows in `order` and every widget spans the zone's full width.
+ *
+ * `columns` is the zone's live `auto-fill` column count (the renderer measures
+ * it); `widthPx` is the widget box's measured width, which in a full-span stack
+ * is the zone's own. A widget with a `colSpan` reports that span but still
+ * starts at column 1 — auto-flow places it, and this model gives each widget a
+ * row of its own, so column 1 is where it lands.
+ *
+ * A widget OCCUPIES exactly one row here (that is what the stack is), so the
+ * edges come out of its index — first touches the top, last the bottom — while
+ * `box.rows` reports the cell floor its height spec reserves, or null when the
+ * track grows. Conflating the two would make a 3-cell composer in a 2-widget
+ * stack claim the bottom edge from the middle of the zone.
+ */
+export function stackPlacements(
+	widgets: WidgetConfig[],
+	measured: { columns: number; widthPx: number }
+): PlacementInput[] {
+	const cols = Math.max(1, measured.columns)
+	const rows = Math.max(1, widgets.length)
+	return widgets.map((w, i) =>
+		placementOf({
+			zone: { cols, rows },
+			box: { x: 0, y: i, w: Math.min(w.colSpan ?? cols, cols), h: 1 },
+			rows: cellRowsOf(w.size.h),
+			widthPx: measured.widthPx,
+			pinned: w.pinned
+		})
+	)
 }
 
 /** Widgets in one zone, in placement order. */

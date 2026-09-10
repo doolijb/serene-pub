@@ -54,7 +54,8 @@ let seen: { req?: any; constructedWith?: any } = {}
 /** Renders currently inside `generateImage`, to prove they do not overlap. */
 let concurrent = 0
 let maxConcurrent = 0
-let mode: "ok" | "abort" | "empty" | "slow" = "ok"
+/** `batch` is a backend that returns more than one image for one request. */
+let mode: "ok" | "abort" | "empty" | "slow" | "batch" = "ok"
 
 class FakeAdapter {
 	connection: any
@@ -83,16 +84,15 @@ class FakeAdapter {
 				}
 			if (mode === "empty")
 				return { media: [], isAborted: false, applied: [], ignored: [] }
+			const one = {
+				kind: "image",
+				mime: "image/png",
+				// A 1x1 PNG, so the media store has real bytes to sniff.
+				base64: PNG_1x1,
+				seed: 4242
+			}
 			return {
-				media: [
-					{
-						kind: "image",
-						mime: "image/png",
-						// A 1x1 PNG, so the media store has real bytes to sniff.
-						base64: PNG_1x1,
-						seed: 4242
-					}
-				],
+				media: mode === "batch" ? [one, { ...one, seed: 4243 }] : [one],
 				isAborted: false,
 				applied: ["steps", "cfg"],
 				ignored: ["denoise"]
@@ -742,6 +742,67 @@ describe("dispatchImage — reached through the host", () => {
 			sink: { onProgress: (e: any) => events.push(e) }
 		})
 		expect(events).toEqual([])
+	})
+
+	it("writes the rows it made into the run's artifact collector", async () => {
+		/**
+		 * ⚠ **The only place these ids exist.** The node publishes `MediaRef`s
+		 * — uuid, mime, dimensions — because bytes and row ids both stop at
+		 * this dispatcher by design, so a run's `files` and `variants` were
+		 * recorded NOWHERE: `pipeline_runs.message_id` had no room for them and
+		 * the receipt has no id to read. `createMedia`'s loop pushes them now.
+		 */
+		const artifacts: any[] = []
+		await callHost({
+			runId: "run-9f2",
+			sessionId: 3,
+			userId: 7,
+			artifacts
+		})
+
+		expect(artifacts).toEqual([
+			{
+				kind: "file",
+				entityId: 100,
+				action: "created",
+				nodeKey: "render"
+			},
+			{
+				kind: "variant",
+				entityId: 900,
+				action: "created",
+				nodeKey: "render"
+			}
+		])
+	})
+
+	it("records every image of a batch, not just the first", async () => {
+		// The shape of the defect the relation exists to fix, on the image
+		// path: one request, two images, and a single-valued column could only
+		// ever have named one of them.
+		mode = "batch"
+		const artifacts: any[] = []
+		await callHost({
+			runId: "run-9f2",
+			sessionId: 3,
+			userId: 7,
+			artifacts
+		})
+
+		expect(artifacts.map((a) => [a.kind, a.entityId])).toEqual([
+			["file", 100],
+			["variant", 900],
+			["file", 101],
+			["variant", 901]
+		])
+	})
+
+	it("collects nothing when the host has no collector to write into", async () => {
+		// The deliberate other half, same rule as the progress event above: a
+		// host wired by hand has no run to attribute anything to, and this must
+		// not throw trying to push into an array that is not there.
+		const out: any = await callHost({ sessionId: 3, userId: 7 })
+		expect(out.media).toHaveLength(1)
 	})
 
 	it("hands the prompts-slot render the run, so a plugin engine stays cancellable", async () => {

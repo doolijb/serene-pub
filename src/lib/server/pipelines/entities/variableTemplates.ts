@@ -32,8 +32,6 @@ import * as schema from "$lib/server/db/schema"
 import { declarations } from "$lib/server/pipelines/config/panel"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 
-type Db = { select: any; insert: any; update: any; delete: any }
-
 /** The template named nothing here — deleted since the list was loaded. */
 export class VariableTemplateNotFoundError extends Error {}
 
@@ -256,9 +254,9 @@ export async function updateVariableTemplate(
 export async function variableSlotNames(db: Db): Promise<string[]> {
 	const specs = await db.select().from(schema.pipelineSpecs)
 	const names = new Set<string>()
-	for (const spec of specs as any[]) {
+	for (const spec of specs) {
 		if (!spec.activeVersionId) continue
-		for (const d of await declarations(db as any, spec.activeVersionId))
+		for (const d of await declarations(db, spec.activeVersionId))
 			if (d.control === "variable-template-ref") names.add(d.slot)
 	}
 	return [...names]

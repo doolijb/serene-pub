@@ -27,14 +27,6 @@ import {
 	type SpecDocument
 } from "@serene-pub/sdk"
 
-type Db = {
-	insert: any
-	select: any
-	update: any
-	delete: any
-	transaction: any
-}
-
 /** What `saveDocument` reports back — the ids core needs to reference the version. */
 export interface SavedSpec {
 	specId: number

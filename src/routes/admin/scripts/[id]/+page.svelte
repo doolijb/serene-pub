@@ -96,43 +96,53 @@
 		"pipelines:deleteScript"
 	] as const
 
+	// Named so `off` can name them too. A bare `socket.off("pipelines:scripts")`
+	// removes EVERY listener for that event — including any other open
+	// page's, which then stops updating for the rest of the session.
+	function handlePipelinesScripts(res: Sockets.Pipelines.Scripts.Response) {
+		view = res
+		loading = false
+	}
+
+	// One handler reused across all three WRITE_EVENTS (and one for their
+	// `:error` counterparts) — same as the per-iteration closures they
+	// replace, since neither body ever read the loop's `ev`.
+	function handleWriteEvent(res: Sockets.Pipelines.ScriptWrite.Response) {
+		if (res.scripts) view = res.scripts
+	}
+
+	function handleWriteEventError(res: { error?: string }) {
+		if (res.error) toaster.error({ title: res.error })
+	}
+
+	function handlePipelinesExportScripts(
+		res: Sockets.Pipelines.ScriptShare.ExportResponse
+	) {
+		if (res.blob && res.filename)
+			downloadBlob(res as { blob: unknown; filename: string })
+	}
+
 	onMount(() => {
 		if (!userCtx.user?.isAdmin) {
 			goto("/")
 			return
 		}
-		socket.on(
-			"pipelines:scripts",
-			(res: Sockets.Pipelines.Scripts.Response) => {
-				view = res
-				loading = false
-			}
-		)
+		socket.on("pipelines:scripts", handlePipelinesScripts)
 		for (const ev of WRITE_EVENTS) {
-			socket.on(ev, (res: Sockets.Pipelines.ScriptWrite.Response) => {
-				if (res.scripts) view = res.scripts
-			})
-			socket.on(`${ev}:error` as any, (res: { error?: string }) => {
-				if (res.error) toaster.error({ title: res.error })
-			})
+			socket.on(ev, handleWriteEvent)
+			socket.on(`${ev}:error` as any, handleWriteEventError)
 		}
-		socket.on(
-			"pipelines:exportScripts",
-			(res: Sockets.Pipelines.ScriptShare.ExportResponse) => {
-				if (res.blob && res.filename)
-					downloadBlob(res as { blob: unknown; filename: string })
-			}
-		)
+		socket.on("pipelines:exportScripts", handlePipelinesExportScripts)
 		socket.emit("pipelines:scripts", {})
 	})
 
 	onDestroy(() => {
-		socket.off("pipelines:scripts")
+		socket.off("pipelines:scripts", handlePipelinesScripts)
 		for (const ev of WRITE_EVENTS) {
-			socket.off(ev)
-			socket.off(`${ev}:error` as any)
+			socket.off(ev, handleWriteEvent)
+			socket.off(`${ev}:error` as any, handleWriteEventError)
 		}
-		socket.off("pipelines:exportScripts")
+		socket.off("pipelines:exportScripts", handlePipelinesExportScripts)
 	})
 
 	function save() {

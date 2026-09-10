@@ -88,18 +88,24 @@
 		} catch {}
 	})
 
+	// Named so `off` can name them too. A bare `socket.off("pipelines:list")`
+	// removes EVERY listener for that event — including any other open
+	// page's, which then stops updating for the rest of the session.
+	const onList = (res: Sockets.Pipelines.List.Response) => {
+		list = res.pipelinesList
+		loading = false
+	}
+	const onRuns = (res: Sockets.Pipelines.Runs.Response) => {
+		runs = res.runs
+	}
+
 	onMount(() => {
 		if (!userCtx.user?.isAdmin) {
 			goto("/")
 			return
 		}
-		socket.on("pipelines:list", (res: Sockets.Pipelines.List.Response) => {
-			list = res.pipelinesList
-			loading = false
-		})
-		socket.on("pipelines:runs", (res: Sockets.Pipelines.Runs.Response) => {
-			runs = res.runs
-		})
+		socket.on("pipelines:list", onList)
+		socket.on("pipelines:runs", onRuns)
 		socket.on("pipelines:detail", onDetail)
 		socket.on("pipelines:get", onGet)
 		socket.on("sessions:genres", onModes)
@@ -115,8 +121,8 @@
 	})
 
 	onDestroy(() => {
-		socket.off("pipelines:list")
-		socket.off("pipelines:runs")
+		socket.off("pipelines:list", onList)
+		socket.off("pipelines:runs", onRuns)
 		socket.off("pipelines:detail", onDetail)
 		socket.off("pipelines:get", onGet)
 		socket.off("sessions:genres", onModes)

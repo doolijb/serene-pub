@@ -27,7 +27,7 @@ beforeAll(async () => {
 
 describe("bootstrapping the pipeline tables", () => {
 	it("registers the types and publishes core's spec on a fresh install", async () => {
-		const report = await bootstrapPipelines(db as any)
+		const report = await bootstrapPipelines(db)
 		expect(report.conflict).toBeUndefined()
 		expect(report.types.inserted).toBeGreaterThan(0)
 		// Every pipeline core ships, published once, each with nothing to
@@ -46,7 +46,7 @@ describe("bootstrapping the pipeline tables", () => {
 		// bootstrap that re-published would either orphan a run's history or
 		// grow the table by one row per restart until somebody noticed.
 		const before = await db.select().from(schema.pipelineSpecVersions)
-		const report = await bootstrapPipelines(db as any)
+		const report = await bootstrapPipelines(db)
 		const after = await db.select().from(schema.pipelineSpecVersions)
 
 		expect(report.types.inserted).toBe(0)
@@ -57,7 +57,7 @@ describe("bootstrapping the pipeline tables", () => {
 	it("publishes a document that loads back and runs", async () => {
 		// Round-tripping is the real assertion: a spec that saved but cannot be
 		// loaded is a table full of rows nobody can execute.
-		const doc = await loadPublished(db as any, RESPOND_SPEC_ID)
+		const doc = await loadPublished(db, RESPOND_SPEC_ID)
 		expect(doc).toBeTruthy()
 		expect(doc!.nodes.map((n: any) => n.key)).toEqual(
 			respondSpec().nodes.map((n: any) => n.key)
@@ -65,7 +65,7 @@ describe("bootstrapping the pipeline tables", () => {
 	})
 
 	it("finds nothing for a spec nobody published", async () => {
-		expect(await loadPublished(db as any, "core:spec/nonexistent")).toBe(
+		expect(await loadPublished(db, "core:spec/nonexistent")).toBe(
 			null
 		)
 	})
@@ -81,7 +81,7 @@ describe("bootstrapping the pipeline tables", () => {
 			.update(schema.pipelineTypeRegistry)
 			.set({ contentHash: "tampered" })
 
-		const report = await bootstrapPipelines(db as any)
+		const report = await bootstrapPipelines(db)
 		expect(report.conflict).toMatch(/./)
 		expect(report.specs).toEqual([])
 	})

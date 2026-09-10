@@ -26,7 +26,6 @@ import * as schema from "$lib/server/db/schema"
 import { historyDateOf } from "$lib/server/utils/lorebookEntries"
 import { eq, sql } from "drizzle-orm"
 import type { CastEntry, ExtractedCastRef } from "./templates"
-import type { PgliteDatabase } from "drizzle-orm/pglite"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
 
 export type { CastEntry, ExtractedCastRef }
@@ -44,9 +43,7 @@ export type { CastEntry, ExtractedCastRef }
 //
 // A previous version of this note attributed the pattern to
 // `scripts/backfill-scene-character-ids.ts`. No such script exists in the repo.
-type DbLike = PgliteDatabase<typeof schema>
-
-async function defaultDb(): Promise<DbLike> {
+async function defaultDb(): Promise<Db> {
 	return (await import("$lib/server/db")).db
 }
 
@@ -302,7 +299,7 @@ export async function buildSceneCastList(
 	sceneId: number | null,
 	lorebookId: number,
 	sessionId: number | null,
-	dbInstance?: DbLike
+	dbInstance?: Db
 ): Promise<CastEntry[]> {
 	const db = dbInstance ?? (await defaultDb())
 	const entries: CastEntry[] = []
@@ -599,7 +596,7 @@ export async function resolveCharacterNamesToBindingIds(
 	refs: ExtractedCastRef[],
 	lorebookId: number,
 	castEntries: CastEntry[],
-	dbInstance?: DbLike
+	dbInstance?: Db
 ): Promise<number[]> {
 	const db = dbInstance ?? (await defaultDb())
 	const { ids, suggestedNames } = resolveCharacterRefs(refs, castEntries)
@@ -657,7 +654,7 @@ export async function resolveCharacterNamesToBindingIds(
 export async function resolveOrCreateBindingByName(
 	lorebookId: number,
 	name: string,
-	dbInstance?: DbLike
+	dbInstance?: Db
 ): Promise<{ id: number; created: boolean }> {
 	const db = dbInstance ?? (await defaultDb())
 	const trimmed = name.trim()

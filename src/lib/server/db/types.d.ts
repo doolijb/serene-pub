@@ -1,8 +1,68 @@
 import type * as schema from "$lib/server/db/schema"
 import type { db } from "$lib/server/db"
-import type { SelectedFieldsFlat } from "drizzle-orm/pg-core"
+import type {
+	PgDatabase,
+	PgQueryResultHKT,
+	SelectedFieldsFlat
+} from "drizzle-orm/pg-core"
+import type { CompletionTemplate } from "$lib/shared/constants/completionTemplates"
+import type { WireMode } from "@serene-pub/sdk"
 
 export global {
+	/**
+	 * **The database handle a server module takes as a parameter.**
+	 *
+	 * The one spelling, global for the same reason `DbTransaction` below is:
+	 * this is where handle-shaped types live, and a global costs no import —
+	 * which is what keeps the "a **parameter**, never an import" posture
+	 * visible. A module that names `Db` has no `$lib/server/db` in its import
+	 * list at all, so nothing that imports it ends up with a live PGlite handle
+	 * behind it, and any `PgDatabase` over this schema satisfies it (the parity
+	 * harness's, the test suite's, a transaction). `PgDatabase` is itself a
+	 * type-only import and `verbatimModuleSyntax` erases it outright, so even a
+	 * module that spelled this out longhand would bind no driver at runtime —
+	 * the global just spares every site the spelling.
+	 *
+	 * ⚠ It replaces `db: any` / `type Db = { select: any }`, which was not
+	 * merely loose but **load-bearing in the wrong direction**: `any` on
+	 * `select` makes every ROW read through it an `any` too, so a column that
+	 * has never existed (`config.localModel`, `connection.tokenLimit`,
+	 * `connection.contextSize`) type-checks cleanly and collapses its
+	 * expression to the fallback forever. The table objects were always
+	 * checked; the rows were not, and the rows are where the reads are.
+	 *
+	 * A module that needs the DRIVER rather than the schema (a dump, a raw
+	 * migration read) wants `MigrationDb` below instead.
+	 */
+	export type Db = PgDatabase<PgQueryResultHKT, typeof schema>
+
+	/**
+	 * A handle at MIGRATION time, when the schema is not a fact yet.
+	 *
+	 * `Db` above is wrong for the backup/ledger/data-upgrade path in both
+	 * directions: those run before (or across) the migrations that make the
+	 * schema true, they speak nothing but raw SQL, and the databases handed to
+	 * them are frequently `drizzle(client)` with no schema generic at all — not
+	 * assignable to `Db`, and rightly so.
+	 *
+	 * So it names the surface actually used and nothing else. Structural, so
+	 * every driver and every schema generic satisfies it; `Pick`ed off
+	 * `PgDatabase` rather than hand-written, so the signature stays drizzle's
+	 * own.
+	 *
+	 * ⚠ `transaction` is the exception and has to be: `PgTransaction` carries a
+	 * `protected schema` keyed on the schema generic, and protected members are
+	 * compared invariantly — so the `Pick`ed method would refuse the app's own
+	 * handle, which is the one caller that matters. Declared in terms of
+	 * `MigrationTx` below, which has no protected members to disagree about.
+	 */
+	export type MigrationDb = Pick<PgDatabase<PgQueryResultHKT>, "execute"> & {
+		transaction<T>(transaction: (tx: MigrationTx) => Promise<T>): Promise<T>
+	}
+
+	/** The transaction half of `MigrationDb` — what a data upgrade is handed. */
+	export type MigrationTx = Pick<PgDatabase<PgQueryResultHKT>, "execute">
+
 	// Transaction handle type inferred directly from the db instance's own
 	// `.transaction()` callback parameter, so it always matches whatever
 	// driver (pglite) backs `db`.
@@ -44,10 +104,67 @@ export global {
 	 */
 	export type ResolvedSampling = Record<string, any>
 
+	// Completion template types
+	export type SelectCompletionTemplate =
+		typeof schema.completionTemplates.$inferSelect
+	export type InsertCompletionTemplate =
+		typeof schema.completionTemplates.$inferInsert
+	export type UpdateCompletionTemplate =
+		Partial<SelectCompletionTemplate> & { id: number }
+
 	// Connection types
 	export type SelectConnection = typeof schema.connections.$inferSelect
 	export type InsertConnection = typeof schema.connections.$inferInsert
 	export type UpdateConnection = Partial<SelectConnection> & { id: number }
+	/**
+	 * A connection AS AN ADAPTER RECEIVES IT: the row, plus the
+	 * `completion_templates` row its `prompt_format` names, already
+	 * dereferenced. Produced by `withCompletionTemplate()`
+	 * (server/connections/completionTemplates.ts) wherever a connection is
+	 * loaded for a run.
+	 *
+	 * Global, like `ResolvedSampling` above and for the same reason: it is the
+	 * difference between "the row" and "what an adapter is handed", and the
+	 * seven adapters should be able to name it without importing anything.
+	 *
+	 * ## Why the template rides on the connection
+	 *
+	 * `prompt_format` is a KEY, and `completionTemplateOf` resolves a bare key
+	 * against the BUILT-INS — so an adapter holding only the row could never
+	 * see a template an admin authored, and stopped every generation on the
+	 * default's markers while the prompt was rendered in the admin's. The row
+	 * has to be dereferenced from the table, the table needs `db`, and an
+	 * adapter must not have one (nor may `promptTextFor` become async). So the
+	 * dereference happens where the connection is already being loaded and
+	 * travels with it.
+	 *
+	 * ⚠ OPTIONAL, and it has to stay optional: a hand-built connection (a unit
+	 * test, `connections:test` on unsaved form state) legitimately has no
+	 * resolved template, and `BaseConnectionAdapter.completionTemplate` falls
+	 * back to exactly what the renderer falls back to for that case.
+	 */
+	export type AdapterConnection = SelectConnection & {
+		completionTemplate?: CompletionTemplate | null
+		/**
+		 * Which METHOD this connection wants to be called by — `chat`
+		 * (role-tagged messages) or `completion` (one text prompt).
+		 *
+		 * Attached by `withWireMode()` (server/connections/resolve.ts) at the two
+		 * places a connection is loaded for a run, alongside the completion
+		 * template above and for the same reason: resolving it needs the row's
+		 * four capability layers, an adapter must not do that reading itself, and
+		 * the value has to be the SAME one the pipeline rendered against.
+		 *
+		 * ⚠ OPTIONAL, and it has to stay optional for the same reason
+		 * `completionTemplate` does: a hand-built connection (a unit test,
+		 * `connections:test` on unsaved form state) has none, and
+		 * `BaseConnectionAdapter.wireMode` falls back through the row's own
+		 * declaration. It is also the field a test SETS to pin a mode, which is
+		 * what replaced the `extraJson.useSession` / `prerenderPrompt` flags the
+		 * adapters used to read.
+		 */
+		wireMode?: WireMode | null
+	}
 
 	// Widget style types (PLAN 25)
 	export type SelectWidgetStyle = typeof schema.widgetStyles.$inferSelect

@@ -20,8 +20,6 @@ import { and, asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { SessionShape } from "@serene-pub/sdk"
 
-type Db = { select: any; insert: any; update: any; delete: any }
-
 /** The F29 floor: always present, the default and the backfill (24 §3). */
 export const STANDARD_GENRE_ID = "core:genre/chat"
 

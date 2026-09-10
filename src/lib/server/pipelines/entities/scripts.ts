@@ -28,13 +28,6 @@ import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { parseScriptTypeId } from "@serene-pub/sdk"
 
-type Db = {
-	select: any
-	insert: any
-	update: any
-	delete: any
-}
-
 /** The script named nothing here. */
 export class ScriptNotFoundError extends Error {}
 

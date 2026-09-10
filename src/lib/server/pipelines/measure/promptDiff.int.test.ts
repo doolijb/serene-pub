@@ -73,7 +73,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -185,7 +185,7 @@ afterAll(async () => {
 
 const compare = (variantName: string | null) =>
 	comparePrompts({
-		db: db as any,
+		db: db,
 		sessionId,
 		userId,
 		currentCharacterId: characterId,
@@ -278,7 +278,7 @@ describe("the tool sees a real difference", () => {
 	 */
 	it("reports a reordering as a reordering", async () => {
 		const reordered = await comparePrompts({
-			db: db as any,
+			db: db,
 			sessionId,
 			userId,
 			currentCharacterId: characterId,
@@ -370,7 +370,7 @@ describe("the tool changes nothing", () => {
 
 describe("the surface the runner script drives", () => {
 	it("finds every session with messages", async () => {
-		expect(await sessionsWithMessages(db as any)).toContain(sessionId)
+		expect(await sessionsWithMessages(db)).toContain(sessionId)
 	})
 
 	it("names a preset for every mechanism that ships off", () => {

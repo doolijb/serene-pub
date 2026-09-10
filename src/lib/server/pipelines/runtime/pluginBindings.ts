@@ -39,8 +39,6 @@ import type { Bindings } from "@serene-pub/sdk"
 import { ok, err } from "@serene-pub/sdk"
 import type { RuntimeManager } from "$lib/server/plugins/RuntimeManager"
 
-type Db = { select: any }
-
 /** Read `nodeTypes` off a stored manifest, tolerant of its json being anything. */
 export function nodeTypesOf(manifest: unknown): Record<string, string> {
 	const raw =
@@ -83,12 +81,7 @@ export async function pluginNodeBindings(
 ): Promise<Bindings> {
 	const bindings: Bindings = {}
 
-	const rows: Array<{
-		typeId: string
-		version: number
-		kind: string
-		ownerPluginId: number
-	}> = await db
+	const rows = await db
 		.select({
 			typeId: schema.pipelineTypeRegistry.typeId,
 			version: schema.pipelineTypeRegistry.version,
@@ -103,7 +96,13 @@ export async function pluginNodeBindings(
 				isNotNull(schema.pipelineTypeRegistry.ownerPluginId)
 			)
 		)
-	const nodeRows = rows.filter((r) => r.kind !== "script")
+	// `ownerPluginId` is nullable on the column and the `isNotNull` above is
+	// what makes it real here; the predicate carries that into the type rather
+	// than asserting it in the row annotation, where it was simply untrue.
+	const nodeRows = rows.filter(
+		(r): r is (typeof rows)[number] & { ownerPluginId: number } =>
+			r.kind !== "script" && r.ownerPluginId != null
+	)
 	if (!nodeRows.length) return bindings
 
 	const owners: Array<{

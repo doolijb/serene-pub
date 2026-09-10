@@ -1,13 +1,13 @@
 // Use html to explain the connection types and any helpful information/links
 
-const llamaCppCompletionDesc = `
-<p>Serene Pub supports Llama.cpp through <a class="text-primary-500 hover:underline" href="https://github.com/ggml-org/llama.cpp" target="_blank">llama-server's completion API.</a></p>
+const llamaCppDesc = `
+<p>Serene Pub supports Llama.cpp through <a class="text-primary-500 hover:underline" href="https://github.com/ggml-org/llama.cpp" target="_blank">llama-server</a> — its native completion API by default, and its chat API if you switch the wire mode on the connection.</p>
 <p>Llama.cpp is a high-performance C++ library for running LLaMA models.</p>
 <p>It supports various model formats and provides efficient inference capabilities.</p>
 <p>For more information, visit the <a class="text-primary-500 hover:underline" href="https://github.com/ggml-org/llama.cpp" target="_blank">Llama.cpp GitHub repository</a>.</p>
 `
 
-const llamaCppCompletionDiff = "Intermediate - Not for beginners"
+const llamaCppDiff = "Intermediate - Not for beginners"
 
 const lmStudioDesc = `
 <p>Serene Pub supports LM Studio through their <a class="text-primary-500 hover:underline" href="https://lmstudio.ai/docs/app/api/endpoints/rest" target="_blank">"LM Studio REST API (beta)"</a>.</p>
@@ -65,10 +65,39 @@ const anthropicDesc = `
 const anthropicDiff = "Beginner - Nothing to install"
 
 export class CONNECTION_TYPE {
-	static LLAMACPP_COMPLETION = "llamacpp_completion"
+	/**
+	 * llama.cpp's llama-server — the SERVICE, not one of its two wires.
+	 *
+	 * The id was `llamacpp_completion` and it was the only one in this class
+	 * that encoded a WIRE MODE. That is now a connection capability graded
+	 * through the same four layers as everything else (`wire_chat` /
+	 * `wire_completion`), so a type spelling it too was the same fact in two
+	 * places — and the place that could not be switched. Ruling 2026-09-08:
+	 * one connection type per service, wire mode as a property.
+	 *
+	 * Its own type rather than an `openai` preset pointed at the same server,
+	 * because llama-server's native `/completion` is not the OpenAI wire with a
+	 * different URL: `id_slot`/`cache_prompt` (prompt-cache slot reuse),
+	 * `n_probs`, `samplers` (explicit sampler ORDER), `t_max_predict_ms` and
+	 * `dry_sequence_breakers` have no OpenAI field to be carried in, and
+	 * `llamaCppSamplingKeyMap` names them. Its `testConnection` and
+	 * `listModels` are `/health` and `/show`, not `/v1/models`. A preset would
+	 * drop all of it silently.
+	 *
+	 * ⚠ Renaming the id needed a data migration — `drizzle/0105_llamacpp_service_type.sql`.
+	 */
+	static LLAMACPP = "llamacpp"
 	static LM_STUDIO = "lmstudio"
 	static OLLAMA = "ollama"
-	static OPENAI_CHAT = "openai"
+	/**
+	 * The OpenAI-compatible wire format, and the two dozen services behind it.
+	 *
+	 * Was `OPENAI_CHAT`. The `_CHAT` was a misnomer once wire mode became a
+	 * capability: this type declares BOTH `wire_chat` and `wire_completion`,
+	 * and a connection of it can be switched to either. The id string is
+	 * unchanged, so nothing was migrated.
+	 */
+	static OPENAI = "openai"
 	static KOBOLDCPP = "koboldcpp"
 	static KOBOLDCPP_MANAGED = "koboldcpp_managed"
 	/**
@@ -102,7 +131,7 @@ export class CONNECTION_TYPE {
 		 * Connection picker's Text/Image button-group can filter them.
 		 */
 		modality?: "text-gen" | "image-gen"
-		/** Used to group this type alongside OPENAI_CHAT_PRESETS entries in the
+		/** Used to group this type alongside OPENAI_COMPATIBLE_PRESETS entries in the
 		 * unified "New Connection" service picker — "local" for anything that
 		 * talks to a process running on the user's own machine/network,
 		 * "cloud" for a hosted third-party API. */
@@ -123,17 +152,17 @@ export class CONNECTION_TYPE {
 			category: "local"
 		},
 		{
-			value: CONNECTION_TYPE.OPENAI_CHAT,
+			value: CONNECTION_TYPE.OPENAI,
 			label: "OpenAI Chat",
 			description: openaiSessionDesc,
 			difficulty: openaiSessionDiff,
 			category: "cloud"
 		},
 		{
-			value: CONNECTION_TYPE.LLAMACPP_COMPLETION,
+			value: CONNECTION_TYPE.LLAMACPP,
 			label: "Llama.cpp",
-			description: llamaCppCompletionDesc,
-			difficulty: llamaCppCompletionDiff,
+			description: llamaCppDesc,
+			difficulty: llamaCppDiff,
 			category: "local"
 		},
 		{

@@ -410,7 +410,7 @@ export const createEntryHandler: Handler<
  * after any deletion.
  */
 async function allocatePosition(
-	tx: any,
+	tx: Db,
 	lorebookId: number,
 	typeId: EntryTypeId
 ): Promise<number> {

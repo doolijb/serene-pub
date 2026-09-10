@@ -7,7 +7,7 @@ import { ADAPTER_REGISTRY } from "../adapters/registry"
  *
  * Which types have an image module, and which pointedly do not, is documented at
  * the registry entries themselves rather than here: those absences are load-
- * bearing (KOBOLDCPP_MANAGED and OPENAI_CHAT each have one), and a comment about
+ * bearing (KOBOLDCPP_MANAGED and OPENAI each have one), and a comment about
  * an entry belongs beside the entry, where an edit to it cannot miss the reason.
  *
  * Reaching this error is now a bug upstream rather than a user mistake: the

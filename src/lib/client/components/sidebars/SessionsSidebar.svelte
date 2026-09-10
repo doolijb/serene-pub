@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getContext, onMount } from "svelte"
+	import { getContext, onDestroy, onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import EditSessionForm from "../sessionForms/EditSessionForm.svelte"
 	import SessionViewPanel from "../sessionForms/SessionViewPanel.svelte"
@@ -54,16 +54,21 @@
 		return [...active, ...filteredSessions.filter((s) => s.id !== sessionId)]
 	})
 
-	socket.on("sessions:list", (msg: Sockets.Sessions.List.Response) => {
+	// Named so `off` can name them too, and so onDestroy can remove them at
+	// all: these were registered in the script body and never removed, so
+	// every mount of this sidebar piled another listener on the socket.
+	function handleSessionsList(msg: Sockets.Sessions.List.Response) {
 		sessions = msg.sessionList || []
 		isLoading = false
-	})
+	}
 	// The generic **:error listener in Layout.svelte already toasts this —
 	// this just stops the spinner from spinning forever if the initial
 	// fetch fails, so it settles into the (accurate enough) empty state.
-	socket.on("sessions:list:error", () => {
+	function handleSessionsListError() {
 		isLoading = false
-	})
+	}
+	socket.on("sessions:list", handleSessionsList)
+	socket.on("sessions:list:error", handleSessionsListError)
 
 	async function handleOnClose() {
 		if (sessionFormHasChanges) {
@@ -176,17 +181,19 @@
 			sessionToDelete = null
 		}
 	}
-	socket.on("sessions:delete", (msg) => {
+	function handleSessionsDelete(msg: Sockets.Sessions.Delete.Response) {
 		isDeleting = false
 		sessions = sessions.filter((c) => c.id !== msg.id)
 		toaster.success({ title: "Session deleted" })
-	})
+	}
 	// Not shown to the user here - the generic onAny catch-all in Layout.svelte
 	// already toasts on "sessions:delete:error"; this listener just clears the
 	// in-flight guard so a failed delete doesn't leave the button stuck.
-	socket.on("sessions:delete:error", () => {
+	function handleSessionsDeleteError() {
 		isDeleting = false
-	})
+	}
+	socket.on("sessions:delete", handleSessionsDelete)
+	socket.on("sessions:delete:error", handleSessionsDeleteError)
 
 	function handleCloseModalDiscard() {
 		showUnsavedChangesModal = false
@@ -334,6 +341,13 @@
 	onMount(() => {
 		socket.emit("sessions:list", {})
 		onclose = handleOnClose
+	})
+
+	onDestroy(() => {
+		socket.off("sessions:list", handleSessionsList)
+		socket.off("sessions:list:error", handleSessionsListError)
+		socket.off("sessions:delete", handleSessionsDelete)
+		socket.off("sessions:delete:error", handleSessionsDeleteError)
 	})
 </script>
 

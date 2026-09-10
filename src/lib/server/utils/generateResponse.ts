@@ -23,97 +23,34 @@ import {
 	autoEnqueueSession,
 	ensureSessionMessageEmbedded
 } from "$lib/server/embedding/vectorizationQueue"
+import { buildThinkingMetadata } from "$lib/server/messages/thinkingMetadata"
+import { joinContinuation } from "$lib/server/messages/continuation"
+import { resolveThinking } from "$lib/shared/utils/thinkingDelimiters"
+import type { Receipt } from "@serene-pub/sdk"
 
 /**
- * Build updated metadata that keeps swipes.history and swipes.thinkingHistory
- * in perfect sync (equal length, same indices).
+ * The `params` slot as the run resolved it for the generate node.
  *
- * @param existingMeta  - current message metadata object
- * @param content       - the generated content string
- * @param thinking      - the thinking/reasoning trace, or undefined if none
- * @param writeToHistory - if true, also write content into swipes.history[currentIdx]
- *                        (used for final completion; mid-stream only updates thinking)
- * @returns updated metadata object, or null if no metadata changes are needed
+ * ⚠ Read off the RECEIPT, and only this path has to. A reply halts at the
+ * pre-call substrate (`preview: true`), so `core:provider/generate-text@1`'s
+ * binding — the reader of `params.stopSequences` on every other path — never
+ * runs. What does happen before the halt is `resolveInput`, whose output the
+ * executor records as the node's `input`; so the value an author set is on the
+ * receipt even though nothing consumed it there.
+ *
+ * Undefined is the ordinary answer today and not a failure: `resolveInput`
+ * resolves only the config keys a spec NAMES, and the three shipped reply specs
+ * do not name this node's `params` slot yet (see `paramsSlotWiring.test.ts`'s
+ * ledger). This reader is what makes naming it take effect.
  */
-function buildThinkingMetadata(
-	existingMeta: any,
-	content: string,
-	thinking: string | undefined,
-	writeToHistory: boolean
-): any | null {
-	const hasThinking = thinking !== undefined
-	const swipes = existingMeta?.swipes
-
-	if (swipes && Array.isArray(swipes.history)) {
-		const idx = swipes.currentIdx ?? 0
-
-		// Clone content history; update only for swipe slots (idx > 0) to preserve existing behaviour
-		const history: string[] = [...swipes.history]
-		if (writeToHistory && typeof idx === "number" && idx > 0) {
-			history[idx] = content
-		}
-
-		// Build thinkingHistory always parallel (same length) as history
-		const thinkingHistory: (string | null)[] = [
-			...(swipes.thinkingHistory || [])
-		]
-		while (thinkingHistory.length < history.length)
-			thinkingHistory.push(null)
-		if (hasThinking && typeof idx === "number") {
-			thinkingHistory[idx] = thinking!
-		}
-		// Trim excess (should never happen, but guard the invariant)
-		thinkingHistory.length = history.length
-
-		return {
-			...existingMeta,
-			...(hasThinking ? { thinking } : {}),
-			swipes: {
-				...swipes,
-				history,
-				thinkingHistory
-			}
-		}
-	}
-
-	// No swipes — only update metadata.thinking
-	if (hasThinking) {
-		return {
-			...(existingMeta || {}),
-			thinking
-		}
-	}
-
-	return null // no changes needed
-}
-
-/**
- * Extract all <think>...</think> blocks from content (DeepSeek R1 / Qwen3 style).
- * Returns cleaned content and the concatenated extracted thinking, or undefined if no tag found.
- * Also hides any unclosed <think> block still being streamed.
- */
-function extractThinkFromContent(content: string): {
-	content: string
-	thinking: string | undefined
-} {
-	// Collect all completed <think>...</think> blocks
-	const thinkRegex = /<think>([\s\S]*?)<\/think>/g
-	const thinkParts: string[] = []
-	let cleaned = content.replace(thinkRegex, (_match, inner: string) => {
-		const trimmed = inner.trim()
-		if (trimmed) thinkParts.push(trimmed)
-		return ""
-	})
-
-	// Hide any in-progress (unclosed) <think> block
-	const openIdx = cleaned.indexOf("<think>")
-	if (openIdx !== -1) {
-		cleaned = cleaned.slice(0, openIdx)
-	}
-
-	cleaned = cleaned.trimStart()
-	const thinking = thinkParts.length > 0 ? thinkParts.join("\n\n") : undefined
-	return { content: cleaned, thinking }
+function generateNodeParams(receipt: Receipt): Record<string, unknown> | null {
+	const node = receipt.nodes?.find((n) =>
+		n.typeId?.startsWith("core:provider/generate-text")
+	)
+	const params = (node?.input as { params?: unknown } | undefined)?.params
+	return params && typeof params === "object"
+		? (params as Record<string, unknown>)
+		: null
 }
 
 type GenerateExecuteResult =
@@ -142,7 +79,7 @@ export async function generateResponse({
 		const { sessionGenreAvailable } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		const modeCheck = await sessionGenreAvailable(db as any, sessionId)
+		const modeCheck = await sessionGenreAvailable(db, sessionId)
 		if (!modeCheck.available) {
 			await persistGenerationErrorRow(
 				socket.io,
@@ -262,14 +199,19 @@ export async function generateResponse({
 		return false
 	}
 
-	// If continuing, signal the PromptBuilder to use preservedContent as the
-	// prefill (-2 placeholder) rather than inserting a duplicate message.
-	// Adding a separate synthetic message causes two consecutive assistant
-	// entries in session-completion APIs and a wrongly-closed block for text-
-	// completion formats.
-	if (isContinuing) {
-		;(session as any)._continuationPrefill = preservedContent
-	}
+	/**
+	 * ⚠ `(session as any)._continuationPrefill = preservedContent` stood here,
+	 * and **nothing read it** — not the legacy builder, not the pipeline, not
+	 * anything. So the reasoning it carried (use the partial as the seed's
+	 * prefill rather than as a duplicate message; a second assistant entry means
+	 * two consecutive assistant turns on a chat endpoint and a wrongly-closed
+	 * block on a completion one) was correct and had no implementation behind
+	 * it: a continue sent an EMPTY seed line, got a fresh reply, and the join
+	 * below glued the partial on afterwards.
+	 *
+	 * It is a real port now — `runTurn`'s `continuationPrefill`, wired below —
+	 * so the reasoning lives where the value travels.
+	 */
 
 	// Context/prompt config from user settings. Connection and sampling come from
 	// resolveTaskConfig alone (session override → prompt config override → the
@@ -284,6 +226,28 @@ export async function generateResponse({
 	// wins over the user's active/system-default pick — see
 	// resolveNarratorPromptConfig.ts.
 	const isNarratorResponseMode = !!generatingMessage.isNarratorResponse
+	/**
+	 * The side character speaking this turn, if the trigger named one (ruling
+	 * 2026-09-07). Read off the row rather than recomputed: the trigger
+	 * resolved it — including whether the lorebook knows them — before this
+	 * message existed, and a second resolution here would be free to disagree
+	 * with the name already snapshotted on the row.
+	 *
+	 * ⚠ It changes which pipeline runs and nothing about the rotation. The row
+	 * is still `isNarratorResponse` with a null `characterId`, which is what
+	 * keeps it out of `getNextCharacterTurn`.
+	 */
+	const sideCharacter =
+		(isNarratorResponseMode &&
+			((generatingMessage.metadata as any)?.speaker as
+				| {
+						name: string
+						characterId: number | null
+						known: boolean
+						character?: Record<string, unknown> | null
+				  }
+				| undefined)) ||
+		null
 	const narratorPromptConfig = isNarratorResponseMode
 		? await resolveNarratorPromptConfig(session, userId)
 		: null
@@ -417,6 +381,16 @@ export async function generateResponse({
 	void contextDebuggingEnabled
 
 	/**
+	 * The run this turn compiled under, and the stop list it composed — kept out
+	 * here so the `hit` can be added once the generation has actually happened.
+	 * Null only if the pipeline block below somehow did not reach the compose.
+	 */
+	let stopsRecord: {
+		runId: string
+		stops: import("$lib/server/connections/stops").ComposedStops
+	} | null = null
+
+	/**
 	 * The pipeline compiles every reply. There is no toggle and no fallback
 	 * (ruling 2026-08-19): a failure here fails the turn the same way any other
 	 * generation error does, with the receipt saying where it stopped. Falling
@@ -435,7 +409,7 @@ export async function generateResponse({
 		const { runTurn } = await import(
 			"$lib/server/pipelines/runtime/runTurn"
 		)
-		const { NARRATE_SPEC_ID } = await import(
+		const { NARRATE_SPEC_ID, NARRATE_CHARACTER_SPEC_ID } = await import(
 			"$lib/server/pipelines/specs/narrate"
 		)
 		const { RESPOND_SPEC_ID } = await import(
@@ -451,7 +425,32 @@ export async function generateResponse({
 		const { resolveFunctionSpec, STANDARD_GENRE_ID } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		const functionKey = isNarratorResponseMode ? "narrate" : "respond"
+		// Three functions now (ruling 2026-09-07): the narrator split into
+		// world narration and side-character narration, and which one this
+		// turn is comes from the row the trigger wrote — a named speaker means
+		// the second. Still routed through `resolveFunctionSpec`, so a genre
+		// that binds its own spec to either function still wins.
+		//
+		// ⚠ **Four now**, and the fourth is a message verb rather than a
+		// button. Continue is its own trigger identity (ruling 2026-09-08,
+		// D-2): it is not a resume point in the `respond` turn, it is a turn of
+		// its own that happens to start from text. Keying it separately is what
+		// lets a genre bind `continue` to a spec of its own — the floor stays
+		// `respond`, because respond is the spec carrying the
+		// `continuationPrefill` port, so a genre that says nothing gets exactly
+		// today's behaviour.
+		const functionKey = isNarratorResponseMode
+			? sideCharacter
+				? "narrate-character"
+				: "narrate"
+			: isContinuing
+				? "continue"
+				: "respond"
+		const floorSpecId = isNarratorResponseMode
+			? sideCharacter
+				? NARRATE_CHARACTER_SPEC_ID
+				: NARRATE_SPEC_ID
+			: RESPOND_SPEC_ID
 		const specId =
 			(await resolveFunctionSpec(
 				db,
@@ -461,14 +460,70 @@ export async function generateResponse({
 				// session's choice among the eligible, else the instance's,
 				// before the companion default.
 				{ sessionId }
-			)) ?? (isNarratorResponseMode ? NARRATE_SPEC_ID : RESPOND_SPEC_ID)
+			)) ?? floorSpecId
 		const receipt = await runTurn({
 			db,
 			sessionId,
 			userId,
-			currentCharacterId: adapter.currentCharacterId,
-			text: preservedContent || "",
+			/**
+			 * ⚠ The side character's id reaches the RUN but never the row.
+			 *
+			 * It is what makes character lore bound to them visible: the
+			 * host's `lorebook_entries` read gates character lore on the run's
+			 * scope, so naming the speaker here is the whole of "a route for
+			 * perspective into the chat session". The *name and the card* take
+			 * a different road — the `speaker` port below — because a free-form
+			 * name has no id to travel on at all.
+			 *
+			 * `adapter.currentCharacterId` stays null in narrator mode, so the
+			 * legacy stop-string exclusion and the stored message are
+			 * unchanged; only the pipeline's scope learns who is speaking.
+			 */
+			currentCharacterId:
+				sideCharacter?.characterId ?? adapter.currentCharacterId,
+			speaker: sideCharacter,
+			/**
+			 * ⚠ Was `preservedContent || ""`, which on a **continue** made the
+			 * partial reply the turn's triggering text — the one thing the
+			 * ruling of 2026-09-08 (D-2) says it must never be.
+			 *
+			 * It is now what an ordinary turn passes, which is the empty string:
+			 * every other entry to this function clears the row's content before
+			 * calling (send, regenerate, swipe), so `preservedContent` was
+			 * non-empty exactly when `isContinuing` was true and this expression
+			 * only ever meant "the partial, on a continue". A session turn has no
+			 * separate triggering text on this path at all — the user's message
+			 * is a row, read from history like every other row — so the honest
+			 * value is the one a fresh reply already passes.
+			 */
+			text: "",
+			// The partial, on the port that carries it to the seed line the
+			// model continues from. Absent on every other turn.
+			continuationPrefill: isContinuing ? preservedContent : undefined,
 			specId,
+			/**
+			 * The row this turn is writing into — created by the trigger,
+			 * filled in by the adapter below.
+			 *
+			 * ⚠ Without it the run recorded **no output at all for every reply
+			 * this product has ever generated**: the run halts at the pre-call
+			 * substrate (see `preview` below), so no Consumer commits and the
+			 * host writes nothing down. It also decides `is_preview` — a run
+			 * that produced something is not a preview, whatever the executor
+			 * was asked to do — which is what `pipelines:sessionEntryUsage` and
+			 * `lastRunFor` both filter on and both saw nothing through.
+			 *
+			 * `created` even though the row already exists as a placeholder:
+			 * the artifact says which message THIS run produced, and an empty
+			 * generating row is not a message anyone has read.
+			 */
+			artifacts: [
+				{
+					kind: "message" as const,
+					entityId: generatingMessage.id,
+					action: "created" as const
+				}
+			],
 			// Stops at the pre-call substrate with the real payload: the
 			// adapter below is what actually sends it.
 			preview: true
@@ -503,6 +558,45 @@ export async function generateResponse({
 				currentCharacterId: adapter.currentCharacterId
 			})
 		)
+
+		/**
+		 * The stop sequences, composed ONCE and handed to the adapter (ruling
+		 * 2026-09-10).
+		 *
+		 * ⚠ **This path needs its own call, and that is not a second
+		 * composition point.** `dispatchGeneration` composes for every run whose
+		 * Provider node actually fires; a REPLY halts at the pre-call substrate
+		 * (`preview: true` above) and the adapter below is what sends. So the
+		 * two adapter-construction sites both call `composeStops` — one
+		 * function, one wire rule — rather than the adapters composing for
+		 * themselves, which is what five of them used to do and disagree about.
+		 * Without this call the primary path would send no stop sequences at
+		 * all.
+		 *
+		 * The author's own list comes off the run that just halted: the
+		 * executor resolves a node's input BEFORE the preview halt and records
+		 * it, so `params.stopSequences` is on the receipt even though the
+		 * binding never ran.
+		 */
+		const { composeStopsFor } = await import(
+			"$lib/server/connections/stops"
+		)
+		const stops = composeStopsFor(connection, adapterSession, {
+			currentCharacterId: adapter.currentCharacterId,
+			explicit: generateNodeParams(receipt)?.stopSequences
+		})
+		adapter.withStops(stops)
+
+		// The receipt was written by `runTurn` before this function composed
+		// anything, so the stops are patched onto the generate node afterwards
+		// — see `recordGenerateStops` for why that is honest rather than a
+		// rewrite of history. Never allowed to fail the turn, like every other
+		// receipt write.
+		const { recordGenerateStops } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
+		stopsRecord = { runId: receipt.runId, stops }
+		await recordGenerateStops(db, receipt.runId, stops)
 	}
 
 	// Inject narrative graph context into system instructions (if lorebook + node
@@ -610,6 +704,27 @@ export async function generateResponse({
 	try {
 		const result = await done
 
+		/**
+		 * Which sequence actually ended the reply, once there is one to name.
+		 *
+		 * ⚠ A SECOND write, and only when there is something new to say. The
+		 * list itself was recorded before the request went out, because a turn
+		 * that fails mid-generation is exactly the turn whose stop list somebody
+		 * wants to read; the hit can only be known afterwards, and only from the
+		 * one service that reports the word rather than a reason code
+		 * (llama.cpp's `stopping_word` — see `BaseConnectionAdapter.stopHit`).
+		 * So the common case stays one write.
+		 */
+		if (adapter.stopHit && stopsRecord) {
+			const { recordGenerateStops } = await import(
+				"$lib/server/pipelines/runtime/receipts"
+			)
+			await recordGenerateStops(db, stopsRecord.runId, {
+				...stopsRecord.stops,
+				hit: adapter.stopHit
+			})
+		}
+
 		if (result.kind === "silentFail") {
 			return false
 		}
@@ -707,7 +822,13 @@ async function runGenerateAndPersist({
 		thinkingContent: adapterThinking
 	} = await adapter.generateText() // TODO: save compiledPrompt to sessionMessages
 	let content = ""
-	let thinking = "" // accumulated thinking from streaming thinkingCb
+	/**
+	 * Reasoning the ADAPTER separated for us, via `thinkingCb`. Named for its
+	 * source on purpose: the inline parser must never write here, or the two
+	 * questions "did we get native reasoning" and "is the buffer clean" collapse
+	 * back into one variable and the strip starts skipping frames again.
+	 */
+	let nativeThinking = ""
 
 	if (typeof completionResult === "function") {
 		let ok = true
@@ -753,72 +874,50 @@ async function runGenerateAndPersist({
 				// to the existing partial content.
 				let stagedForDisplay = stagedContent.trim()
 
-				// Strip <think> tags from streamed content when no native thinking is active.
-				// Completed blocks are moved to the thinking accumulator; unclosed blocks
-				// (still being streamed) are hidden from the displayed content.
-				if (!thinking.trim()) {
-					const extracted = extractThinkFromContent(stagedForDisplay)
-					if (extracted.thinking) {
-						thinking = extracted.thinking
-						stagedForDisplay = extracted.content
-					} else if (extracted.content !== stagedForDisplay) {
-						stagedForDisplay = extracted.content
-					}
-				}
+				// Runs on EVERY frame, whatever `nativeThinking` holds. The
+				// guard that used to stand here asked "did we get native
+				// reasoning yet" and used the answer to decide whether to clean
+				// the buffer — two different questions, and the inline path
+				// wrote its result into the very variable being tested. So the
+				// first frame carrying a closed block disabled the strip for
+				// every frame after it, and the raw markup rode the last frame
+				// into the `content` column. `resolveThinking` separates them:
+				// the buffer is always cleaned, native reasoning only wins the
+				// trace.
+				const resolved = resolveThinking(
+					stagedForDisplay,
+					nativeThinking
+				)
+				stagedForDisplay = resolved.content
 
+				// One seam, and only one — `joinContinuation` states what each
+				// wire mode actually does with the prefill and why the model
+				// echoing it is a normal outcome rather than a fault.
 				const finalContent = isContinuing
-					? preservedContent + " " + stagedForDisplay
+					? joinContinuation(preservedContent, stagedForDisplay)
 					: stagedForDisplay
 
 				// --- SWIPE HISTORY + THINKING LOGIC (mid-stream) ---
-				const currentThinking = thinking.trim() || undefined
+				// Through the same builder the final write uses, with the same
+				// content the `content` column is about to get. Mid-stream used
+				// to hand the raw buffer to `history[idx]` while the column got
+				// the stripped text; on abort the mid-stream write is the last
+				// one to land (the final write is fenced out by the
+				// isGenerating/queueItemId predicate), so swiping away and back
+				// reintroduced markup the column had already lost.
+				const currentThinking = resolved.thinking
 				let updateData: any = {
 					content: finalContent,
 					isGenerating: true
 				}
-				const swipes = generatingMessage.metadata?.swipes
-				if (swipes && Array.isArray(swipes.history)) {
-					const idx = swipes.currentIdx ?? 0
-					const history: string[] = [...swipes.history]
-					// Only update content in history for actual swipe slots (idx > 0)
-					if (typeof idx === "number" && idx > 0) {
-						history[idx] = content
-					}
-					// Keep thinkingHistory parallel to history
-					const thinkingHistory: (string | null)[] = [
-						...(swipes.thinkingHistory || [])
-					]
-					while (thinkingHistory.length < history.length)
-						thinkingHistory.push(null)
-					if (
-						currentThinking !== undefined &&
-						typeof idx === "number"
-					) {
-						thinkingHistory[idx] = currentThinking
-					}
-					updateData = {
-						...updateData,
-						metadata: {
-							...generatingMessage.metadata,
-							...(currentThinking !== undefined
-								? { thinking: currentThinking }
-								: {}),
-							swipes: {
-								...swipes,
-								history,
-								thinkingHistory
-							}
-						}
-					}
-				} else if (currentThinking !== undefined) {
-					// No swipes — store thinking directly in metadata
-					updateData = {
-						...updateData,
-						metadata: {
-							...(generatingMessage.metadata || {}),
-							thinking: currentThinking
-						}
-					}
+				const midStreamMeta = buildThinkingMetadata(
+					generatingMessage.metadata,
+					finalContent,
+					currentThinking,
+					true
+				)
+				if (midStreamMeta !== null) {
+					updateData = { ...updateData, metadata: midStreamMeta }
 				}
 
 				const [updatedSessionMsg] = await updateLegacyWhere(
@@ -863,29 +962,31 @@ async function runGenerateAndPersist({
 				}
 			},
 			(thinkingChunk: string) => {
-				thinking += thinkingChunk
+				nativeThinking += thinkingChunk
 			}
 		)
 
 		// Final update: mark as not generating, clear queueItemId
 		content = content.replace(startString, "").trim()
 
-		// When continuing, append to existing content
-		if (isContinuing) {
-			content = preservedContent + " " + content
-		}
+		// Stripped BEFORE the continue-prefix is applied, exactly as the
+		// mid-stream frames do it. The order matters for the prefilled-close
+		// shape: joined first, a bare `</think>` in the model's new text would
+		// read the user's existing message as the preamble and move it into the
+		// thinking pane. The model's own output is the only thing the parser
+		// should ever see.
+		const finalResolved = resolveThinking(content, nativeThinking)
+		content = finalResolved.content
 
-		// If no native thinking was captured via thinkingCb, check for <think> tags in content
-		if (!thinking.trim()) {
-			const extracted = extractThinkFromContent(content)
-			if (extracted.thinking) {
-				thinking = extracted.thinking
-				content = extracted.content
-			}
+		// When continuing, append to existing content — through the same seam
+		// the mid-stream frames above use, so the last frame and the final write
+		// cannot disagree about the join.
+		if (isContinuing) {
+			content = joinContinuation(preservedContent, content)
 		}
 
 		// Build final metadata with thinking + swipe history in sync
-		const finalThinking = thinking.trim() || undefined
+		const finalThinking = finalResolved.thinking
 		let finalMetadata: any = buildThinkingMetadata(
 			generatingMessage.metadata,
 			content,
@@ -973,24 +1074,19 @@ async function runGenerateAndPersist({
 	} else {
 		content = completionResult.replace(startString, "").trim()
 
-		// When continuing, append to existing content
-		const finalContent = isContinuing
-			? preservedContent + " " + content
-			: content
+		// Stripped unconditionally and before the continue-prefix, for the same
+		// two reasons as the streaming branch above: `adapterThinking` answers
+		// where the trace came from, never whether the text needs cleaning, and
+		// the parser must only ever see the model's own output.
+		const nonStreamResolved = resolveThinking(content, adapterThinking)
 
-		// If no native thinking was returned by the adapter, check for <think> tags in content
-		let nonStreamContent = finalContent
-		let nonStreamAdapterThinking = adapterThinking
-		if (!nonStreamAdapterThinking?.trim()) {
-			const extracted = extractThinkFromContent(nonStreamContent)
-			if (extracted.thinking) {
-				nonStreamAdapterThinking = extracted.thinking
-				nonStreamContent = extracted.content
-			}
-		}
+		// When continuing, append to existing content — the same seam again.
+		const nonStreamContent = isContinuing
+			? joinContinuation(preservedContent, nonStreamResolved.content)
+			: nonStreamResolved.content
 
 		// --- SWIPE HISTORY + THINKING LOGIC (non-streamed) ---
-		const nonStreamThinking = nonStreamAdapterThinking?.trim() || undefined
+		const nonStreamThinking = nonStreamResolved.thinking
 		const nonStreamMeta = buildThinkingMetadata(
 			generatingMessage.metadata,
 			nonStreamContent,

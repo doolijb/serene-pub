@@ -15,7 +15,7 @@
  *     loading it is deferred to render time on purpose.
  *   - **"Which models can I pick?"** A1111 lists the checkpoints the server
  *     already holds. The Manager holds none until asked; the list that matters
- *     is the image models on disk, which is `koboldcpp_models`.
+ *     is the image models on disk, which is `local_models`.
  *
  * Both also have to resolve WHERE the process is from the Manager's settings
  * rather than from `connection.baseUrl` — a managed row's own URL is not
@@ -202,7 +202,7 @@ async function testConnection(connection: SelectConnection): Promise<{
  * The image models the Manager knows about — what fills the Checkpoint dropdown.
  *
  * Not the server's checkpoint list (it has none) and not a directory scan: the
- * `koboldcpp_models` table is what the Manager's own listing maintains, kind and
+ * `local_models` table is what the Manager's own listing maintains, kind and
  * all, and reading it here means the two screens cannot disagree about what
  * exists.
  *
@@ -217,7 +217,7 @@ async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: string[]; error?: string }> {
 	try {
-		const rows = await db.query.koboldCppModels.findMany()
+		const rows = await db.query.localModels.findMany()
 		const models = rows
 			.filter((m) => m.kind === "image" && m.status === "complete")
 			.map((m) => m.filename)

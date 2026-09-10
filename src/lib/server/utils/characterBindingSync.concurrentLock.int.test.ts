@@ -181,7 +181,7 @@ describe("characterBindingSync — advisory lock (Round-12 audit fix, PGlite int
 			.returning()
 
 		await testDb.transaction(async (tx) => {
-			await syncLorebookBindingsForCharacter(character.id, tx as any)
+			await syncLorebookBindingsForCharacter(character.id, tx)
 		})
 	})
 })

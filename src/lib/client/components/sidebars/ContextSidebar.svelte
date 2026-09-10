@@ -287,54 +287,65 @@
 		socket.emit("contextConfigs:setUserActive", { id: selectedConfigId })
 	}
 
+	// Named so `off` can name them too. A bare `socket.off("contextConfigs:list")`
+	// removes EVERY listener for that event — including any other open
+	// context config UI, not just this sidebar's.
+	function handleContextConfigsList(
+		msg: Sockets.ContextConfigs.List.Response
+	) {
+		configsList = msg.contextConfigsList
+		if (!selectedConfigId && configsList.length > 0) {
+			selectedConfigId =
+				userSettingsCtx.settings?.activeContextConfigId ??
+				configsList[0].id
+		}
+	}
+
+	function handleContextConfigsGet(msg: Sockets.ContextConfigs.Get.Response) {
+		contextConfig = { ...msg.contextConfig }
+		originalData = { ...msg.contextConfig }
+		previewMessages = undefined
+		previewError = undefined
+	}
+
+	function handleContextConfigsCreate(
+		msg: Sockets.ContextConfigs.Create.Response
+	) {
+		selectedConfigId = msg.contextConfig.id
+	}
+
+	function handleContextConfigsUpdate(
+		msg: Sockets.ContextConfigs.Update.Response
+	) {
+		contextConfig = { ...msg.contextConfig }
+		originalData = { ...msg.contextConfig }
+		toaster.success({ title: "Context config saved successfully." })
+	}
+
+	function handleContextConfigsSetUserActive() {
+		toaster.success({ title: "Default context config updated" })
+	}
+
+	function handleContextConfigsPreview(
+		msg: Sockets.ContextConfigs.Preview.Response
+	) {
+		previewLoading = false
+		previewMessages = msg.messages
+		previewError = msg.error
+	}
+
 	onMount(() => {
-		socket.on(
-			"contextConfigs:list",
-			(msg: Sockets.ContextConfigs.List.Response) => {
-				configsList = msg.contextConfigsList
-				if (!selectedConfigId && configsList.length > 0) {
-					selectedConfigId =
-						userSettingsCtx.settings?.activeContextConfigId ??
-						configsList[0].id
-				}
-			}
-		)
+		socket.on("contextConfigs:list", handleContextConfigsList)
 
-		socket.on(
-			"contextConfigs:get",
-			(msg: Sockets.ContextConfigs.Get.Response) => {
-				contextConfig = { ...msg.contextConfig }
-				originalData = { ...msg.contextConfig }
-				previewMessages = undefined
-				previewError = undefined
-			}
-		)
+		socket.on("contextConfigs:get", handleContextConfigsGet)
 
+		socket.on("contextConfigs:create", handleContextConfigsCreate)
+		socket.on("contextConfigs:update", handleContextConfigsUpdate)
 		socket.on(
-			"contextConfigs:create",
-			(msg: Sockets.ContextConfigs.Create.Response) => {
-				selectedConfigId = msg.contextConfig.id
-			}
+			"contextConfigs:setUserActive",
+			handleContextConfigsSetUserActive
 		)
-		socket.on(
-			"contextConfigs:update",
-			(msg: Sockets.ContextConfigs.Update.Response) => {
-				contextConfig = { ...msg.contextConfig }
-				originalData = { ...msg.contextConfig }
-				toaster.success({ title: "Context config saved successfully." })
-			}
-		)
-		socket.on("contextConfigs:setUserActive", () => {
-			toaster.success({ title: "Default context config updated" })
-		})
-		socket.on(
-			"contextConfigs:preview",
-			(msg: Sockets.ContextConfigs.Preview.Response) => {
-				previewLoading = false
-				previewMessages = msg.messages
-				previewError = msg.error
-			}
-		)
+		socket.on("contextConfigs:preview", handleContextConfigsPreview)
 		socket.emit("contextConfigs:list", {})
 		if (selectedConfigId) {
 			socket.emit("contextConfigs:get", {
@@ -345,12 +356,15 @@
 	})
 
 	onDestroy(() => {
-		socket.off("contextConfigs:list")
-		socket.off("contextConfigs:get")
-		socket.off("contextConfigs:create")
-		socket.off("contextConfigs:update")
-		socket.off("contextConfigs:setUserActive")
-		socket.off("contextConfigs:preview")
+		socket.off("contextConfigs:list", handleContextConfigsList)
+		socket.off("contextConfigs:get", handleContextConfigsGet)
+		socket.off("contextConfigs:create", handleContextConfigsCreate)
+		socket.off("contextConfigs:update", handleContextConfigsUpdate)
+		socket.off(
+			"contextConfigs:setUserActive",
+			handleContextConfigsSetUserActive
+		)
+		socket.off("contextConfigs:preview", handleContextConfigsPreview)
 		onclose = undefined
 	})
 
@@ -489,8 +503,8 @@
 					class="preset-tonal-warning flex items-center gap-2 rounded-xl p-2 text-sm"
 				>
 					<Icons.Info size={16} class="shrink-0" />
-					This is a built-in config — edit freely, then use "+ Clone" to save
-					your changes as a copy.
+					This is a built-in config — edit freely, then use "+ Clone" to
+					save your changes as a copy.
 				</div>
 			{/if}
 			<Tabs

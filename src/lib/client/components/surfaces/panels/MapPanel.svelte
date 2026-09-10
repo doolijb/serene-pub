@@ -7,6 +7,7 @@
 	 * state (because the grid never reparents it). Delete once real panels land.
 	 */
 	import * as Icons from "@lucide/svelte"
+	import { useWidgetContext } from "$lib/shared/widgets/context"
 
 	interface Props {
 		sessionId: number | null
@@ -14,6 +15,28 @@
 		channels: string[]
 	}
 	let { sessionId }: Props = $props()
+
+	// PLAN 25 ctx probe, the same one NotesPanel wears — a second sample panel
+	// so the REAL placement can be read in a second zone (a widget's `layout.v1`
+	// is about where it sits, so one zone proves half the claim). Guarded: the
+	// panel renders fine standalone, ctx undefined.
+	const widget = useWidgetContext()
+	let ctx = $derived(widget?.current)
+
+	// …and of the `on` verb, same as NotesPanel's. Collapse or move this panel
+	// and the count ticks: `layout:changed` is the native lane's analog of the
+	// `{ t: "layout" }` a frame is pushed.
+	let lastEvent = $state("—")
+	let eventCount = $state(0)
+	$effect(() => {
+		const c = widget?.current
+		if (!c) return
+		return c.on("*", (e) => {
+			eventCount += 1
+			const ch = (e as { channel?: string }).channel
+			lastEvent = ch ? `${e.kind} ${ch}` : e.kind
+		})
+	})
 
 	const COLS = 8
 	const ROWS = 6
@@ -41,6 +64,26 @@
 </script>
 
 <div class="flex h-full flex-col gap-2 p-2">
+	{#if ctx}
+		{@const l = ctx.layout.v1}
+		<div
+			class="preset-tonal-primary rounded px-2 py-1 text-[10px]"
+			data-testid="widget-ctx-probe"
+			title="Unified widget context (PLAN 25)"
+		>
+			ctx · zone {l.zone.columns}×{l.zone.rows} @ c{l.zone.column}r{l.zone
+				.row} · box {l.box.cols}×{l.box.rows ?? "auto"} · edges {(
+				[
+					["t", l.box.edges.top],
+					["r", l.box.edges.right],
+					["b", l.box.edges.bottom],
+					["l", l.box.edges.left]
+				] as const
+			)
+				.map(([k, on]) => (on ? k.toUpperCase() : k))
+				.join("")} · {l.tier} · ev {eventCount}: {lastEvent}
+		</div>
+	{/if}
 	<p class="text-surface-500 text-[11px]">
 		Click a cell to move the token. Position sticks per session.
 	</p>

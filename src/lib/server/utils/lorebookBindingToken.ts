@@ -12,14 +12,10 @@
 // transaction wrapping costs nothing and keeps the two writes atomic).
 import * as schema from "$lib/server/db/schema"
 import { eq, sql } from "drizzle-orm"
-import type { PgliteDatabase, PgliteTransaction } from "drizzle-orm/pglite"
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Executor = PgliteDatabase<typeof schema> | PgliteTransaction<any, any>
 
 export async function deriveNextBindingToken(
 	lorebookId: number,
-	tx: Executor
+	tx: Db
 ): Promise<string> {
 	const [row] = await tx
 		.update(schema.lorebooks)

@@ -1,4 +1,10 @@
 import { relations, sql } from "drizzle-orm"
+// ⚠ RELATIVE, not `$lib/...`, and it must stay that way. `drizzle-kit generate`
+// requires this file through its own CJS loader, which knows nothing about
+// SvelteKit's aliases — a `$lib` import here fails with MODULE_NOT_FOUND and
+// no migration can be generated at all until it is changed back.
+import { PromptFormats } from "../../shared/constants/PromptFormats"
+import type { RenderMode } from "../../shared/constants/completionTemplates"
 import {
 	pgTable,
 	integer,
@@ -370,6 +376,130 @@ export const samplingConfigs = pgTable(
 
 export const samplingRelations = relations(samplingConfigs, () => ({}))
 
+/**
+ * A completion template: what wraps each block of a prompt, as DATA.
+ *
+ * Modelled on `samplingConfigs` above for the seedKey/isImmutable conventions,
+ * and for the same reason — these are rows a person may add to, sitting beside
+ * rows core ships and refuses to let anyone edit.
+ *
+ * ## Why a row can only ever describe framing
+ *
+ * There is no scripting surface here on purpose. Every field is a literal
+ * string, a boolean, or a list of literal strings; the renderer
+ * (`PromptBlockFormatter.makeBlock`) is a concatenation. A template that could
+ * compute is a template that could be made to do something other than format,
+ * and these are admin-authored.
+ *
+ * That closure is what keeps the one dangerous format safe. `split_session`
+ * emits `<@role:user>` markers and PARSES THEM BACK OUT, neutralising literal
+ * markers in user content on the way — a guard that only holds while the
+ * emitter, the pattern and the parser stay in step by hand. Its row therefore
+ * carries EMPTY framing and its emitter reads nothing from here: an admin can
+ * see the template exists and reference it, and cannot define a marker the
+ * neutraliser does not know about. It is `isSelectable: false` for the same
+ * reason — it is a transport bridge, not a text format anyone chooses.
+ */
+export const completionTemplates = pgTable(
+	"completion_templates",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** Stable seed identity, e.g. "completion-template-vicuna". NULL for
+		 *  user-created rows — see db/defaults.ts for why matching on id was
+		 *  unsafe. */
+		seedKey: text("seed_key").unique(),
+		/**
+		 * The stable identifier `connections.prompt_format` holds, and the
+		 * target of that foreign key.
+		 *
+		 * ⚠ A SECOND identity column beside `seedKey`, deliberately. `seedKey`
+		 * is NULL on every row a user made, and a NULL cannot be a foreign-key
+		 * target — but a user's own template still has to be referenceable by a
+		 * connection. `id` could have served instead, and does not: every layer
+		 * above this (the pipeline payload, the render receipt, the adapters,
+		 * sixteen parity goldens) carries the format as the STRING "vicuna",
+		 * and re-keying all of it to an integer is a change with no user
+		 * visible at the end of it.
+		 */
+		key: text("key").notNull().unique(),
+		name: text("name").notNull(),
+		/** Built-in? Then no edit and no delete. ⚠ Required on every seeded row:
+		 *  db/defaults.ts re-applies a seed's full contents on EVERY boot, and
+		 *  the only thing that stops that reverting a user's edits is that the
+		 *  server refuses to accept edits to an immutable row at all. */
+		isImmutable: boolean("is_immutable").notNull().default(false),
+		/**
+		 * `flat` — one completion string. `role_array` — the legacy
+		 * split-session bridge, retired once chat wire mode builds `messages[]`
+		 * structurally.
+		 *
+		 * ⚠ An explicit column because the decision used to be
+		 * `/split/i.test(promptFormat)` in `prompt/assemble.ts` — a SUBSTRING
+		 * test against the format's NAME. Harmless while the eight keys were
+		 * hardcoded; with rows, a template someone calls "my split format"
+		 * silently switches the entire pipeline to role-array output.
+		 */
+		renderMode: text("render_mode")
+			.notNull()
+			.default("flat")
+			.$type<RenderMode>(),
+		/**
+		 * `{ system: {prefix, suffix}, user: {...}, ... }` — what wraps a block,
+		 * per role, exhaustive over `BlockRole`.
+		 *
+		 * JSON rather than fourteen columns, following `sampling_configs.values`
+		 * next door: six roles times two framings plus a fallback pair is a wall
+		 * of columns that has to grow by migration every time the role
+		 * vocabulary does, and the SDK's plugin surface can extend it. The set
+		 * stays closed where closure is enforceable — in `CompletionTemplate`
+		 * and at the save boundary — rather than in the column list.
+		 *
+		 * ⚠ EMPTY for `split_session`, which is not an oversight. See the
+		 * docblock above this table.
+		 */
+		roles: json("roles")
+			.notNull()
+			.default({})
+			.$type<Record<string, { prefix: string; suffix: string }>>(),
+		/** Framing for a role outside `BlockRole` — reachable only from an
+		 *  untyped caller, and never empty-by-accident as a result. */
+		fallbackRole: json("fallback_role")
+			.notNull()
+			.default({ prefix: "", suffix: "" })
+			.$type<{ prefix: string; suffix: string }>(),
+		/**
+		 * What to stop generation on, BEFORE the character and persona names a
+		 * session adds.
+		 *
+		 * On the row because a format's stop strings are a property of the
+		 * format. They used to be a second, independent switch in
+		 * `server/utils/StopStrings.ts` that covered five of the eight formats —
+		 * Claude, Instruct and split-session fell through to a generic list with
+		 * nothing saying so, and nothing anywhere made adding a format add its
+		 * stop strings. That module is gone; `server/connections/stops.ts` reads
+		 * this column, tags each entry `format`, and holds them back on a chat
+		 * wire where a request carries none of these markers (ruling
+		 * 2026-09-10).
+		 */
+		stopStrings: json("stop_strings")
+			.notNull()
+			.default([])
+			.$type<string[]>(),
+		/** Whether a connection's format picker may offer it. */
+		isSelectable: boolean("is_selectable").notNull().default(true)
+	},
+	(t) => [
+		// Every picker sorts built-ins first and then by name, the way
+		// /admin/sampling does.
+		index("completion_templates_selectable_idx").on(t.isSelectable)
+	]
+)
+
+export const completionTemplatesRelations = relations(
+	completionTemplates,
+	() => ({})
+)
+
 export const connections = pgTable("connections", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	name: text("name").notNull(), // Connection name (e.g., ollama, llama, sessiongpt)
@@ -425,7 +555,52 @@ export const connections = pgTable("connections", {
 		.default({})
 		.$type<Record<string, any>>(), // Additional JSON options for the connections, api keys, etc.
 	tokenCounter: text("token_counter").notNull().default("estimate"),
-	promptFormat: text("prompt_format").default("vicuna")
+	/**
+	 * Which completion template wraps this connection's prompt blocks.
+	 *
+	 * ⚠ A FOREIGN KEY, and `set null` rather than cascade — the
+	 * `connection_defaults` precedent above, for the reason given there: "the
+	 * template you picked is gone" and "you never picked one" are different
+	 * sentences to a person. It was bare `text()` with no key at all, so
+	 * deleting a template left every connection naming it pointing at nothing.
+	 *
+	 * ⚠ It references `completion_templates.key`, NOT `id`. The column holds
+	 * `"vicuna"` on installs going back to 0.1 and that string rides the whole
+	 * pipeline payload; keying the reference to the id would have meant
+	 * rewriting sixteen parity goldens to buy nothing.
+	 *
+	 * The default is `PromptFormats.DEFAULT`, spelled once. Three states reach
+	 * `completionTemplateOf` and all three answer the same way: NULL (never
+	 * set), `""` (cleared — this column has no check constraint), and a key
+	 * whose row is gone.
+	 */
+	promptFormat: text("prompt_format")
+		.default(PromptFormats.DEFAULT)
+		.references(() => completionTemplates.key, { onDelete: "set null" }),
+	/**
+	 * A note the user writes to THEMSELVES about this connection — "use this
+	 * one for prose, the other for extraction". Surfaced beside the row in the
+	 * connection pickers, which is the moment the reminder is worth anything;
+	 * a note only reachable from the edit form is a note nobody reads.
+	 *
+	 * ⚠ DISPLAY-ONLY. A note is a note, never metadata. Nothing parses it,
+	 * nothing branches on it, no feature reads it and no capability is inferred
+	 * from it — `capabilities` above is where a machine-readable claim about
+	 * this connection belongs, and it is a machine-readable column precisely so
+	 * this one never has to be. The moment something acts on the free text,
+	 * people stop writing notes and start writing incantations, and we have
+	 * acquired an undocumented configuration language with no validation, no
+	 * migration path and no way to tell a typo from an opinion.
+	 *
+	 * `varchar` and not `text`, alone in this table, for the length cap and
+	 * nothing else: the picker renders every note on every row, and a pasted
+	 * transcript is the normal accident rather than the exotic one. 4000 is
+	 * generous for prose and small enough that the list stays a list. Nullable
+	 * with no default — "wrote nothing" and "wrote an empty string" are the
+	 * same fact here, so the client normalizes blank to NULL rather than
+	 * storing two spellings of it.
+	 */
+	notes: varchar("notes", { length: 4000 })
 })
 
 /**
@@ -1273,9 +1448,19 @@ export const bindingMergeLogs = pgTable(
 			.notNull()
 			.default([])
 			.$type<Record<string, unknown>[]>(),
-		// Pre-merge participantCharacters/mentionedCharacters for every scene
-		// whose arrays referenced the absorbed id — undo restores these
-		// recorded values directly rather than reverse-computing the rewrite.
+		// Pre-merge cast for every scene whose rows referenced the absorbed id —
+		// undo restores these recorded values directly rather than
+		// reverse-computing the rewrite.
+		//
+		// ⚠ The two halves are no longer the same kind of thing.
+		// `participantCharacters` is the stored decision, read off
+		// `scene_characters`, and undo writes it back. `mentionedCharacters` is
+		// the value DERIVED from annotations at the moment of the merge, frozen
+		// here because a merge log is a point-in-time record and re-deriving it
+		// later would answer about a vocabulary this merge never saw. Undo does
+		// NOT write it back: the derivation reverts on its own once the absorbed
+		// binding is recreated and its lent aliases are stripped, so restoring
+		// rows nothing reads would be work that only looks like an answer.
 		sceneSnapshots: json("scene_snapshots").notNull().default([]).$type<
 			{
 				sceneId: number
@@ -1783,9 +1968,26 @@ export const characters = pgTable(
 			.notNull()
 			.default({})
 			.$type<Record<string, any>>(), // JSON/text for extra fields
-		/** The character's avatar — a role, expressed as a pointer at `media`
-		 *  (28). Plain integer, not an FK: see the note on `media`. */
-		avatarMediaId: integer("avatar_media_id"),
+		/**
+		 * The character's avatar — a role, expressed as a pointer at `files`
+		 * (28).
+		 *
+		 * A REAL foreign key, `ON DELETE SET NULL` (0109), and the distinction
+		 * against `files`'s own no-FK ruling is role versus provenance.
+		 * `files.character_id` is EVIDENCE: it says which character a file came
+		 * from, and a stale id there is the feature — it keeps an orphan
+		 * groupable. This is the other direction and the other kind of fact: the
+		 * entity naming the one file it currently wears. A role whose file is
+		 * gone is not evidence of anything, it is a broken image, and there is
+		 * nothing to keep groupable about it. Same line the codebase already
+		 * draws at `pipeline_run_artifacts.entity_id` (evidence, no FK).
+		 *
+		 * SET NULL rather than CASCADE, obviously: deleting a file must not
+		 * delete the character wearing it.
+		 */
+		avatarMediaId: integer("avatar_media_id").references(() => files.id, {
+			onDelete: "set null"
+		}),
 		creatorNotes: text("creator_notes"), // Notes from the character creator
 		creatorNotesMultilingual: json("creator_notes_multilingual").$type<
 			Record<string, string>
@@ -1858,8 +2060,10 @@ export const personas = pgTable(
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }), // FK to users.id
 		isDefault: boolean("is_default").notNull(), // Is this the default persona for the user?
-		/** See characters.avatarMediaId. */
-		avatarMediaId: integer("avatar_media_id"),
+		/** See characters.avatarMediaId — same role-not-provenance FK. */
+		avatarMediaId: integer("avatar_media_id").references(() => files.id, {
+			onDelete: "set null"
+		}),
 		name: text("name").notNull(), // e.g. 'Warren', 'Master Desir'
 		description: text("description").notNull(), // Persona description (long text)
 		position: integer("position").default(0),
@@ -2287,16 +2491,25 @@ export const messageParts = pgTable(
  * of roles grows over time, the number of parent kinds does not, so a new role
  * costs a column on the thing that owns it and never a migration here.
  *
- * **No foreign keys, no cascade, no set null** (28 §2, ruled). Deleting a
- * character leaves its files behind, still stamped with that character's id —
- * which is the whole point. A stale id keeps an orphan *groupable*, so "these
- * 34 files belonged to a character you deleted" stays an answerable question
- * and deleting them stays a safe operation. Under cascade the rows vanish and
- * the files become an unattributable pile.
+ * **No foreign keys, no cascade, no set null** (28 §2, ruled) — ON THE COLUMNS
+ * OF THIS TABLE. Deleting a character leaves its files behind, still stamped
+ * with that character's id — which is the whole point. A stale id keeps an
+ * orphan *groupable*, so "these 34 files belonged to a character you deleted"
+ * stays an answerable question and deleting them stays a safe operation. Under
+ * cascade the rows vanish and the files become an unattributable pile.
  *
- * The cost, stated so it is not a surprise: the database enforces nothing about
- * file references. A dangling `avatarMediaId` is possible and renders as a
- * missing image. Integrity lives in the application and in the cleanup tool.
+ * **That ruling is about provenance, and does not reach a role pointer.**
+ * `characters.avatar_media_id` and `personas.avatar_media_id` point INTO this
+ * table and are real foreign keys, `ON DELETE SET NULL`, since 0109. The two
+ * are different kinds of fact: a provenance column is evidence and a stale one
+ * is useful, whereas a role names the one file an entity currently wears and a
+ * stale one is just a broken image. Read the direction before citing the
+ * ruling — outbound from `files` is provenance, inbound is a role.
+ *
+ * The cost, stated so it is not a surprise: outside those two role pointers the
+ * database enforces nothing about file references — a `messages` asset id or a
+ * `display_variant_id` can dangle. Integrity there lives in the application and
+ * in the cleanup tool.
  *
  * A path is NEVER serialised to a non-admin client — and since 0182 a path only
  * exists on a `variants` row that no payload builder ever loads, so that is now
@@ -3012,7 +3225,35 @@ export const systemSettings = pgTable("system_settings", {
 	 * Base URL for the `libre` engine. NULL means the library's public default.
 	 * Ignored by the `google` engine, which has no configurable endpoint.
 	 */
-	autoTranslateEndpoint: text("auto_translate_endpoint")
+	autoTranslateEndpoint: text("auto_translate_endpoint"),
+	/**
+	 * Take a backup once a day (ruled 2026-09-10).
+	 *
+	 * On by default. Until this existed the only automatic backup was the one
+	 * taken in front of a migration, which protects an upgrade and nothing
+	 * else — an install that never upgrades never had a backup at all, and the
+	 * failure this whole area exists for (a force-quit leaving PGlite
+	 * unopenable) does not wait for a version bump.
+	 *
+	 * Not a retention policy: nothing is culled and nothing is ever deleted
+	 * automatically. Off simply stops new ones being taken.
+	 */
+	backupDaily: boolean("backup_daily").notNull().default(true),
+	/**
+	 * Also archive `<dataDir>/users/` — media and avatars — beside the dump.
+	 *
+	 * **Off by default**, and that is the ruling rather than a guess: a dump is
+	 * the database, measured in megabytes, while a user's media library has no
+	 * ceiling at all, and a daily backup that silently doubles as a daily copy
+	 * of every image on the instance is not a default anybody asked for.
+	 *
+	 * On, it matters more than its size suggests: `files` rows are FK'd from
+	 * avatars (0109), so a database restored without the bytes those rows name
+	 * points at media that was never archived.
+	 */
+	backupIncludeUserFiles: boolean("backup_include_user_files")
+		.notNull()
+		.default(false)
 })
 
 export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
@@ -3153,12 +3394,36 @@ export const koboldCppSettings = pgTable("koboldcpp_settings", {
 	koboldCppManagedReleaseTag: text("koboldcpp_managed_release_tag")
 })
 
-// Tracks the model files in the KoboldCPP models directories — .gguf and
-// .safetensors, of two kinds (a text LLM or a Stable-Diffusion image model) —
-// whether downloaded through the UI or placed there manually. Rows for
-// manually-placed files are created on discovery during a koboldcpp:listModels
-// scan. Models with status != "complete" (still downloading, or errored) are
-// excluded from the available models list.
+/**
+ * The container a local model file is written in. A property of the BYTES, so
+ * it is read off the file (`formatForFilename`) and never guessed at.
+ *
+ * Not a list of engines. `.gguf` is not owned by KoboldCPP — llama.cpp opens
+ * the same bytes — so which engines can load a row is derived from
+ * `(format, modality)` in `$lib/server/localModels/registry`, not stored.
+ */
+export type LocalModelFormat = "gguf" | "onnx" | "safetensors"
+
+// Every model file this install has on disk, whatever ends up loading it —
+// downloaded through the UI or placed in a models directory by hand. Rows for
+// manually-placed files are created on discovery during a directory scan.
+// Models with status != "complete" (still downloading, or errored) are excluded
+// from the available models list.
+//
+// ONE registry, not one per vendor. It was `local_models`, and the vendor
+// in the name was the only thing about it that was vendor-specific: embedding
+// and NER models need the same filename-unique, provenance-carrying,
+// download-status-tracking row, and a second table would mean a second scan
+// protocol to keep in step with this one.
+//
+// ## The asymmetry the columns are shaped around
+//
+// **`format` is detectable from the file; `modality` is not.** The extension
+// tells you the container and tells you nothing about what the model is FOR —
+// the curated image models at huggingface.co/koboldcpp/imgmodel are every one
+// of them `.gguf`, indistinguishable by name from a text LLM sitting beside
+// them. So `format` carries no provenance because it needs none, and the
+// undetectable half of the row is what `kindSource`'s trust ordering guards.
 //
 // `filename` stays UNIQUE now that there are two directories to scan, so one
 // file named `foo.gguf` in EACH of them is a single row whose kind/size/
@@ -3168,7 +3433,7 @@ export const koboldCppSettings = pgTable("koboldcpp_settings", {
 // damage is bounded to metadata, because `resolveModelPath` tries the kind's
 // own directory FIRST: the text connection still loads llm/foo.gguf and the
 // image connection still loads image/foo.gguf. Renaming one fixes the display.
-export const koboldCppModels = pgTable("koboldcpp_models", {
+export const localModels = pgTable("local_models", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	filename: text("filename").notNull().unique(),
 	modelName: text("model_name").notNull(),
@@ -3180,9 +3445,30 @@ export const koboldCppModels = pgTable("koboldcpp_models", {
 	status: text("status").notNull().default("downloading"), // "downloading" | "complete" | "error"
 	errorMessage: text("error_message"),
 	/**
-	 * "text" | "image" | "unknown". Never inferred from the extension: the
-	 * curated image models at huggingface.co/koboldcpp/imgmodel are every one
-	 * of them .gguf.
+	 * The file's container — see {@link LocalModelFormat}.
+	 *
+	 * ⚠ The DEFAULT exists so the column could be added NOT NULL to a table
+	 * that already had rows; it is not a fallback anybody should lean on. Every
+	 * writer passes `formatForFilename(filename)`, and an `.onnx` row that took
+	 * the default would claim to be a GGUF.
+	 */
+	format: text("format").notNull().default("gguf").$type<LocalModelFormat>(),
+	/**
+	 * "text" | "image" | "unknown" — which of koboldcpp's two loaders can open
+	 * this file, and so which of its two models directories the file belongs in
+	 * (`modelsDirFor`). Never inferred from the extension: the curated image
+	 * models at huggingface.co/koboldcpp/imgmodel are every one of them .gguf.
+	 * `classifyModelFile` reads the GGUF header instead, and answers "unknown"
+	 * rather than guessing.
+	 *
+	 * ⚠ NOT a second spelling of `modality`, and the two cannot drift apart
+	 * because `modalityForKind` is the only thing that projects one into the
+	 * other. `kind` is a LOADER lane with three values; `modality` is the ROLE.
+	 * The header sniff can only answer the first: `bert` is in its
+	 * language-model list, so a BERT GGUF lands on `kind: "text"` while its
+	 * modality is `embeddings`, not `text-gen`. Collapsing the two would make
+	 * that sniff record `text-gen` at `detected` — the highest automatic trust
+	 * there is — for a file it cannot tell apart from an embedding model.
 	 */
 	kind: text("kind")
 		.notNull()
@@ -3196,6 +3482,20 @@ export const koboldCppModels = pgTable("koboldcpp_models", {
 		.notNull()
 		.default("assumed")
 		.$type<"user" | "detected" | "declared" | "assumed">(),
+	/**
+	 * What this model is FOR: `text-gen | embeddings | image-gen | ner | tts |
+	 * …` — the same open vocabulary `connections.modality` documents, reused
+	 * verbatim so a connection of a given modality can be pointed at a local
+	 * model of the same one. Deliberately not narrowed with `$type`, for the
+	 * reason that column is not either: a closed union here would be a second,
+	 * parallel vocabulary.
+	 *
+	 * NULL means "nobody knows yet" — the same open state `kind: "unknown"` is,
+	 * and where the backfill left every unknown row. It is NOT "text-gen unless
+	 * told otherwise": an unreadable file offered as a working text model fails
+	 * at load time with nothing on screen to say why.
+	 */
+	modality: text("modality"),
 	createdAt: timestamp("created_at").notNull().defaultNow(),
 	updatedAt: timestamp("updated_at")
 		.notNull()
@@ -3203,8 +3503,8 @@ export const koboldCppModels = pgTable("koboldcpp_models", {
 		.$onUpdate(() => new Date())
 })
 
-export type SelectKoboldCppModel = typeof koboldCppModels.$inferSelect
-export type InsertKoboldCppModel = typeof koboldCppModels.$inferInsert
+export type SelectLocalModel = typeof localModels.$inferSelect
+export type InsertLocalModel = typeof localModels.$inferInsert
 
 /**
  * Scenes: discrete story moments within a session, used as the foundation for
@@ -4750,10 +5050,6 @@ export const pipelineRuns = pgTable(
 		userId: integer("user_id").references(() => users.id, {
 			onDelete: "set null"
 		}),
-		/** The message this run produced, when it produced one. */
-		messageId: integer("message_id").references(() => sessionMessages.id, {
-			onDelete: "set null"
-		}),
 		outcome: text("outcome").notNull(), // ok | halt | err | cancelled
 		haltNodeKey: text("halt_node_key"),
 		haltReason: text("halt_reason"),
@@ -4766,7 +5062,18 @@ export const pipelineRuns = pgTable(
 		 * inputs produce the same prompt again.
 		 */
 		seed: text("seed").notNull(),
-		/** A preview stopped before the provider call and sent nothing. */
+		/**
+		 * A preview produced nothing.
+		 *
+		 * ⚠ **Derived from the artifacts, never from `receipt.preview` alone.**
+		 * The reply path runs `runTurn({ preview: true })` because the ADAPTER
+		 * makes the provider call — so the executor genuinely halts early and a
+		 * real message is written anyway. `Boolean(receipt.preview)` on its own
+		 * therefore recorded every reply in the product as a preview. The rule
+		 * is `Boolean(receipt.preview) && artifacts.length === 0`: a run that
+		 * left something behind is not a preview, whatever the executor was
+		 * asked to do. See `saveReceipt`.
+		 */
 		isPreview: boolean("is_preview").notNull().default(false),
 		startedAt: timestamp("started_at").notNull(),
 		endedAt: timestamp("ended_at").notNull(),
@@ -4776,10 +5083,7 @@ export const pipelineRuns = pgTable(
 		receipt: json("receipt").notNull().$type<Record<string, any>>(),
 		createdAt: timestamp("created_at").notNull().defaultNow()
 	},
-	(t) => [
-		index("pipeline_runs_session_idx").on(t.sessionId, t.id),
-		index("pipeline_runs_message_idx").on(t.messageId)
-	]
+	(t) => [index("pipeline_runs_session_idx").on(t.sessionId, t.id)]
 )
 
 /**
@@ -4808,6 +5112,63 @@ export const pipelineRunNodes = pgTable(
 		createdAt: timestamp("created_at").notNull().defaultNow()
 	},
 	(t) => [index("pipeline_run_nodes_run_idx").on(t.runId, t.seq)]
+)
+
+/**
+ * What a run left behind — every row it made, not just the one it used to name.
+ *
+ * `pipeline_runs.message_id` was a single nullable column, so a run could
+ * record exactly one message and nothing else. That was wrong in both
+ * directions and provably so: `core:consumer/seed-greetings` writes **N**
+ * messages and the column recorded none of them, `generate-image` writes N
+ * `files` and N `variants` with no run id stored anywhere, `create-lore-entry`
+ * writes an entry the run was invisible to, and `create-message` posts media
+ * parts beside its message. Ruled 2026-09-08: *"the schema is wrong if it only
+ * reflects one message — messages should be relational artifacts."*
+ *
+ * ⚠ **`entity_id` is a plain integer with no foreign key, deliberately.** An
+ * artifact row is *evidence that this run made something*; deleting the thing
+ * afterwards must not delete the evidence, exactly as `pipeline_runs`'
+ * `spec_version_id` is FK-free ("a run happened; a spec being retired later
+ * does not unhappen it") and for the same reason `files` records its provenance
+ * as plain columns. A cascade here would quietly rewrite history whenever
+ * somebody tidied a session.
+ *
+ * The row is written by `saveReceipt` from a collector on the run scope — not
+ * parsed back out of the receipt blob, whose per-node `ids` shape varies with
+ * whatever each host commit happens to return.
+ */
+export const pipelineRunArtifacts = pgTable(
+	"pipeline_run_artifacts",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		runId: integer("run_id")
+			.notNull()
+			.references(() => pipelineRuns.id, { onDelete: "cascade" }),
+		/** Order within the run — the sequence the effects actually happened in. */
+		seq: integer("seq").notNull(),
+		/** `message` | `file` | `variant` | `lore_entry`. */
+		kind: text("kind").notNull(),
+		/** The row's id in its own table. See the note above: no FK, on purpose. */
+		entityId: integer("entity_id").notNull(),
+		/** `created` | `updated` | `attached`. */
+		action: text("action").notNull(),
+		/** Which node produced it, when the producer was a node. */
+		nodeKey: text("node_key"),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		index("pipeline_run_artifacts_run_idx").on(t.runId, t.seq),
+		// "Which runs produced this row" — `runsForArtifact`, and the join
+		// behind `runForMessage` and `pipelines:messageExplain`.
+		index("pipeline_run_artifacts_entity_idx").on(t.kind, t.entityId),
+		unique("pipeline_run_artifacts_unique").on(
+			t.runId,
+			t.kind,
+			t.entityId,
+			t.action
+		)
+	]
 )
 
 /**
@@ -6382,6 +6743,132 @@ export const messageAnnotationsRelations = relations(
 		message: one(messages, {
 			fields: [messageAnnotations.messageId],
 			references: [messages.id]
+		})
+	})
+)
+
+// ─── Binding suggestions ──────────────────────────────────────────────────────
+
+/**
+ * What a human said about a name the world does not know yet.
+ *
+ * ## The candidate is derived; the decision is not
+ *
+ * The scene-cast plan's governing rule (§1) splits this table off from the
+ * annotations above it. *"`emberfall` was named and resolves to nothing"* is
+ * exactly `entry_annotations` ∪ `message_annotations` filtered to the `open:`
+ * tier, recomputed on demand and correct the moment the vocabulary widens — so
+ * it is **not** stored as a fact. *"a human looked at `emberfall` and said no"*
+ * is nowhere in the text, cannot be recomputed from it, and is what these rows
+ * hold. Every derived column here (`occurrences`, `first_seen_at`,
+ * `last_seen_at`, `example_*`) is a **cache refreshed by each scan**, present so
+ * a list renders without re-walking every annotation; `status`, `decided_at`
+ * and `resolved_binding_id` are the record.
+ *
+ * ## Why `ignored` has to be a row and not a filter
+ *
+ * Plan §4 asks for two things that pull against each other: a dismissed name
+ * must not come back on every scan, and a dismissal must stay visible and
+ * reversible — *"a log of found+ignored, not yet added binding suggestions"*.
+ * A suppression list expressed as anything other than a row (a hash set in
+ * memory, a deleted row, a `NOT IN` over some other table) satisfies the first
+ * and loses the second. So the row persists at every status and the *list* is
+ * what filters: `pending` is the proposition, `ignored` is the log, `added` is
+ * the receipt.
+ *
+ * ⚠ **`added` suppresses on its own strength, not the gazetteer's.** Adding a
+ * background binding — no character, no persona — contributes nothing to the
+ * vocabulary (`annotations/loadVocabulary` says so in as many words: there is no
+ * row for it to resolve *to*), so the name keeps coming back out of the open
+ * tier for as long as the transcript says it. This status is the only thing
+ * standing between the user and a suggestion to add what they just added.
+ *
+ * ## No foreign key on the example
+ *
+ * `example_source_kind`/`example_source_id` are **provenance, not a reference** —
+ * the same call the `media` table makes. The snippet is a frozen copy taken at
+ * scan time; deleting the message it came from does not make the decision
+ * un-made, and neither of the two things a real key could do is wanted here
+ * (cascade would delete the log, restrict would block an ordinary delete). The
+ * next scan re-fills them from whatever still exists.
+ */
+export const bindingSuggestions = pgTable(
+	"binding_suggestions",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }),
+		/**
+		 * The annotation's own key — `open:<normalized>`, lowercased and
+		 * whitespace-collapsed by `entities.ts`.
+		 *
+		 * ⚠ Stored verbatim, prefix and all, rather than as the bare name. It
+		 * is what a scan matches against and what a future tier would have to
+		 * disambiguate from (`character:3` and `open:3` are different things),
+		 * and re-deriving the prefix at every comparison is how two spellings of
+		 * one identity get made.
+		 */
+		entityKey: text("entity_key").notNull(),
+		/** The fullest surface form seen — what a person reads. Cache. */
+		surface: text("surface").notNull().default(""),
+		/** `pending` | `ignored` | `added`. The decision. */
+		status: text("status").notNull().default("pending"),
+		/** Total mentions across every source that named it. Cache. */
+		occurrences: integer("occurrences").notNull().default(0),
+		/** How many distinct entries/messages named it. Cache. */
+		sourceCount: integer("source_count").notNull().default(0),
+		/**
+		 * The earliest and latest *source* timestamp among the sources that
+		 * name it — when the story said it, not when the extractor noticed.
+		 * Cache; a scan may move `first_seen_at` backwards when an older source
+		 * is annotated later, which is the honest answer rather than a bug.
+		 */
+		firstSeenAt: timestamp("first_seen_at").notNull().defaultNow(),
+		lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
+		/** One line of the text that named it, so the decision needs no hunting. */
+		exampleContext: text("example_context").notNull().default(""),
+		/** `entry` | `message` | `''`. Provenance for the line above. */
+		exampleSourceKind: text("example_source_kind").notNull().default(""),
+		exampleSourceId: integer("example_source_id"),
+		/**
+		 * What `add` created. `SET NULL` rather than cascade: deleting the
+		 * binding afterwards does not un-decide the suggestion, and a log that
+		 * vanished when its subject did would be no log at all.
+		 */
+		resolvedBindingId: integer("resolved_binding_id").references(
+			() => lorebookBindings.id,
+			{ onDelete: "set null" }
+		),
+		/** When a human moved it off `pending`. NULL while nobody has. */
+		decidedAt: timestamp("decided_at"),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [
+		/** The identity a scan upserts on. */
+		uniqueIndex("binding_suggestions_book_key_uq").on(
+			t.lorebookId,
+			t.entityKey
+		),
+		/** The list: one book's pending set, or one book's dismissal log. */
+		index("binding_suggestions_book_status_idx").on(t.lorebookId, t.status)
+	]
+)
+
+export const bindingSuggestionsRelations = relations(
+	bindingSuggestions,
+	({ one }) => ({
+		lorebook: one(lorebooks, {
+			fields: [bindingSuggestions.lorebookId],
+			references: [lorebooks.id]
+		}),
+		resolvedBinding: one(lorebookBindings, {
+			fields: [bindingSuggestions.resolvedBindingId],
+			references: [lorebookBindings.id]
 		})
 	})
 )

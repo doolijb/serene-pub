@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
+	import { completionTemplateOptions } from "$lib/client/stores/completionTemplateOptions.svelte"
+	import { connectionWireMode } from "$lib/client/stores/connectionWireMode.svelte"
+	import { usesCompletionTemplate } from "$lib/shared/connectionAdapters/wireMode"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { onMount, onDestroy } from "svelte"
@@ -23,7 +25,29 @@
 
 	let { connection = $bindable() } = $props()
 
+	/**
+	 * A completion template only means something in COMPLETION wire mode.
+	 *
+	 * In chat mode the roles carry the structure: no delimiter is emitted and no
+	 * stop string from the template is sent, so the picker below would be a
+	 * saved preference that changes no byte of any request. Same "no control
+	 * without an effect" rule the retrieval audit applied.
+	 *
+	 * Read through the store rather than off `connection.capabilities`, so the
+	 * wire-mode switches in the capability panel underneath take effect here at
+	 * once — that panel deliberately never writes into `connection`.
+	 */
+	const wireMode = connectionWireMode()
+	const showFormat = $derived(usesCompletionTemplate(wireMode.of(connection)))
+
 	const socket = useTypedSocket()
+	/**
+	 * The format picker's options, read from `completion_templates` instead of
+	 * the eight-entry constant that used to sit beside the table — so a template
+	 * an admin authored is offered by the one control that selects it. Falls back
+	 * to the built-ins until the reply lands.
+	 */
+	const formatOptions = completionTemplateOptions()
 	let availableLMStudioModels: { model: string; name: string }[] = $state([])
 	// The picker takes { value, label }; LM Studio reports the id under `model`
 	// and the display name under `name`.
@@ -42,8 +66,7 @@
 		stream: connection.extraJson?.stream ?? true,
 		think: connection.extraJson?.think ?? false,
 		ttl: connection.extraJson?.ttl ?? 60,
-		raw: connection.extraJson?.raw ?? true,
-		useSession: connection.extraJson?.useSession ?? true
+		raw: connection.extraJson?.raw ?? true
 	})
 
 	function handleRefreshModels() {
@@ -164,11 +187,11 @@
 				{/if}
 			</button>
 		</div>
-		{#if !extraFields.useSession}
+		{#if showFormat}
 			<Select
 				class="mt-2"
 				label="Prompt Format"
-				options={PromptFormats.options}
+				options={formatOptions.value}
 				bind:value={connection.promptFormat}
 			/>
 		{/if}
@@ -246,23 +269,10 @@
 					</p>
 				{/if}
 			</div>
-			<!-- Use Session toggle -->
-			<div class="mt-2 flex items-center gap-2">
-				<label class="font-semibold" for="useSession">
-					Use Session Mode
-				</label>
-				<input
-					type="checkbox"
-					id="useSession"
-					bind:checked={extraFields.useSession}
-					onchange={() => {
-						connection.extraJson = {
-							...connection.extraJson,
-							useSession: extraFields.useSession
-						}
-					}}
-				/>
-			</div>
+			<!-- "Use Session Mode" lived here. It is a CAPABILITY now —
+			     Chat messages / Text completion, in the Capabilities panel
+			     below, graded through the same four layers as everything else
+			     and with a hand-set value outranking every later test. -->
 			<div class="mt-2 flex items-center gap-2">
 				<label class="font-semibold" for="stream">Stream</label>
 				<input

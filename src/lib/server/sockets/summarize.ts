@@ -12,7 +12,10 @@ import {
 import { lorebookBindingListHandler } from "./lorebooks"
 import { withSessionTriggerLock } from "$lib/server/utils/sessionTriggerLock"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
-import { DEFAULT_CHANNEL } from "$lib/server/messages/channels"
+import {
+	DEFAULT_CHANNEL,
+	channelWhere
+} from "$lib/server/messages/channels"
 import { activityError, activityStore } from "$lib/server/utils/activityStore"
 
 export const sessionsSummarizeHandler: Handler<
@@ -111,17 +114,22 @@ export const sessionsSummarizeHandler: Handler<
 				// would queue the user's next message behind minutes of LLM
 				// calls. That is exactly the trap a minimize-first flow must
 				// not set. Same scoping as scenes:process.
-				// "All" means all of one lane (20 §7): a summary that folded a
-				// side conversation into the account of the main one would be
+				// "All" means all of one channel (20 §7): a summary that folded
+				// a side conversation into the account of the main one would be
 				// wrong in a way nothing downstream could detect. A picked
 				// list is taken as given — the person picked those rows, lane
 				// and all.
+				//
+				// `channelWhere`, not an equality: a bare slug is the whole
+				// channel (ruling 2026-09-09), so "all of main" is every lane
+				// of main — which is what the word "all" says, and what the
+				// host's own `summarize_source` read resolves it to.
 				const whereClause =
 					messageIds === "all"
 						? and(
 								eq(schema.sessionMessages.sessionId, sessionId),
 								eq(schema.sessionMessages.isHidden, false),
-								eq(
+								channelWhere(
 									schema.sessionMessages.channel,
 									DEFAULT_CHANNEL
 								)
@@ -315,6 +323,13 @@ export const sessionsSummarizeHandler: Handler<
 					participantCharacters: castOut?.participants as
 						| any[]
 						| undefined,
+					// ⚠ ICED (plan §1/§6), read but never resolved below.
+					// `mentioned` is derived from `message_annotations` now —
+					// exactly (scene text × vocabulary), invalidated by the
+					// freshness triple — so a second copy at scene granularity
+					// is duplication with weaker invalidation. Kept on the
+					// object so reviving the extraction is one line, not a
+					// re-derivation.
 					mentionedCharacters: castOut?.mentioned as any[] | undefined
 				}
 
@@ -340,18 +355,19 @@ export const sessionsSummarizeHandler: Handler<
 						result.participantCharacters ?? [],
 						knownCast!
 					)
-					const mentioned = resolveCharacterRefs(
-						result.mentionedCharacters ?? [],
-						knownCast!
-					)
 					participantCharacters = participants.ids
-					mentionedCharacters = mentioned.ids
+					// ⚠ ICED — the extraction's mentioned list is deliberately
+					// not resolved. Deriving it (utils/sceneMentions.ts) is the
+					// answer now, and it is internal: §6 ruled that `mentioned`
+					// is not surfaced to the user, so nothing on the Review &
+					// Save screen may write a stored copy back.
+					mentionedCharacters = []
 					;({
 						participants: suggestedParticipantCharacters,
 						mentioned: suggestedMentionedCharacters
 					} = reconcileSuggestedNames(
 						participants.suggestedNames,
-						mentioned.suggestedNames
+						[]
 					))
 
 					// Guarantee: whoever actually sent a message in this range is a

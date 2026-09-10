@@ -271,20 +271,51 @@ async function createMacOSExecutable(platformDir, config) {
 `
 	fs.writeFileSync(infoPlist, plistContent)
 
-	// Create executable script that launches the bare entrypoint inside the
-	// bundle. It used to cd to the .app directory and exec ./run.sh there —
-	// a path nothing ever wrote a run.sh to, so double-clicking the bundle
-	// could never have worked. The application now lives at
-	// Contents/Resources/app (one directory an update can replace in a single
-	// rename), and its run.sh is what this execs.
+	// Create the executable Info.plist names as CFBundleExecutable — the only
+	// thing a Dock or Finder launch runs. It used to cd to the .app directory
+	// and exec ./run.sh there — a path nothing ever wrote a run.sh to, so
+	// double-clicking the bundle could never have worked at all; then it
+	// exec'd the payload's bare entrypoint at Contents/Resources/app/run.sh,
+	// which worked but skipped the launcher, so a double-click got no startup
+	// watch: a database that would not open produced no window, no browser tab
+	// and no log, on the one launch path with no terminal to fall back on.
+	//
+	// It now hands over to the launcher's own copy inside the bundle, which
+	// scripts/bundle-dist.js places at Contents/Resources/run.sh from the one
+	// source text in dist-assets/macos/run.sh. KEEP THIS TEXT IDENTICAL to the
+	// checked-in dist-assets/macos/Serene Pub.app/Contents/MacOS/serene-pub —
+	// this script overwrites that file, and a shipped release carries whichever
+	// of the two was written last.
 	const executableScript = path.join(macOSDir, "serene-pub")
 	const scriptContent = `#!/bin/bash
 # Serene Pub Application Launcher for macOS
-# Launches the bare entrypoint inside this bundle's Resources/app directory,
-# which holds the entire application so an update can replace it in one rename.
-APP_DIR="$( cd "$( dirname "\${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-RESOURCES_DIR="$( cd "$APP_DIR/../Resources" &> /dev/null && pwd )"
-exec "$RESOURCES_DIR/app/run.sh"
+#
+# Info.plist names this file as CFBundleExecutable, so it is the only thing a
+# Dock or Finder launch runs. It hands straight over to the launcher, whose
+# copy inside this bundle scripts/bundle-dist.js places at
+# Contents/Resources/run.sh from the one source text in dist-assets/macos.
+#
+# It used to exec Resources/app/run.sh - the bare entrypoint - directly, which
+# meant a double-click skipped the launcher entirely: no startup watch, so a
+# database that would not open produced no window, no browser tab and no log,
+# on the one launch path that has no terminal to fall back on.
+MACOS_DIR="$( cd "$( dirname "\${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+RESOURCES_DIR="$( cd "$MACOS_DIR/../Resources" &> /dev/null && pwd )"
+
+# Through /bin/sh rather than on its own shebang, and tested with -r rather
+# than -x, so that a launcher which arrived without its executable bit still
+# runs. The alternative is the fallback below firing on a bundle that HAS a
+# launcher - a Dock launch quietly doing less than it looks like it is doing,
+# which is the whole failure this file exists to end. Both this script and the
+# launcher are POSIX sh; nothing here needs the shebang to pick a shell.
+if [ -r "$RESOURCES_DIR/run.sh" ]; then
+    exec /bin/sh "$RESOURCES_DIR/run.sh" "\$@"
+fi
+
+# The bare entrypoint is the fallback, not the plan: a bundle assembled by hand
+# or by an older build has no launcher beside the payload, and starting the
+# server without a startup watch beats not starting at all.
+exec "$RESOURCES_DIR/app/run.sh" "\$@"
 `
 
 	fs.writeFileSync(executableScript, scriptContent)

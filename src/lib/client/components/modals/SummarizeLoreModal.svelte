@@ -601,6 +601,7 @@
 			const s = socket as any
 			s.off("scenes:create", onCreated)
 			s.off("scenes:create:error", onCreateError)
+			if (activeCleanup === cleanupCreate) activeCleanup = null
 		}
 
 		function onCreated(data: {
@@ -634,6 +635,10 @@
 			errorMessage = data?.error ?? "Could not create the scene."
 		}
 
+		// Parked on activeCleanup so onDestroy can drop these too — closing the
+		// modal while the create is still in flight used to leave both
+		// listeners on the socket forever.
+		activeCleanup = cleanupCreate
 		socket.on("scenes:create", onCreated)
 		socket.on("scenes:create:error", onCreateError)
 

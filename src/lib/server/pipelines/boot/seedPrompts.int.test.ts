@@ -62,7 +62,7 @@ beforeAll(async () => {
 	db = dbModule.db as unknown as TestDb
 
 	await (await import("$lib/server/db/defaults")).sync()
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 }, 180_000)
 
 afterAll(async () => {
@@ -82,7 +82,7 @@ const promptDeclsOf = async (slug: string) => {
 	const spec = await specOf(slug)
 	if (!spec?.activeVersionId) return []
 	const { declarations } = await import("$lib/server/pipelines/config/panel")
-	return (await declarations(db as any, spec.activeVersionId)).filter(
+	return (await declarations(db, spec.activeVersionId)).filter(
 		(d: any) => d.control === "prompts-ref"
 	)
 }
@@ -278,12 +278,17 @@ describe("the catalog matches the legacy seeds — the drift canary (24 T6b)", (
 			fields: summarizeFields
 		},
 		{
+			// ⚠ `characterExtraction` is deliberately absent from this list.
+			// The scene spec no longer wires `core:provider/extract-cast` (plan
+			// §2 put it on ice, migration `0104_ice_scene_cast_extraction`), so
+			// no step of this pipeline declares that field and the pool lookup
+			// below would have nothing to resolve. The prompt itself still
+			// ships byte-identical — that is what makes the ice revivable — and
+			// the test right after this one is where it is checked, off the
+			// node type rather than off a spec's declarations.
 			specSlug: SUMMARIZE_SCENE_SPEC_ID,
 			table: schema.sceneSummarizeConfigs,
-			fields: (r: any) => ({
-				...summarizeFields(r),
-				characterExtraction: str(r.characterExtractionSystemPrompt)
-			})
+			fields: summarizeFields
 		},
 		{
 			specSlug: SUMMARIZE_HISTORY_SPEC_ID,
@@ -341,6 +346,36 @@ describe("the catalog matches the legacy seeds — the drift canary (24 T6b)", (
 		expect(compared).toBeGreaterThan(20)
 	})
 
+	it("keeps the iced cast prompt shipped, byte-identical, though no spec reads it", async () => {
+		// The other half of "on ice, not deleted". `core:provider/extract-cast`
+		// is no longer wired into the scene summarize document, so the canary
+		// above cannot reach its prompt through a spec's declarations — but the
+		// prose still has to be exactly what `db/defaults.ts` ships, or
+		// reviving the step later would quietly hand somebody a different
+		// extractor. Checked off the NODE TYPE, which is what survives the ice.
+		const { CORE_PROMPTS } = await import("@serene-pub/core-catalog")
+		const rows = (await db
+			.select()
+			.from(schema.sceneSummarizeConfigs)) as any[]
+		const seeded = rows.filter((r) => r.seedKey)
+		expect(seeded.length).toBeGreaterThan(0)
+		for (const row of seeded) {
+			const text = str(row.characterExtractionSystemPrompt)
+			const matches = CORE_PROMPTS.filter(
+				(p) =>
+					p.nodeType === "core:provider/extract-cast" &&
+					p.slot === "prompts" &&
+					p.fields.characterExtraction === text
+			)
+			expect(
+				matches.length,
+				`'${row.name}'.characterExtraction appears in ${matches.length} ` +
+					`extract-cast catalog rows, not 1`
+			).toBe(1)
+			expect(matches[0]!.name).toBe(row.name)
+		}
+	})
+
 	it("seeds every catalog row, and nothing twice", async () => {
 		const { CORE_PROMPTS } = await import("@serene-pub/core-catalog")
 		// Duplicate identity in the catalog would make the seed non-idempotent
@@ -379,7 +414,9 @@ describe("the wording is the wording", () => {
 			.where(eq(schema.graphBuildConfigs.seedKey, "graph-build-default"))
 
 		const decls = await promptDeclsOf(GRAPH_BUILD_SPEC_ID)
-		const pools = new Set(decls.map((d: any) => `${d.nodeTypeId}#${d.slot}`))
+		const pools = new Set(
+			decls.map((d: any) => `${d.nodeTypeId}#${d.slot}`)
+		)
 		expect(pools.size).toBeGreaterThan(1)
 
 		const expected: Record<string, string> = {
@@ -493,7 +530,7 @@ describe("the wording is the wording", () => {
 describe("re-seeding", () => {
 	it("writes nothing the second time", async () => {
 		const before = await db.select().from(schema.pipelinePrompts)
-		const res = await seedPipelinePrompts(db as any)
+		const res = await seedPipelinePrompts(db)
 		expect(res.every((r) => r.created.length === 0)).toBe(true)
 		expect(res.every((r) => r.refreshed.length === 0)).toBe(true)
 		const after = await db.select().from(schema.pipelinePrompts)
@@ -508,13 +545,13 @@ describe("re-seeding", () => {
 			"$lib/server/pipelines/entities/prompts"
 		)
 		const decl = (await promptDeclsOf(RESPOND_SPEC_ID))[0]!
-		const mine = await createPrompt(db as any, {
+		const mine = await createPrompt(db, {
 			nodeTypeId: decl.nodeTypeId!,
 			slot: decl.slot,
 			name: "Mine, untouched",
 			fields: { systemPrompt: "my words" }
 		})
-		await seedPipelinePrompts(db as any)
+		await seedPipelinePrompts(db)
 		const [after] = await db
 			.select()
 			.from(schema.pipelinePrompts)
@@ -534,7 +571,7 @@ describe("re-seeding", () => {
 			.set({ fields: { ...target.fields, systemPrompt: "drifted" } })
 			.where(eq(schema.pipelinePrompts.seedKey, target.seedKey))
 
-		const res = await seedPipelinePrompts(db as any)
+		const res = await seedPipelinePrompts(db)
 		expect(res.flatMap((r) => r.refreshed)).toContain(target.seedKey)
 
 		const [row] = await db
@@ -544,7 +581,7 @@ describe("re-seeding", () => {
 		expect(row.fields).toEqual(target.fields)
 
 		// …and having corrected it, it is quiet again.
-		const again = await seedPipelinePrompts(db as any)
+		const again = await seedPipelinePrompts(db)
 		expect(again.every((r) => r.refreshed.length === 0)).toBe(true)
 	})
 })

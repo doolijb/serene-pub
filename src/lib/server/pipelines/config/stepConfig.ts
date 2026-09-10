@@ -19,14 +19,14 @@ import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { resolveConfigSources } from "@serene-pub/sdk"
 import { buildWorld } from "$lib/server/pipelines/config/world"
-
-type Db = { select: any }
+import { withCompletionTemplate } from "$lib/server/connections/completionTemplates"
+import { withWireMode } from "$lib/server/connections/resolve"
 
 export interface ResolvedStepConfig {
 	/** The configured prompt text per declared field, where one was chosen. */
 	prompts: Record<string, string>
 	/** Whole rows — these callers construct their own adapters. */
-	connection?: any
+	connection?: AdapterConnection
 	/**
 	 * The sampling ROW, deliberately not a `ResolvedSampling` (0171). These
 	 * callers still need the row itself — its name labels the LLM queue entry —
@@ -65,14 +65,35 @@ export async function resolveStepConfigs(
 	const world = await buildWorld(db, { specId })
 	const sourced: any = resolveConfigSources(world as any, nodeKeys)
 
-	const rowById = async (table: any, id: number | null) =>
+	/**
+	 * The two reads, spelled per table — mirroring
+	 * `connections/capabilityTarget.ts`, whose header gives the reason at
+	 * length. One `(table: any, id) => any` helper stood here instead, and it
+	 * was the hole in miniature: `any` in, `any` out, so `connection` below was
+	 * an `any` for the whole function (every field read off it, and the row
+	 * handed to `withCompletionTemplate`/`withWireMode`) and `sampling` was an
+	 * `any` satisfying `SelectSamplingConfig` by construction rather than by
+	 * checking. Two three-line reads cost less than that.
+	 */
+	const connectionById = async (id: number | null) =>
 		id == null
 			? undefined
 			: (
 					await db
 						.select()
-						.from(table)
-						.where(eq(table.id, id))
+						.from(schema.connections)
+						.where(eq(schema.connections.id, id))
+						.limit(1)
+				)[0]
+
+	const samplingConfigById = async (id: number | null) =>
+		id == null
+			? undefined
+			: (
+					await db
+						.select()
+						.from(schema.samplingConfigs)
+						.where(eq(schema.samplingConfigs.id, id))
 						.limit(1)
 				)[0]
 
@@ -86,14 +107,24 @@ export async function resolveStepConfigs(
 			const text = (entry as any)?.value
 			if (typeof text === "string" && text.trim()) prompts[field] = text
 		}
+		const connection = await connectionById(
+			refId(at?.connection?.[""]?.value)
+		)
 		out[nodeKey] = {
 			prompts,
-			connection: await rowById(
-				schema.connections,
-				refId(at?.connection?.[""]?.value)
-			),
-			sampling: await rowById(
-				schema.samplingConfigs,
+			/**
+			 * With its completion template and its wire mode attached, same as
+			 * `resolveCapabilityTarget` does for the tier underneath this one —
+			 * these two are the only places a connection bound for a text
+			 * adapter is loaded, and a row that arrived by one path and not the
+			 * other would stop generation on the default's markers for every
+			 * admin-authored template, or be handed a payload built for the other
+			 * wire shape. See `AdapterConnection`.
+			 */
+			connection:
+				connection &&
+				withWireMode(await withCompletionTemplate(db, connection)),
+			sampling: await samplingConfigById(
 				refId(at?.sampling?.[""]?.value)
 			)
 		}

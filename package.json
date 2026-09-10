@@ -39,6 +39,7 @@
 		"db:generate": "node scripts/check-db-lock.js drizzle-kit generate --config ./src/lib/server/db/drizzle.config.ts",
 		"db:migrate": "node scripts/check-db-lock.js drizzle-kit migrate --config ./src/lib/server/db/drizzle.config.ts",
 		"db:studio": "node scripts/check-db-lock.js drizzle-kit studio --config ./src/lib/server/db/drizzle.config.ts",
+		"db:recover": "node scripts/check-db-lock.js node scripts/db-recover.js",
 		"bundle": "node scripts/bundle-dist.js",
 		"dist": "npm run build && npm run bundle",
 		"create-executables": "node scripts/create-executables.js",

@@ -40,7 +40,7 @@ beforeAll(async () => {
 
 describe("type registry sync", () => {
 	it("seeds the registry from the core contracts", async () => {
-		const r = await syncTypeRegistry(db as any, allTypes(), {
+		const r = await syncTypeRegistry(db, allTypes(), {
 			release: "0.6.0"
 		})
 		expect(r.inserted.length).toBeGreaterThan(20)
@@ -51,7 +51,7 @@ describe("type registry sync", () => {
 	})
 
 	it("is idempotent, which is why it can run unconditionally at boot", async () => {
-		const again = await syncTypeRegistry(db as any, allTypes(), {
+		const again = await syncTypeRegistry(db, allTypes(), {
 			release: "0.6.0"
 		})
 		expect(again.inserted).toEqual([])
@@ -83,12 +83,12 @@ describe("type registry sync", () => {
 				}
 			}
 		}
-		const r = await syncTypeRegistry(db as any, [reworded], {
+		const r = await syncTypeRegistry(db, [reworded], {
 			release: "0.6.0"
 		})
 		expect(r.updated).toContain("core:query/session-history@1")
 
-		const rows = await readTypeRegistry(db as any)
+		const rows = await readTypeRegistry(db)
 		// Registry entries carry the bare id; the version is its own column.
 		const row = rows.find(
 			(e) => `${e.id}@${e.version}` === "core:query/session-history@1"
@@ -98,7 +98,7 @@ describe("type registry sync", () => {
 		)
 
 		// Put the original wording back so later assertions see the build's own.
-		const restore = await syncTypeRegistry(db as any, [base], {
+		const restore = await syncTypeRegistry(db, [base], {
 			release: "0.6.0"
 		})
 		expect(restore.updated).toContain("core:query/session-history@1")
@@ -122,11 +122,11 @@ describe("type registry sync", () => {
 			}
 		} as unknown as Descriptor
 		await expect(
-			syncTypeRegistry(db as any, [drifted], { release: "0.6.1" })
+			syncTypeRegistry(db, [drifted], { release: "0.6.1" })
 		).rejects.toThrow(TypeRegistryConflictError)
 
 		await expect(
-			syncTypeRegistry(db as any, [drifted], { release: "0.6.1" })
+			syncTypeRegistry(db, [drifted], { release: "0.6.1" })
 		).rejects.toThrow(/Publish core:task\/chunk-text@2 instead/)
 	})
 
@@ -140,10 +140,10 @@ describe("type registry sync", () => {
 				out: { main: S.json, chunks: S.json }
 			}
 		} as unknown as Descriptor
-		const r = await syncTypeRegistry(db as any, [v2], { release: "0.6.1" })
+		const r = await syncTypeRegistry(db, [v2], { release: "0.6.1" })
 		expect(r.inserted).toEqual(["core:task/chunk-text@2"])
 
-		const registry = await readTypeRegistry(db as any)
+		const registry = await readTypeRegistry(db)
 		const versions = registry
 			.filter((e) => e.id === "core:task/chunk-text")
 			.map((e) => e.version)
@@ -171,13 +171,13 @@ describe("type registry sync", () => {
 				)
 				.build()
 		)
-		const saved = await saveDocument(db as any, doc)
-		const stored = await loadDocument(db as any, saved.specVersionId)
+		const saved = await saveDocument(db, doc)
+		const stored = await loadDocument(db, saved.specVersionId)
 
 		const findings = checkInstall({
 			declares: [],
 			documents: [stored],
-			registry: await readTypeRegistry(db as any)
+			registry: await readTypeRegistry(db)
 		})
 		expect(installable(findings), renderInstall(findings)).toBe(true)
 	})
@@ -199,7 +199,7 @@ describe("type registry sync", () => {
 		const findings = checkInstall({
 			declares: [],
 			documents: [doc],
-			registry: await readTypeRegistry(db as any)
+			registry: await readTypeRegistry(db)
 		})
 		expect(installable(findings)).toBe(false)
 		expect(findings.find((f) => f.code === "E_SHAPE_DRIFT")?.fix).toMatch(
@@ -234,7 +234,7 @@ describe("the optional flag is stored, and self-corrects", () => {
 					eq(schema.pipelineTypeRegistry.version, 1)
 				)
 			)
-		await syncTypeRegistry(db as any, allTypes(), { release: "test" })
+		await syncTypeRegistry(db, allTypes(), { release: "test" })
 
 		const [row] = await db
 			.select()
@@ -276,7 +276,7 @@ describe("the optional flag is stored, and self-corrects", () => {
 			.set({ optional: false })
 			.where(eq(schema.pipelineTypeRegistry.id, before.id))
 
-		await syncTypeRegistry(db as any, allTypes(), { release: "test" })
+		await syncTypeRegistry(db, allTypes(), { release: "test" })
 
 		const [after] = await db
 			.select()
@@ -341,7 +341,7 @@ describe("the declared name is stored, and self-corrects", () => {
 					eq(schema.pipelineTypeRegistry.version, 1)
 				)
 			)
-		await syncTypeRegistry(db as any, allTypes(), { release: "test" })
+		await syncTypeRegistry(db, allTypes(), { release: "test" })
 
 		const row = await rowFor(PIN)
 		expect(row, "the row was not re-inserted").toBeTruthy()
@@ -355,7 +355,7 @@ describe("the declared name is stored, and self-corrects", () => {
 			.set({ i18n: null })
 			.where(eq(schema.pipelineTypeRegistry.id, before.id))
 
-		await syncTypeRegistry(db as any, allTypes(), { release: "test" })
+		await syncTypeRegistry(db, allTypes(), { release: "test" })
 
 		const [after] = await db
 			.select()
@@ -375,7 +375,7 @@ describe("the declared name is stored, and self-corrects", () => {
 			.set({ i18n: { name: { en: "Something else entirely" } } })
 			.where(eq(schema.pipelineTypeRegistry.id, before.id))
 
-		await syncTypeRegistry(db as any, allTypes(), { release: "test" })
+		await syncTypeRegistry(db, allTypes(), { release: "test" })
 
 		const [after] = await db
 			.select()
@@ -410,7 +410,7 @@ describe("script types ride the node-type sync", () => {
 	}
 
 	it("projects all seven core contracts as rows of kind 'script'", async () => {
-		await syncTypeRegistry(db as any, ALL(), { release: "test" })
+		await syncTypeRegistry(db, ALL(), { release: "test" })
 
 		const rows = await db
 			.select()
@@ -444,7 +444,7 @@ describe("script types ride the node-type sync", () => {
 	})
 
 	it("is idempotent, which is what lets it run unconditionally at boot", async () => {
-		const again = await syncTypeRegistry(db as any, ALL(), {
+		const again = await syncTypeRegistry(db, ALL(), {
 			release: "test"
 		})
 		expect(again.inserted).toEqual([])
@@ -462,7 +462,7 @@ describe("script types ride the node-type sync", () => {
 			.where(eq(schema.pipelineTypeRegistry.id, before.id))
 
 		await expect(
-			syncTypeRegistry(db as any, ALL(), { release: "test" })
+			syncTypeRegistry(db, ALL(), { release: "test" })
 		).rejects.toBeInstanceOf(TypeRegistryConflictError)
 
 		// Put it back, so the shared database is not left conflicting for
@@ -507,7 +507,7 @@ describe("script types ride the node-type sync", () => {
 describe("a registry row round-trips through the reader", () => {
 	it("returns the same content hash it was written with", async () => {
 		await syncTypeRegistry(
-			db as any,
+			db,
 			[...allTypes(), ...allScriptTypes()],
 			{
 				release: "test"
@@ -518,7 +518,7 @@ describe("a registry row round-trips through the reader", () => {
 		)
 
 		const readBack = new Map(
-			(await readTypeRegistry(db as any)).map((e) => [
+			(await readTypeRegistry(db)).map((e) => [
 				`${e.id}@${e.version}`,
 				e
 			])

@@ -122,12 +122,12 @@ async function execute(seed: string) {
 		"$lib/server/pipelines/runtime/host"
 	)
 	return await run(doc(), {
-		world: await buildWorld(db as any, { sessionId }),
+		world: await buildWorld(db, { sessionId }),
 		input: { text: "everything", sessionScope: { sessionId } },
 		seed,
 		triggerSource: "event",
 		bindings,
-		host: createHost(db as any, { sessionId })
+		host: createHost(db, { sessionId })
 	})
 }
 

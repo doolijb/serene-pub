@@ -83,16 +83,21 @@
 		onclose()
 	}
 
+	// Named so `off` can name it too. A bare `socket.off("users:list")` removes
+	// EVERY listener for that event — including other components listening for
+	// the same event — which then stops updating for the rest of the session.
+	function handleUsersList(msg: Sockets.Users.List.Response) {
+		users = msg.users || []
+	}
+
 	onMount(() => {
 		// Fetch all users
 		socket.emit("users:list", {})
 
-		socket.on("users:list", (msg: Sockets.Users.List.Response) => {
-			users = msg.users || []
-		})
+		socket.on("users:list", handleUsersList)
 
 		return () => {
-			socket.off("users:list")
+			socket.off("users:list", handleUsersList)
 		}
 	})
 

@@ -16,6 +16,7 @@
 -->
 <script lang="ts">
 	import { onMount } from "svelte"
+	import { SvelteMap } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
 	import { Dialog, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { fade } from "svelte/transition"
@@ -51,6 +52,49 @@
 	let menuOpenFor = $state<number | null>(null)
 	let busyId = $state<number | null>(null)
 	let brokenIds = $state(new Set<number>())
+
+	/**
+	 * Which pipeline runs made this image, keyed by file id.
+	 *
+	 * ⚠ **Fetched when a detail popover opens, never per tile.** The list is a
+	 * hundred thumbnails and this is one question about one of them; asking it
+	 * for every row would be a hundred round trips to fill a line most of them
+	 * do not have. An entry is written *before* the ask, so re-opening a
+	 * popover mid-flight does not ask twice, and an empty array reads the same
+	 * as an unanswered one — both render nothing, which is exactly what an
+	 * uploaded image should show.
+	 *
+	 * `SvelteMap` rather than `$state(new Map())`: a plain Map's `.set()` is
+	 * not reactive, so the line would arrive and never render.
+	 */
+	let artifactRuns = new SvelteMap<
+		number,
+		Sockets.Pipelines.ArtifactRuns.Run[]
+	>()
+
+	/** The newest few, which is all a popover has room to link. The count on
+	 *  the label above them is the real total. */
+	const runsFor = (item: Item) => artifactRuns.get(item.id) ?? []
+
+	/**
+	 * Where a run's receipt actually lives.
+	 *
+	 * `?tab=runs` is the workspace's own deep link and `?run=` is read by
+	 * `RunsPanel`, which fetches by run id — so this lands on the receipt
+	 * itself rather than on a list the reader then has to search.
+	 */
+	const runHref = (r: Sockets.Pipelines.ArtifactRuns.Run) =>
+		`/admin/pipelines/${encodeURIComponent(r.specSlug)}` +
+		`?tab=runs&run=${encodeURIComponent(r.runId)}`
+
+	function loadRuns(item: Item) {
+		if (artifactRuns.has(item.id)) return
+		artifactRuns.set(item.id, [])
+		socket.emit("pipelines:artifactRuns", {
+			kind: "file",
+			entityId: item.id
+		})
+	}
 
 	// Storage cleanup (0182). Collapsed and unpriced until asked for: the
 	// preview is a full pass over this user's variant rows, and nobody opening
@@ -331,7 +375,19 @@
 			toaster.error({ title: e?.error ?? "Something went wrong" })
 		}
 
+		// Provenance. Silent on failure by design: "which run made this" is an
+		// ambient detail on a panel opened to look at pictures, and a toast for
+		// a line the reader did not ask for is noise, not honesty — the line
+		// simply does not appear.
+		const onArtifactRuns = (
+			res: Sockets.Pipelines.ArtifactRuns.Response
+		) => {
+			if (res.entityId == null || res.error) return
+			artifactRuns.set(res.entityId, res.runs)
+		}
+
 		socket.on("media:list", onList)
+		socket.on("pipelines:artifactRuns", onArtifactRuns)
 		socket.on("media:regenerateThumbnail", onRegen)
 		socket.on("media:delete", onDelete)
 		socket.on("media:cleanupPreview", onCleanup)
@@ -352,6 +408,7 @@
 		// that has caused two real bugs in this codebase.
 		return () => {
 			socket.off("media:list", onList)
+			socket.off("pipelines:artifactRuns", onArtifactRuns)
 			socket.off("media:regenerateThumbnail", onRegen)
 			socket.off("media:delete", onDelete)
 			socket.off("media:cleanupPreview", onCleanup)
@@ -373,7 +430,10 @@
 {#snippet itemMenu(item: Item)}
 	<Popover
 		open={menuOpenFor === item.id}
-		onOpenChange={(e) => (menuOpenFor = e.open ? item.id : null)}
+		onOpenChange={(e) => {
+			menuOpenFor = e.open ? item.id : null
+			if (e.open) loadRuns(item)
+		}}
 		positioning={{ placement: "bottom-end" }}
 	>
 		<Popover.Trigger
@@ -412,6 +472,34 @@
 							{item.variants.map((v) => v.variant).join(", ") ||
 								"nothing stored"}
 						</p>
+						<!-- Where it came from. `pipeline_run_artifacts` has
+						     recorded this since the relation replaced the
+						     nullable column, and nothing ever read it back
+						     here — a generated picture and an uploaded one
+						     looked identical. Absent for an upload, because
+						     "no run" is the ordinary case and a line saying
+						     so every time is what teaches people to stop
+						     reading this block. -->
+						{#if runsFor(item).length}
+							<p class="text-surface-600-400 text-xs">
+								{runsFor(item).length === 1
+									? "Made by a run"
+									: `Made by ${runsFor(item).length} runs`}
+								{#each runsFor(item).slice(0, 3) as r (r.runId)}
+									<br />
+									<a
+										class="anchor"
+										href={runHref(r)}
+										title="Open this run's receipt ({r.runId})"
+									>
+										{r.specSlug}{r.isPreview
+											? " (preview)"
+											: ""}
+									</a>
+									· {shortDate(String(r.startedAt))}
+								{/each}
+							</p>
+						{/if}
 					</header>
 					<article class="flex flex-col gap-1">
 						<button

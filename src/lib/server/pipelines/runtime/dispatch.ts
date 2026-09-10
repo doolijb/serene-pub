@@ -66,6 +66,11 @@ import {
 	connectionIdentity
 } from "$lib/server/connections/visibility"
 import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
+import {
+	composeStopsFor,
+	type ComposedStops
+} from "$lib/server/connections/stops"
+import { resolveThinking } from "$lib/shared/utils/thinkingDelimiters"
 
 /**
  * A dispatch failure, and a marker: this sentence is ours.
@@ -78,11 +83,6 @@ import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
  * everyone who is not an administrator.
  */
 export class DispatchError extends ComposedError {}
-
-/** Just the query surface this module needs, so any caller's db will do. */
-export interface DbLike {
-	query: { sessions: { findFirst: (args: unknown) => Promise<any> } }
-}
 
 export interface DispatchRequest {
 	/** The payload an adapter would otherwise have built for itself. */
@@ -97,7 +97,7 @@ export interface DispatchRequest {
 	 * against anything else, which includes every future case where "anything
 	 * else" matters — a dry run, a replay, a second instance.
 	 */
-	db: DbLike
+	db: Db
 	sessionId: number
 	userId?: number
 	/** Null in narrator mode, matching the legacy adapter's own convention. */
@@ -123,6 +123,17 @@ export interface DispatchRequest {
 	 */
 	attachments?: readonly (MediaRef | string)[]
 	samplingId?: number | null
+	/**
+	 * The author's own stop sequences — `generate-text.params.stopSequences`,
+	 * forwarded verbatim from the node's params slot.
+	 *
+	 * ⚠ Only the EXPLICIT kind travels here. The format and speaker kinds are
+	 * derived from the connection's completion template and the session's cast,
+	 * both of which this module resolves for itself below, so passing them in
+	 * would be a second reading of the same facts — the shape
+	 * `connections/stops.ts` exists to remove. See `composeStops`.
+	 */
+	stopSequences?: readonly string[] | null
 	/** Called with each chunk when the adapter streams. */
 	onChunk?: (chunk: string) => void
 	onThinking?: (chunk: string) => void
@@ -144,6 +155,17 @@ export interface DispatchResult {
 	 * leak no projection can find.
 	 */
 	via: string
+	/**
+	 * What this request stopped on, and what it was not allowed to stop on.
+	 *
+	 * On the receipt rather than only on the wire, because the failure this
+	 * whole area exists to stop being silent has no error attached to it: a stop
+	 * sequence the model never sees means a reply that runs on, and one that
+	 * matches at position zero means an empty reply. Both read as a bad model.
+	 * `dropped` is the half that answers "why is my stop sequence not working" —
+	 * it names the entries the wire rule held back, with the kind that decided.
+	 */
+	stops: ComposedStops & { hit?: string }
 }
 
 /**
@@ -154,7 +176,7 @@ export interface DispatchResult {
  * receipt and in every downstream node's input — the prompt text is what the
  * pipeline is carrying, not the rows it came from.
  */
-async function loadAdapterSession(db: DbLike, sessionId: number) {
+async function loadAdapterSession(db: Db, sessionId: number) {
 	const session = await db.query.sessions.findFirst({
 		where: (c: any, { eq }: any) => eq(c.id, sessionId),
 		with: {
@@ -361,11 +383,12 @@ const idsOf = (payload: any, included: boolean): number[] =>
  * from a model ignoring it — the failure the whole attachment path is arranged
  * to prevent.
  *
- * `db: any` for the same reason `mediaParts` takes one: the media module wants
- * the real drizzle type and every caller here holds a structural subset of it.
+ * Takes the handle as a parameter, the same posture `mediaParts` keeps next
+ * door: `$lib/server/media` is imported lazily below, so no importer of the
+ * dispatch path ends up with a live PGlite handle behind it.
  */
 export async function resolveAttachments(
-	db: any,
+	db: Db,
 	refs: readonly unknown[],
 	scope: { sessionId: number; userId?: number }
 ): Promise<AttachmentInput[]> {
@@ -509,6 +532,25 @@ export async function dispatchGeneration(
 		generatingMessageMetadata: request.generatingMessageMetadata ?? {}
 	})
 
+	// The stop sequences, composed ONCE and handed over (ruling 2026-09-10).
+	//
+	// ⚠ Composed HERE rather than in the adapter, and the difference is the
+	// whole of the ruling: five adapters each built their own list and applied
+	// their own wire rule, so a completion template's role labels went out on
+	// Ollama's CHAT request — where they override the model's native
+	// `<|im_end|>` and truncate the reply — while OpenAI and llama.cpp
+	// deliberately withheld them and KoboldCPP sent nothing at all. One
+	// composition point cannot disagree with itself.
+	//
+	// The template is dereferenced the same way `BaseConnectionAdapter`
+	// dereferences it, so the markers the prompt is wrapped in and the strings
+	// it stops on cannot come from two different resolutions.
+	const stops = composeStopsFor(connection, session, {
+		currentCharacterId: request.currentCharacterId ?? null,
+		explicit: request.stopSequences
+	})
+	adapter.withStops(stops)
+
 	// After this line the adapter builds nothing. Everything below is the same
 	// code the legacy path runs.
 	adapter.withCompiledPrompt(
@@ -585,6 +627,16 @@ export async function dispatchGeneration(
 					request.onThinking?.(chunk)
 				}
 			)
+			// `TextGenResult.thinkingContent` is documented as non-streaming
+			// only — a streaming adapter delivers reasoning through the callback
+			// above. Read anyway, as a fallback the contract says should never
+			// fire: an adapter that populated both would otherwise have its
+			// streamed half silently dropped here while the non-streaming branch
+			// below reads the field. Note what this can and cannot be: the value
+			// was captured when `generateText()` returned, i.e. before the stream
+			// ran, so it can only ever carry a trace the adapter had in hand up
+			// front.
+			if (!thinking) thinking = result.thinkingContent ?? ""
 		} else {
 			text = result.completionResult ?? ""
 			thinking = result.thinkingContent ?? ""
@@ -594,11 +646,33 @@ export async function dispatchGeneration(
 			if (text) request.onChunk?.(text)
 		}
 
+		// The pipeline's own strip, and the reason no consumer of this function
+		// has to have one. `text` goes on a port and from there into a lore
+		// entry, a scene, a summary, a session message — durable records, every
+		// one of them, with no later stage that could tell reasoning from what
+		// the model meant to say. Reasoning already has a home on this result,
+		// so nothing is lost by moving it there.
+		//
+		// The chunks forwarded above are deliberately NOT filtered: a sink is a
+		// live view of the stream and the caller re-parses the accumulated
+		// buffer anyway (see generateResponse). Filtering deltas would mean
+		// parsing across chunk boundaries, which is the one thing the
+		// accumulate-then-parse shape exists to avoid.
+		const resolved = resolveThinking(text, thinking)
+
 		return {
-			text,
-			thinking: thinking || undefined,
+			text: resolved.content,
+			thinking: resolved.thinking,
 			isAborted: Boolean(result.isAborted),
-			via: connection.type
+			via: connection.type,
+			// Read AFTER the stream has been drained, which is why the hit is a
+			// property on the adapter rather than a field on `TextGenResult`:
+			// a streaming adapter only learns which sequence matched while the
+			// loop above is running, long after `generateText()` returned.
+			stops: {
+				...stops,
+				...(adapter.stopHit ? { hit: adapter.stopHit } : {})
+			}
 		}
 	} finally {
 		request.signal?.removeEventListener("abort", onAbort)

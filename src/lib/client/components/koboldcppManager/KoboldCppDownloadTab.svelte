@@ -167,60 +167,67 @@
 		showQuantModal = true
 	}
 
-	onMount(() => {
-		socket.on(
-			"koboldcpp:searchModels",
-			(msg: Sockets.KoboldCPP.SearchModels.Response) => {
-				isSearching = false
-				searchResults = msg.models
-			}
-		)
-		socket.on(
-			"koboldcpp:searchModels:error",
-			(msg: Sockets.ErrorResponse) => {
-				isSearching = false
-				// The reason matters more here than it used to: search is rate
-				// limited instance-wide (5 per minute, one budget shared by both
-				// kinds), and switching Text/Image re-runs the active search. A
-				// user comparing the two result sets can spend the budget in
-				// seconds, and a bare "Search failed" gives them nothing to
-				// connect it to — the server's message names the wait.
-				toaster.error({
-					title: "Search failed",
-					description: msg.error
-				})
-			}
-		)
+	// Named so `off` can name them too. A bare `socket.off("koboldcpp:searchModels")`
+	// removes EVERY listener for that event.
+	function handleSearchModels(msg: Sockets.KoboldCPP.SearchModels.Response) {
+		isSearching = false
+		searchResults = msg.models
+	}
 
-		socket.on("koboldcpp:downloadModel", () => {})
-		socket.on(
-			"koboldcpp:downloadModel:error",
-			(msg: Sockets.ErrorResponse) => {
-				toaster.error({
-					title: "Download failed",
-					description: msg.error
-				})
-			}
-		)
-
-		socket.on(
-			"koboldcpp:recommendedModels",
-			(msg: Sockets.KoboldCPP.RecommendedModels.Response) => {
-				isLoadingRecommended = false
-				// The image branch reports a failed fetch on the SUCCESS
-				// response — it catches its own single fetch rather than
-				// throwing — so a hard `false` here would render an outage as
-				// "no image models exist" and send the user to Hugging Face,
-				// which is the host that just failed.
-				recommendedFailed = msg.failed ?? false
-				recommendedModels = msg.models
-			}
-		)
-		socket.on("koboldcpp:recommendedModels:error", () => {
-			isLoadingRecommended = false
-			recommendedFailed = true
-			toaster.error({ title: "Failed to load recommended models" })
+	function handleSearchModelsError(msg: Sockets.ErrorResponse) {
+		isSearching = false
+		// The reason matters more here than it used to: search is rate
+		// limited instance-wide (5 per minute, one budget shared by both
+		// kinds), and switching Text/Image re-runs the active search. A
+		// user comparing the two result sets can spend the budget in
+		// seconds, and a bare "Search failed" gives them nothing to
+		// connect it to — the server's message names the wait.
+		toaster.error({
+			title: "Search failed",
+			description: msg.error
 		})
+	}
+
+	function handleDownloadModel() {}
+
+	function handleDownloadModelError(msg: Sockets.ErrorResponse) {
+		toaster.error({
+			title: "Download failed",
+			description: msg.error
+		})
+	}
+
+	function handleRecommendedModels(
+		msg: Sockets.KoboldCPP.RecommendedModels.Response
+	) {
+		isLoadingRecommended = false
+		// The image branch reports a failed fetch on the SUCCESS
+		// response — it catches its own single fetch rather than
+		// throwing — so a hard `false` here would render an outage as
+		// "no image models exist" and send the user to Hugging Face,
+		// which is the host that just failed.
+		recommendedFailed = msg.failed ?? false
+		recommendedModels = msg.models
+	}
+
+	function handleRecommendedModelsError() {
+		isLoadingRecommended = false
+		recommendedFailed = true
+		toaster.error({ title: "Failed to load recommended models" })
+	}
+
+	onMount(() => {
+		socket.on("koboldcpp:searchModels", handleSearchModels)
+		socket.on("koboldcpp:searchModels:error", handleSearchModelsError)
+
+		socket.on("koboldcpp:downloadModel", handleDownloadModel)
+		socket.on("koboldcpp:downloadModel:error", handleDownloadModelError)
+
+		socket.on("koboldcpp:recommendedModels", handleRecommendedModels)
+		socket.on(
+			"koboldcpp:recommendedModels:error",
+			handleRecommendedModelsError
+		)
 
 		// The sidebar owns the kind and this tab is remounted on every visit,
 		// so the first fetch is simply for whatever kind is current — which is
@@ -252,12 +259,15 @@
 	}
 
 	onDestroy(() => {
-		socket.off("koboldcpp:searchModels")
-		socket.off("koboldcpp:searchModels:error")
-		socket.off("koboldcpp:downloadModel")
-		socket.off("koboldcpp:downloadModel:error")
-		socket.off("koboldcpp:recommendedModels")
-		socket.off("koboldcpp:recommendedModels:error")
+		socket.off("koboldcpp:searchModels", handleSearchModels)
+		socket.off("koboldcpp:searchModels:error", handleSearchModelsError)
+		socket.off("koboldcpp:downloadModel", handleDownloadModel)
+		socket.off("koboldcpp:downloadModel:error", handleDownloadModelError)
+		socket.off("koboldcpp:recommendedModels", handleRecommendedModels)
+		socket.off(
+			"koboldcpp:recommendedModels:error",
+			handleRecommendedModelsError
+		)
 	})
 </script>
 

@@ -15,7 +15,6 @@
  */
 import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import type { PgliteDatabase } from "drizzle-orm/pglite"
 
 // The shared `db` is reached through a lazy dynamic import rather than a
 // top-level one, matching the other db-helper modules in this directory
@@ -32,10 +31,7 @@ import type { PgliteDatabase } from "drizzle-orm/pglite"
 // thing that reshuffles Rollup's chunking and surfaces boot-time TDZ errors
 // in packaged builds.
 
-/** Anything with `.select`/`.insert`/`.delete` — the db handle or a transaction. */
-type DbLike = PgliteDatabase<typeof schema>
-
-async function defaultDb(): Promise<DbLike> {
+async function defaultDb(): Promise<Db> {
 	return (await import("$lib/server/db")).db
 }
 
@@ -80,7 +76,7 @@ function group(rows: CastRow[]): Map<number, SceneCast> {
  */
 export async function readSceneCasts(
 	sceneIds: number[],
-	dbInstance?: DbLike
+	dbInstance?: Db
 ): Promise<Map<number, SceneCast>> {
 	if (sceneIds.length === 0) return new Map()
 	const database = dbInstance ?? (await defaultDb())
@@ -102,7 +98,7 @@ export async function readSceneCasts(
 
 export async function readSceneCast(
 	sceneId: number,
-	dbInstance?: DbLike
+	dbInstance?: Db
 ): Promise<SceneCast> {
 	const casts = await readSceneCasts([sceneId], dbInstance)
 	return castFor(casts, sceneId)
@@ -124,12 +120,20 @@ export function castFor(
 export { EMPTY_CAST }
 
 /**
- * Replace one scene's cast wholesale.
+ * Replace one scene's cast, **in exactly the roles the caller names**.
  *
  * Delete-then-insert rather than a diff: the arrays this replaces were always
  * written wholesale, so a caller passing `[a, b]` means "the cast is exactly
  * a and b" — a diff would have to infer removals anyway. Doing it in one
  * statement pair also keeps `ordinal` trivially correct.
+ *
+ * ⚠ An ABSENT role key means *leave that role alone*, not *empty it*. This is
+ * what lets the graph build write participants without touching the `mentioned`
+ * rows it no longer has an opinion about (plan §1 iced that half: it is derived
+ * from annotations now, so writing an empty list would destroy pre-icing data
+ * to no purpose and re-adding the write would be the only way back). Every
+ * caller that existed when this changed passed both keys, so nothing that meant
+ * "clear it" started meaning something else — pass `[]` for that.
  *
  * Writes EXACTLY what it is given, deduped within each role but NOT across
  * them. Disjointness is deliberately not enforced here: a binding legitimately
@@ -149,30 +153,34 @@ export { EMPTY_CAST }
 export async function writeSceneCast(
 	sceneId: number,
 	cast: Partial<SceneCast>,
-	dbInstance?: DbLike
+	dbInstance?: Db
 ): Promise<void> {
 	const database = dbInstance ?? (await defaultDb())
-	const participants = [...new Set(cast.participantCharacters ?? [])]
-	const mentioned = [...new Set(cast.mentionedCharacters ?? [])]
+	const roles: Array<[schema.SceneCharacterRole, number[]]> = []
+	if (cast.participantCharacters !== undefined)
+		roles.push(["participant", [...new Set(cast.participantCharacters)]])
+	if (cast.mentionedCharacters !== undefined)
+		roles.push(["mentioned", [...new Set(cast.mentionedCharacters)]])
+	if (roles.length === 0) return
 
-	await database
-		.delete(schema.sceneCharacters)
-		.where(eq(schema.sceneCharacters.sceneId, sceneId))
+	await database.delete(schema.sceneCharacters).where(
+		and(
+			eq(schema.sceneCharacters.sceneId, sceneId),
+			inArray(
+				schema.sceneCharacters.role,
+				roles.map(([role]) => role)
+			)
+		)
+	)
 
-	const rows = [
-		...participants.map((bindingId, ordinal) => ({
+	const rows = roles.flatMap(([role, bindingIds]) =>
+		bindingIds.map((bindingId, ordinal) => ({
 			sceneId,
 			bindingId,
-			role: "participant" as const,
-			ordinal
-		})),
-		...mentioned.map((bindingId, ordinal) => ({
-			sceneId,
-			bindingId,
-			role: "mentioned" as const,
+			role,
 			ordinal
 		}))
-	]
+	)
 	if (rows.length > 0) {
 		await database.insert(schema.sceneCharacters).values(rows)
 	}
@@ -192,7 +200,7 @@ export async function repointSceneCast(
 	lorebookId: number,
 	fromBindingId: number,
 	toBindingId: number,
-	dbInstance?: DbLike
+	dbInstance?: Db
 ): Promise<void> {
 	const database = dbInstance ?? (await defaultDb())
 	const scenesInLorebook = await database

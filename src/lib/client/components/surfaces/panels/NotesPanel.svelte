@@ -23,6 +23,23 @@
 	const widget = useWidgetContext()
 	let ctx = $derived(widget?.current)
 
+	// …and of the `on` verb. The probe below prints the last event this widget
+	// was handed, which is what makes the event lane VISIBLE rather than merely
+	// typed. `$effect` for the subscription so the unsubscribe is the cleanup —
+	// a probe that leaked a listener per re-render would be a poor advert for
+	// the verb it exists to demonstrate.
+	let lastEvent = $state<string>("—")
+	let eventCount = $state(0)
+	$effect(() => {
+		const c = widget?.current
+		if (!c) return
+		return c.on("*", (e) => {
+			eventCount += 1
+			const ch = (e as { channel?: string }).channel
+			lastEvent = ch ? `${e.kind} ${ch}` : e.kind
+		})
+	})
+
 	interface Task {
 		id: string
 		text: string
@@ -74,14 +91,29 @@
 <div class="flex h-full flex-col gap-2 p-2">
 	{#if ctx}
 		<!-- PLAN 25 ctx probe: proves the unified data pipe reaches a native
-		     widget. session name + width tier + scoped, channel-filtered count. -->
+		     widget. Session, the REAL placement the zone measured (grid dims,
+		     this widget's cell, the zone edges it touches, its own width tier),
+		     the scoped message count, and the last event the `on` verb
+		     delivered. `edges` reads t/r/b/l, upper-case for the ones it touches. -->
+		{@const l = ctx.layout.v1}
 		<div
-			class="preset-tonal-primary text-[10px] rounded px-2 py-1"
+			class="preset-tonal-primary rounded px-2 py-1 text-[10px]"
 			data-testid="widget-ctx-probe"
 			title="Unified widget context (PLAN 25)"
 		>
-			ctx · {ctx.session.v1.name ?? `#${ctx.session.v1.id}`} · {ctx.layout.v1
-				.tier} · {ctx.messages.v1.length} msg
+			ctx · {ctx.session.v1.name ?? `#${ctx.session.v1.id}`} · zone {l.zone
+				.columns}×{l.zone.rows} @ c{l.zone.column}r{l.zone.row} · box {l
+				.box.cols}×{l.box.rows ?? "auto"} · edges {(
+				[
+					["t", l.box.edges.top],
+					["r", l.box.edges.right],
+					["b", l.box.edges.bottom],
+					["l", l.box.edges.left]
+				] as const
+			)
+				.map(([k, on]) => (on ? k.toUpperCase() : k))
+				.join("")} · {l.tier} · {ctx.messages.v1.length} msg · ev {eventCount}:
+			{lastEvent}
 		</div>
 	{/if}
 	<form

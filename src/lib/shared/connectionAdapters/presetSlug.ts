@@ -32,7 +32,7 @@
 
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import {
-	OPENAI_CHAT_PRESETS,
+	OPENAI_COMPATIBLE_PRESETS,
 	presetLabel
 } from "$lib/shared/utils/connectionDefaults"
 import { PRESET_CAPABILITIES } from "./manifest"
@@ -42,7 +42,7 @@ import { PRESET_CAPABILITIES } from "./manifest"
  * the two lists that give a slug meaning, and it has to be the union rather than
  * either half.
  *
- * `OPENAI_CHAT_PRESETS` is where a slug comes FROM; `PRESET_CAPABILITIES` is
+ * `OPENAI_COMPATIBLE_PRESETS` is where a slug comes FROM; `PRESET_CAPABILITIES` is
  * where one is READ. The preset list's own docblock says the two may
  * legitimately disagree in both directions — "adding a slug here without a
  * matching key in `PRESET_CAPABILITIES` is harmless" — and today they disagree
@@ -56,7 +56,7 @@ import { PRESET_CAPABILITIES } from "./manifest"
  * unchanged the day a preset starts offering it.
  */
 const KNOWN_PRESET_SLUGS: ReadonlySet<string> = new Set<string>([
-	...OPENAI_CHAT_PRESETS.flatMap((p) => {
+	...OPENAI_COMPATIBLE_PRESETS.flatMap((p) => {
 		const slug = (p as { slug?: string }).slug
 		return slug ? [slug] : []
 	}),
@@ -73,9 +73,9 @@ export function isKnownPresetSlug(slug: string): boolean {
  * one.
  *
  * Derived from membership rather than stored per preset, because membership IS
- * the association: `OPENAI_CHAT_PRESETS` is the OpenAI-compatible zoo and
+ * the association: `OPENAI_COMPATIBLE_PRESETS` is the OpenAI-compatible zoo and
  * nothing else, its entries carry no `type` field of their own, and
- * `buildConnectionServiceItems` hardcodes `CONNECTION_TYPE.OPENAI_CHAT` for
+ * `buildConnectionServiceItems` hardcodes `CONNECTION_TYPE.OPENAI` for
  * every one of them it flattens into the picker. Adding a preset therefore needs
  * no second edit here.
  *
@@ -87,10 +87,10 @@ export function isKnownPresetSlug(slug: string): boolean {
  * happening on its own.
  */
 export function presetHomeType(slug: string): string | null {
-	return OPENAI_CHAT_PRESETS.some(
+	return OPENAI_COMPATIBLE_PRESETS.some(
 		(p) => (p as { slug?: string }).slug === slug
 	)
-		? CONNECTION_TYPE.OPENAI_CHAT
+		? CONNECTION_TYPE.OPENAI
 		: null
 }
 

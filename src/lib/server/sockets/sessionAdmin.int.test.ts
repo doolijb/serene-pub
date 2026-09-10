@@ -99,6 +99,28 @@ describe("presets list — the picker's cut", () => {
 		for (const id of [live.id, hidden.id, offType.id])
 			expect(adminIds).toContain(id)
 	}, 60_000)
+
+	// The create flow's step 3 pre-fills from `defaults` (schema 23 §9:
+	// "Optional pre-fill for creation"). The blob is stored, so it has to
+	// reach the picker — a column nothing puts on the wire cannot pre-fill
+	// anything.
+	test("the picker's cut carries each preset's creation pre-fill", async () => {
+		const { sessionPresetsList } = await import("./sessionAdmin")
+		const prefilled = await makePreset({
+			name: "Pre-filled",
+			defaults: {
+				name: "A quiet evening",
+				scenario: "The lamps are lit"
+			}
+		})
+		const bare = await makePreset({ name: "No pre-fill" })
+
+		const res = await sessionPresetsList.handler(user(), {}, noopEmit)
+		expect(res.presets.find((p) => p.id === prefilled.id)!.defaults).toEqual(
+			{ name: "A quiet evening", scenario: "The lamps are lit" }
+		)
+		expect(res.presets.find((p) => p.id === bare.id)!.defaults).toBeNull()
+	}, 60_000)
 })
 
 describe("preset mutations", () => {

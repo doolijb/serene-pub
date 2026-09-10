@@ -139,7 +139,7 @@ interface NodeInfo {
 	aliases: string[]
 }
 
-async function fetchNodeMap(db: typeof defaultDb, nodeIds: number[]) {
+async function fetchNodeMap(db: Db, nodeIds: number[]) {
 	if (nodeIds.length === 0) return new Map<number, NodeInfo>()
 	const nodes = await db.query.lorebookBindings.findMany({
 		where: inArray(schema.lorebookBindings.id, nodeIds),
@@ -243,7 +243,7 @@ export async function buildGraphContextData(params: {
 	 * database from inside a test suite that had never opened one, and the
 	 * node timed out at 2s on every run.
 	 */
-	db?: typeof defaultDb
+	db?: Db
 }): Promise<GraphContextData | null> {
 	const { sessionId, lorebookId, speakerCharacterId, speakerPersonaId } =
 		params

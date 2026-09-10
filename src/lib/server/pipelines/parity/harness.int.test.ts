@@ -237,10 +237,14 @@ beforeAll(async () => {
  * that are not in its own description.
  */
 async function seedWorld(
-	db: any,
+	db: Db,
 	opts: {
-		characters: Array<Record<string, unknown>>
-		personas?: Array<Record<string, unknown>>
+		characters: Array<Omit<InsertCharacter, "userId">>
+		personas?: Array<
+			Omit<InsertPersona, "userId" | "isDefault"> & {
+				isDefault?: boolean
+			}
+		>
 		lore?: Array<Record<string, unknown>>
 		messages: Array<{ role: string; content: string; speaker?: number }>
 		isGroup?: boolean
@@ -347,7 +351,7 @@ const ASHGUARD = {
 /** One character, one persona, one lore entry, a short history. */
 const oneOnOne: ParityFixture = {
 	name: "session/one-on-one",
-	async seed(db: any) {
+	async seed(db) {
 		const w = await seedWorld(db, {
 			characters: [
 				{
@@ -383,7 +387,7 @@ const oneOnOne: ParityFixture = {
  */
 const groupSession: ParityFixture = {
 	name: "session/group",
-	async seed(db: any) {
+	async seed(db) {
 		const w = await seedWorld(db, {
 			isGroup: true,
 			characters: [
@@ -420,7 +424,7 @@ const groupSession: ParityFixture = {
  */
 const macroHeavy: ParityFixture = {
 	name: "session/macros-in-cards",
-	async seed(db: any) {
+	async seed(db) {
 		const w = await seedWorld(db, {
 			characters: [
 				{
@@ -462,7 +466,7 @@ const macroHeavy: ParityFixture = {
  */
 const decoratedLore: ParityFixture = {
 	name: "session/decorated-lore",
-	async seed(db: any) {
+	async seed(db) {
 		const w = await seedWorld(db, {
 			characters: [
 				{ name: "Alice", description: "A knight of the gate." }
@@ -509,7 +513,7 @@ const decoratedLore: ParityFixture = {
  */
 const postHistory: ParityFixture = {
 	name: "session/post-history",
-	async seed(db: any) {
+	async seed(db) {
 		const [config] = await db
 			.insert(schema.promptConfigs)
 			.values({
@@ -557,7 +561,7 @@ const postHistory: ParityFixture = {
  */
 const datedHistory: ParityFixture = {
 	name: "session/history-entries",
-	async seed(db: any) {
+	async seed(db) {
 		const w = await seedWorld(db, {
 			characters: [{ name: "Alice", description: "A knight." }],
 			messages: [{ role: "user", content: "What happened at the siege?" }]
@@ -601,7 +605,7 @@ const datedHistory: ParityFixture = {
  */
 const mixedVisibility: ParityFixture = {
 	name: "session/visibility",
-	async seed(db: any) {
+	async seed(db) {
 		const w = await seedWorld(db, {
 			characters: [
 				{ name: "Alice", description: "A knight." },
@@ -655,7 +659,7 @@ const mixedVisibility: ParityFixture = {
  */
 const narrator: ParityFixture = {
 	name: "session/narrator",
-	async seed(db: any) {
+	async seed(db) {
 		const [config] = await db
 			.insert(schema.promptConfigs)
 			.values({
@@ -709,7 +713,7 @@ const narrator: ParityFixture = {
  */
 const overBudget: ParityFixture = {
 	name: "session/over-budget",
-	async seed(db: any) {
+	async seed(db) {
 		// Distinct `position` values, deliberately. With every entry at the
 		// default 0 the tie-break falls through to whatever order the database
 		// happened to return, on **both** paths — neither issues an ORDER BY —
@@ -774,7 +778,7 @@ const overBudget: ParityFixture = {
  */
 const entityCooccurrence: ParityFixture = {
 	name: "session/entity-cooccurrence",
-	async seed(db: any) {
+	async seed(db) {
 		const w = await seedWorld(db, {
 			characters: [
 				{
@@ -834,7 +838,7 @@ const entityCooccurrence: ParityFixture = {
  */
 const shippedTemplate: ParityFixture = {
 	name: "session/shipped-template",
-	async seed(db: any) {
+	async seed(db) {
 		const { DEFAULT_CONTEXT_TEMPLATE } = await import(
 			"$lib/server/db/legacyContextTemplate"
 		)
@@ -910,7 +914,7 @@ const shippedTemplate: ParityFixture = {
  */
 const allHidden: ParityFixture = {
 	name: "session/all-hidden",
-	async seed(db: any) {
+	async seed(db) {
 		const w = await seedWorld(db, {
 			characters: [{ name: "Alice", description: "A knight." }],
 			messages: [{ role: "user", content: "Anyone there?" }]
@@ -946,7 +950,7 @@ const allHidden: ParityFixture = {
  */
 const withPipelineTemplate = (f: ParityFixture): ParityFixture => ({
 	name: f.name,
-	async seed(db: any) {
+	async seed(db) {
 		return { pipelineTemplate: TEMPLATE, ...(await f.seed(db)) }
 	}
 })
@@ -1061,7 +1065,7 @@ describe("the parity corpus", () => {
 			// the template rather than on the thing it is holding, so it would
 			// stay open through the fix and never be promoted.
 			const r = await runFixture(
-				db as any,
+				db,
 				withPipelineTemplate(fixture),
 				configs
 			)
@@ -1142,10 +1146,8 @@ describe("the parity corpus", () => {
 			})
 			.where(eq(schema.systemSettings.id, 1))
 
-		const scope = await withPipelineTemplate(entityCooccurrence).seed(
-			db as any
-		)
-		const run: any = await pipelinePreview(db as any, scope)
+		const scope = await withPipelineTemplate(entityCooccurrence).seed(db)
+		const run: any = await pipelinePreview(db, scope)
 		const worldLore = (run.nodes as any[]).find(
 			(n) => n.nodeKey === "worldLore"
 		)
@@ -1239,11 +1241,7 @@ describe("the parity corpus", () => {
 		const results = []
 		for (const fixture of CORPUS)
 			results.push(
-				await runFixture(
-					db as any,
-					withPipelineTemplate(fixture),
-					configs
-				)
+				await runFixture(db, withPipelineTemplate(fixture), configs)
 			)
 
 		const gate = parityGate(results, CORPUS.length)
@@ -1257,8 +1255,8 @@ describe("the parity corpus", () => {
 			const { goldenPathFor, pipelinePreview } = await import(
 				"$lib/server/pipelines/parity/harness"
 			)
-			const scope = await CORPUS[0]!.seed(db as any)
-			const pv: any = await pipelinePreview(db as any, scope)
+			const scope = await CORPUS[0]!.seed(db)
+			const pv: any = await pipelinePreview(db, scope)
 			console.log(
 				"--- 0.5 (frozen golden) ---\n" +
 					readFileSync(goldenPathFor(CORPUS[0]!.name), "utf8") +
@@ -1300,7 +1298,7 @@ describe("the parity corpus", () => {
 			expect(because.length).toBeGreaterThan(120)
 
 			const r = await runFixture(
-				db as any,
+				db,
 				withPipelineTemplate(fixture),
 				configs
 			)
@@ -1312,8 +1310,8 @@ describe("the parity corpus", () => {
 				identical: false
 			})
 
-			const scope = await withPipelineTemplate(fixture).seed(db as any)
-			const preview: any = await pipelinePreview(db as any, scope)
+			const scope = await withPipelineTemplate(fixture).seed(db)
+			const preview: any = await pipelinePreview(db, scope)
 			const pipeline: string =
 				preview.preview?.context?.rendered?.rendered ?? ""
 			const legacy = readFileSync(goldenPathFor(fixture.name), "utf8")

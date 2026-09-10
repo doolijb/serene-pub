@@ -1,8 +1,6 @@
 import { sql } from "drizzle-orm"
 import { db as defaultDb } from "$lib/server/db"
 
-type DbLike = typeof defaultDb
-
 /**
  * Give scene-derived relationships the history entry they were always
  * associated with.
@@ -22,7 +20,7 @@ type DbLike = typeof defaultDb
  * Safe to call on every boot, like backfillMissingBindingNames.
  */
 export async function backfillRelationshipHistoryEntries(
-	dbInstance?: DbLike
+	dbInstance?: Db
 ): Promise<number> {
 	const db = dbInstance ?? defaultDb
 	const result = await db.execute(sql`

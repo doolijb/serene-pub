@@ -22,6 +22,7 @@
 import Handlebars from "handlebars"
 import { registerContextHandlebarsHelpers } from "$lib/shared/utils/contextHandlebarsHelpers"
 import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
+import type { CompletionTemplate } from "$lib/shared/constants/completionTemplates"
 
 export const CORE_TEMPLATE_ENGINE = "core:template/handlebars@1"
 
@@ -52,6 +53,22 @@ export interface RenderContext extends RenderRun {
 	variables: Record<string, unknown>
 	/** Passed through so an engine can honour the connection's prompt format. */
 	promptFormat?: string
+	/**
+	 * The `completion_templates` row that format names, already loaded.
+	 *
+	 * ⚠ The key on its own resolves against the BUILT-INS only, so without this
+	 * an admin-authored template rendered as the default — delimiters authored,
+	 * saved, and absent from every prompt. `config/world.ts` dereferences the
+	 * row; `runtime/bindings.ts` and `prompt/assemble.ts` carry it here.
+	 *
+	 * Separate from `promptFormat` rather than replacing it, because the key is
+	 * a REFERENCE and this is its value: the key is what the receipt reports
+	 * (`runtime/dispatch.ts`), what `connections.prompt_format` stores, and what
+	 * a plugin engine's hook payload has always carried. Widening that string
+	 * into a union would change a published contract to say something it can
+	 * already say beside it.
+	 */
+	completionTemplate?: CompletionTemplate
 }
 
 /**
@@ -66,19 +83,39 @@ const renderers = new Map<string, { render: TemplateRenderer; owner: string }>()
 
 /** Core's renderer: the same construction the legacy prompt path uses. */
 function renderHandlebars(ctx: RenderContext): string {
+	/**
+	 * ⚠ A FRESH Handlebars per render, and it is load-bearing here.
+	 *
+	 * `registerContextHandlebarsHelpers` wraps every registration in
+	 * `if (!handlebars.helpers.X)`, so the block helpers close over whichever
+	 * template was passed the FIRST time they were registered on an instance.
+	 * On a shared instance that would pin every prompt on the instance to the
+	 * first connection that rendered — and now that the template can be a row
+	 * somebody is editing, it would also mean an admin's save appearing to do
+	 * nothing until a restart. Nothing between the table and this line
+	 * memoises, for the same reason (see
+	 * `connections/completionTemplates.ts`).
+	 */
 	const handlebars = Handlebars.create()
 	registerContextHandlebarsHelpers(handlebars, {
-		// `promptFormatOf`, not `?? "vicuna"`: the block helpers hand this
-		// straight to `PromptBlockFormatter.makeBlock`, whose `default:` arm is
-		// ChatML — so an empty string here silently rewraps every block in a
-		// format nobody chose. See the helper's own note.
+		// The resolved ROW when the caller loaded one, and only then the key.
+		//
+		// `makeBlock` takes either, but a bare key resolves against the
+		// BUILT-INS — so a key alone renders eight templates and silently
+		// substitutes the default for every other row in the table. Passing the
+		// row is what makes an admin-authored template mean anything at all.
+		//
+		// `promptFormatOf`, not `?? "vicuna"`, for the key half: an empty string
+		// is a CLEARED format and `"" ?? x` is `""`, which used to reach
+		// `makeBlock`'s `default:` arm and rewrap every block as ChatML.
 		//
 		// ⚠ This fallback used to fire on **every pipeline run**, not just the
 		// ones with nothing to say: nothing supplied `promptFormat` to the
 		// render at all, so a ChatML connection got Vicuna and the receipt said
 		// otherwise. It reaches only genuine absences now — a preview with no
 		// connection in scope, an admin editing a template.
-		promptFormat: promptFormatOf(ctx.promptFormat)
+		promptFormat:
+			ctx.completionTemplate ?? promptFormatOf(ctx.promptFormat)
 	})
 	return handlebars.compile(ctx.template)(ctx.variables)
 }

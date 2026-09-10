@@ -65,8 +65,7 @@
 
 import { createHash } from "node:crypto"
 import { sql } from "drizzle-orm"
-
-type Db = { execute: (q: any) => Promise<any> }
+import { rawRows } from "$lib/server/db/rawRows"
 
 /** The table everything here projects onto. */
 const TABLE = "lorebook_entries"
@@ -308,8 +307,6 @@ export interface ProjectedEntryType {
 	indexes: Array<{ name: string; field: string; ddl: string }>
 }
 
-const rowsOf = (res: any): any[] => res?.rows ?? res ?? []
-
 /**
  * The entry types this instance actually has, as rows.
  *
@@ -335,7 +332,11 @@ export async function readProjectedEntryTypes(
 		)
 	)
 	const out: ProjectedEntryType[] = []
-	for (const row of rowsOf(res)) {
+	for (const row of rawRows<{
+		type_id: string
+		version: number | string
+		config_schema: string | Record<string, any> | null
+	}>(res)) {
 		const typeId = String(row.type_id)
 		const version = Number(row.version)
 		if (!Number.isInteger(version)) {
@@ -418,7 +419,7 @@ export async function auditEntryConstraints(
 				`SELECT COUNT(*)::int AS n FROM ${JSON.stringify(TABLE)} ${where}`
 			)
 		)
-		const count = Number(rowsOf(counted)[0]?.n ?? 0)
+		const count = Number(rawRows<{ n: number }>(counted)[0]?.n ?? 0)
 		if (!count) continue
 		const sample = await db.execute(
 			sql.raw(
@@ -431,7 +432,7 @@ export async function auditEntryConstraints(
 			typeId: t.typeId,
 			typeVersion: t.version,
 			count,
-			entryIds: rowsOf(sample).map((r: any) => Number(r.id))
+			entryIds: rawRows<{ id: number }>(sample).map((r) => Number(r.id))
 		})
 	}
 	return violations
@@ -443,7 +444,7 @@ const tableExists = async (db: Db): Promise<boolean> => {
 	const res = await db.execute(
 		sql.raw(`SELECT to_regclass('public.${TABLE}') IS NOT NULL AS present`)
 	)
-	return !!rowsOf(res)[0]?.present
+	return !!rawRows<{ present: boolean }>(res)[0]?.present
 }
 
 /**
@@ -515,7 +516,10 @@ export async function projectEntryConstraints(
 					`AND starts_with("conname", ${lit(CHECK_PREFIX)})`
 			)
 		)
-		for (const r of rowsOf(res))
+		for (const r of rawRows<{
+			conname: string
+			convalidated: boolean
+		}>(res))
 			existing.set(String(r.conname), !!r.convalidated)
 	} catch (err) {
 		report.errors.push(
@@ -562,7 +566,9 @@ export async function projectEntryConstraints(
 			)
 		)
 		const present = new Set(
-			rowsOf(res).map((r: any) => String(r.indexname))
+			rawRows<{ indexname: string }>(res).map((r) =>
+				String(r.indexname)
+			)
 		)
 		for (const name of present) {
 			if (wantedIdx.has(name)) continue
@@ -606,7 +612,8 @@ export async function projectEntryConstraints(
 					`AND starts_with("conname", ${lit(CHECK_PREFIX)}) AND NOT "convalidated"`
 			)
 		)
-		for (const r of rowsOf(res)) unvalidated.add(String(r.conname))
+		for (const r of rawRows<{ conname: string }>(res))
+			unvalidated.add(String(r.conname))
 	} catch (err) {
 		report.errors.push(
 			`read validation state: ${err instanceof Error ? err.message : String(err)}`
@@ -639,7 +646,9 @@ export async function projectEntryConstraints(
 					`WHERE r."id" IS NULL`
 			)
 		)
-		report.danglingTypeRefs = Number(rowsOf(res)[0]?.n ?? 0)
+		report.danglingTypeRefs = Number(
+			rawRows<{ n: number }>(res)[0]?.n ?? 0
+		)
 
 		const fk = await db.execute(
 			sql.raw(
@@ -647,7 +656,7 @@ export async function projectEntryConstraints(
 					`WHERE "conrelid" = ${lit(TABLE)}::regclass AND "conname" = ${lit(TYPE_FK)}`
 			)
 		)
-		const row = rowsOf(fk)[0]
+		const row = rawRows<{ convalidated: boolean }>(fk)[0]
 		report.typeFkValidated = !!row?.convalidated
 		if (row && !row.convalidated && report.danglingTypeRefs === 0) {
 			if (

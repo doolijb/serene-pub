@@ -9,7 +9,7 @@
  * it. Before this, `BaseConnectionAdapter` declared a single
  * `abstract generate()` whose meaning was whatever the subclass made of it —
  * one name, seven contracts — and `manifest.ts` declared the transforms by hand
- * beside it. Two spellings of one fact, and they had drifted: OPENAI_CHAT
+ * beside it. Two spellings of one fact, and they had drifted: OPENAI
  * claimed `text->image` with no image adapter behind it at all.
  *
  * So the actions are named and individually typed, and this table says which
@@ -152,9 +152,10 @@ export const HOSTED_BY = {
  * Which FEATURES an action may be declared to qualify.
  *
  * Features (`json_object`, `json_schema`, `strict_schema`, `grammar`, `tools`,
- * `streaming`) are qualifiers on a request, not separate actions — `json_schema`
- * is a FIELD on the request `generateText` already takes, so there is no method
- * whose presence could derive it and none should be invented. They stay
+ * `streaming`, `continue_reply`, and the two wires) qualify a request or say
+ * what kind of request can be made — not separate actions. `json_schema` is a
+ * FIELD on the request `generateText` already takes, so there is no method whose
+ * presence could derive it and none should be invented. They stay
  * declared, and they already have their own one-fact derivation from data: the
  * SDK's `closure()` grows them out of `EMULATABLE_VIA` and `IMPLIES` rather than
  * from seven adapters each remembering to list the weaker forms.
@@ -165,7 +166,15 @@ export const HOSTED_BY = {
  * transform half gets.
  */
 export const ACTION_FEATURES = {
-	/** All six. Every feature in the SDK's vocabulary constrains a text reply. */
+	/**
+	 * All of them. Every feature in the SDK's vocabulary qualifies a text reply
+	 * — the constraints shape what it says, the wires say how it is asked for,
+	 * and `continue_reply` says whether one can be resumed.
+	 *
+	 * `FEATURES` itself rather than a copied list, so a capability added to the
+	 * SDK is carriable here the day it lands instead of being an orphan the
+	 * conformance test rejects for a reason nobody expects.
+	 */
 	generateText: FEATURES,
 	// The rest carry none — and this is a statement, not a stub. A render has no
 	// response format to constrain and no tool loop to run; a feature declared

@@ -14,8 +14,6 @@
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 
-type Db = { select: any }
-
 export interface MessageVerbPolicy {
 	retry: boolean
 	continue: boolean
@@ -65,7 +63,7 @@ export async function verbRefusal(
 		const { getSessionGenre } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		const mode = await getSessionGenre(db as any, session.genreId)
+		const mode = await getSessionGenre(db, session.genreId)
 		if (!mode) return null
 		if (resolveMessageVerbs(mode.shape)[verb]) return null
 		return (
@@ -73,6 +71,71 @@ export async function verbRefusal(
 			`messages — what happened stands. Deleting or hiding is always yours.`
 		)
 	} catch {
+		return null
+	}
+}
+
+/**
+ * Why `continue` is unavailable in this session, or `null` when it is available.
+ *
+ * ## Two refusals, one answer, because a person only wants one sentence
+ *
+ * `verbRefusal` above answers whether this KIND of session offers the verb at
+ * all — the genre's declaration, 20 §4. It says nothing about whether the
+ * connection serving the session can actually resume a partial reply, and most
+ * cannot: a continuation is only a continuation when the model is handed the
+ * text so far inside an OPEN assistant turn. Everything else produces a fresh
+ * reply that `joinContinuation` then glues onto the partial, with nothing
+ * reporting it.
+ *
+ * So the two are composed here rather than at each call site, and in this order:
+ * the genre's refusal wins, because "this mode does not offer continue" is true
+ * whatever connection is behind it, and telling somebody to change their wire
+ * mode when the mode would refuse anyway sends them to a screen that cannot help.
+ *
+ * ## The connection is resolved the way the TURN resolves it
+ *
+ * Through `resolveTaskConfig`, which is the same call `generateResponse` makes —
+ * session override → prompt config → the instance's `text->text` default. A
+ * shortcut that read only `sessions.connection_id` would be right until somebody
+ * set a connection on their prompt config, and then would disable a button that
+ * works (or, worse, enable one that does not).
+ *
+ * ⚠ A resolution FAILURE is not this function's refusal. "No connection is set"
+ * is a different problem with a different sentence, and `generateResponse` writes
+ * that one onto the message row where a person can see it; answering it here
+ * would grey out Continue on an instance whose real fault is that nothing is
+ * configured at all. Null — let the turn refuse, in its own words.
+ */
+export async function continueVerbRefusal(
+	db: Db,
+	sessionId: number,
+	userId: number
+): Promise<string | null> {
+	const genre = await verbRefusal(db, sessionId, "continue")
+	if (genre) return genre
+	try {
+		const { getUserConfigurations } = await import(
+			"$lib/server/utils/getUserConfigurations"
+		)
+		const { resolveTaskConfig } = await import(
+			"$lib/server/utils/resolveTaskConfig"
+		)
+		const { resolveContinueRefusal } = await import(
+			"$lib/server/connections/resolve"
+		)
+		const { promptConfig } = await getUserConfigurations(userId)
+		const resolved = await resolveTaskConfig({
+			taskType: "session",
+			promptConfigId: promptConfig?.id,
+			sessionId
+		})
+		if (!resolved.connection) return null
+		return resolveContinueRefusal(resolved.connection)
+	} catch {
+		// The same F29 posture as `verbRefusal`: a policy read that fails must
+		// never block the turn's floor behaviour. An unresolvable connection is
+		// the turn's problem to report, not a reason to take the verb away.
 		return null
 	}
 }

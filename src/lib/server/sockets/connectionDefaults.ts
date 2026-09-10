@@ -116,6 +116,13 @@ export const connectionDefaultsList: Handler<
 			label: c.name,
 			capabilities: storedCapabilities(c)
 		})) as ChoiceList
+		// The user's own note per connection, kept beside the judged list rather
+		// than inside it: `ChoiceList` is the vocabulary `judgeAgainst` reasons
+		// in — id, label, capabilities, and the verdict it writes — and a note
+		// is not something anything reasons about. Carried, not consulted.
+		const notesById = new Map<number, string | null>(
+			(connectionRows as any[]).map((c) => [c.id, c.notes ?? null])
+		)
 
 		const samplingRows = await db
 			.select()
@@ -140,7 +147,10 @@ export const connectionDefaultsList: Handler<
 					id: entry.id,
 					name: entry.label,
 					eligible: !entry.disabled,
-					...(entry.reason ? { reason: entry.reason } : {})
+					...(entry.reason ? { reason: entry.reason } : {}),
+					...(notesById.get(entry.id)
+						? { notes: notesById.get(entry.id)! }
+						: {})
 				})
 			)
 

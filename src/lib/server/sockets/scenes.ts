@@ -686,7 +686,7 @@ export const sceneCompileHandler: Handler<
 			const { v4: uuidv4 } = await import("uuid")
 			const now = Date.now()
 			await saveReceipt(
-				db as any,
+				db,
 				{
 					runId: uuidv4(),
 					specId: SUMMARIZE_HISTORY_SPEC_ID,
@@ -994,17 +994,19 @@ export const sceneProcessHandler: Handler<
 				result.participantCharacters ?? [],
 				knownCast
 			)
-			const mentioned = resolveCharacterRefs(
-				result.mentionedCharacters ?? [],
-				knownCast
-			)
+			// ⚠ ICED (plan §1/§6). `result.mentionedCharacters` is deliberately
+			// not resolved: `mentioned` is derived from `message_annotations`
+			// now (utils/sceneMentions.ts) and is internal — §6 ruled it is not
+			// surfaced — so the Review & Save screen has nothing to write back.
+			// The field is left on `result` so reviving the extraction is a
+			// one-line change rather than a re-derivation.
 			const suggested = reconcileSuggestedNames(
 				participants.suggestedNames,
-				mentioned.suggestedNames
+				[]
 			)
 			return {
 				participantIds: participants.ids,
-				mentionedIds: mentioned.ids,
+				mentionedIds: [] as number[],
 				suggestedParticipants: suggested.participants,
 				suggestedMentioned: suggested.mentioned
 			}

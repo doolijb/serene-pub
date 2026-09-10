@@ -60,13 +60,6 @@ import { defaultVariableTemplateFor } from "$lib/server/pipelines/boot/seedVaria
 import { defaultContextTemplateFor } from "$lib/server/pipelines/boot/seedContextTemplates"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 
-type Db = {
-	select: any
-	insert: any
-	update: any
-	delete: any
-}
-
 // `\u0000` as an escape, never the raw byte: a literal NUL makes git
 // classify this file as binary, and a patch generated without `--binary`
 // silently drops its content. The SDK's config.ts documents the same

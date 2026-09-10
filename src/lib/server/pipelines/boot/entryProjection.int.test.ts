@@ -73,7 +73,7 @@ beforeAll(async () => {
 	lorebookId = book.id
 
 	// The boot chain's own order: the registry first, the projection after it.
-	await syncTypeRegistry(db as any, allEntryTypes(), { release: "0.6.0" })
+	await syncTypeRegistry(db, allEntryTypes(), { release: "0.6.0" })
 
 	// A history entry with no year, written *before* the constraint exists —
 	// which is exactly the situation NOT VALID is for: a real install may

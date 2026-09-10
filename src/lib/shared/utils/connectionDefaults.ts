@@ -11,18 +11,18 @@ export const CONNECTION_DEFAULTS = {
 		extraJson: {
 			stream: true,
 			think: false,
-			keepAlive: "300ms",
-			useSession: true
+			// Ollama's own default. This said "300ms", which unloads the
+			// weights after every turn — see OllamaAdapter.generateText().
+			keepAlive: "5m"
 		}
 	},
-	[CONNECTION_TYPE.OPENAI_CHAT]: {
-		type: CONNECTION_TYPE.OPENAI_CHAT,
+	[CONNECTION_TYPE.OPENAI]: {
+		type: CONNECTION_TYPE.OPENAI,
 		baseUrl: "",
 		promptFormat: PromptFormats.VICUNA,
 		tokenCounter: TokenCounterOptions.ESTIMATE,
 		extraJson: {
 			stream: true,
-			prerenderPrompt: false,
 			apiKey: ""
 		}
 	},
@@ -32,13 +32,12 @@ export const CONNECTION_DEFAULTS = {
 		promptFormat: PromptFormats.VICUNA,
 		tokenCounter: TokenCounterOptions.ESTIMATE,
 		extraJson: {
-			useSession: true,
 			stream: true,
 			ttl: 60
 		}
 	},
-	[CONNECTION_TYPE.LLAMACPP_COMPLETION]: {
-		type: CONNECTION_TYPE.LLAMACPP_COMPLETION,
+	[CONNECTION_TYPE.LLAMACPP]: {
+		type: CONNECTION_TYPE.LLAMACPP,
 		baseUrl: "http://localhost:8080/",
 		promptFormat: PromptFormats.VICUNA,
 		tokenCounter: TokenCounterOptions.ESTIMATE,
@@ -55,7 +54,6 @@ export const CONNECTION_DEFAULTS = {
 		tokenCounter: TokenCounterOptions.ESTIMATE,
 		extraJson: {
 			stream: true,
-			useSession: true,
 			useMemory: false,
 			memory: "",
 			// Must match KoboldCppForm.svelte's own extraJsonToExtraFields
@@ -83,7 +81,6 @@ export const CONNECTION_DEFAULTS = {
 		tokenCounter: TokenCounterOptions.ESTIMATE,
 		extraJson: {
 			stream: true,
-			useSession: true,
 			useMemory: false,
 			memory: "",
 			// See CONNECTION_TYPE.KOBOLDCPP above — same fix, same reason,
@@ -181,7 +178,7 @@ export const CONNECTION_DEFAULTS = {
  * harmless; adding capabilities there without a slug here is what makes them
  * dead data, so add the pair together.
  */
-export const OPENAI_CHAT_PRESETS = [
+export const OPENAI_COMPATIBLE_PRESETS = [
 	{
 		name: "Empty",
 		value: 0,
@@ -513,7 +510,7 @@ export const OPENAI_CHAT_PRESETS = [
 export function presetLabel(slug: string | null | undefined): string {
 	if (!slug) return "custom"
 	return (
-		OPENAI_CHAT_PRESETS.find((p) => (p as { slug?: string }).slug === slug)
+		OPENAI_COMPATIBLE_PRESETS.find((p) => (p as { slug?: string }).slug === slug)
 			?.name ?? slug
 	)
 }

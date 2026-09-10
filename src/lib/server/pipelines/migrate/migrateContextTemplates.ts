@@ -74,8 +74,6 @@ import {
 import { defaultContextTemplateFor } from "$lib/server/pipelines/boot/seedContextTemplates"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 
-type Db = { select: any; insert: any; update: any; delete: any }
-
 /** The seed key of the legacy context config core used to keep up to date. */
 const CORE_CONTEXT_SEED_KEY = "context-default"
 
@@ -117,9 +115,7 @@ export async function migrateContextTemplates(
 	report.ran = true
 
 	const legacyRows = await db.select().from(schema.contextConfigs)
-	const legacyById = new Map<number, any>(
-		(legacyRows as any[]).map((c) => [c.id, c])
-	)
+	const legacyById = new Map(legacyRows.map((c) => [c.id, c]))
 
 	/**
 	 * The new-table row a legacy id should resolve to, copying it if needed.
@@ -210,7 +206,7 @@ export async function migrateContextTemplates(
 		const { resolveSelectedConfig, duplicateConfig, selectConfig } =
 			await import("$lib/server/pipelines/config/named")
 
-		for (const spec of specs as any[]) {
+		for (const spec of specs) {
 			if (spec.activeVersionId == null) continue
 			const decls = await declarations(db, spec.activeVersionId)
 			const templateDecls = decls.filter(
@@ -236,7 +232,7 @@ export async function migrateContextTemplates(
 
 			// The mutable config these values become part of.
 			const selected = await resolveSelectedConfig(
-				db as any,
+				db,
 				spec.id,
 				spec.slug,
 				{}
@@ -249,22 +245,16 @@ export async function migrateContextTemplates(
 				.from(schema.pipelineConfigs)
 				.where(eq(schema.pipelineConfigs.id, targetConfig))
 				.limit(1)
-			if ((cfg as any)?.isImmutable) {
+			if (cfg?.isImmutable) {
 				const copy = await duplicateConfig(
-					db as any,
+					db,
 					targetConfig,
-					`${(cfg as any).name} (customized)`
+					`${cfg.name} (customized)`
 				).catch(() => null)
 				if (!copy) continue
 				targetConfig = copy.id
 				createdCopy = true
-				await selectConfig(
-					db as any,
-					spec.id,
-					"instance",
-					0,
-					targetConfig
-				)
+				await selectConfig(db, spec.id, "instance", 0, targetConfig)
 			}
 
 			// Into a copy this migration just made, values upsert: what sits
@@ -338,7 +328,7 @@ async function freeName(db: Db, wanted: string): Promise<string> {
 				poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE)
 			)
 		)
-	const taken = new Set((rows as any[]).map((r) => r.name))
+	const taken = new Set(rows.map((r) => r.name))
 	if (!taken.has(wanted)) return wanted
 	for (let n = 2; ; n++) {
 		const candidate = `${wanted} (${n})`
@@ -375,17 +365,13 @@ async function freeName(db: Db, wanted: string): Promise<string> {
 async function rePointShippedConfigs(db: Db): Promise<number> {
 	const templates = await db.select().from(schema.pipelineVariableTemplates)
 	if (!templates.length) return 0
-	const byId = new Map<number, any>(
-		(templates as any[]).map((t) => [t.id, t])
-	)
-	const bySeedKey = new Map<string, any>(
-		(templates as any[]).filter((t) => t.seedKey).map((t) => [t.seedKey, t])
+	const byId = new Map(templates.map((t) => [t.id, t]))
+	const bySeedKey = new Map(
+		templates.filter((t) => t.seedKey).map((t) => [t.seedKey!, t])
 	)
 
 	let moved = 0
-	for (const spec of (await db
-		.select()
-		.from(schema.pipelineSpecs)) as any[]) {
+	for (const spec of await db.select().from(schema.pipelineSpecs)) {
 		if (spec.activeVersionId == null) continue
 		const layoutDecls = (
 			await declarations(db, spec.activeVersionId)
@@ -397,16 +383,16 @@ async function rePointShippedConfigs(db: Db): Promise<number> {
 				.select()
 				.from(schema.pipelineConfigs)
 				.where(eq(schema.pipelineConfigs.specId, spec.id))
-		).filter((c: any) => c.isImmutable)
+		).filter((c) => c.isImmutable)
 
-		for (const config of configs as any[]) {
+		for (const config of configs) {
 			const values = await db
 				.select()
 				.from(schema.pipelineConfigValues)
 				.where(eq(schema.pipelineConfigValues.configId, config.id))
 
 			for (const d of layoutDecls) {
-				const v = (values as any[]).find(
+				const v = values.find(
 					(row) =>
 						row.nodeKey === d.nodeKey &&
 						row.slot === d.slot &&

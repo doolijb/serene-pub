@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import Avatar from "../Avatar.svelte"
+	import EmptyState from "../EmptyState.svelte"
 	import * as Icons from "@lucide/svelte"
 
 	interface Props {
@@ -14,6 +15,12 @@
 		title?: string
 		description?: string
 		returnFullPersona?: boolean
+		// Inline create. A picker must never be an overlay with nothing to
+		// offer and no way to make something — on a fresh install there are
+		// no personas at all, and the session form requires one. Callers that
+		// can host a creator pass this; when absent, no create affordance is
+		// rendered.
+		onCreateNew?: () => void
 	}
 
 	let {
@@ -24,7 +31,8 @@
 		onSelect,
 		title = "Select Persona",
 		description,
-		returnFullPersona = false
+		returnFullPersona = false,
+		onCreateNew
 	}: Props = $props()
 
 	// Every caller passes `personas` explicitly (see EditSessionForm.svelte,
@@ -88,73 +96,94 @@
 					placeholder="Search personas..."
 					bind:value={search}
 				/>
-				<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
-					<div
-						class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap"
-					>
-						{#if filtered.length === 0}
-							<div class="text-surface-700-300 text-center">
-								No personas found
-							</div>
-						{/if}
-						{#each filtered as p}
-							{#if p.id}
-								<div class="flex p-1 lg:basis-1/2">
-									<button
-										class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
-										onclick={() => {
-											if (returnFullPersona) {
-												// For EditSessionForm - return full persona object
-												;(
-													onSelect as (
-														persona: Partial<SelectPersona> & {
+				{#if filtered.length === 0}
+					<EmptyState
+						icon={Icons.User}
+						message={search
+							? `No personas found matching "${search}".`
+							: "No personas yet — a persona is who you are in the conversation."}
+						ctaLabel={search || !onCreateNew
+							? undefined
+							: "New Persona"}
+						onCta={search ? undefined : onCreateNew}
+					/>
+				{:else}
+					<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
+						<div
+							class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap"
+						>
+							{#each filtered as p}
+								{#if p.id}
+									<div class="flex p-1 lg:basis-1/2">
+										<button
+											class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
+											onclick={() => {
+												if (returnFullPersona) {
+													// For EditSessionForm - return full persona object
+													;(
+														onSelect as (
+															persona: Partial<SelectPersona> & {
+																id: number
+															}
+														) => void
+													)(
+														p as Partial<SelectPersona> & {
 															id: number
 														}
-													) => void
-												)(
-													p as Partial<SelectPersona> & {
-														id: number
-													}
-												)
-											} else {
-												// For session page - return just ID
-												;(
-													onSelect as (
-														personaId: number
-													) => void
-												)(p.id!)
-											}
-											if (onOpenChange) {
-												onOpenChange({ open: false })
-											} else if (onclose) {
-												onclose()
-											}
-										}}
-									>
-										<div class="w-fit shrink-0">
-											<Avatar char={p} />
-										</div>
-										<div
-											class="relative flex w-0 min-w-0 flex-1 flex-col"
+													)
+												} else {
+													// For session page - return just ID
+													;(
+														onSelect as (
+															personaId: number
+														) => void
+													)(p.id!)
+												}
+												if (onOpenChange) {
+													onOpenChange({
+														open: false
+													})
+												} else if (onclose) {
+													onclose()
+												}
+											}}
 										>
-											<div
-												class="w-full truncate text-left font-semibold"
-											>
-												{p.name}
+											<div class="w-fit shrink-0">
+												<Avatar char={p} />
 											</div>
 											<div
-												class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
+												class="relative flex w-0 min-w-0 flex-1 flex-col"
 											>
-												{p.description ||
-													"No description"}
+												<div
+													class="w-full truncate text-left font-semibold"
+												>
+													{p.name}
+												</div>
+												<div
+													class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
+												>
+													{p.description ||
+														"No description"}
+												</div>
 											</div>
-										</div>
-									</button>
-								</div>
-							{/if}
-						{/each}
+										</button>
+									</div>
+								{/if}
+							{/each}
+						</div>
 					</div>
-				</div>
+					{#if onCreateNew}
+						<div class="border-surface-300-700 border-t pt-4">
+							<button
+								type="button"
+								class="btn btn-sm preset-tonal-primary flex items-center gap-1"
+								onclick={onCreateNew}
+							>
+								<Icons.Plus size={16} /> New Persona
+							</button>
+						</div>
+					{/if}
+				{/if}
 			</Dialog.Content>
 		</Dialog.Positioner>
 	</Portal>

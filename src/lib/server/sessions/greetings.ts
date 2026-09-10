@@ -13,11 +13,11 @@
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { insertLegacy } from "$lib/server/messages/store"
-import { resolveChannel } from "$lib/server/messages/channels"
+import { canonicalChannel } from "$lib/server/messages/channels"
 import { InterpolationEngine } from "$lib/server/utils/interpolation/InterpolationEngine"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 
-type Db = any
+// db is the global Db — see db/types.d.ts
 
 /**
  * The greeting history for one character's first message — the first entry
@@ -90,20 +90,25 @@ export async function collectSessionGreetings(
 		.limit(1)
 	const isGroup = !!session?.isGroup
 
+	// ⚠ `asc(cc.position)`, not `asc(cc.position ?? 0)`. The callback is handed
+	// the TABLE, so `cc.position` is a column object and never nullish — the
+	// coalesce could only ever have fired on a column that does not exist, and
+	// both tables have had `position` since the cast rows did. Ordering is
+	// unchanged.
 	const sessionCharacters = await db.query.sessionCharacters.findMany({
-		where: (cc: any, { eq }: any) => eq(cc.sessionId, sessionId),
+		where: (cc, { eq }) => eq(cc.sessionId, sessionId),
 		with: { character: true },
-		orderBy: (cc: any, { asc }: any) => asc(cc.position ?? 0)
+		orderBy: (cc, { asc }) => asc(cc.position)
 	})
 	const sessionPersona = await db.query.sessionPersonas.findFirst({
-		where: (cp: any, { eq, and, isNotNull }: any) =>
+		where: (cp, { eq, and, isNotNull }) =>
 			and(eq(cp.sessionId, sessionId), isNotNull(cp.personaId)),
 		with: { persona: true },
-		orderBy: (cp: any, { asc }: any) => asc(cp.position ?? 0)
+		orderBy: (cp, { asc }) => asc(cp.position)
 	})
 
 	const entries: SessionGreetingEntry[] = []
-	for (const cc of sessionCharacters as any[]) {
+	for (const cc of sessionCharacters) {
 		if (!cc.character) continue
 		const texts = buildCharacterFirstSessionMessage({
 			character: cc.character,
@@ -135,7 +140,10 @@ export async function writeSessionGreetings(
 		channel?: string
 	}
 ): Promise<number[]> {
-	const channel = resolveChannel(opts.channel)
+	// Canonical (ruling 2026-09-09): lane 1 is the bare slug, so a genre that
+	// redirects its greetings to `intro:1` and one that says `intro` seed onto
+	// one lane rather than two.
+	const channel = canonicalChannel(opts.channel)
 	const ids: number[] = []
 	for (const entry of opts.entries) {
 		const created = await insertLegacy(db, {
@@ -151,10 +159,10 @@ export async function writeSessionGreetings(
 				isGreeting: true,
 				swipes: {
 					currentIdx: 0,
-					history: entry.texts as any
+					history: entry.texts
 				}
 			}
-		} as InsertSessionMessage)
+		})
 		ids.push(created.id)
 	}
 	return ids

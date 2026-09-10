@@ -40,6 +40,12 @@ const NO_PAYLOAD: CompiledPrompt = {
 
 /** Pinned to the real action, so a rename cannot pass here — fakeTextAdapter.ts. */
 class FakeStepAdapter implements FakeTextAdapter {
+	/** The composed stop list, handed over at construction. */
+	stops: any
+	withStops(s: any) {
+		this.stops = s
+		return this
+	}
 	constructor(_p: any) {}
 	abort() {}
 	async preflight() {}
@@ -75,7 +81,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -116,7 +122,7 @@ beforeAll(async () => {
 	const { setCapabilityDefault } = await import(
 		"$lib/server/connections/capabilityDefaults"
 	)
-	await setCapabilityDefault(db as any, "text->text", {
+	await setCapabilityDefault(db, "text->text", {
 		connectionId: connection.id,
 		samplingConfigId: sampling.id
 	})

@@ -90,7 +90,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [spec] = await db
 		.select()
@@ -102,7 +102,7 @@ beforeAll(async () => {
 	// test naming `template` would keep passing against a pipeline that renamed
 	// it while the projection quietly stopped dereferencing anything.
 	const { declarations } = await import("$lib/server/pipelines/config/panel")
-	const decl = (await declarations(db as any, spec.activeVersionId!)).find(
+	const decl = (await declarations(db, spec.activeVersionId!)).find(
 		(d) => d.control === "context-template-ref"
 	)
 	expect(
@@ -127,7 +127,7 @@ afterEach(() => {
 /** The whole template slot, as the assemble binding would receive it. */
 const templateSlotValue = async () => {
 	const { buildWorld } = await import("$lib/server/pipelines/config/world")
-	const world = await buildWorld(db as any, {
+	const world = await buildWorld(db, {
 		sessionId,
 		specId: RESPOND_SPEC_ID
 	})
@@ -163,7 +163,7 @@ describe("the engine reaches the renderer", () => {
 		const { createContextTemplate } = await import(
 			"$lib/server/pipelines/entities/contextTemplates"
 		)
-		const row = await createContextTemplate(db as any, {
+		const row = await createContextTemplate(db, {
 			nodeTypeId: "core:task/assemble",
 			name: "Written in another language",
 			// Valid Handlebars, and that is the point: if the engine is lost,
@@ -212,7 +212,7 @@ describe("the engine reaches the renderer", () => {
 			"$lib/server/pipelines/entities/contextTemplates"
 		)
 		const shipped = await shippedContextTemplate(
-			db as any,
+			db,
 			"core:task/assemble"
 		)
 		expect(shipped).toBeTruthy()
@@ -235,7 +235,7 @@ describe("the engine reaches the renderer", () => {
 			const { shippedContextTemplate } = await import(
 				"$lib/server/pipelines/entities/contextTemplates"
 			)
-			return await shippedContextTemplate(db as any, "core:task/assemble")
+			return await shippedContextTemplate(db, "core:task/assemble")
 		})()
 
 		// What survives is the config's own selection underneath, never a

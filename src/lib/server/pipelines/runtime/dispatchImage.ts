@@ -59,6 +59,7 @@ import {
 } from "$lib/server/pipelines/prompt/renderers"
 import type { ImageGenProgress } from "$lib/shared/imageGen/types"
 import type { MediaRef } from "@serene-pub/sdk"
+import type { RunArtifact } from "$lib/server/pipelines/runtime/receipts"
 
 export interface ImageCall {
 	/** The text the node was given — what the prompt templates interpolate. */
@@ -85,6 +86,19 @@ export interface ImageCall {
 	 * an association that was never made rather than one that went missing.
 	 */
 	runId?: string
+	/**
+	 * The run's artifact collector, when this render belongs to a run.
+	 *
+	 * ⚠ **This is the only place a rendered image's row ids exist.** The node
+	 * publishes `MediaRef`s — uuid, mime, dimensions — because bytes and row
+	 * ids both stop here by design, so nothing downstream and nothing on the
+	 * receipt can say which `files` rows the run created. Pushed at the write,
+	 * read by `saveReceipt`. Absent for a direct dispatch or a test, which is
+	 * an association that was never made rather than one that went missing.
+	 */
+	artifacts?: RunArtifact[]
+	/** Which node is rendering, stamped onto the artifacts above. */
+	nodeKey?: string
 	signal?: AbortSignal
 	onProgress?: (p: ImageGenProgress) => void
 }
@@ -237,7 +251,7 @@ async function ensureManagedInstanceReady(
  * a failure here must not turn a finished render into a failed one.
  */
 async function touchManagedTtl(
-	db: any,
+	db: Db,
 	connection: SelectConnection
 ): Promise<void> {
 	if (connection.type !== CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE) return
@@ -286,7 +300,7 @@ async function touchManagedTtl(
  * the managed text connection and the managed image connection ARE one process.
  */
 async function resolveBaseUrl(
-	db: any,
+	db: Db,
 	connection: SelectConnection
 ): Promise<string> {
 	if (connection.type !== CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE)
@@ -308,7 +322,7 @@ function serialize<T>(key: string, work: () => Promise<T>): Promise<T> {
 
 /** Render one image request. Throws with a sentence a person can act on. */
 export async function dispatchImage(
-	db: any,
+	db: Db,
 	call: ImageCall
 ): Promise<ImageCallResult> {
 	call.signal?.throwIfAborted()
@@ -512,6 +526,25 @@ export async function dispatchImage(
 			// image is described rather than announced as an untitled attachment.
 			text: positive
 		})
+		// What the run MADE, as row ids — the refs above are what the graph
+		// carries and deliberately name no row. `created` even on a dedupe hit
+		// (`createMedia` returns the existing rows for identical bytes from the
+		// same user): this run produced that image, and the artifact is a
+		// statement about the run rather than about the row's age.
+		if (call.artifacts) {
+			call.artifacts.push({
+				kind: "file",
+				entityId: file.id,
+				action: "created",
+				nodeKey: call.nodeKey ?? null
+			})
+			call.artifacts.push({
+				kind: "variant",
+				entityId: original.id,
+				action: "created",
+				nodeKey: call.nodeKey ?? null
+			})
+		}
 	}
 
 	return {

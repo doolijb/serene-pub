@@ -1,6 +1,7 @@
 import { llmQueue } from "./llmQueue"
 import type { TaskType } from "./resolveTaskConfig"
 import type { BaseConnectionAdapter } from "../connectionAdapters/BaseConnectionAdapter"
+import { resolveThinking } from "$lib/shared/utils/thinkingDelimiters"
 
 export interface RunQueuedLLMCallParams {
 	adapter: BaseConnectionAdapter
@@ -30,6 +31,17 @@ export interface RunQueuedLLMCallResult {
  * narrative graph building, session-title generation, and field generation.
  * Session message generation has its own live-streaming needs and builds its
  * LLMQueueItem directly instead of using this helper.
+ *
+ * ## Reasoning is lifted out of `text` here
+ *
+ * Every caller of this wrapper writes its answer somewhere durable — a lore
+ * entry's summary, a graph node, a session title, a generated field — and none
+ * of them has any use for a `<think>` block. It was reaching them: the only
+ * inline parser lived inside `generateResponse` and was private to it, so a
+ * backend without a reasoning parser of its own handed the delimiters straight
+ * through into the stored text. `thinkingContent` is where it belongs and the
+ * shape of this result already has that field, so the trace is moved rather
+ * than dropped. See `$lib/shared/utils/thinkingDelimiters` for the rules.
  */
 export async function runQueuedLLMCall({
 	adapter,
@@ -56,9 +68,13 @@ export async function runQueuedLLMCall({
 				await adapter.generateText()
 
 			if (typeof completionResult === "string") {
+				const resolved = resolveThinking(
+					completionResult.trim(),
+					thinkingContent
+				)
 				return {
-					text: completionResult.trim(),
-					thinkingContent,
+					text: resolved.content.trim(),
+					thinkingContent: resolved.thinking,
 					isAborted
 				}
 			}
@@ -75,9 +91,13 @@ export async function runQueuedLLMCall({
 					thinking += thinkChunk
 				}
 			)
+			const resolved = resolveThinking(
+				text.trim(),
+				thinking.trim() || thinkingContent
+			)
 			return {
-				text: text.trim(),
-				thinkingContent: thinking.trim() || thinkingContent,
+				text: resolved.content.trim(),
+				thinkingContent: resolved.thinking,
 				isAborted
 			}
 		},

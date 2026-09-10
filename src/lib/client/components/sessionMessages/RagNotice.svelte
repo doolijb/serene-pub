@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { getSocket } from "$lib/client/sockets/socketInstance"
+	import { onDestroy } from "svelte"
 
 	interface Props {
 		sessionId: number
@@ -34,10 +35,18 @@
 	})
 
 	// Re-fetch when the queue reports a status change (items may have finished)
-	socket.on("vectorization:progress", () => {
+	// Named so `off` can name it too, and so there is anything to off at all:
+	// this was registered in the script body and never removed, so every
+	// session this notice rendered for piled another listener on the socket.
+	function handleVectorizationProgress() {
 		if (ragStatus?.applicable) {
 			fetchStatus()
 		}
+	}
+	socket.on("vectorization:progress", handleVectorizationProgress)
+
+	onDestroy(() => {
+		socket.off("vectorization:progress", handleVectorizationProgress)
 	})
 
 	function handleMoveToTop() {

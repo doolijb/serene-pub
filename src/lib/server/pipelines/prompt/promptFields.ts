@@ -47,6 +47,32 @@ export interface ResolveInput {
 	sessionScenario?: string | null
 	isGroup?: boolean
 	narratorName?: string
+	/**
+	 * The side character speaking this turn (ruling 2026-09-07) — a
+	 * **participant without a turn slot**.
+	 *
+	 * Read only when `currentCharacterId` names nobody in the cast, which is
+	 * the whole of "not a cast member": if the pick happens to be a cast member
+	 * the ordinary branch finds them and this is never consulted, so there is
+	 * one answer for a speaker rather than two that could disagree.
+	 *
+	 * It supplies `{{char}}` and the seed line, and nothing else. It is
+	 * deliberately **not** added to `characterNames`: that list is the cast
+	 * roster — the people this speaker must not write dialogue for — and a
+	 * side character is not on it. The shipped side-character prompt says so in
+	 * as many words, which it could not if the two collapsed.
+	 */
+	speakerName?: string | null
+	/**
+	 * That side character's card, when the trigger picked a real character
+	 * rather than typing a name.
+	 *
+	 * Rendered at full visibility beside the cast's cards, because a model
+	 * asked to speak as somebody needs to know who they are — that is what
+	 * "first-class presence" means in a prompt. Absent for a free-form name,
+	 * where there is no card to render and the name is all there is.
+	 */
+	speakerCharacter?: (F.CharacterFields & { id?: number }) | null
 	/** The narrative graph's two halves, as structure. */
 	relationshipsPerspectives?: unknown
 	relationshipsKnown?: unknown
@@ -131,6 +157,19 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 		)
 		.filter(Boolean) as Record<string, unknown>[]
 
+	// The side character's card, first, at full visibility — the same terms
+	// the speaking cast member gets. Only when they are genuinely outside the
+	// cast: `current` finding them means the loop above already rendered them,
+	// and rendering twice would put one person in the prompt as two.
+	const sideCard =
+		!current && input.speakerCharacter
+			? compileCharacter(
+					input.speakerCharacter,
+					SessionCharacterVisibility.VISIBLE
+				)
+			: null
+	if (sideCard) characters.unshift(sideCard)
+
 	// Names: active and not hidden, no exception for the speaker.
 	const characterNames = sessionCharacters
 		.filter(
@@ -165,9 +204,14 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 		personaNames,
 		// No single speaker in narrator mode: `{{char}}` becomes the cast list,
 		// the same convention `{{characterNames}}` follows (index.ts:623-625).
+		// The speaker's name, then the side character's, then the cast list.
+		// The middle rung is what makes `{{char}}` mean the shopkeeper on a
+		// side-character turn instead of "Alice and Cara" — which is the joined
+		// list the no-perspective narrator wants and the one thing a turn
+		// spoken by a person must not say.
 		charName: current
 			? resolveCharacterName(current as any)
-			: joinWithAnd(characterNames),
+			: input.speakerName || joinWithAnd(characterNames),
 		// One persona when someone is speaking; the whole list when nobody is.
 		// The `"user"` fallback is the legacy default rather than an empty
 		// string — a card that says "you are talking to {{user}}" should not
@@ -199,7 +243,7 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 		exampleDialogueIndex,
 		seedName: current
 			? resolveCharacterName(current as any)
-			: input.narratorName || "Narrator"
+			: input.speakerName || input.narratorName || "Narrator"
 	}
 }
 

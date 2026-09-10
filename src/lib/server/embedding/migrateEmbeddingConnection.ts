@@ -22,8 +22,6 @@ import {
 	VECTORIZATION_API_KEY_INFO
 } from "$lib/server/utils/tokenCrypto"
 
-type Db = { select: any; insert: any; update: any }
-
 export async function migrateEmbeddingConnection(
 	db: Db
 ): Promise<{ migrated: boolean; connectionId?: number }> {

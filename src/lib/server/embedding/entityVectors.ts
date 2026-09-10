@@ -75,7 +75,7 @@ import {
 	type NamedBindingRow
 } from "$lib/server/pipelines/ranking/entityNames"
 
-type Db = any
+// db is the global Db — see db/types.d.ts
 
 /** The space. Versioned in the name, so a recipe change re-embeds only it. */
 export const ENTITY_VECTOR_NAME = "core:vec/entity@1"
@@ -152,7 +152,7 @@ export async function loadBindingNames(
 ): Promise<Map<number, NamedBindingRow>> {
 	const out = new Map<number, NamedBindingRow>()
 	if (lorebookId == null) return out
-	const rows = (await db
+	const rows = await db
 		.select({
 			id: schema.lorebookBindings.id,
 			name: schema.lorebookBindings.name,
@@ -160,7 +160,7 @@ export async function loadBindingNames(
 			absorbedAliases: schema.lorebookBindings.absorbedAliases
 		})
 		.from(schema.lorebookBindings)
-		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))) as any[]
+		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
 	for (const row of rows) out.set(row.id, row)
 	return out
 }
@@ -180,7 +180,7 @@ async function freshnessOf(
 ): Promise<Map<number, StoredFreshness>> {
 	const out = new Map<number, StoredFreshness>()
 	if (!entryIds.length) return out
-	const rows = (await db
+	const rows = await db
 		.select({
 			entryId: schema.lorebookEntryVectors.entryId,
 			sourceHash: schema.lorebookEntryVectors.sourceHash,
@@ -197,7 +197,7 @@ async function freshnessOf(
 				),
 				eq(schema.lorebookEntryVectors.vectorName, ENTITY_VECTOR_NAME)
 			)
-		)) as any[]
+		)
 	// Every row of one entry carries the same identity by construction — they
 	// are written together — so the first seen is that entry's answer, and the
 	// count is how many names it currently has stored.
@@ -338,20 +338,20 @@ export async function ensureEntityVectors(
 			.from(schema.lorebookEntries)
 			.where(
 				inArray(schema.lorebookEntries.id, input.entryIds as number[])
-			) as Promise<any[]>,
+			),
 		loadBindingNames(db, input.lorebookId)
 	])
 
 	const stored = await freshnessOf(
 		db,
-		(rows as any[]).map((r) => r.id)
+		rows.map((r) => r.id)
 	)
 
 	const report: EntityVectorPassReport = {
 		...EMPTY_PASS,
 		examined: rows.length
 	}
-	for (const row of rows as any[]) {
+	for (const row of rows) {
 		const names = entityNamesFor(row, bindings)
 		const sourceHash = nameSetHash(names, digest)
 		if (
@@ -416,7 +416,7 @@ export async function readEntityVectors(
 	modelId: string
 ): Promise<EntityVectorRow[]> {
 	if (!entryIds.length) return []
-	const rows = (await db
+	const rows = await db
 		.select({
 			entryId: schema.lorebookEntryVectors.entryId,
 			chunkIndex: schema.lorebookEntryVectors.chunkIndex,
@@ -435,7 +435,7 @@ export async function readEntityVectors(
 				eq(schema.lorebookEntryVectors.vectorName, ENTITY_VECTOR_NAME),
 				eq(schema.lorebookEntryVectors.model, modelId)
 			)
-		)) as any[]
+		)
 
 	const out: EntityVectorRow[] = []
 	for (const row of rows) {

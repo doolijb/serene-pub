@@ -36,6 +36,7 @@ import {
 	BM25_K1,
 	buildTermFreq,
 	lastRefRecencySignal,
+	densitySignal,
 	type LexicalDocument,
 	type LexicalOptions,
 	type ScanWindow,
@@ -198,6 +199,8 @@ export interface KeywordQueryResult {
 	}>
 	diagnostics: {
 		scanDepth: number
+		/** The other window — how much conversation counts as *now*. */
+		guaranteedMessages: number
 		windowChars: number
 		considered: number
 		matched: number
@@ -298,6 +301,25 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 	)
 	const idf = buildIdf(messages)
 	const lastRef = buildLastRefMap(messages, entries)
+
+	/**
+	 * The mean entry length, for `density`.
+	 *
+	 * Over the **pool** and not over the hits, for BM25's reason one block
+	 * down: an entry's length is a property of the entry and of the book it is
+	 * in, so it must not change according to what else happened to match this
+	 * turn. Characters rather than tokens because it is free — the strings are
+	 * already here — and because `countTokens` is a host call this mechanism
+	 * makes once per *candidate*, not once per row.
+	 *
+	 * Unconditional, unlike the BM25 document pool: this is one pass summing
+	 * string lengths, which is the same reason `proximity` is computed whether
+	 * or not anybody weighs it.
+	 */
+	const averageContentLength = entries.length
+		? entries.reduce((sum, e) => sum + (e.content ?? "").length, 0) /
+			entries.length
+		: 0
 
 	/**
 	 * The entry pool as documents, and the pool's mean length.
@@ -540,7 +562,8 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 				lexical,
 				lexicalIdf,
 				documents.get(keyOf(entry)),
-				profile
+				profile,
+				averageContentLength
 			)
 
 			/**
@@ -698,6 +721,19 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 		skipped,
 		diagnostics: {
 			scanDepth: retrieval.scanDepth,
+			/**
+			 * Reported beside `scanDepth` because it is the other half of one
+			 * pair and was invisible for as long as it was undeclared: this is
+			 * the window `entityCooccurrence` asks "did this character speak"
+			 * over and the window `tfidf` scores against, and until
+			 * `guaranteedMessages` was declared on the lore types the only value
+			 * it could hold was a constant nothing could reach.
+			 *
+			 * Two numbers on one line is also the only way a reader can tell the
+			 * two windows apart when they disagree, which is the entire point of
+			 * having split them.
+			 */
+			guaranteedMessages: retrieval.guaranteedMessages,
 			windowChars: sessionWindow.raw.length,
 			considered: entries.length,
 			matched,
@@ -746,7 +782,16 @@ function scoreSignals(
 	 * this pool. Null only when the pool is empty, in which case nothing is
 	 * being scored either.
 	 */
-	profile: EvidenceProfile | null
+	profile: EvidenceProfile | null,
+	/**
+	 * The pool's mean entry-CONTENT length in characters, for `density`.
+	 *
+	 * ⚠ Not `LexicalOptions.averageLength`, which is a mean over BM25's
+	 * *documents* — term counts over `keys + title`. Two different measures of
+	 * two different texts; the names are close enough that spelling out which
+	 * is which is cheaper than the bug.
+	 */
+	averageContentLength: number
 ) {
 	// One walk of the entry's keys answers both of these. Proximity is the
 	// *offsets* that walk already computed, which is the whole reason design
@@ -854,6 +899,33 @@ function scoreSignals(
 		lastRefRecency: lastRefRecencySignal(
 			lastRef.get(entry.id),
 			totalMessages
+		),
+		/**
+		 * How long this entry is against the pool's average, capped at 1.
+		 *
+		 * ⚠ **`densitySignal` had no caller at all until this line**, while
+		 * `SignalWeights.density` was declared, stored and read by `score()` —
+		 * a helper and a weight that had been waiting for each other since the
+		 * ranker was written.
+		 *
+		 * Written on every candidate for `proximity`'s reason, which is the
+		 * same reason stated one field at a time: the number costs one pass
+		 * over lengths that were already in memory, and a signal whose value
+		 * nobody can see is a signal nobody can decide to weight. Every lore
+		 * band weighs it 0, so producing it changes no score anywhere until a
+		 * reader moves the slider.
+		 *
+		 * The cap is what makes it useful rather than a second `tokens`: it
+		 * discriminates *below* the average and saturates above, so a book of
+		 * even entries gets a flat 1 and no ordering, and a book that mixes
+		 * one-line stubs with real articles pushes the stubs down. Length is a
+		 * proxy for how much an entry has to say and it is only a good proxy in
+		 * the second kind of book — which is why this ships as a slider and not
+		 * as a policy.
+		 */
+		density: densitySignal(
+			(entry.content ?? "").length,
+			averageContentLength
 		)
 	}
 }

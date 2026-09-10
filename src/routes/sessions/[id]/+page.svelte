@@ -28,10 +28,19 @@
 	import EntityGalleryViewModal from "$lib/client/components/sessionMessages/EntityGalleryViewModal.svelte"
 	import SessionSceneImagesTab from "$lib/client/components/sessionMessages/SessionSceneImagesTab.svelte"
 	import SessionWorkflowTab from "$lib/client/components/sessionMessages/SessionWorkflowTab.svelte"
+	// The answer where the question is asked (ruling 2026-09-08, 4.4): what
+	// lore would fire if you sent right now, what has fired in this session,
+	// and — in the prompt report — what actually fired for one reply. All
+	// three read the same server projection the admin workspace does.
+	import SessionRetrievalPreview from "$lib/client/components/pipelines/workspace/SessionRetrievalPreview.svelte"
+	import SessionUsagePanel from "$lib/client/components/pipelines/workspace/SessionUsagePanel.svelte"
+	import MessageRetrievalExplanation from "$lib/client/components/pipelines/workspace/MessageRetrievalExplanation.svelte"
 	import { sceneImages } from "$lib/client/stores/sceneImages"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 	import SessionLayout from "$lib/client/sessionLayout/SessionLayout.svelte"
+	import { presetBase } from "$lib/shared/sessionLayout/presets"
+	import { setWidgetStylePins } from "$lib/client/stores/widgetStyles.svelte"
 	import { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 	import type { LayoutBlob } from "$lib/client/surfaces/types"
 
@@ -124,10 +133,55 @@
 			: false
 	)
 	let openMsgControlsMenu: number | undefined = $state(undefined)
+	/**
+	 * The message whose report is open, and the report itself.
+	 *
+	 * Separate from `draftCompiledPrompt` because that is *live*: the composer
+	 * recompiles it on a debounce while somebody types, and the footer's own
+	 * token readout reads it. Opening a message's report used to overwrite it,
+	 * which silently replaced the draft's numbers with a finished reply's and
+	 * left them there until the next keystroke recompiled — a report about one
+	 * thing shown as the state of another.
+	 */
+	let messageReport:
+		| {
+				messageId: number
+				meta: any
+				prompt?: string
+				messages?: any[]
+		  }
+		| undefined = $state()
+	/** Whichever of the two the modal is currently reporting on. */
+	let promptDetails = $derived(
+		messageReport
+			? {
+					prompt: messageReport.prompt,
+					messages: messageReport.messages,
+					meta: messageReport.meta
+				}
+			: draftCompiledPrompt
+	)
+	/** The modal's own budget verdict — `contextExceeded` is the composer's. */
+	let detailsExceeded = $derived(
+		promptDetails?.meta
+			? promptDetails.meta.tokenCounts.total >
+					promptDetails.meta.tokenCounts.limit
+			: false
+	)
 	let showDraftCompiledPromptModal = $state(false)
 	let showTriggerCharacterMessageModal = $state(false)
 	let triggerCharacterSearch = $state("")
 	let showTriggerNarratorResponseModal = $state(false)
+	/**
+	 * The dropdown half of the trigger's first step (ruling 2026-09-07): this
+	 * person's characters, minus the cast. Fetched when the modal opens rather
+	 * than on every session load — it is a list nobody sees until they ask.
+	 */
+	let sideCharacterOptions: {
+		id: number
+		name: string
+		nickname: string | null
+	}[] = $state([])
 	let showAddPersonaModal = $state(false)
 	let showBranchSessionModal = $state(false)
 	let branchFromMessage: SelectSessionMessage | undefined = $state()
@@ -163,6 +217,21 @@
 	// falls back to core's log with no error.
 	let sessionFrames = $state<Sockets.Sessions.View.Response | null>(null)
 	const sessionViewFrame = $derived(sessionFrames?.sessionView ?? null)
+	/**
+	 * Why Continue is unavailable on this session's messages, when it is.
+	 *
+	 * Off `sessions:view`, which the page already fetches once when a session
+	 * opens and which already reads the genre — half the answer (`messageVerbs`)
+	 * was there anyway, and the other half is the connection the replies resolve
+	 * to. Session-level, so the button is disabled with the same sentence on
+	 * every message rather than asking per row.
+	 *
+	 * ⚠ An affordance, not the enforcement. `sessionMessagesContinueHandler`
+	 * refuses with this same sentence from the same resolution, so a stale value
+	 * (an admin repointing the instance default while this page is open) costs a
+	 * refusal message and never a wrong generation.
+	 */
+	const continueRefusal = $derived(sessionFrames?.continueRefusal)
 
 	// ── Surface grid (plan 21) ──────────────────────────────────────
 	// The modular session layout: the conversation is the primary panel, and
@@ -173,6 +242,49 @@
 	let panelViewLoaded = $state(false)
 	let panelLayoutLoaded = $state(false)
 	let panelLayoutBlob = $state<LayoutBlob>({})
+	// The preset layer (PLAN 25 redesign). `layoutPresetBase` is the ALREADY
+	// composed read-only floor (active preset + this user's widget settings);
+	// it is handed to the manager as a base it never serialises, so the user's
+	// own blob above still wins slot by slot and an existing arrangement is
+	// untouched. `{}` composes to `undefined` — i.e. no base at all.
+	let layoutPresets = $state<Sockets.Sessions.LayoutPreset[]>([])
+	let layoutPresetId = $state<number | null>(null)
+	let layoutPresetBase = $state<Record<string, unknown> | undefined>(undefined)
+	// The answer to "how many sessions are on this preset?", held for exactly
+	// one pending delete confirmation. `null` = nothing asked, or still asking.
+	let layoutPresetUsage = $state<{ id: number; sessions: number } | null>(
+		null
+	)
+	let layoutSettings = $state<Record<string, unknown>>({})
+
+	// PLAN 25: the per-widget style pins ride `layoutSettings.widgetStyles`.
+	// They are pushed into the widget-style store rather than threaded as
+	// props because the thing that needs them — WidgetHost — is mounted deep
+	// inside Panel, several layers below anything this page hands down.
+	$effect(() => {
+		setWidgetStylePins(layoutSettings?.widgetStyles)
+	})
+
+	/**
+	 * Persist a replacement `layoutSettings` blob (the Settings tab's style
+	 * pins today). Sent with `layout` because the server requires it, and WITH
+	 * the `layoutSettings` key present — key presence is what tells it to write
+	 * that column at all, so an absent key here would silently drop the write.
+	 *
+	 * `layoutPresetBase` is deliberately NOT recomputed: it composes the preset
+	 * with these settings for the SURFACE MANAGER's slots, and `widgetStyles`
+	 * is not one of them — merging it in would change nothing and re-seeding
+	 * the manager mid-session would.
+	 */
+	function persistLayoutSettings(next: Record<string, unknown>) {
+		if (sessionId == null) return
+		layoutSettings = next
+		socket.emit("sessions:panelLayout:set", {
+			sessionId,
+			layout: surfaceManager.toBlob() as Record<string, unknown>,
+			layoutSettings: next
+		})
+	}
 
 	/**
 	 * Core's default panels for the standard chat — the scene portraits (moved
@@ -237,9 +349,55 @@
 	function persistPanelLayout(blob: LayoutBlob) {
 		if (sessionId == null) return
 		panelLayoutBlob = blob
+		// Deliberately blob-only: omitting the preset keys is what tells the
+		// server to leave the user's preset choice and widget settings alone.
 		socket.emit("sessions:panelLayout:set", {
 			sessionId,
 			layout: blob as Record<string, unknown>
+		})
+	}
+
+	/**
+	 * Apply a layout preset: point at it, and drop this user's own arrangement
+	 * so the preset shows through. The arrangement is CLEARED rather than
+	 * overwritten with a copy — that keeps the row a reference, so a later edit
+	 * to the preset still reaches them.
+	 */
+	function applyLayoutPreset(presetId: number | null) {
+		if (sessionId == null) return
+		const chosen = layoutPresets.find((p) => p.id === presetId)
+		layoutPresetId = presetId
+		layoutPresetBase = presetBase(chosen?.layout ?? {}, layoutSettings)
+		surfaceManager.setBaseLayout(layoutPresetBase)
+		surfaceManager.clearArrangement()
+		socket.emit("sessions:panelLayout:set", {
+			sessionId,
+			layout: surfaceManager.toBlob() as Record<string, unknown>,
+			layoutPresetId: presetId
+		})
+	}
+
+	/**
+	 * Save the current arrangement as a new user-authored preset.
+	 *
+	 * The EFFECTIVE layout, not this user's delta: someone who applied a preset
+	 * and nudged one thing expects "save" to capture what they can see, not the
+	 * one slot they happened to touch. Slots nobody has set stay absent, so a
+	 * preset saved from an untouched session is `{}` — the shipped default,
+	 * which is exactly what it looked like.
+	 */
+	function saveLayoutPreset(name: string) {
+		if (sessionId == null) return
+		const slot = (k: string, v: unknown) =>
+			v !== undefined ? { [k]: v } : {}
+		socket.emit("sessions:layoutPreset:save", {
+			sessionId,
+			name,
+			layout: {
+				...slot("zoneLayout", surfaceManager.effectiveZoneLayout),
+				...slot("widgetGrid", surfaceManager.effectiveWidgetGrid),
+				...slot("arrangedGrid", surfaceManager.effectiveArrangedGrid)
+			} as Record<string, unknown>
 		})
 	}
 
@@ -253,7 +411,8 @@
 			sessionId,
 			[...byId.values()],
 			panelLayoutBlob,
-			persistPanelLayout
+			persistPanelLayout,
+			layoutPresetBase
 		)
 	}
 
@@ -269,8 +428,101 @@
 	) {
 		if (res.sessionId !== sessionId) return
 		panelLayoutBlob = (res.layout ?? {}) as LayoutBlob
+		layoutPresets = res.presets ?? []
+		layoutPresetId = res.layoutPresetId ?? null
+		layoutSettings = res.layoutSettings ?? {}
+		layoutPresetBase = presetBase(res.presetLayout, layoutSettings)
 		panelLayoutLoaded = true
 		initSurfaceManagerIfReady()
+	}
+
+	function handleLayoutPresetSave(
+		res: Sockets.Sessions.PanelLayout.Save.Response
+	) {
+		if (res.sessionId !== sessionId) return
+		layoutPresets = res.presets ?? layoutPresets
+	}
+
+	/**
+	 * Managing the presets this user saved (PLAN 25 redesign).
+	 *
+	 * These three are GENRE-scoped, not session-scoped: a preset belongs to a
+	 * genre and an author, not to the session you happened to be looking at
+	 * when you saved it. So the refreshed list is adopted only when the reply
+	 * names THIS session's genre — and a refusal names no genre at all (it must
+	 * not say where an id it declined to touch lives), which the same check
+	 * correctly declines to adopt.
+	 *
+	 * A refusal arrives on the main channel with `ok: false` and the server's
+	 * own sentence; it is toasted verbatim rather than re-worded here, because
+	 * the server is the only thing that knows which of "built-in", "not yours"
+	 * or "already gone" happened.
+	 */
+	function sessionGenreId(): string | undefined {
+		const g = (session as any)?.genreId
+		return typeof g === "string" ? g : undefined
+	}
+
+	function handleLayoutPresetRename(
+		res: Sockets.Sessions.PanelLayout.Rename.Response
+	) {
+		if (!res.ok) {
+			toaster.error({
+				title: res.error ?? "Could not rename that layout"
+			})
+			return
+		}
+		if (res.genreId !== sessionGenreId()) return
+		layoutPresets = res.presets ?? layoutPresets
+	}
+
+	function handleLayoutPresetDelete(
+		res: Sockets.Sessions.PanelLayout.Delete.Response
+	) {
+		layoutPresetUsage = null
+		if (!res.ok) {
+			toaster.error({
+				title: res.error ?? "Could not delete that layout"
+			})
+			return
+		}
+		if (res.genreId !== sessionGenreId()) return
+		layoutPresets = res.presets ?? layoutPresets
+		if (res.id === layoutPresetId) {
+			// `layout_preset_id` is ON DELETE SET NULL, so the pin is already
+			// gone server-side — mirror it here so the open page stops standing
+			// on a floor that no longer exists. Only the base moves: this user's
+			// own arrangement blob is untouched, exactly as a reload would leave
+			// it. The genre default's layout is `{}`, which is what the server
+			// would resolve this session to next time it asks.
+			layoutPresetId = null
+			layoutPresetBase = presetBase({}, layoutSettings)
+			surfaceManager.setBaseLayout(layoutPresetBase)
+		}
+	}
+
+	function handleLayoutPresetUsage(
+		res: Sockets.Sessions.PanelLayout.Usage.Response
+	) {
+		if (!res.ok) {
+			layoutPresetUsage = null
+			toaster.error({ title: res.error ?? "Could not read that layout" })
+			return
+		}
+		layoutPresetUsage = { id: res.id, sessions: res.sessions }
+	}
+
+	function renameLayoutPreset(presetId: number, name: string) {
+		socket.emit("sessions:layoutPreset:rename", { id: presetId, name })
+	}
+	function deleteLayoutPreset(presetId: number) {
+		socket.emit("sessions:layoutPreset:delete", { id: presetId })
+	}
+	function askLayoutPresetUsage(presetId: number) {
+		// Cleared first so the confirmation cannot show a stale count for the
+		// preset it asked about last time while this answer is in flight.
+		layoutPresetUsage = null
+		socket.emit("sessions:layoutPreset:usage", { id: presetId })
 	}
 
 	/** Explicit surface intents (21 §9): a node/action opened or closed panels. */
@@ -810,6 +1062,11 @@
 			panelViewLoaded = false
 			panelLayoutLoaded = false
 			panelLayoutBlob = {}
+			layoutPresets = []
+			layoutPresetId = null
+			layoutSettings = {}
+			layoutPresetBase = undefined
+			layoutPresetUsage = null
 			socket.emit("sessions:get", { id: sessionId, limit: 25 })
 			socket.emit("sessions:view", { sessionId })
 			socket.emit("sessions:panelLayout:get", { sessionId })
@@ -1096,18 +1353,29 @@
 		})
 	}
 
+	function openNarrateModal() {
+		socket.emit("sessions:sideCharacterOptions", { sessionId })
+		showTriggerNarratorResponseModal = true
+	}
+
 	function handleTriggerNarratorResponse(e: Event) {
 		e.stopPropagation()
 		openMsgControlsMenu = undefined
 		showTriggerCharacterMessageModal = false
-		showTriggerNarratorResponseModal = true
+		openNarrateModal()
 	}
 
-	function handleConfirmTriggerNarratorResponse(instructions: string) {
+	function handleConfirmTriggerNarratorResponse(request: {
+		instructions: string
+		speaker?: { characterId: number | null; name: string | null }
+	}) {
 		showTriggerNarratorResponseModal = false
 		socket.emit("sessions:triggerNarratorResponse", {
 			sessionId,
-			instructions: instructions || undefined
+			instructions: request.instructions || undefined,
+			// Absent means world narration, which is what this trigger has
+			// always sent — the server reads its absence, not a mode flag.
+			...(request.speaker ? { speaker: request.speaker } : {})
 		})
 	}
 
@@ -1545,6 +1813,13 @@
 		narratorName = msg.narratorName
 	}
 
+	function handleSessionsSideCharacterOptions(
+		msg: Sockets.Sessions.SideCharacterOptions.Response
+	) {
+		if (msg.sessionId !== sessionId) return
+		sideCharacterOptions = msg.characters ?? []
+	}
+
 	function handleSessionsTriggers(msg: Sockets.Sessions.Triggers.Response) {
 		if (msg.sessionId !== sessionId) return
 		modeTriggers = msg.triggers || []
@@ -1596,11 +1871,12 @@
 	}
 
 	function fireTrigger(fn: string) {
-		// The one function with a bespoke client flow: narrate opens its
-		// instructions modal and fires its dedicated event. Everything else is
-		// the generic fire (19 §4).
-		if (fn === "narrate") {
-			showTriggerNarratorResponseModal = true
+		// The functions with a bespoke client flow: both halves of the narrator
+		// split open the same modal — whose first step *is* the choice between
+		// them — and fire the dedicated event. Everything else is the generic
+		// fire (19 §4).
+		if (fn === "narrate" || fn === "narrate-character") {
+			openNarrateModal()
 			return
 		}
 		// The run is named HERE, so Cancel works during the window between the
@@ -1696,9 +1972,17 @@
 		socket.on("scenes:list", handleScenesList)
 		socket.on("scenes:list:error", handleScenesListError)
 		socket.on("sessions:getNarratorName", handleSessionsGetNarratorName)
+		socket.on(
+			"sessions:sideCharacterOptions",
+			handleSessionsSideCharacterOptions
+		)
 		socket.on("sessions:triggers", handleSessionsTriggers)
 		socket.on("sessions:view", handleSessionsView)
 		socket.on("sessions:panelLayout:get", handleSessionsPanelLayoutGet)
+		socket.on("sessions:layoutPreset:save", handleLayoutPresetSave)
+		socket.on("sessions:layoutPreset:rename", handleLayoutPresetRename)
+		socket.on("sessions:layoutPreset:delete", handleLayoutPresetDelete)
+		socket.on("sessions:layoutPreset:usage", handleLayoutPresetUsage)
 		socket.on("sessions:surfaceIntent", handleSurfaceIntent)
 		socket.on("sessions:triggerFunction", handleSessionsTriggerFunction)
 		socket.on("pipelines:runStarted", handleRunProgress)
@@ -1760,9 +2044,17 @@
 				"sessions:getNarratorName",
 				handleSessionsGetNarratorName
 			)
+			socket.off(
+				"sessions:sideCharacterOptions",
+				handleSessionsSideCharacterOptions
+			)
 			socket.off("sessions:triggers", handleSessionsTriggers)
 			socket.off("sessions:view", handleSessionsView)
 			socket.off("sessions:panelLayout:get", handleSessionsPanelLayoutGet)
+			socket.off("sessions:layoutPreset:save", handleLayoutPresetSave)
+			socket.off("sessions:layoutPreset:rename", handleLayoutPresetRename)
+			socket.off("sessions:layoutPreset:delete", handleLayoutPresetDelete)
+			socket.off("sessions:layoutPreset:usage", handleLayoutPresetUsage)
 			socket.off("sessions:surfaceIntent", handleSurfaceIntent)
 			socket.off(
 				"sessions:triggerFunction",
@@ -1928,6 +2220,16 @@
 				manager={surfaceManager}
 				{sessionId}
 				{session}
+				presets={layoutPresets}
+				activePresetId={layoutPresetId}
+				onApplyPreset={applyLayoutPreset}
+				onSavePreset={saveLayoutPreset}
+				onRenamePreset={renameLayoutPreset}
+				onDeletePreset={deleteLayoutPreset}
+				onPresetUsage={askLayoutPresetUsage}
+				presetUsage={layoutPresetUsage}
+				{layoutSettings}
+				onLayoutSettings={persistLayoutSettings}
 				onFrameAction={handleFrameAction}
 			>
 				{#snippet messagesChildren()}
@@ -2005,7 +2307,6 @@
 								onCancelEditMessage={handleCancelEditMessage}
 								onSaveEditMessage={handleSaveEditMessage}
 								bind:openMsgControlsMenu
-								{lastPersonaMessage}
 								{isSummarizationMode}
 								isSelected={selectedMessageIds.has(
 									props.msg.id
@@ -2154,6 +2455,7 @@
 											onDeleteMessage={props.onDeleteMessage}
 											onRegenerateMessage={props.onRegenerateMessage}
 											onContinueMessage={props.onContinueMessage}
+											{continueRefusal}
 											onAbortMessage={props.onAbortMessage}
 											onBranchMessage={props.onBranchMessage}
 											onStartSummarization={summarizationEnabled
@@ -2168,7 +2470,8 @@
 												.settings
 												?.contextDebuggingEnabled
 												? (meta: any) => {
-														draftCompiledPrompt = {
+														messageReport = {
+															messageId: msg.id,
 															prompt: meta?.prompt,
 															messages:
 																meta?.messages,
@@ -2530,17 +2833,17 @@
 						</button>
 					</header>
 
-					{#if draftCompiledPrompt?.meta}
-						{@const tokens = draftCompiledPrompt.meta.tokenCounts}
-						{@const msgs = draftCompiledPrompt.meta.sessionMessages}
-						{@const src = draftCompiledPrompt.meta.sources}
-						{@const retrieval = draftCompiledPrompt.meta.retrieval}
+					{#if promptDetails?.meta}
+						{@const tokens = promptDetails.meta.tokenCounts}
+						{@const msgs = promptDetails.meta.sessionMessages}
+						{@const src = promptDetails.meta.sources}
+						{@const retrieval = promptDetails.meta.retrieval}
 						{@const tokenPct = Math.min(
 							100,
 							Math.round((tokens.total / tokens.limit) * 100)
 						)}
 						{@const truncReason =
-							draftCompiledPrompt.meta.truncationReason}
+							promptDetails.meta.truncationReason}
 
 						<div
 							class="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1"
@@ -2558,8 +2861,8 @@
 									class="flex items-center justify-between text-sm"
 								>
 									<span
-										class:text-error-500={contextExceeded}
-										class:text-success-500={!contextExceeded}
+										class:text-error-500={detailsExceeded}
+										class:text-success-500={!detailsExceeded}
 									>
 										{tokens.total.toLocaleString()} / {tokens.limit.toLocaleString()}
 										tokens
@@ -2572,7 +2875,7 @@
 									class="bg-surface-300-700 h-2 w-full overflow-hidden rounded-full"
 								>
 									<div
-										class="h-full rounded-full transition-all {contextExceeded
+										class="h-full rounded-full transition-all {detailsExceeded
 											? 'bg-error-500'
 											: tokenPct > 85
 												? 'bg-warning-500'
@@ -2587,16 +2890,16 @@
 										Format: <span
 											class="text-surface-300-700"
 										>
-											{draftCompiledPrompt.meta
+											{promptDetails.meta
 												.promptFormat || "—"}
 										</span>
 									</span>
-									{#if draftCompiledPrompt.meta.templateName}
+									{#if promptDetails.meta.templateName}
 										<span>
 											Template: <span
 												class="text-surface-300-700"
 											>
-												{draftCompiledPrompt.meta
+												{promptDetails.meta
 													.templateName}
 											</span>
 										</span>
@@ -2682,62 +2985,84 @@
 								"why isn't my lore showing up" — directly, per entry,
 								instead of via an aggregate it was inferred from.
 							-->
-							{#if retrieval?.blocks?.length}
-								{@const shown = retrieval.blocks}
-								{@const kept = shown.filter(
-									(b: { included: boolean }) => b.included
-								)}
-								<section
-									class="bg-surface-200-800 space-y-2 rounded-lg p-3"
-								>
-									<h3
-										class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+							<!--
+								The thin list is now the FALLBACK, not the answer.
+
+								It reports "in / out", a source and a token count,
+								which says *that* an entry was left out and never
+								*why* — the only half anybody opens this report to
+								learn. `pipelines:messageExplain` returns the same
+								projection the pipeline workspace reads, resolved
+								from the message rather than from a run id the
+								reader was never given; when nothing was recorded
+								for a reply, this is still what there is.
+							-->
+							{#snippet thinRetrieval()}
+								{#if retrieval?.blocks?.length}
+									{@const shown = retrieval.blocks}
+									{@const kept = shown.filter(
+										(b: { included: boolean }) => b.included
+									)}
+									<section
+										class="bg-surface-200-800 space-y-2 rounded-lg p-3"
 									>
-										Retrieval
-									</h3>
-									<p class="text-surface-700-300 text-xs">
-										{kept.length} of {shown.length} candidates
-										included
-									</p>
-									<div class="space-y-1">
-										{#each shown as b (`${b.source}:${b.id}`)}
-											<div
-												class="bg-surface-300-700 rounded p-2 text-xs"
-											>
+										<h3
+											class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+										>
+											Retrieval
+										</h3>
+										<p class="text-surface-700-300 text-xs">
+											{kept.length} of {shown.length} candidates
+											included
+										</p>
+										<div class="space-y-1">
+											{#each shown as b (`${b.source}:${b.id}`)}
 												<div
-													class="flex items-baseline gap-2"
+													class="bg-surface-300-700 rounded p-2 text-xs"
 												>
-													<span
-														class="font-medium {b.included
-															? 'text-primary-400'
-															: 'text-surface-400'}"
+													<div
+														class="flex items-baseline gap-2"
 													>
-														{b.included
-															? "in"
-															: "out"}
-													</span>
-													<span
-														class="min-w-0 flex-1 truncate"
-													>
-														{b.name ?? b.source}
-													</span>
-													<span
-														class="text-surface-700-300 shrink-0"
-													>
-														{b.source} · {b.tokens} tok
-													</span>
+														<span
+															class="font-medium {b.included
+																? 'text-primary-400'
+																: 'text-surface-400'}"
+														>
+															{b.included
+																? "in"
+																: "out"}
+														</span>
+														<span
+															class="min-w-0 flex-1 truncate"
+														>
+															{b.name ?? b.source}
+														</span>
+														<span
+															class="text-surface-700-300 shrink-0"
+														>
+															{b.source} · {b.tokens} tok
+														</span>
+													</div>
+													{#if b.why?.length}
+														<p
+															class="text-surface-700-300 mt-1"
+														>
+															{b.why.join(" · ")}
+														</p>
+													{/if}
 												</div>
-												{#if b.why?.length}
-													<p
-														class="text-surface-700-300 mt-1"
-													>
-														{b.why.join(" · ")}
-													</p>
-												{/if}
-											</div>
-										{/each}
-									</div>
-								</section>
+											{/each}
+										</div>
+									</section>
+								{/if}
+							{/snippet}
+							{#if messageReport}
+								<MessageRetrievalExplanation
+									messageId={messageReport.messageId}
+									fallback={thinRetrieval}
+								/>
+							{:else}
+								{@render thinRetrieval()}
 							{/if}
 
 							<!-- ── Sources ───────────────────────────────────────────────────── -->
@@ -2840,12 +3165,12 @@
 								>
 									Prompt Preview
 								</h3>
-								{#if draftCompiledPrompt.messages && draftCompiledPrompt.messages.length > 0}
+								{#if promptDetails.messages && promptDetails.messages.length > 0}
 									<!-- Session format: render each message block -->
 									<div
 										class="max-h-96 space-y-2 overflow-y-auto"
 									>
-										{#each draftCompiledPrompt.messages as msg, i}
+										{#each promptDetails.messages as msg, i}
 											<div
 												class="rounded border {msg.role ===
 												'system'
@@ -2893,10 +3218,10 @@
 											</div>
 										{/each}
 									</div>
-								{:else if draftCompiledPrompt.prompt}
+								{:else if promptDetails.prompt}
 									<!-- Raw text format -->
 									<pre
-										class="bg-surface-300-700 max-h-96 overflow-y-auto rounded p-2 text-xs leading-relaxed whitespace-pre-wrap">{draftCompiledPrompt.prompt}</pre>
+										class="bg-surface-300-700 max-h-96 overflow-y-auto rounded p-2 text-xs leading-relaxed whitespace-pre-wrap">{promptDetails.prompt}</pre>
 								{:else}
 									<p class="text-surface-700-300 text-xs">
 										No prompt content available.
@@ -3042,6 +3367,7 @@
 		onTrigger={handleConfirmTriggerNarratorResponse}
 		onCancel={handleCancelTriggerNarratorResponse}
 		{narratorName}
+		sideCharacters={sideCharacterOptions}
 	/>
 
 	<EntityGalleryViewModal
@@ -3087,6 +3413,40 @@
 					? enterSummarizationModeEmpty
 					: undefined}
 			/>
+
+			<!--
+				"The answer goes where the question is asked" (ruling
+				2026-09-08, 4.4). Both halves of it live here, under the tab
+				the author already opens to think about lore:
+
+				· What WOULD fire, if they sent the message currently in the
+				  box. On a button, never on a keystroke — a turn is a real run
+				  with a real embedding call behind it (`EntryFireTest`'s rule).
+				· What HAS fired in this conversation, which is the question no
+				  single turn can answer and the one that catches an entry
+				  that has never once come in.
+
+				The persona is the CURRENT one rather than the session's first:
+				a persona switch changes which character lore is in scope, so
+				answering from the first would answer about somebody else.
+			-->
+			<div
+				class="border-surface-300-700 mt-3 flex flex-col gap-3 border-t pt-3"
+			>
+				<SessionRetrievalPreview
+					sessionId={session.id}
+					content={newMessage}
+					personaId={currentUserPersona?.personaId ||
+						session?.sessionPersonas?.[0]?.personaId ||
+						null}
+					disabledReason={(session?.sessionCharacters ?? []).some(
+						(cc) => cc.isActive && !cc.removedAt
+					)
+						? null
+						: "Add a character to this conversation to see what its next reply would pull in."}
+				/>
+				<SessionUsagePanel sessionId={session.id} />
+			</div>
 		{/if}
 	{/snippet}
 
@@ -3155,6 +3515,11 @@
 			     narrator name and its instructions modal — mapped on the
 			     function key. -->
 			{#each modeTriggers.filter((t) => t.kind === "button") as t (t.specSlug + t.function)}
+				<!-- `narrate-character` deliberately falls through to the
+				     generic branch: `fireTrigger` routes it to the same modal,
+				     whose first step is the choice between the two. A second
+				     bespoke button here would be a second place to keep in
+				     step with the narrator's resolved name. -->
 				{#if t.function === "narrate"}
 					<button
 						class="btn btn-sm preset-tonal-success"
@@ -3190,7 +3555,13 @@
 			<button
 				class="btn btn-sm preset-tonal-primary"
 				title="View full prompt details"
-				onclick={() => (showDraftCompiledPromptModal = true)}
+				onclick={() => {
+					// The draft is the subject again; a message report left
+					// standing here would put a finished reply behind a button
+					// labelled with the draft's own numbers.
+					messageReport = undefined
+					showDraftCompiledPromptModal = true
+				}}
 				disabled={!draftCompiledPrompt?.meta}
 			>
 				<Icons.Info size={14} />

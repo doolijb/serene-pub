@@ -45,7 +45,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -78,7 +78,7 @@ const viewer = (over: any = {}) => ({
 
 const view = (over: any = {}): Promise<NamespaceView> =>
 	namespaceView(
-		db as any,
+		db,
 		SECRET,
 		RESPOND_SPEC_ID,
 		viewer(over)
@@ -89,7 +89,7 @@ const allOptions = (v: NamespaceView): ConfigOption[] =>
 
 describe("the namespace list", () => {
 	it("lists what core published, from rows", async () => {
-		const list = await listNamespaces(db as any)
+		const list = await listNamespaces(db)
 		expect(list.map((n) => n.slug)).toContain(RESPOND_SPEC_ID)
 	})
 })
@@ -267,7 +267,7 @@ describe("the option payload", () => {
 			"$lib/server/pipelines/config/panel"
 		)
 		const decl = (
-			await declarations(db as any, spec.activeVersionId!)
+			await declarations(db, spec.activeVersionId!)
 		).find(
 			(d: any) =>
 				d.control === "prompts-ref" &&
@@ -294,7 +294,7 @@ describe("the option payload", () => {
 		expect(ref.prompt!.readOnly).toBe(true)
 
 		await writeOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer({ sessionId }),
@@ -312,7 +312,7 @@ describe("the option payload", () => {
 
 		// Leave the option as found for the provenance tests below.
 		await clearOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer({ sessionId }),
@@ -354,7 +354,7 @@ describe("the option payload", () => {
 		// From inside a session: the prompts line.
 		await expect(
 			writeOption(
-				db as any,
+				db,
 				SECRET,
 				RESPOND_SPEC_ID,
 				viewer({ sessionId }),
@@ -366,7 +366,7 @@ describe("the option payload", () => {
 		// config edit, and configs are the administrator's (ruled 2026-08-24).
 		await expect(
 			writeOption(
-				db as any,
+				db,
 				SECRET,
 				RESPOND_SPEC_ID,
 				viewer(),
@@ -415,13 +415,13 @@ describe("resolution and provenance", () => {
 					eq(schema.pipelineConfigs.isImmutable, true)
 				)
 			)
-		const copy = await duplicateConfig(db as any, shipped.id, "Walk copy")
-		await selectConfig(db as any, spec.id, "instance", 0, copy.id, adminId)
+		const copy = await duplicateConfig(db, shipped.id, "Walk copy")
+		await selectConfig(db, spec.id, "instance", 0, copy.id, adminId)
 
 		// Clearing deletes the copy's row, so the author default resolves —
 		// the bottom of the chain, seen before the layers stack back up.
 		await clearOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
@@ -433,7 +433,7 @@ describe("resolution and provenance", () => {
 		expect(base.source).toBe("author")
 
 		await writeOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
@@ -449,7 +449,7 @@ describe("resolution and provenance", () => {
 
 		// Opened from inside the session, the same edit lands at session scope and wins.
 		await writeOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer({ sessionId }),
@@ -470,13 +470,13 @@ describe("resolution and provenance", () => {
 
 		// Leave the instance as found for the tests below.
 		await clearOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer({ sessionId }),
 			target.id
 		)
-		await selectConfig(db as any, spec.id, "instance", 0, null, adminId)
+		await selectConfig(db, spec.id, "instance", 0, null, adminId)
 	})
 
 	it("a global edit lands in the selected configuration — and a shipped one refuses", async () => {
@@ -495,7 +495,7 @@ describe("resolution and provenance", () => {
 		// Nothing selected: the shipped default resolves, and refuses edits.
 		await expect(
 			writeOption(
-				db as any,
+				db,
 				SECRET,
 				RESPOND_SPEC_ID,
 				viewer({ userId: adminId, isAdmin: true }),
@@ -511,9 +511,9 @@ describe("resolution and provenance", () => {
 			.select()
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
-		const landing = await createConfig(db as any, spec.id, "Landing")
+		const landing = await createConfig(db, spec.id, "Landing")
 		await selectConfig(
-			db as any,
+			db,
 			spec.id,
 			"instance",
 			0,
@@ -522,7 +522,7 @@ describe("resolution and provenance", () => {
 		)
 
 		await writeOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
@@ -542,7 +542,7 @@ describe("resolution and provenance", () => {
 
 		// Reset deletes the configuration's value; the author default resolves.
 		await clearOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
@@ -552,7 +552,7 @@ describe("resolution and provenance", () => {
 		expect(back.value).not.toBe(777)
 		expect(back.source).not.toBe("preset")
 
-		await selectConfig(db as any, spec.id, "instance", 0, null, adminId)
+		await selectConfig(db, spec.id, "instance", 0, null, adminId)
 	})
 
 	it("keeps one session's overrides out of another's view", async () => {
@@ -561,7 +561,7 @@ describe("resolution and provenance", () => {
 			(o) => o.writable && o.source !== "session"
 		)!
 		await writeOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer({ sessionId }),
@@ -586,7 +586,7 @@ describe("resolution and provenance", () => {
 		)!
 
 		await clearOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer({ sessionId }),
@@ -623,7 +623,7 @@ describe("what a write refuses", () => {
 		)!
 		await expect(
 			writeOption(
-				db as any,
+				db,
 				SECRET,
 				RESPOND_SPEC_ID,
 				viewer(),
@@ -639,7 +639,7 @@ describe("what a write refuses", () => {
 		)!
 		await expect(
 			writeOption(
-				db as any,
+				db,
 				SECRET,
 				RESPOND_SPEC_ID,
 				viewer(),
@@ -661,7 +661,7 @@ describe("what a write refuses", () => {
 		)
 		await expect(
 			writeOption(
-				db as any,
+				db,
 				SECRET,
 				RESPOND_SPEC_ID,
 				viewer(),
@@ -694,7 +694,7 @@ describe("named configs", () => {
 			.returning()
 
 		await selectNamedConfig(
-			db as any,
+			db,
 			RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
 			copy.id,
@@ -733,7 +733,7 @@ describe("named configs", () => {
 
 		await expect(
 			selectNamedConfig(
-				db as any,
+				db,
 				RESPOND_SPEC_ID,
 				viewer({ userId: adminId, isAdmin: true }),
 				other.id,
@@ -800,7 +800,7 @@ describe("the curated set", () => {
 		// makes the switch a rule rather than a rendering decision.
 		await expect(
 			selectNamedConfig(
-				db as any,
+				db,
 				RESPOND_SPEC_ID,
 				viewer({ sessionId }),
 				withdrawn,
@@ -825,7 +825,7 @@ describe("the curated set", () => {
 		// The other half of the ruling, and the one a permission change is
 		// most likely to break by accident: choosing is the verb people keep.
 		await selectNamedConfig(
-			db as any,
+			db,
 			RESPOND_SPEC_ID,
 			viewer({ sessionId }),
 			offered,
@@ -841,7 +841,7 @@ describe("the curated set", () => {
 
 	it("lets an admin choose a withdrawn one, since it is their switch", async () => {
 		await selectNamedConfig(
-			db as any,
+			db,
 			RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
 			withdrawn,
@@ -861,7 +861,7 @@ describe("the curated set", () => {
 		// to prevent.
 		await expect(
 			selectNamedConfig(
-				db as any,
+				db,
 				RESPOND_SPEC_ID,
 				viewer(),
 				offered,
@@ -919,7 +919,7 @@ describe("whether the selection is this viewer's to make", () => {
 		expect(v.configs.length).toBeGreaterThan(0)
 		await expect(
 			selectNamedConfig(
-				db as any,
+				db,
 				RESPOND_SPEC_ID,
 				viewer(),
 				v.configs[0].id
@@ -958,7 +958,7 @@ describe("configurations hold their own values", () => {
 	 */
 	const budget = async (): Promise<ConfigOption> => {
 		const v = (await namespaceView(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			admin
@@ -975,7 +975,7 @@ describe("configurations hold their own values", () => {
 		const { selectConfig } = await import(
 			"$lib/server/pipelines/config/named"
 		)
-		await selectConfig(db as any, specId, "instance" as any, 0, configId)
+		await selectConfig(db, specId, "instance" as any, 0, configId)
 	}
 
 	beforeAll(async () => {
@@ -987,14 +987,14 @@ describe("configurations hold their own values", () => {
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
 		specId = spec.id
-		alpha = (await createConfig(db as any, specId, "Alpha")).id
-		beta = (await createConfig(db as any, specId, "Beta")).id
+		alpha = (await createConfig(db, specId, "Alpha")).id
+		beta = (await createConfig(db, specId, "Beta")).id
 	})
 
 	it("keeps each configuration's value with that configuration", async () => {
 		await useConfig(alpha)
 		await writeOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			admin,
@@ -1005,7 +1005,7 @@ describe("configurations hold their own values", () => {
 
 		await useConfig(beta)
 		await writeOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			admin,
@@ -1027,7 +1027,7 @@ describe("configurations hold their own values", () => {
 	it("resets only the configuration it was asked about", async () => {
 		await useConfig(beta)
 		await clearOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			admin,
@@ -1056,7 +1056,7 @@ describe("configurations hold their own values", () => {
 		expect(shipped, "no immutable config to test against").toBeTruthy()
 		await expect(
 			writeOption(
-				db as any,
+				db,
 				SECRET,
 				RESPOND_SPEC_ID,
 				admin,
@@ -1078,7 +1078,7 @@ describe("configurations hold their own values", () => {
 			.where(eq(schema.pipelineConfigs.specId, narrate.id))
 		await expect(
 			writeOption(
-				db as any,
+				db,
 				SECRET,
 				RESPOND_SPEC_ID,
 				admin,
@@ -1100,7 +1100,7 @@ describe("configurations hold their own values", () => {
  */
 describe("a share option carries its own bands", () => {
 	const shareOption = async () => {
-		const v = (await namespaceView(db as any, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
@@ -1139,7 +1139,7 @@ describe("a share option carries its own bands", () => {
 	})
 
 	it("carries the real window once a sampling config is selected", async () => {
-		const v = (await namespaceView(db as any, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
@@ -1168,7 +1168,7 @@ describe("a share option carries its own bands", () => {
 			})
 			.returning()
 		await writeOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			{ userId: 1, isAdmin: true },
@@ -1183,7 +1183,7 @@ describe("a share option carries its own bands", () => {
 	})
 
 	it("gives the per-member ceiling the same bands", async () => {
-		const v = (await namespaceView(db as any, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
@@ -1222,8 +1222,8 @@ describe("every reference control has something to reference", () => {
 			"$lib/server/pipelines/config/panel"
 		)
 		const empty: string[] = []
-		for (const ns of await list(db as any)) {
-			const v = (await namespaceView(db as any, SECRET, ns.slug, {
+		for (const ns of await list(db)) {
+			const v = (await namespaceView(db, SECRET, ns.slug, {
 				userId: 1,
 				isAdmin: true
 			})) as NamespaceView
@@ -1272,7 +1272,7 @@ describe("every reference control has something to reference", () => {
  */
 describe("the facet vocabulary travels with the view", () => {
 	const view = async () =>
-		(await namespaceView(db as any, SECRET, RESPOND_SPEC_ID, {
+		(await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
@@ -1381,7 +1381,7 @@ describe("the facet vocabulary travels with the view", () => {
  */
 describe("options arrive in the order they were declared", () => {
 	it("follows the parameter schema's own order within a slot", async () => {
-		const v = (await namespaceView(db as any, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
@@ -1418,9 +1418,14 @@ describe("options arrive in the order they were declared", () => {
 			"Called by a description",
 			"Distinctive words",
 			"Recently referenced",
-			"Recency",
-			"Same scene",
-			"Information density",
+			// ⚠ `Recency` and `Same scene` were declared between these two and
+			// are gone (migration 0099): nothing produced either signal, so
+			// both were controls a reader could move at any value without
+			// changing a prompt. `Information density` survives under a
+			// truthful label — the number is length against the pool mean, not
+			// how much an entry says per token — because the scan produces it
+			// now, as it already produced `proximity`.
+			"Length against the pool",
 			"Keywords close together",
 			"Author priority",
 			// The allocation switch (migration 0196), declared after the
@@ -1437,7 +1442,7 @@ describe("options arrive in the order they were declared", () => {
 		// alphabetically that is params, template, variables, which would put
 		// "Post History Depth" first and the context template third. So this is
 		// the assertion that notices a tidy-minded `.sort()` in the slot walk.
-		const v = (await namespaceView(db as any, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
@@ -1454,7 +1459,7 @@ describe("options arrive in the order they were declared", () => {
 	})
 
 	it("follows node position across steps", async () => {
-		const v = (await namespaceView(db as any, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView

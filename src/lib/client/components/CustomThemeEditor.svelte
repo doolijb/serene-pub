@@ -182,6 +182,60 @@
 		socket.emit("customThemes:setInstanceTheme", { id: theme.id, enabled })
 	}
 
+	// Named so `off` can name them too. A bare `socket.off("customThemes:save")`
+	// removes EVERY listener for that event — including the theme manager's,
+	// which then stops updating for the rest of the session.
+	function onGetCss(msg: Sockets.CustomThemes.GetCss.Response) {
+		if (msg.name !== (theme?.name ?? themeName)) return
+		isLoadingCss = false
+		editorView?.dispatch({
+			changes: {
+				from: 0,
+				to: editorView.state.doc.length,
+				insert: msg.css
+			}
+		})
+	}
+
+	function onSave(msg: Sockets.CustomThemes.Save.Response) {
+		isSaving = false
+		toaster.success({ title: "Theme saved" })
+		onSaved?.(msg.theme)
+	}
+
+	function onSaveError(msg: Sockets.ErrorResponse) {
+		isSaving = false
+		toaster.error({
+			title: "Failed to save theme",
+			description: msg?.error
+		})
+	}
+
+	function onDelete() {
+		isDeleting = false
+		toaster.success({ title: "Theme deleted" })
+		if (theme?.id) onDeleted?.(theme.id)
+	}
+
+	function onDeleteError(msg: Sockets.ErrorResponse) {
+		isDeleting = false
+		toaster.error({
+			title: "Failed to delete theme",
+			description: msg?.error
+		})
+	}
+
+	function onSetInstanceTheme() {
+		toaster.success({ title: "Instance theme setting updated" })
+	}
+
+	function onSetInstanceThemeError(msg: Sockets.ErrorResponse) {
+		toaster.error({
+			title: "Failed to update",
+			description: msg?.error
+		})
+	}
+
 	onMount(() => {
 		initEditor()
 
@@ -191,73 +245,30 @@
 			socket.emit("customThemes:getCss", { name: theme.name })
 		}
 
-		socket.on(
-			"customThemes:getCss",
-			(msg: Sockets.CustomThemes.GetCss.Response) => {
-				if (msg.name !== (theme?.name ?? themeName)) return
-				isLoadingCss = false
-				editorView?.dispatch({
-					changes: {
-						from: 0,
-						to: editorView.state.doc.length,
-						insert: msg.css
-					}
-				})
-			}
-		)
-
-		socket.on(
-			"customThemes:save",
-			(msg: Sockets.CustomThemes.Save.Response) => {
-				isSaving = false
-				toaster.success({ title: "Theme saved" })
-				onSaved?.(msg.theme)
-			}
-		)
-		socket.on("customThemes:save:error", (msg: Sockets.ErrorResponse) => {
-			isSaving = false
-			toaster.error({
-				title: "Failed to save theme",
-				description: msg?.error
-			})
-		})
-
-		socket.on("customThemes:delete", () => {
-			isDeleting = false
-			toaster.success({ title: "Theme deleted" })
-			if (theme?.id) onDeleted?.(theme.id)
-		})
-		socket.on("customThemes:delete:error", (msg: Sockets.ErrorResponse) => {
-			isDeleting = false
-			toaster.error({
-				title: "Failed to delete theme",
-				description: msg?.error
-			})
-		})
-
-		socket.on("customThemes:setInstanceTheme", () => {
-			toaster.success({ title: "Instance theme setting updated" })
-		})
+		socket.on("customThemes:getCss", onGetCss)
+		socket.on("customThemes:save", onSave)
+		socket.on("customThemes:save:error", onSaveError)
+		socket.on("customThemes:delete", onDelete)
+		socket.on("customThemes:delete:error", onDeleteError)
+		socket.on("customThemes:setInstanceTheme", onSetInstanceTheme)
 		socket.on(
 			"customThemes:setInstanceTheme:error",
-			(msg: Sockets.ErrorResponse) => {
-				toaster.error({
-					title: "Failed to update",
-					description: msg?.error
-				})
-			}
+			onSetInstanceThemeError
 		)
 	})
 
 	onDestroy(() => {
 		editorView?.destroy()
-		socket.off("customThemes:getCss")
-		socket.off("customThemes:save")
-		socket.off("customThemes:save:error")
-		socket.off("customThemes:delete")
-		socket.off("customThemes:delete:error")
-		socket.off("customThemes:setInstanceTheme")
-		socket.off("customThemes:setInstanceTheme:error")
+		socket.off("customThemes:getCss", onGetCss)
+		socket.off("customThemes:save", onSave)
+		socket.off("customThemes:save:error", onSaveError)
+		socket.off("customThemes:delete", onDelete)
+		socket.off("customThemes:delete:error", onDeleteError)
+		socket.off("customThemes:setInstanceTheme", onSetInstanceTheme)
+		socket.off(
+			"customThemes:setInstanceTheme:error",
+			onSetInstanceThemeError
+		)
 	})
 </script>
 

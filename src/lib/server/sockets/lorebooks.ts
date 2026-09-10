@@ -23,8 +23,6 @@ import { resolveOrCreateBindingByName } from "$lib/server/utils/summarizer/avail
 import { hashCanonicalJson } from "$lib/server/utils/contentHash"
 import { isValidUuid } from "$lib/server/utils/uuid"
 import { findOrCreateTagId } from "$lib/server/utils/tags"
-import type { ExtractTablesWithRelations } from "drizzle-orm"
-import type { PgliteDatabase, PgliteTransaction } from "drizzle-orm/pglite"
 import {
 	extractCharacterUuid,
 	buildExistingCharacterComparisonData,
@@ -52,13 +50,6 @@ import type { Handler } from "$lib/shared/events"
 // SelectTag/SelectLorebookTag/InsertHistoryEntry are declared globally in
 // $lib/server/db/types.d.ts (ambient `export global {}` block, same pattern
 // as the Sockets namespace) — no import needed/available for them.
-
-type Executor =
-	| PgliteDatabase<typeof schema>
-	| PgliteTransaction<
-			typeof schema,
-			ExtractTablesWithRelations<typeof schema>
-	  >
 
 // `parentNodeId`/`sceneId`/`historyEntryId` are foreign keys into rows that
 // must belong to the SAME lorebook as the binding being written — allowlisting
@@ -114,7 +105,7 @@ async function processLorebookTags(
 	lorebookId: number,
 	tagNames: string[],
 	userId: number,
-	dbOrTx: Executor = db
+	dbOrTx: Db = db
 ) {
 	if (!tagNames || tagNames.length === 0) return
 
@@ -1070,7 +1061,7 @@ async function restoreBoundEntities(
 	lorebookId: number,
 	serenepub: any,
 	userId: number,
-	dbOrTx: Executor = db
+	dbOrTx: Db = db
 ): Promise<{
 	bindingLocalIdToRealId: Map<number, number>
 	syncCharacterIds: Set<number>
@@ -1151,9 +1142,9 @@ async function restoreBoundEntities(
 		// {{char:N}} token forever. Deferred to after this transaction
 		// commits (see the caller) rather than called here — same
 		// inside-tx/outside-tx split resolveOrCreateBinding
-		// (characterBindingSync.ts) already uses for this exact call, and
-		// these sync helpers' own `dbInstance?: DbLike` type doesn't accept
-		// a transaction handle anyway.
+		// (characterBindingSync.ts) already uses for this exact call: the
+		// sync writes rows this transaction has not committed yet, so they
+		// have to see it landed.
 		if (characterId) {
 			syncCharacterIds.add(characterId)
 		} else if (personaId) {
@@ -1172,7 +1163,7 @@ async function restoreBoundEntities(
 async function resolveOrOverwriteEmbeddedCharacter(
 	cardData: any,
 	userId: number,
-	dbOrTx: Executor = db
+	dbOrTx: Db = db
 ) {
 	const incomingUuid = extractCharacterUuid(cardData)
 	if (incomingUuid) {
@@ -1211,7 +1202,7 @@ async function resolveOrOverwriteEmbeddedCharacter(
 async function resolveOrOverwriteEmbeddedPersona(
 	cardData: any,
 	userId: number,
-	dbOrTx: Executor = db
+	dbOrTx: Db = db
 ) {
 	const incomingUuid = extractPersonaUuid(cardData)
 	if (incomingUuid) {
@@ -1260,7 +1251,7 @@ async function insertLorebookEntries(
 	lorebookId: number,
 	entries: any[],
 	bindingLocalIdToRealId: Map<number, number>,
-	dbOrTx: Executor = db
+	dbOrTx: Db = db
 ): Promise<RestoredHistoryRefs> {
 	// Position is per `(lorebook, type)`, so each type counts from zero —
 	// which is what the three counters this replaces were doing.
@@ -1611,7 +1602,7 @@ async function fetchCompletedLorebook(lorebookId: number) {
 async function claimIncomingLorebookUuid(
 	incomingUuid: string | undefined,
 	userId: number,
-	dbOrTx: Executor
+	dbOrTx: Db
 ): Promise<string | undefined> {
 	if (!incomingUuid) return undefined
 	const existing = await dbOrTx.query.lorebooks.findFirst({

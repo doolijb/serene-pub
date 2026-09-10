@@ -16,14 +16,6 @@ import { syncPluginEngines } from "./engineHost"
 import { pluginEvents, syncPluginEventHooks } from "./eventHost"
 import { setRunStopObserver } from "$lib/server/pipelines/runtime/runRegistry"
 
-type Db = {
-	select: any
-	insert: any
-	update: any
-	delete: any
-	transaction: any
-}
-
 let manager: SandboxManager | null = null
 let dbRef: Db | null = null
 

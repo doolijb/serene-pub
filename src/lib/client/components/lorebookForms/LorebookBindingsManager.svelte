@@ -7,6 +7,7 @@
 	import * as Icons from "@lucide/svelte"
 	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import BindingSuggestionsPanel from "./BindingSuggestionsPanel.svelte"
 	import { onMount, onDestroy, tick } from "svelte"
 
 	interface Props {
@@ -665,6 +666,15 @@
 				{/each}
 			{/if}
 		</div>
+
+		<!--
+			Suggested bindings sit here, between the bindings themselves and the
+			two other review surfaces, because accepting one *creates* a row in
+			the list directly above: the proposal and its result are on one
+			screen. See the component's own note for why this tab rather than a
+			new one.
+		-->
+		<BindingSuggestionsPanel {lorebookId} />
 
 		{#if duplicateCandidates.length > 0}
 			<div

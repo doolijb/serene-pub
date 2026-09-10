@@ -23,7 +23,7 @@ import {
 	type ParamDecl,
 	type SlotDecl
 } from "@serene-pub/sdk"
-import { type Db, type Decl } from "$lib/server/pipelines/config/panel/types"
+import { type Decl } from "$lib/server/pipelines/config/panel/types"
 
 const KIND_TO_MATRIX_SLOT: Record<string, string> = {
 	connection: "connection",

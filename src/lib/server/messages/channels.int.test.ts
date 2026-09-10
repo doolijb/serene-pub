@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { createHost, HostScopeError } from "$lib/server/pipelines/runtime/host"
 import * as schema from "$lib/server/db/schema"
@@ -24,8 +24,13 @@ import { insertLegacy, listMessages } from "$lib/server/messages/store"
 import {
 	ALL_CHANNELS,
 	DEFAULT_CHANNEL,
+	channelPrefixWhere,
 	channelRefusal,
 	channelsOf,
+	formatChannel,
+	isSameChannel,
+	nextLane,
+	parseChannel,
 	resolveChannel,
 	sessionChannels
 } from "$lib/server/messages/channels"
@@ -36,8 +41,11 @@ let userId: number
 let chatSessionId: number
 /** A session whose genre declares a second lane. */
 let phoneSessionId: number
+/** A session whose genre declares a channel that will carry several lanes. */
+let textSessionId: number
 
 const PHONE_GENRE = "test:input/phone-mode@1"
+const TEXT_GENRE = "test:input/texting-mode@1"
 
 const node = { key: "history", typeId: "core:query/session-history@1" } as any
 
@@ -45,7 +53,7 @@ const history = async (
 	sessionId: number,
 	query: Record<string, unknown> = {}
 ): Promise<any[]> =>
-	(await createHost(db as any, { sessionId }).read!(
+	(await createHost(db, { sessionId }).read!(
 		"session_messages",
 		{ sessionId, ...query },
 		node
@@ -76,22 +84,36 @@ beforeAll(async () => {
 		.returning()
 	chatSessionId = chat.id
 
+	await db.insert(schema.pipelineTypeRegistry).values({
+		typeId: "test:input/texting-mode",
+		version: 1,
+		kind: "input",
+		status: "live",
+		sessionShape: { channels: ["text-messages"] } as any
+	})
+
 	const [phone] = await db
 		.insert(schema.sessions)
 		.values({ userId, isGroup: false, genreId: PHONE_GENRE })
 		.returning()
 	phoneSessionId = phone.id
 
+	const [texting] = await db
+		.insert(schema.sessions)
+		.values({ userId, isGroup: false, genreId: TEXT_GENRE })
+		.returning()
+	textSessionId = texting.id
+
 	// Three on the chat log and three on the phone, interleaved, so a read
 	// that took its limit before filtering comes back visibly short.
 	for (let i = 1; i <= 3; i++) {
-		await insertLegacy(db as any, {
+		await insertLegacy(db, {
 			sessionId: phoneSessionId,
 			userId,
 			role: "user",
 			content: `main ${i}`
 		})
-		await insertLegacy(db as any, {
+		await insertLegacy(db, {
 			sessionId: phoneSessionId,
 			userId,
 			role: "assistant",
@@ -101,11 +123,29 @@ beforeAll(async () => {
 	}
 
 	for (let i = 1; i <= 3; i++)
-		await insertLegacy(db as any, {
+		await insertLegacy(db, {
 			sessionId: chatSessionId,
 			userId,
 			role: "user",
 			content: `chat ${i}`
+		})
+
+	// Two lanes of one channel, interleaved with each other and with the
+	// session's own log, so a read that spans lanes without ordering them
+	// comes back as one conversation nobody had.
+	for (const [channel, content] of [
+		["text-messages", "sms 1"],
+		["text-messages:2", "second 1"],
+		["main", "log 1"],
+		["text-messages", "sms 2"],
+		["text-messages:2", "second 2"]
+	] as const)
+		await insertLegacy(db, {
+			sessionId: textSessionId,
+			userId,
+			role: "user",
+			channel,
+			content
 		})
 }, 60_000)
 
@@ -128,9 +168,10 @@ describe("resolving a channel", () => {
 			"map"
 		])
 		// A genre that redirects its greetings has named that lane by using it.
-		expect(
-			channelsOf({ greeting: { channel: "intro" } } as any)
-		).toEqual(["main", "intro"])
+		expect(channelsOf({ greeting: { channel: "intro" } } as any)).toEqual([
+			"main",
+			"intro"
+		])
 		// Declared twice is still one lane.
 		expect(
 			channelsOf({
@@ -141,10 +182,10 @@ describe("resolving a channel", () => {
 	})
 
 	it("reads a session's lanes off its genre", async () => {
-		expect(await sessionChannels(db as any, chatSessionId)).toEqual([
+		expect(await sessionChannels(db, chatSessionId)).toEqual([
 			DEFAULT_CHANNEL
 		])
-		expect(await sessionChannels(db as any, phoneSessionId)).toEqual([
+		expect(await sessionChannels(db, phoneSessionId)).toEqual([
 			"main",
 			"phone"
 		])
@@ -213,7 +254,7 @@ describe("a history read", () => {
 
 	it("appends the draft to the composer's own lane and no other", async () => {
 		const draftMessage = { content: "half-typed", personaId: null }
-		const onMain = (await createHost(db as any, {
+		const onMain = (await createHost(db, {
 			sessionId: phoneSessionId,
 			draftMessage
 		}).read!(
@@ -223,7 +264,7 @@ describe("a history read", () => {
 		)) as any[]
 		expect(onMain.at(-1)?.content).toBe("half-typed")
 
-		const onPhone = (await createHost(db as any, {
+		const onPhone = (await createHost(db, {
 			sessionId: phoneSessionId,
 			draftMessage
 		}).read!(
@@ -246,7 +287,7 @@ describe("a summary read", () => {
 	} as any
 
 	it("draws from one lane unless a person picked the messages", async () => {
-		const scoped = (await createHost(db as any, {
+		const scoped = (await createHost(db, {
 			sessionId: phoneSessionId
 		}).read!(
 			"summarize_source",
@@ -265,7 +306,7 @@ describe("a summary read", () => {
 			.select({ id: schema.sessionMessages.id })
 			.from(schema.sessionMessages)
 			.where(eq(schema.sessionMessages.sessionId, phoneSessionId))
-		const byId = (await createHost(db as any, {
+		const byId = (await createHost(db, {
 			sessionId: phoneSessionId
 		}).read!(
 			"summarize_source",
@@ -279,13 +320,11 @@ describe("a summary read", () => {
 describe("the native list", () => {
 	it("defaults to one lane rather than every lane", async () => {
 		expect(
-			(await listMessages(db as any, phoneSessionId)).map(
-				(m) => m.channel
-			)
+			(await listMessages(db, phoneSessionId)).map((m) => m.channel)
 		).toEqual(["main", "main", "main"])
 		expect(
 			(
-				await listMessages(db as any, phoneSessionId, {
+				await listMessages(db, phoneSessionId, {
 					channel: ALL_CHANNELS
 				})
 			).length
@@ -300,7 +339,7 @@ describe("writing a message to a channel", () => {
 	} as any
 
 	const write = async (sessionId: number, payload: Record<string, unknown>) =>
-		await createHost(db as any, { sessionId, userId }).commit!(
+		await createHost(db, { sessionId, userId }).commit!(
 			{ sessionId, ...payload },
 			writeNode
 		)
@@ -345,8 +384,253 @@ describe("writing a message to a channel", () => {
 	}, 60_000)
 
 	it("refuses the union sentinel as a destination", async () => {
+		expect(await channelRefusal(db, phoneSessionId, ALL_CHANNELS)).toMatch(
+			/not a channel a message can be written to/
+		)
+	}, 60_000)
+})
+
+/**
+ * Lanes (ruling 2026-09-09).
+ *
+ * A channel is a slug the genre declares; the lanes under it are runtime and
+ * open-ended — a lane exists because a pipeline wrote to it. Lane 1 is written
+ * as the bare slug, which is why every row that existed before this shipped is
+ * already canonical and why there is no migration.
+ *
+ * The two claims here are the ones a genre's pipelines rest on: a **read of the
+ * bare slug is the whole channel** (and a read of `slug:1` is its default lane
+ * alone), and **allocating the next lane cannot hand two writers the same
+ * number**.
+ */
+describe("lanes under a channel", () => {
+	it("takes a channel apart and puts it back in canonical form", () => {
+		// The semantics are the SDK's — a plugin has to parse `text-messages:3`
+		// exactly as the host does — so this asserts the re-export is wired,
+		// not the rules, which `sdk-tests/channels.test.ts` owns.
+		expect(parseChannel("text-messages:3")).toEqual({
+			slug: "text-messages",
+			lane: 3,
+			explicit: true
+		})
+		expect(parseChannel("text-messages")).toEqual({
+			slug: "text-messages",
+			lane: 1,
+			explicit: false
+		})
+		expect(formatChannel({ slug: "text-messages", lane: 1 })).toBe(
+			"text-messages"
+		)
+		expect(formatChannel({ slug: "text-messages", lane: 3 })).toBe(
+			"text-messages:3"
+		)
+		expect(isSameChannel("main", "main:1")).toBe(true)
+		expect(isSameChannel("main", "main:2")).toBe(false)
+	})
+
+	it("matches a channel's every lane without reaching a channel that merely starts the same way", async () => {
+		const [session] = await db
+			.insert(schema.sessions)
+			.values({ userId, isGroup: false })
+			.returning()
+		// `text_messages` is not `text-messages`, and an unescaped LIKE
+		// pattern would not know that: `_` is a single-character wildcard, so
+		// `text_messages:%` would sweep up a neighbouring channel's lanes.
+		for (const channel of [
+			"text_messages",
+			"text_messages:2",
+			"textXmessages:2",
+			"text_messagesX:2"
+		])
+			await insertLegacy(db, {
+				sessionId: session.id,
+				userId,
+				role: "user",
+				channel,
+				content: channel
+			})
+
+		const rows = await db
+			.select({ channel: schema.sessionMessages.channel })
+			.from(schema.sessionMessages)
+			.where(
+				and(
+					eq(schema.sessionMessages.sessionId, session.id),
+					channelPrefixWhere(
+						schema.sessionMessages.channel,
+						"text_messages"
+					)
+				)
+			)
+			.orderBy(schema.sessionMessages.id)
 		expect(
-			await channelRefusal(db as any, phoneSessionId, ALL_CHANNELS)
-		).toMatch(/not a channel a message can be written to/)
+			rows.map((r) => r.channel),
+			"the prefix predicate leaked into a channel whose slug only looks alike"
+		).toEqual(["text_messages", "text_messages:2"])
+	}, 60_000)
+
+	it("allocates the next lane from what has been written, per channel and per session", async () => {
+		const [session] = await db
+			.insert(schema.sessions)
+			.values({ userId, isGroup: false })
+			.returning()
+
+		// Nothing written yet: the first lane to allocate is 1, not 2.
+		expect(await nextLane(db, session.id, "text-messages")).toBe(1)
+
+		const write = async (channel: string) =>
+			await insertLegacy(db, {
+				sessionId: session.id,
+				userId,
+				role: "user",
+				channel,
+				content: channel
+			})
+
+		await write("text-messages")
+		expect(await nextLane(db, session.id, "text-messages")).toBe(2)
+
+		// Gaps count as taken — the number is order, and reusing a hole would
+		// hand a new conversation an old one's identity.
+		await write("text-messages:5")
+		expect(await nextLane(db, session.id, "text-messages")).toBe(6)
+
+		// Another channel's lanes are not this channel's.
+		await write("map:9")
+		expect(await nextLane(db, session.id, "text-messages")).toBe(6)
+		expect(await nextLane(db, session.id, "map")).toBe(10)
+
+		// And another session's lanes are not this session's.
+		expect(await nextLane(db, chatSessionId, "text-messages")).toBe(1)
+	}, 60_000)
+
+	it("composes allocate-then-insert into one transaction, opening a fresh lane each time", async () => {
+		const [session] = await db
+			.insert(schema.sessions)
+			.values({ userId, isGroup: false })
+			.returning()
+
+		/**
+		 * The shape `nextLane` is contracted for: the allocation and the insert
+		 * that claims it are one critical section, held by the session-scoped
+		 * `pg_advisory_xact_lock` the helper takes.
+		 *
+		 * ⚠ **This asserts the contract, it does not detect the race.** PGlite
+		 * is a single connection and serialises these transactions on its own,
+		 * so this test passes with the advisory lock removed — verified, not
+		 * assumed. What it does catch is the ordinary regression: an allocator
+		 * that reads its maximum from the wrong rows, or a caller pattern that
+		 * stops composing. The lock is there for the server build, where the
+		 * pool is not one connection.
+		 */
+		const open = async () =>
+			await db.transaction(async (tx) => {
+				const lane = await nextLane(tx, session.id, "text-messages")
+				await insertLegacy(tx, {
+					sessionId: session.id,
+					userId,
+					role: "user",
+					channel: formatChannel({ slug: "text-messages", lane }),
+					content: `lane ${lane}`
+				})
+				return lane
+			})
+
+		const lanes = await Promise.all([open(), open(), open()])
+		expect(
+			lanes.slice().sort(),
+			"an allocator was handed a lane another had already claimed, so one conversation was opened inside another"
+		).toEqual([1, 2, 3])
+	}, 60_000)
+})
+
+describe("reading a channel with more than one lane", () => {
+	it("reads the whole channel from a bare slug, and one lane from `slug:n`", async () => {
+		const laneNode = {
+			key: "history",
+			typeId: "core:query/session-history@1"
+		} as any
+		const read = async (channel?: string) =>
+			(
+				(await createHost(db, { sessionId: textSessionId }).read!(
+					"session_messages",
+					{ sessionId: textSessionId, channel },
+					laneNode
+				)) as any[]
+			).map((m) => m.content)
+
+		// Lane 1 in the column is the bare slug — no migration, by construction.
+		const stored = await db
+			.select({ channel: schema.sessionMessages.channel })
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, textSessionId))
+		expect(stored.some((r) => r.channel === "text-messages")).toBe(true)
+
+		// Bare slug: every lane, ordered lane then time — a genre's five phone
+		// conversations read as five conversations, not one interleaved
+		// transcript.
+		expect(
+			await read("text-messages"),
+			"a whole-channel read interleaved two private conversations"
+		).toEqual(["sms 1", "sms 2", "second 1", "second 2"])
+
+		// `slug:n` is one lane.
+		expect(await read("text-messages:2")).toEqual(["second 1", "second 2"])
+		// And `slug:1` is the default lane alone, which is the one case where
+		// the bare slug and the numbered form differ.
+		expect(await read("text-messages:1")).toEqual(["sms 1", "sms 2"])
+
+		// An omitted channel is still `main`, so the genre's own log is
+		// untouched by any of this.
+		expect(await read()).toEqual(["log 1"])
+	}, 60_000)
+
+	it("refuses a lane of a channel the genre never declared", async () => {
+		const writeNode = {
+			key: "reply",
+			typeId: "core:consumer/create-message"
+		} as any
+		// The slug is what a genre declares; the lane is not. So the refusal
+		// has to fire on the slug and stay silent about the number.
+		await expect(
+			createHost(db, {
+				sessionId: chatSessionId,
+				userId
+			}).commit!(
+				{
+					sessionId: chatSessionId,
+					text: "nowhere to land",
+					channel: "text-messages:2"
+				},
+				writeNode
+			)
+		).rejects.toThrow(/no channel 'text-messages'/)
+	}, 60_000)
+
+	it("stores a write in canonical form, whatever spelling reached it", async () => {
+		const writeNode = {
+			key: "reply",
+			typeId: "core:consumer/create-message"
+		} as any
+		const write = async (channel: string) => {
+			const res: any = await createHost(db, {
+				sessionId: textSessionId,
+				userId
+			}).commit!(
+				{ sessionId: textSessionId, text: "canonical", channel },
+				writeNode
+			)
+			const [row] = await db
+				.select({ channel: schema.sessionMessages.channel })
+				.from(schema.sessionMessages)
+				.where(eq(schema.sessionMessages.id, res.id))
+			return row.channel
+		}
+		// Lane 1 spelled out is still stored bare — two spellings of one lane
+		// in the column would be one conversation wearing two names.
+		expect(await write("text-messages:1")).toBe("text-messages")
+		expect(await write("  text-messages : 3 ")).toBe("text-messages:3")
+		// An unreadable lane degrades to the default one rather than throwing.
+		expect(await write("text-messages:0")).toBe("text-messages")
 	}, 60_000)
 })

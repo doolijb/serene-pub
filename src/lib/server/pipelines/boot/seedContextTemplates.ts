@@ -23,8 +23,6 @@ import {
 	poolKeyFor
 } from "$lib/server/pipelines/entities/contextTemplateDefaults"
 
-type Db = { select: any; insert: any; update: any; delete: any }
-
 export interface ContextTemplateSeedResult {
 	created: string[]
 	present: string[]

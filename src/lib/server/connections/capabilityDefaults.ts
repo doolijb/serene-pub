@@ -74,7 +74,7 @@ export const byCapability = (capability: string) => {
  * the default.
  */
 export async function capabilityDefaults(
-	db: any
+	db: Db
 ): Promise<Record<string, CapabilityDefault>> {
 	const rows = await db.select().from(schema.connectionDefaults)
 	const out: Record<string, CapabilityDefault> = {}
@@ -91,7 +91,7 @@ export async function capabilityDefaults(
 }
 
 export async function capabilityDefault(
-	db: any,
+	db: Db,
 	capability: string
 ): Promise<CapabilityDefault | undefined> {
 	const [row] = await db
@@ -115,7 +115,7 @@ export async function capabilityDefault(
  * insisted on both would have each screen clobbering the other's choice.
  */
 export async function setCapabilityDefault(
-	db: any,
+	db: Db,
 	capability: string,
 	patch: Partial<CapabilityDefault>
 ): Promise<void> {

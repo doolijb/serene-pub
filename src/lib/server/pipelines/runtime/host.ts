@@ -40,23 +40,24 @@ import {
 } from "$lib/server/pipelines/ranking/mentions"
 import { buildScanWindow } from "$lib/server/pipelines/ranking/signals"
 import type { HostServices, MediaRef, NodeRef } from "@serene-pub/sdk"
+import { slotRef } from "@serene-pub/sdk"
 import type { RunProgress } from "$lib/shared/sockets/progress"
+import type { RunArtifact } from "$lib/server/pipelines/runtime/receipts"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 import {
 	DEFAULT_CHANNEL,
+	DEFAULT_LANE,
+	byLaneThenTime,
+	canonicalChannel,
 	channelRefusal,
+	channelSpansLanes,
 	channelWhere,
 	isAllChannels,
+	parseChannel,
 	resolveChannel
 } from "$lib/server/messages/channels"
 
-type Db = {
-	select: any
-	insert: any
-	update: any
-	/** Needed by the writes that allocate a `position` under an advisory lock. */
-	transaction: any
-}
+// db is the global Db — see db/types.d.ts
 
 export interface HostScope {
 	/**
@@ -100,8 +101,8 @@ export interface HostScope {
 	 * Whose turn it is. Null in narrator mode.
 	 *
 	 * A property of the run, like `sessionId` — and it has to reach the provider,
-	 * because `StopStrings` excludes the *speaking* character's own name from
-	 * the stop list. Without it the prompt seeds `Ash: ` and also stops on
+	 * because `composeStops` (`connections/stops.ts`) excludes the *speaking*
+	 * character's own name from the stop list. Without it the prompt seeds `Ash: ` and also stops on
 	 * `Ash:`, so any model that opens by repeating the name returns an empty
 	 * string. The legacy path passed it on the adapter; the pipeline's
 	 * `generate-text` node has no port for it, and nothing carried it.
@@ -131,6 +132,26 @@ export interface HostScope {
 	}
 	/** Aborts an in-flight provider call when the run is cancelled. */
 	signal?: AbortSignal
+	/**
+	 * Where this host writes down what it made — the run's artifact collector.
+	 *
+	 * ⚠ **The single source of truth for a run's output.** Every commit below
+	 * that writes a row pushes one entry; `generate-image` pushes through
+	 * `dispatchImage`, whose `createMedia` loop is the only place the file and
+	 * variant ids exist. `saveReceipt` turns the array into
+	 * `pipeline_run_artifacts` rows and derives `is_preview` from whether it is
+	 * empty.
+	 *
+	 * The array is **mutated in place** rather than returned, because the
+	 * commits are called by the executor and their return values are node
+	 * outputs — a published port shape, not a channel back to the host's owner.
+	 *
+	 * **Optional, and legitimately absent**, exactly like `runId`: a host wired
+	 * by hand (the parity harness, a test poking one binding) has no run to
+	 * attribute anything to, and pushing into an array nobody reads would be
+	 * bookkeeping with no reader. `runSpec` always supplies one.
+	 */
+	artifacts?: RunArtifact[]
 }
 
 /**
@@ -163,16 +184,36 @@ export const STEP_TYPES_FOR_TEST = STEP_TYPE_LIST
  * A resolved `connection` or `sampling` slot is the id of a row in its own
  * table — never the row. Accepts the object form too, because a preset written
  * before configs existed may carry `{ ref: 3 }`.
+ *
+ * ⚠ The two slots do not resolve to the same KIND of thing, and this function
+ * is where that stopped being an implementation detail. A `connection` resolves
+ * to a reference (`{ id, kind, metadata }`); a `sampling` resolves to the
+ * config's VALUES, id deliberately stripped, because the nodes that read a
+ * sampling slot need the numbers — `core:task/context-budget@1` derives the
+ * token budget from `contextTokens` and the batch cutter fits a transcript into
+ * that same window. So this read `null` for every sampling slot ever resolved,
+ * a per-node pick reached no dispatcher, and `resolveCapabilityTarget` — which
+ * treats `null` as "this tier said nothing" — fell through to the capability
+ * default. The budget moved with the pick and the request did not.
+ *
+ * `slotRef` is the executor's own answer to "which row did these values come
+ * from", carried on the values object under a symbol so no value reader sees it.
+ * Asked FIRST, because on a sampling slot the values may legitimately contain
+ * neither `ref` nor `id` and the fallthrough below would go back to `null`.
  */
 const refId = (v: unknown): number | null => {
 	if (typeof v === "number") return v
 	if (typeof v === "string" && /^\d+$/.test(v)) return Number(v)
-	// Recurses rather than restating a narrower rule. The branch above already
-	// accepts a numeric string; this one used to demand a number, and the
-	// executor hands back `{id}` where the id is a STRING — so every resolved
-	// slot became null here, in the one function whose whole job is to read one.
-	if (v && typeof v === "object")
+	if (v && typeof v === "object") {
+		const carried = slotRef(v)
+		if (carried !== null) return refId(carried)
+		// Recurses rather than restating a narrower rule. The branch above
+		// already accepts a numeric string; this one used to demand a number,
+		// and the executor hands back `{id}` where the id is a STRING — so every
+		// resolved slot became null here, in the one function whose whole job is
+		// to read one.
 		return refId((v as any).ref ?? (v as any).id)
+	}
 	return null
 }
 
@@ -280,7 +321,7 @@ function describePromotion(
  * the message and the other images with it.
  */
 async function mediaParts(
-	db: any,
+	db: Db,
 	refs: unknown[],
 	sessionId: number,
 	scope: HostScope,
@@ -364,6 +405,25 @@ let embeddingModule: Promise<typeof import("$lib/server/embedding")> | null =
 const embeddingApi = () => (embeddingModule ??= import("$lib/server/embedding"))
 
 export function createHost(db: Db, scope: HostScope = {}): HostServices {
+	/**
+	 * Write down a row this run just made.
+	 *
+	 * Called at the write, by the code that did it — never reconstructed
+	 * afterwards from a node's published output. Two reasons it cannot be:
+	 * every commit publishes its own shape, and the outputs are redacted for a
+	 * non-admin reading their own receipt, so the ids are not reliably there to
+	 * read. A no-op when the host has no collector (see `HostScope.artifacts`).
+	 */
+	const record = (
+		node: NodeRef,
+		kind: RunArtifact["kind"],
+		entityId: unknown,
+		action: RunArtifact["action"]
+	) => {
+		if (!scope.artifacts || typeof entityId !== "number") return
+		scope.artifacts.push({ kind, entityId, action, nodeKey: node.key })
+	}
+
 	return {
 		async read(table, query, node) {
 			const q = (query ?? {}) as Record<string, any>
@@ -389,12 +449,50 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * many of the last 40 in the session happened to be on
 					 * it" — silently short, and indistinguishable from a lane
 					 * with little history.
+					 *
+					 * Lanes (ruling 2026-09-09): a **bare slug is the whole
+					 * channel** and `slug:n` is one lane of it. The window is
+					 * still the newest `limit` rows — a whole-channel read of
+					 * five conversations wants the recent traffic across them,
+					 * not the opening of the first — and the rows are then put
+					 * in lane-then-time order, so the five read as five. On a
+					 * channel that has only lane 1, which is every channel that
+					 * existed before this shipped, `byLaneThenTime` is exactly
+					 * the `reverse()` it replaces.
 					 */
 					const channel = resolveChannel(q.channel)
+					const spansLanes = channelSpansLanes(channel)
 
 					// `isHidden` is the existing convention for a message that should
 					// not reach a model. Honoured here rather than left to each
 					// binding, so a new Query type cannot forget it.
+					/**
+					 * ⚠ And `isGenerating`, on the same footing (ruling
+					 * 2026-09-08, D-2). **A row that is still being written is
+					 * not a stored message**, and this read is the one seam
+					 * every message query in the product goes through — the
+					 * history window, the keyword scan, the entity and semantic
+					 * mechanisms — so the rule is stated once here rather than
+					 * four times downstream where one of them would forget it.
+					 *
+					 * The legacy path always excluded it (`generateResponse.ts`
+					 * loads the session with `ne(cm.id, generatingMessage.id)`)
+					 * and this path never did, which was two bugs wearing one
+					 * omission:
+					 *
+					 * - a **continue** keeps its partial text on the row, so the
+					 *   partial arrived at every retrieval mechanism as though
+					 *   somebody had said it — lore keyed on a word the model
+					 *   had half-written was retrieved on the strength of the
+					 *   model's own unfinished sentence;
+					 * - and an ordinary turn's row is blank, so every prompt
+					 *   carried an empty `"Alice: "` transcript line immediately
+					 *   before the seed line that says the same thing.
+					 *
+					 * The partial still reaches the model — as
+					 * `continuationPrefill` on the seed line, which is the one
+					 * place a continuation belongs.
+					 */
 					const rows = await db
 						.select()
 						.from(schema.sessionMessages)
@@ -402,6 +500,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							and(
 								eq(schema.sessionMessages.sessionId, sessionId),
 								eq(schema.sessionMessages.isHidden, false),
+								eq(schema.sessionMessages.isGenerating, false),
 								channelWhere(
 									schema.sessionMessages.channel,
 									channel
@@ -414,7 +513,10 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					// Reversed after a descending limit: "the most recent N, in
 					// reading order" is what every caller wants, and doing it here
 					// means no binding has to remember which end it got.
-					const history = rows.reverse().map(toMessage)
+					const ordered = rows.reverse()
+					const history = (
+						spansLanes ? byLaneThenTime(ordered) : ordered
+					).map(toMessage)
 
 					// The uncommitted draft goes last, where the real message
 					// would be. `id: -1` marks it as belonging to no row.
@@ -425,9 +527,16 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					// be the mixing this scoping exists to prevent. A
 					// per-channel composer is later work; when it arrives the
 					// draft grows a channel and this comparison uses it.
+					//
+					// The composer's lane is `main` lane 1, so a whole-channel
+					// read of `main` and a read of `main:1` both include it and
+					// a read of `main:2` does not.
+					const draftLane = parseChannel(channel)
 					if (
 						scope.draftMessage?.content?.trim() &&
-						(channel === DEFAULT_CHANNEL || isAllChannels(channel))
+						(isAllChannels(channel) ||
+							(draftLane.slug === DEFAULT_CHANNEL &&
+								draftLane.lane === DEFAULT_LANE))
 					)
 						history.push(
 							toMessage({
@@ -542,15 +651,15 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					const charIds: number[] = [
 						...new Set<number>(
 							rows
-								.filter((m: any) => m.characterId)
-								.map((m: any) => Number(m.characterId))
+								.filter((m) => m.characterId)
+								.map((m) => Number(m.characterId))
 						)
 					]
 					const personaIds: number[] = [
 						...new Set<number>(
 							rows
-								.filter((m: any) => m.personaId)
-								.map((m: any) => Number(m.personaId))
+								.filter((m) => m.personaId)
+								.map((m) => Number(m.personaId))
 						)
 					]
 					const characters = charIds.length
@@ -566,13 +675,31 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 								.where(inArray(schema.personas.id, personaIds))
 						: []
 					const characterName = new Map(
-						characters.map((c: any) => [c.id, c.name])
+						characters.map((c) => [c.id, c.name])
 					)
 					const personaName = new Map(
-						personas.map((p: any) => [p.id, resolvePersonaName(p)])
+						personas.map((p) => [p.id, resolvePersonaName(p)])
 					)
 
-					return rows.map((m: any) => ({
+					/**
+					 * Lane-grouped, like every other whole-channel read — see
+					 * the `messages` case above for the rule. A bare slug is the
+					 * whole channel (ruling 2026-09-09), and five private
+					 * conversations under one slug are five conversations: a
+					 * summary of them interleaved by timestamp is an account of
+					 * a conversation nobody had.
+					 *
+					 * Applied AFTER the query, over exactly the rows it
+					 * returned, so the window itself is untouched. And not at
+					 * all for a picked id list: `channelWhere` never ran for
+					 * one, and the person picked those rows lane and all.
+					 */
+					const ordered =
+						!messageIds && channelSpansLanes(q.channel)
+							? byLaneThenTime(rows)
+							: rows
+
+					return ordered.map((m) => ({
 						...toMessage(m),
 						senderName:
 							(m.characterId &&
@@ -608,7 +735,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * order is the one deterministic choice that agrees with
 					 * the old arbitrary one wherever the old one was stable.
 					 */
-					const rows = (await db
+					const rows = await db
 						.select()
 						.from(schema.lorebookEntries)
 						.where(
@@ -617,7 +744,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 								session.lorebookId
 							)
 						)
-						.orderBy(asc(schema.lorebookEntries.id))) as any[]
+						.orderBy(asc(schema.lorebookEntries.id))
 
 					/**
 					 * Which entries have a usable vector — the ids, not the
@@ -631,7 +758,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 */
 					const vectored = new Set<number>(
 						(
-							(await db
+							await db
 								.select({
 									entryId: schema.lorebookEntryVectors.entryId
 								})
@@ -654,7 +781,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 										),
 										sql`array_length(${schema.lorebookEntryVectors.vector}, 1) > 0`
 									)
-								)) as any[]
+								)
 						).map((v) => v.entryId)
 					)
 
@@ -700,10 +827,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * which is what legacy's `binding?.characterId` test does.
 					 */
 					const bindingCharacter = new Map<number, number | null>(
-						(bindings as any[]).map((b) => [
-							b.id,
-							b.characterId ?? null
-						])
+						bindings.map((b) => [b.id, b.characterId ?? null])
 					)
 					const boundCharacterOf = (e: any) =>
 						e?.lorebookBindingId != null
@@ -722,11 +846,9 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							id: session.lorebookId,
 							lorebookBindings: hydrated
 						},
-						sessionPersonas: (sessionPersonas as any[]).map(
-							(cp) => ({
-								persona: { id: cp.personaId }
-							})
-						)
+						sessionPersonas: sessionPersonas.map((cp) => ({
+							persona: { id: cp.personaId }
+						}))
 					} as any
 
 					const {
@@ -915,12 +1037,39 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 */
 					const absorbedByCharacter = new Map<number, string[]>()
 					const absorbedByPersona = new Map<number, string[]>()
-					if ((session as any).lorebookId) {
+					/**
+					 * The book's whole roster, not just the seated part of it.
+					 *
+					 * The same rows the alias map above is built from, kept
+					 * whole and passed on, because retrieval's gazetteer needs
+					 * the names of characters this session never seated — a
+					 * lorebook binds a cast far larger than any one scene, and
+					 * `annotations/loadVocabulary` has always read all of them.
+					 * Retrieval reading only the seated ones is how the two
+					 * subsystems came to disagree about what one lorebook is
+					 * called.
+					 *
+					 * Carried on the cast read rather than given a read of its
+					 * own purely to avoid a second query: this block already
+					 * has the rows, and `loreFor` runs three times a turn with
+					 * `lorebook-triggers` behind it. Inert to the prompt path
+					 * for the same reason `absorbedAliases` is.
+					 */
+					let lorebookBindings: Array<{
+						characterId: number | null
+						personaId: number | null
+						name: string | null
+						aliases: string[]
+						absorbedAliases: string[]
+					}> = []
+					if (session.lorebookId) {
 						const bindings = await db
 							.select({
 								characterId:
 									schema.lorebookBindings.characterId,
 								personaId: schema.lorebookBindings.personaId,
+								name: schema.lorebookBindings.name,
+								aliases: schema.lorebookBindings.aliases,
 								absorbedAliases:
 									schema.lorebookBindings.absorbedAliases
 							})
@@ -928,10 +1077,15 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							.where(
 								eq(
 									schema.lorebookBindings.lorebookId,
-									(session as any).lorebookId
+									session.lorebookId
 								)
 							)
-						for (const b of bindings as any[]) {
+							// Stable, and the same order `loadVocabulary` reads
+							// them in: two bindings claiming one name must be
+							// settled the same way on both sides.
+							.orderBy(asc(schema.lorebookBindings.id))
+						lorebookBindings = bindings
+						for (const b of bindings) {
 							const names = Array.isArray(b.absorbedAliases)
 								? b.absorbedAliases
 								: []
@@ -944,28 +1098,33 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 										: null
 							if (!into) continue
 							const id = b.characterId ?? b.personaId
+							// The narrowing the `into` check above already
+							// implies but the compiler cannot carry across two
+							// expressions: `id` is nullish exactly when both
+							// columns are, which is exactly when `into` was
+							// null and we already continued. Both columns are
+							// nullable — an unbound background graph node sets
+							// neither — so the check is real, just not one TS
+							// can derive here.
+							if (id == null) continue
 							into.set(id, [...(into.get(id) ?? []), ...names])
 						}
 					}
 
 					return {
-						sessionCharacters: (sessionCharacters as any[]).map(
-							(cc) => ({
-								...cc,
-								absorbedAliases:
-									absorbedByCharacter.get(cc.character?.id) ??
-									[]
-							})
-						),
-						sessionPersonas: (sessionPersonas as any[]).map(
-							(cp) => ({
-								...cp,
-								absorbedAliases:
-									absorbedByPersona.get(cp.persona?.id) ?? []
-							})
-						),
-						sessionScenario: (session as any).scenario ?? null,
-						isGroup: Boolean((session as any).isGroup)
+						sessionCharacters: sessionCharacters.map((cc) => ({
+							...cc,
+							absorbedAliases:
+								absorbedByCharacter.get(cc.character?.id) ?? []
+						})),
+						sessionPersonas: sessionPersonas.map((cp) => ({
+							...cp,
+							absorbedAliases:
+								absorbedByPersona.get(cp.persona?.id) ?? []
+						})),
+						lorebookBindings,
+						sessionScenario: session.scenario ?? null,
+						isGroup: Boolean(session.isGroup)
 					}
 				}
 
@@ -1026,7 +1185,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							speakerPersonaId: null,
 							// The host's own connection, not the module-scope
 							// one — see the note on the parameter.
-							db: db as any
+							db
 						})) ?? null
 					)
 				}
@@ -1288,7 +1447,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 
 					const vocabulary = await loadVocabulary(
 						db,
-						(session as any).lorebookId ?? null
+						session.lorebookId ?? null
 					)
 
 					const entryIds: number[] = Array.isArray(q.entryIds)
@@ -1317,7 +1476,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					const pass = await promoteEntryAnnotations(
 						entryIds,
 						vocabulary,
-						(session as any).lorebookId ?? null
+						session.lorebookId ?? null
 					)
 					const index = await readEntryAnnotations(
 						db,
@@ -1372,8 +1531,8 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					if (maxMessages > 0)
 						enqueueSessionAnnotation(
 							sessionId,
-							(session as any).lorebookId ?? null,
-							(session as any).name ?? `Session #${sessionId}`
+							session.lorebookId ?? null,
+							session.name ?? `Session #${sessionId}`
 						)
 
 					return {
@@ -1453,7 +1612,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					)
 					const vocabulary = await loadVocabulary(
 						db,
-						(session as any).lorebookId ?? null
+						session.lorebookId ?? null
 					)
 
 					const scanDepth = Math.max(1, Number(q.scanDepth) || 10)
@@ -1572,11 +1731,11 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						await import("$lib/server/embedding/entityVectors")
 					const vocabulary = await loadVocabulary(
 						db,
-						(session as any).lorebookId ?? null
+						session.lorebookId ?? null
 					)
 
 					const pass = await ensureEntityVectors(db, {
-						lorebookId: (session as any).lorebookId ?? null,
+						lorebookId: session.lorebookId ?? null,
 						entryIds,
 						gazetteerHash: vocabulary.hash,
 						modelId,
@@ -1702,7 +1861,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 
 					const result = await dispatchGeneration({
 						compiledPrompt: p.compiledPrompt,
-						db: db as any,
+						db,
 						sessionId: scope.sessionId,
 						userId: scope.userId,
 						// The payload's value when a caller supplied one,
@@ -1729,6 +1888,14 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						// Sampling pickers on the reply step did nothing.
 						connectionId: refId(p.connection),
 						samplingId: refId(p.sampling),
+						// The author's own stop sequences, off the node's
+						// `params` slot (ruling 2026-09-10). Forwarded, never
+						// interpreted: the dispatch composes them together with
+						// the connection's completion template and the scene's
+						// speaker labels, and applies the wire rule once.
+						stopSequences: Array.isArray(p.stopSequences)
+							? (p.stopSequences as string[])
+							: undefined,
 						onChunk: scope.sink?.onChunk,
 						onThinking: scope.sink?.onThinking,
 						signal: scope.signal
@@ -1748,7 +1915,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					const { dispatchImage } = await import(
 						"$lib/server/pipelines/runtime/dispatchImage"
 					)
-					return await dispatchImage(db as any, {
+					return await dispatchImage(db, {
 						prompt: String(p.prompt ?? ""),
 						negative:
 							p.negative === undefined || p.negative === null
@@ -1764,6 +1931,13 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						// moment it names a plugin's — see `dispatchImage`'s
 						// `render`.
 						runId: scope.runId,
+						// The run's artifact collector, handed down because the
+						// `files` and `variants` ids only exist inside
+						// `createMedia` — a Provider that writes rows publishes
+						// media REFERENCES on its port, so there is nothing on
+						// the receipt for the run to be reconstructed from.
+						artifacts: scope.artifacts,
+						nodeKey: node.key,
 						signal: scope.signal,
 						// Forwarded only when somebody is listening AND the run
 						// can be named. The first half is so an adapter that can
@@ -1849,9 +2023,14 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * is a message nobody will ever see, which is the shape of
 					 * data loss even though the row is right there. Same
 					 * posture as `assertScoped` — refused, not filtered.
+					 *
+					 * The refusal is on the **channel**, not the lane: a genre
+					 * declares slugs and its pipelines allocate lanes at
+					 * runtime, so `text-messages:6` needs no permission that
+					 * `text-messages` did not already have.
 					 */
 					const refusal = await channelRefusal(
-						db as any,
+						db,
 						sessionId,
 						p.channel
 					)
@@ -1861,17 +2040,21 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					const { insertLegacy } = await import(
 						"$lib/server/messages/store"
 					)
-					const row = await insertLegacy(db as any, {
+					const row = await insertLegacy(db, {
 						sessionId,
 						userId: p.userId ?? scope.userId ?? null,
 						characterId: p.characterId ?? null,
 						personaId: p.personaId ?? null,
 						role: p.role ?? "assistant",
-						channel: resolveChannel(p.channel),
+						// Canonical, so `text-messages:1` and `text-messages`
+						// cannot land in the column as two lanes.
+						channel: canonicalChannel(p.channel),
 						content: String(p.text ?? ""),
 						metadata: p.metadata ?? {},
 						isGenerating: false
 					})
+
+					record(node, "message", row.id, "created")
 
 					// Media posted WITH the message (the `media` in-port).
 					//
@@ -1883,7 +2066,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					// creates the message is the write that attaches its images.
 					if (Array.isArray(p.media) && p.media.length) {
 						const parts = await mediaParts(
-							db as any,
+							db,
 							p.media,
 							sessionId,
 							scope,
@@ -1893,7 +2076,17 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							const { appendParts } = await import(
 								"$lib/server/messages/store"
 							)
-							await appendParts(db as any, row.id, parts)
+							await appendParts(db, row.id, parts)
+							// The files are the run's output too — the message
+							// alone would say a reply happened and lose the
+							// images it was actually about.
+							for (const part of parts)
+								record(
+									node,
+									"file",
+									part.data.assetId,
+									"attached"
+								)
 						}
 					}
 
@@ -1914,16 +2107,43 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						throw new HostScopeError(
 							`${node.key} has no user to write as — the run was started without a user scope`
 						)
+					/**
+					 * The same refusal `create-message` makes, for the same
+					 * reason: a greeting seeded onto a channel the genre never
+					 * declared is N messages nothing will ever render. The
+					 * genre's own `greeting.channel` counts as declared
+					 * (`channelsOf`), so a genre redirecting its own greetings
+					 * cannot trip this — only a pipeline wiring in some other
+					 * value can.
+					 */
+					const greetingRefusal = await channelRefusal(
+						db,
+						sessionId,
+						p.channel
+					)
+					if (greetingRefusal)
+						throw new HostScopeError(
+							`${node.key}: ${greetingRefusal}`
+						)
+
 					const { writeSessionGreetings } = await import(
 						"$lib/server/sessions/greetings"
 					)
-					const ids = await writeSessionGreetings(db as any, {
+					const ids = await writeSessionGreetings(db, {
 						sessionId,
 						userId,
 						entries: Array.isArray(p.greetings) ? p.greetings : [],
-						channel:
-							typeof p.channel === "string" ? p.channel : "main"
+						// Canonicalised here as well as inside
+						// `writeSessionGreetings`: this is a write path, and a
+						// write path normalises where it can see the value.
+						channel: canonicalChannel(p.channel)
 					})
+					// ⚠ **N messages, all of them recorded.** This is the case
+					// the old single `message_id` column structurally could not
+					// hold: `writtenMessageId` read `output.ids.id` off the
+					// first committed consumer, this consumer publishes `ids[]`,
+					// and so a greeting seed recorded nothing at all.
+					for (const id of ids) record(node, "message", id, "created")
 					return { ids, count: ids.length, sessionId }
 				}
 
@@ -1942,7 +2162,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					const { updateLegacy } = await import(
 						"$lib/server/messages/store"
 					)
-					const row = await updateLegacy(db as any, id, {
+					const row = await updateLegacy(db, id, {
 						content: String(p.text ?? ""),
 						isEdited: true
 					})
@@ -1951,6 +2171,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							`${node.key}: no message ${id} to update`
 						)
 					assertScoped(node, row.sessionId, scope.sessionId)
+					record(node, "message", row.id, "updated")
 					return { id: row.id, sessionId: row.sessionId }
 				}
 
@@ -1990,7 +2211,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					const { getMessage, appendParts } = await import(
 						"$lib/server/messages/store"
 					)
-					const target = await getMessage(db as any, messageId)
+					const target = await getMessage(db, messageId)
 					if (!target)
 						throw new HostScopeError(
 							`${node.key}: no message ${messageId} to attach to`
@@ -2001,7 +2222,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					let asset: { id: number; mime: string }
 					if (uuid) {
 						const [found] = await mediaParts(
-							db as any,
+							db,
 							[media],
 							target.sessionId,
 							scope,
@@ -2011,14 +2232,18 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							throw new HostScopeError(
 								`${node.key}: no media ${uuid} to attach`
 							)
-						await appendParts(db as any, messageId, [found as any])
+						await appendParts(db, messageId, [found as any])
+						// The file already existed — this run attached it — and
+						// the message it landed on changed.
+						record(node, "file", found.data.assetId, "attached")
+						record(node, "message", messageId, "updated")
 						return { id: messageId }
 					}
 
 					const { createSessionAsset } = await import(
 						"$lib/server/messages/assets"
 					)
-					const stored = await createSessionAsset(db as any, {
+					const stored = await createSessionAsset(db, {
 						sessionId: target.sessionId,
 						bytes: Buffer.from(b64!, "base64"),
 						mime:
@@ -2034,13 +2259,15 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					// reason: what a part stores must not be a fact about one
 					// stored representation, because that representation can be
 					// culled or re-pointed under it.
+					record(node, "file", stored.file.id, "created")
+					record(node, "variant", stored.original.id, "created")
 					asset = {
 						id: stored.file.id,
 						// The projection is always written; the fallback is the
 						// row it was projected from, already in hand here.
 						mime: stored.file.displayMime ?? stored.original.mime
 					}
-					await appendParts(db as any, messageId, [
+					await appendParts(db, messageId, [
 						isImage
 							? {
 									type: "core:image",
@@ -2062,6 +2289,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 									}
 								}
 					])
+					record(node, "message", messageId, "updated")
 					return {
 						id: asset.id,
 						messageId,
@@ -2110,7 +2338,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * race it.
 					 */
 					const lorebookId = session.lorebookId
-					const [row] = await db.transaction(async (tx: any) => {
+					const [row] = await db.transaction(async (tx) => {
 						await tx.execute(
 							sql`select pg_advisory_xact_lock(${lorebookId})`
 						)
@@ -2131,6 +2359,9 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							)
 							.returning()
 					})
+					// Invisible to the run until now: a summarize pipeline wrote
+					// an entry and the run row said it had produced nothing.
+					record(node, "lore_entry", row.id, "created")
 					return { id: row.id, lorebookId }
 				}
 
@@ -2155,47 +2386,24 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					}
 				}
 
-				case "embedding_status": {
-					/**
-					 * Whether vector search is usable on this instance.
-					 *
-					 * Instance state, not data — which is why it arrives through a
-					 * read rather than along an edge. A binding cannot be handed it
-					 * as config either: config is resolved before the run, and
-					 * "is the embedding model loaded" is a fact about right now.
-					 *
-					 * It decides whether a `rag` entry falls back to keyword, so
-					 * getting it silently wrong presents as a lorebook problem and
-					 * sends the user to the wrong screen entirely.
-					 */
-					const [config] = await db
-						.select()
-						.from(schema.vectorizationConfigs)
-						.limit(1)
-					if (!config)
-						return {
-							available: false,
-							reason: "no vectorization config"
-						}
-
-					const configured =
-						config.mode === "api"
-							? !!config.apiModel && !!config.apiBaseUrl
-							: !!config.localModel
-
-					return {
-						available: configured,
-						mode: config.mode,
-						model:
-							config.mode === "api"
-								? config.apiModel
-								: config.localModel,
-						reason: configured
-							? undefined
-							: `vectorization is set to '${config.mode}' but no model is configured`
-					}
-				}
-
+				/**
+				 * ⚠ `embedding_status` is a **read**, not a commit. It is answered
+				 * by the `read` switch above — search for the other
+				 * `case "embedding_status"` — and that is the block the four
+				 * `ctx.read("embedding_status", …)` sites in `bindings.ts` reach.
+				 *
+				 * A second copy sat here until it was deleted, and it was
+				 * unreachable: this switch is on `node.typeId`, whose labels are
+				 * namespaced type ids, and no node type is named
+				 * `embedding_status`. Being unreachable, it was also free to be
+				 * wrong, and was — it read a `localModel` column
+				 * `vectorization_configs` has never had, which would have called
+				 * every local-mode install unconfigured. Do not re-add it: the live
+				 * block answers "is a backend loaded and validated *right now*",
+				 * and deriving that from configuration instead would report
+				 * available on a configured-but-cold install while
+				 * `core:provider/embed-text` still throws.
+				 */
 				default:
 					throw new HostScopeError(
 						`${node.key} (${node.typeId}) has no commit path in core. A Consumer that core ` +
@@ -2269,10 +2477,10 @@ function toMessage(r: any) {
 		characterId: r.characterId ?? null,
 		personaId: r.personaId ?? null,
 		isNarratorResponse: r.isNarratorResponse,
-		// Which lane it came from, carried rather than dropped (20 §7). Every
-		// read is scoped to one channel, so this is constant across a result
-		// today — it is here so a receipt says which, and so a Task that ever
-		// sees a union can tell the lanes apart without a second read.
+		// Which lane it came from, carried rather than dropped (20 §7). A read
+		// is scoped to one channel, but a whole-channel read spans that
+		// channel's lanes (ruling 2026-09-09), so this is what tells the five
+		// private conversations under one slug apart without a second read.
 		channel: r.channel ?? DEFAULT_CHANNEL,
 		createdAt: r.createdAt
 	}
@@ -2318,8 +2526,8 @@ async function hydrateBindings(db: Db, bindings: any[]): Promise<any[]> {
 			: Promise.resolve([])
 	])
 
-	const byCharacter = new Map((characters as any[]).map((c) => [c.id, c]))
-	const byPersona = new Map((personas as any[]).map((p) => [p.id, p]))
+	const byCharacter = new Map(characters.map((c) => [c.id, c]))
+	const byPersona = new Map(personas.map((p) => [p.id, p]))
 
 	return bindings.map((b) => ({
 		...b,

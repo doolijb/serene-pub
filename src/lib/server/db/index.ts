@@ -8,17 +8,31 @@ import fs from "fs"
 import crypto from "crypto"
 import { building, dev } from "$app/environment"
 import { drizzle } from "drizzle-orm/pglite"
-
-// Database lock interface
-interface DbLock {
-	timestamp: number
-	lockLength: number // in milliseconds
-}
+import {
+	checkDatabaseLock,
+	createLockHeartbeat,
+	describeLockHolder,
+	readMetaFile,
+	writeMetaFile
+} from "./lock.js"
+import type { DbLock, LockState } from "./lock.js"
+import { closeBootPass, openBootPass } from "./devBootPass"
+import {
+	classifyDatabaseOpenFailure,
+	isDatabaseUnopenableError
+} from "./errors"
+import {
+	readShutdownMarker,
+	writeShutdownMarker,
+	type ShutdownMarker
+} from "./shutdownMarker"
 
 interface MetaFile {
 	version: string
 	lock?: DbLock
 	cryptoSecretKey?: string
+	/** How the previous run ended. See ./shutdownMarker. */
+	lastShutdown?: ShutdownMarker
 }
 
 // Move meta.json handling to the beginning
@@ -35,6 +49,20 @@ const metaPath = dbConfig.dataDir + "/meta.json"
  * install once written.
  */
 const isFreshInstall = !fs.existsSync(metaPath)
+
+/**
+ * The same question, asked again by `reopenDatabase()`.
+ *
+ * A "start fresh" recovery moves `serene-pub.db` aside and leaves `meta.json`
+ * exactly where it was, so `isFreshInstall` above — which is about meta.json —
+ * says "no" while the database about to be created is as new as a database
+ * gets. Every decision below that reads `isFreshInstall` actually wants to know
+ * about the *database*: whether to dump one before migrating it, whether legacy
+ * content exists to upgrade, and whether the seed rows have ever been written.
+ * On the first boot the two are the same value, which is why this is a separate
+ * variable and not a changed meaning for the existing one.
+ */
+let treatAsFreshInstall = isFreshInstall
 
 // Ensure meta.json exists
 if (isFreshInstall) {
@@ -73,142 +101,139 @@ try {
 }
 
 // Database lock functions
-const DEFAULT_LOCK_LENGTH = 10000 // 10 seconds in milliseconds
-
-async function checkDatabaseLock(): Promise<void> {
-	// Refresh meta from file with error handling
-	try {
-		meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
-	} catch (error) {
-		console.warn(
-			`Warning: Error reading meta.json during lock check. Error: ${error}`
-		)
-		meta = { version: "0.0.0", cryptoSecretKey: crypto.randomUUID() }
-		fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
-	}
-
-	if (!meta.lock) {
-		// No lock exists, continue
-		return
-	}
-
-	const currentTime = Date.now()
-	const lockExpiry = meta.lock.timestamp + meta.lock.lockLength
-
-	if (currentTime < lockExpiry) {
-		// Lock is still active, wait for it to expire
-		const waitTime = lockExpiry - currentTime
-		console.log(
-			`Database locked, waiting ${waitTime}ms for lock to expire...`
-		)
-
-		await new Promise((resolve) => setTimeout(resolve, waitTime))
-
-		// Check again after waiting
-		try {
-			meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
-		} catch (error) {
-			console.warn(
-				`Warning: Error reading meta.json during lock recheck. Error: ${error}`
-			)
-			meta = { version: "0.0.0", cryptoSecretKey: crypto.randomUUID() }
-			fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
-		}
-
-		if (
-			meta.lock &&
-			Date.now() < meta.lock.timestamp + meta.lock.lockLength
-		) {
-			// Still locked after waiting, exit application
-			console.error(
-				"Database remains locked after waiting. Exiting application."
-			)
-			process.exit(1)
-		}
-	}
-
-	// Lock is stale or doesn't exist, continue
-}
-
-function updateDatabaseLock(): void {
-	try {
-		// Refresh meta from file with error handling
-		try {
-			meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
-		} catch (error) {
-			console.warn(
-				`Warning: Error reading meta.json during lock update. Error: ${error}`
-			)
-			meta = { version: "0.0.0", cryptoSecretKey: crypto.randomUUID() }
-		}
-
-		meta.lock = {
-			timestamp: Date.now(),
-			lockLength: DEFAULT_LOCK_LENGTH
-		}
-
-		fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
-	} catch (error) {
-		console.error("Failed to update database lock:", error)
-	}
-}
-
-// Background lock update function
-let lockUpdateInterval: NodeJS.Timeout | null = null
-
-function startLockUpdates(): void {
-	// Update lock immediately
-	updateDatabaseLock()
-
-	// Set up interval to update lock every few seconds
-	lockUpdateInterval = setInterval(() => {
-		if (!dataDirPresent()) {
-			stopLockUpdates()
-			return
-		}
-		updateDatabaseLock()
-	}, DEFAULT_LOCK_LENGTH - 1000) // Update 1 second before lock expires
-}
+//
+// The protocol itself — what a lock records, when one has gone stale, how long
+// to wait — lives in ./lock.js, which `scripts/check-db-lock.js` imports too.
+// Both write the same `meta.lock`, and they used to disagree about it.
+const lockHeartbeat = createLockHeartbeat({
+	metaPath,
+	dataDir: dbConfig.dataDir,
+	label: "app"
+})
 
 /**
- * Whether the data directory is still there.
+ * The lock as it stood **before** this process took it.
  *
- * The lock heartbeat writes `meta.json` on a timer, and `writeFileSync`
- * recreates a file whose directory was just removed. That is wrong in
- * production — a server whose data directory has been deleted out from under it
- * should stop writing, not resurrect a lone lock file — and in the test suite
- * it was an intermittent failure: a temp data directory being torn down would
- * have `meta.json` written back into it mid-walk, so the final `rmdir` hit
- * `ENOTEMPTY`. Different file each run, roughly one run in three.
+ * Kept because reading it again later would only ever find our own lock, while
+ * the question a failed open has to answer is about the lock we *found*: a
+ * directory another live process already has open traps exactly like a damaged
+ * one. See `classifyDatabaseOpenFailure` in ./errors.
  */
-function dataDirPresent(): boolean {
-	return fs.existsSync(dbConfig.dataDir)
-}
+let observedLockState: LockState | null = null
 
-function stopLockUpdates(): void {
-	if (lockUpdateInterval) {
-		clearInterval(lockUpdateInterval)
-		lockUpdateInterval = null
+/**
+ * How the previous run ended, read before this one writes anything.
+ *
+ * The only surviving evidence of a SIGKILL, an OOM stop or a pulled plug —
+ * none of which run any code at the time. See ./shutdownMarker.
+ */
+let previousShutdown: ShutdownMarker = "unknown"
+
+/** Whether this run got as far as marking itself in progress. */
+let openRecorded = false
+
+/**
+ * Whether an *earlier* evaluation of this module, in this same process, is
+ * still partway through starting the database — and, as a side effect, this
+ * evaluation's claim on that pass.
+ *
+ * Claimed here at module scope rather than inside `acquireDatabaseLock()`
+ * because the window opens the moment this module starts evaluating, not the
+ * moment it gets around to reading the lock. Everything from here to that
+ * `await` is synchronous, so no other evaluation can slip between the two.
+ *
+ * Dev only, and the reason is not caution: production evaluates this module
+ * exactly once, so there is no second pass to detect and `openBootPass()` is
+ * never called. `dev` is a build-time constant, so the whole thing — the
+ * refusal below included — is dropped from the production bundle. See
+ * ./devBootPass.
+ */
+const overlappingBootPass = !building && dev && openBootPass()
+
+/**
+ * What a refused second startup pass says — on the console, and in the
+ * rejection `dbReady` hands every awaiter.
+ *
+ * It names a restart because a restart is the only fix there is: the outgoing
+ * pass still holds the PGlite client this process opened, nothing disposes it,
+ * and this evaluation therefore has no route to a working database however long
+ * it waits. Refusing is what turns that into a sentence instead of duplicate-key
+ * violations from two interleaved seed passes.
+ */
+const DEV_DOUBLE_BOOT_REFUSAL =
+	"[db] Refusing a second database startup pass in this process.\n" +
+	"`vite dev` re-executed src/lib/server/db/index.ts while the previous " +
+	"evaluation was still starting the database. Two passes migrating and " +
+	"seeding one database at once produce duplicate-key violations, a GET / " +
+	"that never clears and a socket server that never attaches — so this pass " +
+	"has opened, locked, migrated and seeded nothing.\n" +
+	"The pass already running still holds the data directory and is unharmed. " +
+	"Restart the dev server. See src/lib/server/db/devBootPass.ts."
+
+/**
+ * Refuse to open the database while another live process holds it, then take
+ * the lock for ourselves.
+ *
+ * The version this replaces slept once, for the expiry of the lock it first
+ * saw, and then rechecked a single time. A shutting-down process refreshes its
+ * lock every nine seconds, so that one recheck reliably landed on a lock that
+ * had just been renewed and the incoming process exited — "it waits the correct
+ * amount of time but still thinks the db is locked", as reported.
+ *
+ * Two things fix it, and the first is the one that matters: a lock now records
+ * the process that took it, so a lock whose owner is provably gone is stale on
+ * the first read with no wait at all, which removes the restart case rather
+ * than shortening it. Where waiting is still right — somebody really is running
+ * — `checkDatabaseLock` polls to a bounded deadline instead of guessing once.
+ */
+async function acquireDatabaseLock(): Promise<void> {
+	const result = await checkDatabaseLock({ metaPath })
+	observedLockState = result.evaluation.state
+
+	if (!result.ok) {
+		console.error(result.message)
+		process.exit(1)
 	}
 
-	// Nothing to clear, and nothing to write it into.
-	if (!dataDirPresent()) return
-
-	// Clear the lock when stopping
-	try {
-		try {
-			meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
-		} catch (error) {
-			console.warn(
-				`Warning: Error reading meta.json during lock clear. Error: ${error}`
-			)
-			meta = { version: "0.0.0", cryptoSecretKey: crypto.randomUUID() }
-		}
-		delete meta.lock
-		fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
-	} catch (error) {
-		console.error("Failed to clear database lock:", error)
+	const { state, reason } = result.evaluation
+	if (state === "stale" && reason === "owner-gone") {
+		console.log(
+			`Reclaiming a database lock left behind by ${describeLockHolder(result.evaluation)} — that process is gone.`
+		)
+	} else if (state === "self") {
+		// Vite re-executed this module in place: same process, so the lock we
+		// are looking at is our own and cannot be a reason to refuse ourselves.
+		//
+		// Only a reload that arrives AFTER the first pass settled gets this
+		// far. One that lands while that pass is still starting is refused
+		// before the lock is read at all, because no lock can see it — see
+		// ./devBootPass and `overlappingBootPass` above.
+		//
+		// ⚠ The previous instance of this module is still holding the PGlite
+		// client it opened, and PGlite refuses a second open of one directory
+		// in one process — so the queries that follow may fail with
+		// `RuntimeError: Aborted()` until the dev server is restarted. That is
+		// a separate problem (nothing disposes the outgoing instance) which
+		// this check used to hide by exiting the process instead, and it is
+		// named here so it is recognisable rather than mysterious.
+		console.log(
+			"Database lock is this process's own (dev module re-execution) — continuing. " +
+				"If queries then fail to open the database, restart the dev server."
+		)
+	} else if (state === "unreadable") {
+		console.warn(
+			`Warning: could not read ${metaPath} while checking the database lock (${result.evaluation.reason}). Continuing.`
+		)
+	} else if (result.polls > 1) {
+		// Only when we actually had to come back for a second look. Anything
+		// shorter is a lock that was already gone, and saying we waited for it
+		// would be a fiction.
+		console.log(
+			`Database lock released after ${(result.waitedMs / 1000).toFixed(1)}s. Continuing...`
+		)
 	}
+
+	lockHeartbeat.start()
 }
 
 /**
@@ -217,27 +242,42 @@ function stopLockUpdates(): void {
  * Exported for the integration suites, which point `SERENE_PUB_DATA_DIR` at a
  * temp directory, load this module for real, and then delete that directory.
  * Without this they were deleting it out from under a live database and a
- * running timer — see `dataDirPresent`. Stopping the writer first is the
+ * running timer — see `dataDirPresent` in ./lock.js. Stopping the writer first is the
  * deterministic fix; the guard above is what keeps a stray tick harmless.
  *
  * Safe to call twice, and safe to call on a database that never opened.
  */
 export async function closeDatabase(): Promise<void> {
-	stopLockUpdates()
+	lockHeartbeat.stop()
 	const client = (
 		db as unknown as { $client?: { close?: () => Promise<void> } }
 	).$client
 	try {
 		await client?.close?.()
 	} catch {
-		// Already closed, or never opened. Either way there is nothing to hold.
+		// Already closed, or never opened. Either way there is nothing to hold,
+		// and nothing that would justify calling this a clean shutdown.
+		return
+	}
+
+	// Only once PGlite has actually let go, and only if this run ever claimed
+	// the directory: writing "clean" after a boot that could not open it would
+	// erase the very evidence of the kill that broke it.
+	if (!openRecorded) return
+	openRecorded = false
+	const written = writeShutdownMarker(metaPath, "clean")
+	if (!written.ok) {
+		console.warn(
+			`Warning: could not record a clean shutdown in meta.json — ${written.reason}.`
+		)
 	}
 }
 
 // Last-resort, synchronous: 'exit' handlers cannot await, so this only stops
-// the lock-refresh timer. The real teardown is `closeDatabase()`, registered as
-// the "database" managed service (see $lib/server/services/register).
-process.on("exit", stopLockUpdates)
+// the lock-refresh timer and releases the lock (both synchronous). The real
+// teardown is `closeDatabase()`, registered as the "database" managed service
+// (see $lib/server/services/register).
+process.on("exit", () => lockHeartbeat.stop())
 
 // This module used to own SIGINT/SIGTERM handlers that called
 // `process.exit(0)` immediately. Node runs every listener for a signal, and
@@ -261,18 +301,42 @@ process.on("exit", stopLockUpdates)
 // and bundle; nothing evaluates a query at build time. `building` is
 // SvelteKit's own signal for exactly this, and is false at runtime, so the
 // server still initialises normally when it actually starts.
-if (!building) {
-	// Check database lock before proceeding
-	await checkDatabaseLock()
+if (overlappingBootPass) {
+	// Said here, first, rather than left to `dbReady`'s rejection alone: every
+	// line below assumes this evaluation owns the data directory, and the
+	// developer watching the terminal is the one who has to act on it.
+	//
+	// The lock is deliberately NOT taken. The pass already running holds it and
+	// is refreshing it; a second heartbeat on the same `meta.lock` would mean
+	// whichever of the two stops first clears a lock the other still believes
+	// it holds.
+	console.error(DEV_DOUBLE_BOOT_REFUSAL)
+} else if (!building) {
+	// Refuse to start alongside a live holder, then hold it ourselves.
+	await acquireDatabaseLock()
 
-	// Start lock updates
-	startLockUpdates()
+	// Read here, above `drizzle()`, because opening the database is what
+	// overwrites it — and printed unconditionally, because "was I force-quit?"
+	// is the first question a boot after a crash has to answer and the only
+	// place it can be answered is a marker the previous run left behind.
+	previousShutdown = readShutdownMarker(metaPath)
+	console.log(`[db] previous shutdown: ${previousShutdown}`)
 }
 
 // During a build this points at a throwaway in-memory database rather than the
 // user's data directory. Keeps the exact same type (so nothing downstream
 // changes) while guaranteeing the build cannot open, lock or migrate real data.
-export let db = drizzle(building ? "memory://" : dbConfig.dbPath, { schema })
+//
+// A refused dev pass gets the same treatment, for the same reason one step
+// removed: the outgoing pass has this directory open in this process, and a
+// second PGlite on it is exactly the `RuntimeError: Aborted()` named in
+// `acquireDatabaseLock()` above. `dbReady` rejects either way, so nothing ever
+// queries this handle — pointing it at memory is what keeps a refusal from
+// touching the data directory at all.
+export let db = drizzle(
+	building || overlappingBootPass ? "memory://" : dbConfig.dbPath,
+	{ schema }
+)
 export { schema }
 
 // Re-exported from the shared module so the migration gate and the update
@@ -325,7 +389,7 @@ async function runMigrations() {
 		dataDir: dbConfig.dataDir,
 		migrationsFolder: dbConfig.migrationsDir,
 		label: previousVersion ?? "unknown",
-		isFreshInstall
+		isFreshInstall: treatAsFreshInstall
 	})
 
 	const { runMigrationsWithUpgrades } = await import("./dataUpgrades")
@@ -334,7 +398,7 @@ async function runMigrations() {
 		// Data upgrades transform content an older version left behind. There
 		// is none on a fresh install, so they are skipped outright rather than
 		// each being asked to detect emptiness.
-		skipUpgrades: isFreshInstall
+		skipUpgrades: treatAsFreshInstall
 	})
 	console.log(
 		`Migrations applied.` +
@@ -342,6 +406,58 @@ async function runMigrations() {
 				? ` Data upgrades run: ${upgradesRun.join(", ")}.`
 				: "")
 	)
+}
+
+/**
+ * Open the database, and say something useful when it will not open.
+ *
+ * `drizzle()` above is synchronous — it constructs the PGlite client and hands
+ * it straight back, so the actual open is a promise on that client and the
+ * failure of the open surfaces there rather than at the call site. Nothing used
+ * to await it. A data directory left damaged by a force-quit therefore rejected
+ * a promise nobody was holding: an unhandled rejection during boot, followed by
+ * `RuntimeError: Aborted()` on every request for the life of the process, with
+ * no mention of the data directory, of the backups sitting beside it, or of the
+ * fact that the data itself was very likely still intact.
+ *
+ * Awaiting it here is what turns that into a decision. What the decision may
+ * and may not conclude is in ./errors, and the short version is that only a
+ * WASM trap out of `_pg_initdb`, on a database that exists, with no other
+ * process holding it, is allowed to mean "this directory will not open".
+ */
+async function openDatabase(): Promise<void> {
+	try {
+		await (db as unknown as { $client?: { waitReady?: Promise<unknown> } })
+			.$client?.waitReady
+	} catch (error) {
+		const { summariseBackups } = await import("./backup")
+		const classified = classifyDatabaseOpenFailure(error, {
+			dataDir: dbConfig.dataDir,
+			dbPath: dbConfig.dbPath,
+			lockState: observedLockState,
+			lastShutdown: previousShutdown,
+			backups: summariseBackups(dbConfig.dataDir)
+		})
+		// Anything unrecognised keeps its own identity and its own stack.
+		// Dressing an unrelated failure up as a damaged data directory would
+		// send an owner looking for a backup to restore over a bug in the app.
+		throw classified ?? error
+	}
+
+	// On the record as a run that has not shut down yet, from here until
+	// `closeDatabase()` says otherwise.
+	const written = writeShutdownMarker(metaPath, "unclean")
+	openRecorded = written.ok
+	if (!written.ok) {
+		// Never repaired or recreated from here: that file's `cryptoSecretKey`
+		// is the only copy of the key backing sessions and stored passphrases,
+		// and no diagnostic is worth minting a new one. The marker is simply
+		// skipped, and next boot reads "unknown".
+		console.warn(
+			`Warning: could not record the shutdown marker in meta.json — ${written.reason}. ` +
+				"Continuing without it."
+		)
+	}
 }
 
 /**
@@ -366,6 +482,57 @@ async function runMigrations() {
  * inherited by importing `db`.
  */
 async function initialiseDatabase(): Promise<void> {
+	// A startup pass this evaluation cannot join is still running: it holds the
+	// lock, the PGlite client and the migrations ledger, and nothing disposes
+	// it, so there is no state here to wait for. Refuse rather than interleave.
+	//
+	// Deliberately WITHOUT `closeBootPass()`: the flag belongs to the pass that
+	// is still running, and clearing it here would wave the NEXT reload through
+	// into the same collision.
+	if (overlappingBootPass) throw new Error(DEV_DOUBLE_BOOT_REFUSAL)
+
+	try {
+		await runInitialisation()
+	} finally {
+		// Settled either way, succeeded or thrown. A failed boot has to clear
+		// this too, or fixing the error that broke startup would be answered
+		// with "restart the dev server" forever. Reached only by the pass that
+		// opened the flag — a refused one threw above.
+		if (!building && dev) closeBootPass()
+	}
+}
+
+/** The pass itself. Split out only so the guard above reads as a guard. */
+async function runInitialisation(): Promise<void> {
+	// First, and separately from every query below: the database has to be
+	// open before "what is pending" is even a question. See openDatabase().
+	if (!building) await openDatabase()
+
+	// Put the migrations ledger back in agreement with the journal before
+	// anything asks it what is pending. See ./migrationLedgerRepair for the
+	// defect; what matters here is the position, and it is load-bearing twice.
+	//
+	// **Above the version switch, not inside `runMigrations()`.** An affected
+	// database reaches `case 0` — versions match — and the
+	// `hasPendingMigrations()` gate there reads the same poisoned high-water
+	// mark, concludes nothing is pending and never calls `runMigrations()` at
+	// all. A repair living inside it would never run on exactly the installs
+	// that need it.
+	//
+	// **Before the pre-migration backup decides.** `backupBeforeMigrations()`
+	// asks the same question, so repairing afterwards would mean the backup was
+	// skipped as unnecessary and then seven migrations landed on an unprotected
+	// database — the one situation that module exists to prevent.
+	if (!building) {
+		// Deferred like its neighbours below; nothing here needs it earlier.
+		const { repairMigrationLedger } = await import(
+			"./migrationLedgerRepair"
+		)
+		await repairMigrationLedger(db, {
+			migrationsFolder: dbConfig.migrationsDir
+		})
+	}
+
 	// In dev, always run migrations unconditionally — never gated by the
 	// meta.json/app version comparison below. Dev iteration adds new migration
 	// files constantly without bumping the app version for each one (that
@@ -448,7 +615,19 @@ async function initialiseDatabase(): Promise<void> {
 			typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : null
 		if (appVersion && meta.version !== appVersion) {
 			meta.version = appVersion
-			fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
+			// Read-modify-write rather than dumping the in-memory copy.
+			// `meta` was parsed at module scope, before the lock heartbeat
+			// wrote `meta.lock`; writing the whole object from here would
+			// blank the live lock until the next beat, nine seconds later.
+			const current = readMetaFile(metaPath)
+			const next: Record<string, unknown> = current.ok
+				? current.meta
+				: {
+						version: meta.version,
+						cryptoSecretKey: meta.cryptoSecretKey
+					}
+			next.version = appVersion
+			writeMetaFile(metaPath, next)
 			versionChanged = true
 			console.log(`Updated meta.json to version ${appVersion}.`)
 		}
@@ -466,7 +645,7 @@ async function initialiseDatabase(): Promise<void> {
 	// every boot of an unchanged version is pure startup cost — and this runs
 	// before the app serves its first request. sync() stays fully idempotent
 	// either way; this is about not paying for it needlessly.
-	if (!building && (dev || versionChanged || isFreshInstall)) {
+	if (!building && (dev || versionChanged || treatAsFreshInstall)) {
 		// Imported here rather than at module scope, and the difference is a real
 		// cycle rather than style: `defaults.ts` imports `db` from this module, so
 		// a static import makes the two initialise in a loop. It happened to work
@@ -484,7 +663,15 @@ async function initialiseDatabase(): Promise<void> {
 		// `sync` above. Plugin widgets seed their own on install/update.
 		const { syncWidgetStyles } = await import("./widgetStyles")
 		const { CORE_WIDGETS } = await import("@serene-pub/core-catalog")
-		await syncWidgetStyles(CORE_WIDGETS, meta.version || "0.0.0")
+		// `withCorePresets` attaches the app's own message + composer style
+		// packs to core's two primary widgets. They are app-side because every
+		// selector in them is a class the app's SessionMessage / SessionComposer
+		// authors — markup the SDK has no view of (shared/widgets/corePresets.ts).
+		const { withCorePresets } = await import("$lib/shared/widgets/corePresets")
+		await syncWidgetStyles(
+			withCorePresets(CORE_WIDGETS),
+			meta.version || "0.0.0"
+		)
 	}
 }
 
@@ -495,7 +682,82 @@ async function initialiseDatabase(): Promise<void> {
  *
  * Await this before the first query on any path that can run at startup.
  */
-export const dbReady: Promise<void> = initialiseDatabase()
+export let dbReady: Promise<void> = initialiseDatabase()
+
+/**
+ * Mark `dbReady` handled the instant it exists.
+ *
+ * Nothing awaits it until `$lib/server/startup` is imported, and that import is
+ * dynamic — it happens on the first request. A boot failure therefore rejects
+ * an unheld promise, which Node treats as an unhandled rejection and, since v15,
+ * terminates the process for: the app died before it could serve the page
+ * explaining why. Attaching a handler here marks the promise handled without
+ * consuming anything — `dbReady` still rejects for every real awaiter, which is
+ * how `startup/index.ts` learns about it.
+ */
+void dbReady.catch(() => {})
+
+/**
+ * Open the database again, after a recovery has put a working one in place.
+ *
+ * The seam the recovery routes and the CLI need, and it is here rather than in
+ * the caller because everything it has to reset is module state: the `db`
+ * handle (an `export let`, so importers see the replacement through the live
+ * binding), `dbReady` itself, the fresh-install decision, and the
+ * shutdown-marker bookkeeping. A restore that could not re-open would leave the
+ * owner staring at the recovery page having successfully recovered.
+ *
+ * **What it deliberately does not do.** It does not touch the lock — this
+ * process still holds it and has held it throughout; a boot that failed to open
+ * the database still acquired the directory. It does not add a top-level await
+ * (see the note under `dbReady` and the one at the bottom of this file); the
+ * new promise is created and handled exactly the way the first one was. And it
+ * does not run the startup tasks — those belong to `$lib/server/startup`, which
+ * exports its own `restartAfterRecovery()` and calls this first.
+ *
+ * Resolves with the outcome instead of throwing, because both outcomes are
+ * pages the recovery route has to render: "restored, come on in" and "restored,
+ * and it still will not open".
+ */
+export async function reopenDatabase(): Promise<
+	{ ok: true } | { ok: false; error: unknown }
+> {
+	// The failed client's WASM runtime has aborted; closing it is a courtesy
+	// that usually throws the same trap back. Measured, not assumed: a second
+	// PGlite on the same path in the same process opens cleanly afterwards.
+	try {
+		await (
+			db as unknown as { $client?: { close?: () => Promise<void> } }
+		).$client?.close?.()
+	} catch {
+		// Already dead. That is the situation this function exists for.
+	}
+	openRecorded = false
+
+	// A "start fresh" recovery leaves meta.json in place and takes the database
+	// away, so the seed and data-upgrade decisions have to be re-derived from
+	// what is actually on disk right now. See `treatAsFreshInstall`.
+	treatAsFreshInstall = !fs.existsSync(dbConfig.dbPath)
+
+	// Re-read, because a restore can have changed it: `db/recovery.ts` carries
+	// `version` and `cryptoSecretKey` over from the backup's companion file, and
+	// the migration gate below compares `meta.version` against the app's. Using
+	// the copy parsed at module scope would compare against the version of the
+	// database that was just moved aside.
+	const refreshed = readMetaFile(metaPath)
+	if (refreshed.ok) meta = refreshed.meta as unknown as MetaFile
+
+	db = drizzle(dbConfig.dbPath, { schema })
+	dbReady = initialiseDatabase()
+	void dbReady.catch(() => {})
+
+	try {
+		await dbReady
+		return { ok: true }
+	} catch (error) {
+		return { ok: false, error }
+	}
+}
 
 // In dev and under test, keep the original contract: importing this module
 // means the database is ready. Only the *production* bundle has the Rollup
@@ -516,4 +778,12 @@ export const dbReady: Promise<void> = initialiseDatabase()
 // the run, and 5s int-test budgets that used to pass start failing several
 // files away from the cause — confirmed by A/B, not guessed at. Do not delete
 // it as redundant.
-if (dev) await dbReady
+if (dev)
+	await dbReady.catch((error) => {
+		// Sequencing is what this await is for, not error propagation — and a
+		// database that will not open is now a state the app boots into. Let
+		// this throw and the module evaluation fails, `$lib/server/startup`
+		// fails with it, and there is no server left to explain anything.
+		// Everything else keeps the old, loud behaviour.
+		if (!isDatabaseUnopenableError(error)) throw error
+	})

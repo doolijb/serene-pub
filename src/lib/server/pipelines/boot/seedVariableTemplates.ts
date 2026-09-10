@@ -19,8 +19,6 @@ import {
 	seedKeyFor
 } from "$lib/server/pipelines/entities/variableLayouts"
 
-type Db = { select: any; insert: any; update: any; delete: any }
-
 export interface VariableTemplateSeedResult {
 	created: string[]
 	present: string[]

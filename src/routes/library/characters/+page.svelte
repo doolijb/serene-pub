@@ -233,146 +233,166 @@
 		)
 	})
 
-	onMount(() => {
-		socket.on(
-			"characters:searchLibrary",
-			(msg: Sockets.Characters.SearchLibrary.Response) => {
-				if (msg.requestId !== latestRequestId) return
-				libraryCharacters = pendingIsAppend
-					? [...libraryCharacters, ...msg.characters]
-					: msg.characters
-				hasMoreResults = msg.hasMore
-				nextOffset =
-					msg.nextOffset ??
-					(pendingIsAppend
-						? nextOffset + msg.characters.length
-						: msg.characters.length)
-				isLoading = false
-				searching = false
-				loadingMore = false
+	// Named so `off` can name them too. A bare `socket.off("characters:searchLibrary")`
+	// removes EVERY listener for that event — including any other open
+	// page's, which then stops updating for the rest of the session.
+	function handleCharactersSearchLibrary(
+		msg: Sockets.Characters.SearchLibrary.Response
+	) {
+		if (msg.requestId !== latestRequestId) return
+		libraryCharacters = pendingIsAppend
+			? [...libraryCharacters, ...msg.characters]
+			: msg.characters
+		hasMoreResults = msg.hasMore
+		nextOffset =
+			msg.nextOffset ??
+			(pendingIsAppend
+				? nextOffset + msg.characters.length
+				: msg.characters.length)
+		isLoading = false
+		searching = false
+		loadingMore = false
 
-				if (pendingIsAppend) {
-					if (
-						msg.characters.length === 0 &&
-						hasMoreResults &&
-						loadMoreAutoContinueAttempts <
-							MAX_LOAD_MORE_AUTO_CONTINUE
-					) {
-						// This page filtered down to nothing but more upstream
-						// pages exist — keep going automatically rather than
-						// leaving the click looking like it did nothing.
-						loadMoreAutoContinueAttempts++
-						loadMoreQueued = false
-						stillFiltering = true
-						fetchLibrary(false, true)
-						return
-					}
-					loadMoreAutoContinueAttempts = 0
-					stillFiltering = false
-				}
-				if (loadMoreQueued) {
-					loadMoreQueued = false
-					loadMore()
-				}
+		if (pendingIsAppend) {
+			if (
+				msg.characters.length === 0 &&
+				hasMoreResults &&
+				loadMoreAutoContinueAttempts < MAX_LOAD_MORE_AUTO_CONTINUE
+			) {
+				// This page filtered down to nothing but more upstream
+				// pages exist — keep going automatically rather than
+				// leaving the click looking like it did nothing.
+				loadMoreAutoContinueAttempts++
+				loadMoreQueued = false
+				stillFiltering = true
+				fetchLibrary(false, true)
+				return
 			}
-		)
+			loadMoreAutoContinueAttempts = 0
+			stillFiltering = false
+		}
+		if (loadMoreQueued) {
+			loadMoreQueued = false
+			loadMore()
+		}
+	}
+
+	function handleCharactersSearchLibraryError(
+		msg: Sockets.SearchLibraryErrorResponse
+	) {
+		if (msg.requestId !== latestRequestId) return
+		// Capture now — by the time a retryTimer fires, pendingIsAppend may
+		// have already been overwritten by a newer, unrelated request.
+		const wasAppend = pendingIsAppend
+		const isRateLimited = !!msg.rateLimited
+		const errorRetryAfterMs = msg.retryAfterMs ?? null
+		isLoading = false
+		searching = false
+		loadingMore = false
+
+		if (wasAppend) {
+			// A failed "Load More" shouldn't blank out the already-loaded
+			// cards still on screen — just stop the loading-more spinner. A
+			// rate-limited append still auto-retries (resuming the append,
+			// not replacing) same as a fresh search would; anything else
+			// just toasts and leaves the existing grid alone.
+			//
+			// Either way, a queued click is already superseded by (or
+			// moot alongside) this outcome — clear it rather than
+			// letting it fire an extra request once the retry lands.
+			loadMoreQueued = false
+			if (isRateLimited && errorRetryAfterMs) {
+				clearTimeout(retryTimer)
+				retryTimer = setTimeout(
+					() => fetchLibrary(true, true),
+					errorRetryAfterMs
+				)
+			} else {
+				loadMoreAutoContinueAttempts = 0
+				stillFiltering = false
+				toaster.error({
+					title: msg.error || "Failed to load more characters"
+				})
+			}
+			return
+		}
+
+		libraryCharacters = []
+		unreachable = !!msg.unreachable
+		rateLimited = isRateLimited
+		retryAfterMs = errorRetryAfterMs
+		if (isRateLimited && errorRetryAfterMs) {
+			clearTimeout(retryTimer)
+			retryTimer = setTimeout(
+				() => fetchLibrary(true, false),
+				errorRetryAfterMs
+			)
+		}
+		if (!unreachable && !isRateLimited) {
+			toaster.error({
+				title: msg.error || "Failed to search the character library"
+			})
+		}
+	}
+
+	function handleCharactersImportFromLibrary(
+		msg: Sockets.Characters.ImportFromLibrary.Response
+	) {
+		toaster.success({ title: `Downloaded ${msg.character.name}` })
+		downloading = false
+		showDetails = false
+	}
+
+	function handleCharactersImportFromLibraryError(
+		msg: Sockets.ErrorResponse
+	) {
+		toaster.error({
+			title: msg.error || "Failed to download character"
+		})
+		downloading = false
+	}
+
+	function handleCardSourcesCapabilities(
+		msg: Sockets.CardSources.Capabilities.Response
+	) {
+		capabilities = msg
+	}
+
+	function handleCardSourcesCardDetail(
+		msg: Sockets.CardSources.CardDetail.Response
+	) {
+		if (msg.requestId !== latestDetailRequestId) return
+		loadingDetail = false
+		if (selectedCharacter) {
+			selectedCharacter = { ...selectedCharacter, ...msg }
+		}
+	}
+
+	function handleCardSourcesCardDetailError(msg: any) {
+		if (msg.requestId !== latestDetailRequestId) return
+		loadingDetail = false
+	}
+
+	onMount(() => {
+		socket.on("characters:searchLibrary", handleCharactersSearchLibrary)
 		socket.on(
 			"characters:searchLibrary:error",
-			(msg: Sockets.SearchLibraryErrorResponse) => {
-				if (msg.requestId !== latestRequestId) return
-				// Capture now — by the time a retryTimer fires, pendingIsAppend may
-				// have already been overwritten by a newer, unrelated request.
-				const wasAppend = pendingIsAppend
-				const isRateLimited = !!msg.rateLimited
-				const errorRetryAfterMs = msg.retryAfterMs ?? null
-				isLoading = false
-				searching = false
-				loadingMore = false
-
-				if (wasAppend) {
-					// A failed "Load More" shouldn't blank out the already-loaded
-					// cards still on screen — just stop the loading-more spinner. A
-					// rate-limited append still auto-retries (resuming the append,
-					// not replacing) same as a fresh search would; anything else
-					// just toasts and leaves the existing grid alone.
-					//
-					// Either way, a queued click is already superseded by (or
-					// moot alongside) this outcome — clear it rather than
-					// letting it fire an extra request once the retry lands.
-					loadMoreQueued = false
-					if (isRateLimited && errorRetryAfterMs) {
-						clearTimeout(retryTimer)
-						retryTimer = setTimeout(
-							() => fetchLibrary(true, true),
-							errorRetryAfterMs
-						)
-					} else {
-						loadMoreAutoContinueAttempts = 0
-						stillFiltering = false
-						toaster.error({
-							title: msg.error || "Failed to load more characters"
-						})
-					}
-					return
-				}
-
-				libraryCharacters = []
-				unreachable = !!msg.unreachable
-				rateLimited = isRateLimited
-				retryAfterMs = errorRetryAfterMs
-				if (isRateLimited && errorRetryAfterMs) {
-					clearTimeout(retryTimer)
-					retryTimer = setTimeout(
-						() => fetchLibrary(true, false),
-						errorRetryAfterMs
-					)
-				}
-				if (!unreachable && !isRateLimited) {
-					toaster.error({
-						title:
-							msg.error ||
-							"Failed to search the character library"
-					})
-				}
-			}
+			handleCharactersSearchLibraryError
 		)
 		socket.on(
 			"characters:importFromLibrary",
-			(msg: Sockets.Characters.ImportFromLibrary.Response) => {
-				toaster.success({ title: `Downloaded ${msg.character.name}` })
-				downloading = false
-				showDetails = false
-			}
+			handleCharactersImportFromLibrary
 		)
 		socket.on(
 			"characters:importFromLibrary:error",
-			(msg: Sockets.ErrorResponse) => {
-				toaster.error({
-					title: msg.error || "Failed to download character"
-				})
-				downloading = false
-			}
+			handleCharactersImportFromLibraryError
 		)
+		socket.on("cardSources:capabilities", handleCardSourcesCapabilities)
+		socket.on("cardSources:cardDetail", handleCardSourcesCardDetail)
 		socket.on(
-			"cardSources:capabilities",
-			(msg: Sockets.CardSources.Capabilities.Response) => {
-				capabilities = msg
-			}
+			"cardSources:cardDetail:error",
+			handleCardSourcesCardDetailError
 		)
-		socket.on(
-			"cardSources:cardDetail",
-			(msg: Sockets.CardSources.CardDetail.Response) => {
-				if (msg.requestId !== latestDetailRequestId) return
-				loadingDetail = false
-				if (selectedCharacter) {
-					selectedCharacter = { ...selectedCharacter, ...msg }
-				}
-			}
-		)
-		socket.on("cardSources:cardDetail:error", (msg: any) => {
-			if (msg.requestId !== latestDetailRequestId) return
-			loadingDetail = false
-		})
 
 		socket.emit("cardSources:capabilities", {})
 		fetchLibrary(true)
@@ -380,13 +400,31 @@
 		return () => {
 			clearTimeout(retryTimer)
 			clearTimeout(searchDebounceTimeoutId)
-			socket.off("characters:searchLibrary")
-			socket.off("characters:searchLibrary:error")
-			socket.off("characters:importFromLibrary")
-			socket.off("characters:importFromLibrary:error")
-			socket.off("cardSources:capabilities")
-			socket.off("cardSources:cardDetail")
-			socket.off("cardSources:cardDetail:error")
+			socket.off(
+				"characters:searchLibrary",
+				handleCharactersSearchLibrary
+			)
+			socket.off(
+				"characters:searchLibrary:error",
+				handleCharactersSearchLibraryError
+			)
+			socket.off(
+				"characters:importFromLibrary",
+				handleCharactersImportFromLibrary
+			)
+			socket.off(
+				"characters:importFromLibrary:error",
+				handleCharactersImportFromLibraryError
+			)
+			socket.off(
+				"cardSources:capabilities",
+				handleCardSourcesCapabilities
+			)
+			socket.off("cardSources:cardDetail", handleCardSourcesCardDetail)
+			socket.off(
+				"cardSources:cardDetail:error",
+				handleCardSourcesCardDetailError
+			)
 		}
 	})
 </script>

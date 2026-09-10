@@ -23,6 +23,25 @@ const excluded = ["**/node_modules/**", "src/**/*.budgets.test.ts"]
 const integrationTests = ["src/**/*.int.test.ts", "scripts/**/*.int.test.ts"]
 
 /**
+ * `core:query/vector-search@1` declares a 3s `timeoutMs` (see the SDK
+ * contract) enforced by the real host + `run()` engine — not a vitest
+ * setting, so raising `testTimeout` cannot buy it headroom. A file that
+ * drives that node for real (`createHost` + `run`, `vector-search.maxEntries`
+ * above 0) pays that budget in wall-clock time, and a full parallel sweep
+ * steals enough of it that the node comes back `err: timeout` — passing
+ * alone, flaking in the suite. `measure/` is entirely this shape;
+ * `parity/harness.rag.int.test.ts` drives the same real node the same way
+ * (the rest of `parity/` leaves `maxEntries` at the shipped 0 and never
+ * reaches the timeout). Pulled into their own sequential project rather than
+ * budgeted per-file, because the contention is the suite's, not any one
+ * file's to fix.
+ */
+const serialInt = [
+	"src/lib/server/pipelines/measure/**/*.int.test.ts",
+	"src/lib/server/pipelines/parity/**/*.int.test.ts"
+]
+
+/**
  * Spelled out in both projects rather than left to config inheritance.
  * `setupFiles` redirects every run at a throwaway data dir; without it, any
  * test that transitively imports $lib/server/db migrates the developer's real
@@ -56,7 +75,7 @@ export default defineConfig({
 					...shared,
 					name: "int",
 					include: integrationTests,
-					exclude: excluded,
+					exclude: [...excluded, ...serialInt],
 					/**
 					 * An integration test builds a real PGlite database —
 					 * migrations, then a default-data sync — before it asserts
@@ -75,6 +94,24 @@ export default defineConfig({
 					 */
 					testTimeout: 60_000,
 					hookTimeout: 60_000
+				}
+			},
+			{
+				extends: true,
+				test: {
+					...shared,
+					name: "int-serial",
+					include: serialInt,
+					exclude: excluded,
+					// Same headroom as "int" — these are int tests too, just
+					// carved out for the reason on `serialInt` above.
+					testTimeout: 60_000,
+					hookTimeout: 60_000,
+					// The fix itself: run this project's files one at a time so
+					// none of them are competing with the rest of the suite (or
+					// each other) for the CPU that `vector-search`'s 3s budget
+					// assumes it has.
+					fileParallelism: false
 				}
 			}
 		]

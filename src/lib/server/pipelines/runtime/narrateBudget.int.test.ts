@@ -96,7 +96,7 @@ const narratorRun = async () =>
 		},
 		seed: "seed:narrate-budget",
 		bindings: coreBindings(),
-		host: createHost(db as any, { sessionId, userId }),
+		host: createHost(db, { sessionId, userId }),
 		preview: true
 	} as any)
 

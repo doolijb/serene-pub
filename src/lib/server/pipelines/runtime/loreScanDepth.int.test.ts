@@ -73,7 +73,7 @@ beforeAll(async () => {
 	)
 	db = (await import("$lib/server/db")).db as unknown as TestDb
 	await (await import("$lib/server/db/defaults")).sync()
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -131,9 +131,10 @@ beforeAll(async () => {
  * `preview` stops before the provider, which needs a connection this test has
  * no business supplying; every node under test runs upstream of it.
  */
-const scanned = async (
+const scannedOn = async (
 	doc: any,
-	specId: string
+	specId: string,
+	field: "scanDepth" | "guaranteedMessages"
 ): Promise<Record<string, number | undefined>> => {
 	const receipt = await run(doc, {
 		input: {
@@ -144,17 +145,20 @@ const scanned = async (
 		},
 		seed: "seed:scan",
 		bindings: coreBindings(),
-		world: await buildWorld(db as any, { sessionId, specId }),
-		host: createHost(db as any, { sessionId, userId }),
+		world: await buildWorld(db, { sessionId, specId }),
+		host: createHost(db, { sessionId, userId }),
 		preview: true
 	} as any)
 
 	const out: Record<string, number | undefined> = {}
 	for (const node of receipt.nodes as any[])
-		if (node.output?.diagnostics?.scanDepth !== undefined)
-			out[node.nodeKey] = node.output.diagnostics.scanDepth
+		if (node.output?.diagnostics?.[field] !== undefined)
+			out[node.nodeKey] = node.output.diagnostics[field]
 	return out
 }
+
+const scanned = (doc: any, specId: string) =>
+	scannedOn(doc, specId, "scanDepth")
 
 /**
  * The config a run on this session actually resolves to.
@@ -170,7 +174,7 @@ const selectedConfigId = async (slug: string, specId: number) => {
 	const { resolveSelectedConfig } = await import(
 		"$lib/server/pipelines/config/named"
 	)
-	const selected = await resolveSelectedConfig(db as any, specId, slug, {
+	const selected = await resolveSelectedConfig(db, specId, slug, {
 		sessionId
 	})
 	expect(selected, `${slug} resolves to no configuration`).toBeTruthy()
@@ -272,6 +276,93 @@ describe("a lore node's scan depth reaches the scan", () => {
 })
 
 /**
+ * The other half of the same split — engine-read for far longer, and declared
+ * nowhere at all.
+ *
+ * ⚠ `guaranteedMessages` is the mirror image of the `scanDepth` defect above.
+ * That one was declared and unread; this one was **read and undeclared**:
+ * `keywordQuery` has always taken it off `RetrievalParams`, where the only
+ * value it could hold was a hardcoded 10. It sets the window
+ * `speakerCooccurrenceSignal` asks "did this character's own character speak"
+ * over, and the term-frequency window `tfidf` scores an entry against — two
+ * live signals, tuned by a constant with no control anywhere.
+ *
+ * `RetrievalParams` already said the split from `scanDepth` is
+ * "behaviour-preserving while both default to 10". These are the assertions that
+ * make that sentence testable: the declaration defaults to 10, and a number
+ * somebody stores reaches the lane that stores it and no other.
+ */
+describe("a lore node's guaranteed window reaches the scan", () => {
+	it("every lane runs and reports the shipped window", async () => {
+		const windows = await scannedOn(
+			respondSpec(),
+			RESPOND_SPEC_ID,
+			"guaranteedMessages"
+		)
+		for (const lane of LORE_LANES)
+			expect(
+				windows[lane],
+				`${lane} reported no guaranteed window at all — it did not run`
+			).toBe(DEFAULT_RETRIEVAL.guaranteedMessages)
+
+		const narrator = await scannedOn(
+			narrateSpec(),
+			NARRATE_SPEC_ID,
+			"guaranteedMessages"
+		)
+		expect(narrator["lore"]).toBe(DEFAULT_RETRIEVAL.guaranteedMessages)
+	}, 60_000)
+
+	it("a configured value reaches the lane that was configured, and only it", async () => {
+		const configId = await selectedConfigId(
+			RESPOND_SPEC_ID,
+			respondSpecRow.id
+		)
+		const where = (nodeKey: string) =>
+			and(
+				eq(schema.pipelineConfigValues.configId, configId),
+				eq(schema.pipelineConfigValues.nodeKey, nodeKey),
+				eq(schema.pipelineConfigValues.slot, "params"),
+				eq(schema.pipelineConfigValues.path, "guaranteedMessages")
+			)
+
+		await db
+			.update(schema.pipelineConfigValues)
+			.set({ value: 3 })
+			.where(where("gather.worldLore.read"))
+
+		try {
+			const windows = await scannedOn(
+				respondSpec(),
+				RESPOND_SPEC_ID,
+				"guaranteedMessages"
+			)
+			expect(windows["gather.worldLore.read"]).toBe(3)
+			// Each lane owns its own row (F20), exactly as `scanDepth` does.
+			expect(windows["gather.characterLore.read"]).toBe(
+				DEFAULT_RETRIEVAL.guaranteedMessages
+			)
+			expect(windows["gather.historyEntries.read"]).toBe(
+				DEFAULT_RETRIEVAL.guaranteedMessages
+			)
+			// ⚠ And it did not move the *other* window. The whole reason these
+			// are two controls is that one install wants a deep scan and a
+			// short guarantee; a change that moved both would be the shared
+			// constant back under two names.
+			const depths = await scanned(respondSpec(), RESPOND_SPEC_ID)
+			expect(depths["gather.worldLore.read"]).toBe(
+				DEFAULT_RETRIEVAL.scanDepth
+			)
+		} finally {
+			await db
+				.update(schema.pipelineConfigValues)
+				.set({ value: DEFAULT_RETRIEVAL.guaranteedMessages })
+				.where(where("gather.worldLore.read"))
+		}
+	}, 60_000)
+})
+
+/**
  * The declaration and the engine's fallback, held together.
  *
  * They disagreed for as long as nothing read the declaration — 3 on the type,
@@ -301,14 +392,26 @@ describe("the declared scan depth and the engine's fallback are one number", () 
 					)
 				)
 				.limit(1)
-			const declared = (row?.slots as any)?.params?.schema?.scanDepth
-				?.default
+			const schemaOf = (row?.slots as any)?.params?.schema ?? {}
+			const declared = schemaOf.scanDepth?.default
 			expect(
 				declared,
 				`${typeId} declares scanDepth ${declared}, but a node handed ` +
 					`nothing scans ${DEFAULT_RETRIEVAL.scanDepth} — the two are ` +
 					`the same promise and must not drift`
 			).toBe(DEFAULT_RETRIEVAL.scanDepth)
+
+			// The same promise, for the window that was engine-read before it
+			// was declared. 10 is what every scan has silently run on, so the
+			// declaration is what makes the split behaviour-preserving rather
+			// than merely claiming to be.
+			const guaranteed = schemaOf.guaranteedMessages?.default
+			expect(
+				guaranteed,
+				`${typeId} declares guaranteedMessages ${guaranteed}, but a ` +
+					`node handed nothing guarantees ` +
+					`${DEFAULT_RETRIEVAL.guaranteedMessages}`
+			).toBe(DEFAULT_RETRIEVAL.guaranteedMessages)
 		}
 	})
 })

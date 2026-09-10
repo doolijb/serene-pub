@@ -1,7 +1,4 @@
-import Handlebars from "handlebars"
-import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import _ from "lodash"
-import { StopStrings } from "../utils/StopStrings"
 import { Ollama, type ChatRequest, type GenerateRequest } from "ollama"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
@@ -110,26 +107,6 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		return "user"
 	}
 
-	compilePrompt(args: {}) {
-		const useSessionFormat = !!this.connection.extraJson?.useSession
-		console.log(
-			"[OllamaAdapter.compilePrompt] connection.extraJson:",
-			this.connection.extraJson
-		)
-		console.log(
-			"[OllamaAdapter.compilePrompt] useSession value:",
-			this.connection.extraJson?.useSession
-		)
-		console.log(
-			"[OllamaAdapter.compilePrompt] useSessionFormat:",
-			useSessionFormat
-		)
-		return super.compilePrompt({
-			useSessionFormat,
-			...args
-		})
-	}
-
 	// `generateText` is Serene Pub's action; `ollama.generate()` below is the
 	// Ollama SDK's completion endpoint, the counterpart to `ollama.chat()`. Two
 	// unrelated senses of the word in one file — do not rename the SDK calls.
@@ -139,80 +116,74 @@ class OllamaAdapter extends BaseConnectionAdapter {
 			CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].baseUrl
 		const stream = this.connection!.extraJson?.stream || false
 		const think = this.connection!.extraJson?.think || false
-		console.log("[OllamaAdapter] think flag:", think, "stream:", stream)
-		const keep_alive = this.connection!.extraJson?.keepAlive || "300ms"
+		// Ollama's OWN default, and deliberately not a shorter one. This read
+		// `|| "300ms"`, so a connection that had never opened the form unloaded
+		// the weights a third of a second after each turn — measured against a
+		// 14B model, that is a ~9 GB reload on every single message, paid before
+		// the first token of the next reply. The per-connection override below is
+		// untouched; only the fallback moves.
+		const keep_alive = this.connection!.extraJson?.keepAlive || "5m"
 		if (typeof model !== "string")
 			throw new Error("OllamaAdapter: model must be a string")
 
-		// Prepare stop strings for Ollama
-		const stopStrings = StopStrings.get({
-			format: this.connection.promptFormat || "chatml",
-			characters:
-				this.session.sessionCharacters?.map((cc) => cc.character) || [],
-			personas:
-				this.session.sessionPersonas?.map((cp) => cp.persona) || [],
-			currentCharacterId: this.currentCharacterId ?? undefined
-		})
-		const characterName = resolveCharacterName(
-			this.session.sessionCharacters?.[0]?.character
-		)
-		const personaName =
-			this.session.sessionPersonas?.[0]?.persona?.name || "user"
-		const stopContext: Record<string, string> = {
-			char: characterName,
-			user: personaName
-		}
-		const stop = stopStrings.map((str) =>
-			Handlebars.compile(str)(stopContext)
-		)
+		// The stop sequences this request will send — composed by
+		// `connections/stops.ts` and handed over at construction, never built
+		// here. This file used to carry TWO copies of the composition (`||
+		// "chatml"` at this line and `|| "vicuna"` at the generate-mode site
+		// below), which is how the chat branch came to send the completion
+		// template's role labels: they override a ChatML model's own
+		// `<|im_end|>` and truncate the reply, for markers a chat request does
+		// not contain. The wire rule is the composer's now, so both branches
+		// read the one already-filtered list.
+		const stop = this.stops
 
 		// Use PromptBuilder for prompt construction
 
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
 
-		console.log(
-			"[OllamaAdapter] useSession:",
-			this.connection.extraJson?.useSession
-		)
-		console.log(
-			"[OllamaAdapter] compiledPrompt has messages:",
-			!!compiledPrompt.messages
-		)
-		console.log(
-			"[OllamaAdapter] compiledPrompt has prompt:",
-			!!compiledPrompt.prompt
-		)
-
 		/**
-		 * Which request shape to send, taken from **what was actually built**.
+		 * Which of Ollama's two calls to make: `ollama.chat()` or
+		 * `ollama.generate()`.
 		 *
-		 * This read `extraJson?.useSession ?? true` while `compilePrompt` above
-		 * reads `!!extraJson?.useSession` — the same setting with two different
-		 * defaults. A connection whose `extraJson` has no `useSession` (the column
-		 * defaults to `{}`) therefore had a completion prompt built and a *session*
+		 * ## What this replaced, twice over
+		 *
+		 * The setting was `extraJson.useSession`, read in this file with TWO
+		 * different defaults — `!!x` in the `compilePrompt` override above and
+		 * `x ?? true` here — so a connection whose `extraJson` had no such key
+		 * (the column defaults to `{}`) had a completion prompt built and a chat
 		 * request sent, with `messages: undefined`. Ollama answers that with an
-		 * empty string, which surfaces as "the model returned nothing" and
-		 * looks like a model fault rather than a request we built wrong.
+		 * empty string, which reads as a model fault.
 		 *
-		 * Deriving it from the payload cannot disagree with itself: the
-		 * preference already decided which field `compilePrompt` populated, so
-		 * following the payload honours it transitively and stays correct even
-		 * if the two defaults drift again.
+		 * The interim fix was to read the PAYLOAD (`!!compiledPrompt.messages`),
+		 * which cannot disagree with itself — but it also cannot disagree with a
+		 * payload that was built wrong, which is exactly what the pipeline path
+		 * was handing over: one flat string on every run, whatever the connection
+		 * wanted. Following it made the wrong shape self-consistent.
+		 *
+		 * The connection answers now, resolved once from its capability layers
+		 * and read by the render as well as by this send — so the payload and the
+		 * request are the same decision rather than two that happen to agree.
 		 */
-		const useSession = !!compiledPrompt.messages
-		console.log("[OllamaAdapter] useSession (from payload):", useSession)
+		const useSession = this.isChatWire
 		let req: GenerateRequest | ChatRequest
 
 		if (useSession) {
-			if (!compiledPrompt.messages) {
-				console.error(
-					"[OllamaAdapter] ERROR: useSession is true but compiledPrompt.messages is undefined!"
+			// Checked rather than asserted: `messages!` on a completion-shaped
+			// payload sent `undefined`, and a refusal that names the
+			// disagreement is worth more than a request that quietly loses the
+			// prompt. Not a fallback to `promptTextFor` — rebuilding a flat
+			// prompt here would restore the adapter-local wire mode this change
+			// removes.
+			if (!Array.isArray(compiledPrompt.messages))
+				throw new Error(
+					"this Ollama connection is chat wire mode, but the prompt it was " +
+						"handed carries no messages. The render and the send are reading " +
+						"different wire modes — check that the assemble node's connection " +
+						"slot is wired to the sending Provider (slot.connectionOf)."
 				)
-				console.error("[OllamaAdapter] compiledPrompt:", compiledPrompt)
-			}
 			req = {
 				model,
-				messages: compiledPrompt.messages!,
+				messages: compiledPrompt.messages,
 				stream,
 				think,
 				keep_alive,
@@ -231,29 +202,33 @@ class OllamaAdapter extends BaseConnectionAdapter {
 					: {})
 			} as ChatRequest
 		} else {
-			// For generate mode, append the prompt format stop strings
-			// Get the format-specific stop strings based on connection's promptFormat
-			const formatStopStrings = StopStrings.get({
-				format: this.connection.promptFormat || "vicuna",
-				characters: [],
-				personas: [],
-				currentCharacterId: this.currentCharacterId ?? undefined
-			})
-
-			// Combine with the existing stop strings (which include character/persona names)
-			const allStopStrings = [...stop, ...formatStopStrings]
-
 			req = {
 				model,
 				// See `promptTextFor`: `compiledPrompt.prompt!` asserted a
 				// string that a chat-shaped payload does not carry.
 				prompt: this.promptTextFor(compiledPrompt),
+				// This branch sends a prompt WE rendered, in the connection's
+				// own completion template. Without `raw`, Ollama wraps it a
+				// second time in whatever template the model ships with:
+				// measured against Qwen2.5-14B, +8 tokens, and the open
+				// assistant seed block was closed and reopened — so the model
+				// re-emitted the speaker name the seed had already written.
+				//
+				// `raw: true` also switches off Ollama's DEFAULT stop
+				// handling, which the template's own stop strings replace:
+				// `stop` below is on this request precisely because nothing on
+				// the server side supplies them here.
+				//
+				// Only this branch. The chat branch hands over role-tagged
+				// messages for the server to template, which is the whole point
+				// of that wire — `raw` there would be a request to send nothing.
+				raw: true,
 				stream,
 				think,
 				keep_alive,
 				options: {
 					...this.mapSamplingConfig(),
-					stop: allStopStrings
+					stop
 				},
 				// Top-level, and schema-aware, same as the session branch above.
 				...(this.responseFormat === "json"
@@ -261,8 +236,6 @@ class OllamaAdapter extends BaseConnectionAdapter {
 					: {})
 			} as GenerateRequest
 		}
-
-		console.log("OllamaAdapter generate mode request:", req)
 
 		if (stream) {
 			return {
@@ -289,36 +262,15 @@ class OllamaAdapter extends BaseConnectionAdapter {
 								ollama.abort()
 								return
 							}
-							let firstPart = true
 							for await (const part of result) {
 								idle.poke()
 								if (this.isAborting) {
 									ollama.abort()
 									return
 								}
-								if (firstPart) {
-									console.log(
-										"[OllamaAdapter] first stream part keys:",
-										Object.keys(part),
-										"message keys:",
-										part.message
-											? Object.keys(part.message)
-											: "no message",
-										"message.thinking:",
-										(
-											part.message as any
-										)?.thinking?.substring(0, 50)
-									)
-									firstPart = false
-								}
 								if (part.message) {
 									// Forward thinking chunks before content starts
 									if (part.message.thinking) {
-										console.log(
-											"[OllamaAdapter] thinking chunk:",
-											part.message.thinking.length,
-											"chars"
-										)
 										thinkingCb?.(part.message.thinking)
 									}
 									if (part.message.content) {
@@ -338,32 +290,13 @@ class OllamaAdapter extends BaseConnectionAdapter {
 								ollama.abort()
 								return
 							}
-							let genFirstPart = true
 							for await (const part of result) {
 								idle.poke()
 								if (this.isAborting) {
 									ollama.abort()
 									return
 								}
-								if (genFirstPart || part.done) {
-									console.log(
-										"[OllamaAdapter] generate part keys:",
-										Object.keys(part),
-										"thinking:",
-										(part as any).thinking?.length ?? 0,
-										"response:",
-										part.response?.length ?? 0,
-										"done:",
-										part.done
-									)
-									genFirstPart = false
-								}
 								if (part.thinking) {
-									console.log(
-										"[OllamaAdapter] generate thinking chunk:",
-										part.thinking.length,
-										"chars"
-									)
 									thinkingCb?.(part.thinking)
 								}
 								if (part.response) {
@@ -412,7 +345,6 @@ class OllamaAdapter extends BaseConnectionAdapter {
 				}, LLM_NONSTREAMING_TIMEOUT_MS)
 				try {
 					if (useSession) {
-						console.log("Using non-steaming session API")
 						// Use Ollama's session api
 						const res = await ollama.chat({
 							...(req as ChatRequest),
@@ -426,12 +358,6 @@ class OllamaAdapter extends BaseConnectionAdapter {
 							typeof res === "object" &&
 							"message" in res
 						) {
-							console.log(
-								"[OllamaAdapter] non-stream session thinking:",
-								res.message.thinking
-									? res.message.thinking.length + " chars"
-									: "none"
-							)
 							return {
 								content: res.message.content || "",
 								thinking: res.message.thinking
@@ -452,12 +378,6 @@ class OllamaAdapter extends BaseConnectionAdapter {
 							typeof res === "object" &&
 							"response" in res
 						) {
-							console.log(
-								"[OllamaAdapter] non-stream generate thinking:",
-								res.thinking
-									? res.thinking.length + " chars"
-									: "none"
-							)
 							return {
 								content: res.response || "",
 								thinking: res.thinking

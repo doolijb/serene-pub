@@ -18,7 +18,7 @@
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import {
 		CONNECTION_DEFAULTS,
-		OPENAI_CHAT_PRESETS,
+		OPENAI_COMPATIBLE_PRESETS,
 		stableStringify
 	} from "$lib/shared/utils/connectionDefaults"
 	import ConnectionCapabilities from "$lib/client/components/connections/ConnectionCapabilities.svelte"
@@ -28,6 +28,11 @@
 		isKoboldCppManagedType,
 		type ConnectionServiceItem
 	} from "$lib/shared/utils/connectionServiceItems"
+	import {
+		NOTE_MAX_LENGTH,
+		normalizeNote,
+		notePreview
+	} from "$lib/shared/utils/connectionNotes"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -108,6 +113,22 @@
 	// seeding in onMount), and consumed by the first connections:get for that
 	// id — see handleConnectionsGet. Not $state: nothing renders from it.
 	let deepLinkedConnectionId: number | null = null
+	/**
+	 * The selected connection's note IN FULL, for the block under the picker.
+	 *
+	 * Read from the loaded record when there is one, so typing in the notes
+	 * field below updates it as you go, and from the list row otherwise —
+	 * `connections:get` is a round trip, and between clicking a connection and
+	 * its reply arriving the list row is the only copy there is.
+	 */
+	let selectedNote = $derived(
+		normalizeNote(
+			connection?.id === selectedConnectionId
+				? connection?.notes
+				: viewConnections.find((c) => c.id === selectedConnectionId)
+						?.notes
+		)
+	)
 	/**
 	 * Which capability this category's star registers.
 	 *
@@ -238,8 +259,8 @@
 			return
 		}
 		const { type, presetValue, presetSlug } = newConnectionService
-		if (type === CONNECTION_TYPE.OPENAI_CHAT) {
-			const preset = OPENAI_CHAT_PRESETS.find(
+		if (type === CONNECTION_TYPE.OPENAI) {
+			const preset = OPENAI_COMPATIBLE_PRESETS.find(
 				(p) => p.value === presetValue
 			)
 			if (!preset) {
@@ -255,8 +276,8 @@
 			// layer to consult. Undefined for a native type and for the custom
 			// entry, and undefined is the right answer there: NULL means custom.
 			preset: presetSlug,
-			...(type === CONNECTION_TYPE.OPENAI_CHAT
-				? OPENAI_CHAT_PRESETS.find((p) => p.value === presetValue)
+			...(type === CONNECTION_TYPE.OPENAI
+				? OPENAI_COMPATIBLE_PRESETS.find((p) => p.value === presetValue)
 						?.connectionDefaults
 				: CONNECTION_DEFAULTS[type] || {})
 		}
@@ -796,8 +817,21 @@
 								(t) => t.value === c.type
 							)?.label ?? c.type}
 						{@const isDefault = c.id === defaultConnectionId}
-						<option value={c.id}>
-							{isDefault ? "★ " : ""}{c.name} ({typeLabel})
+						{@const preview = notePreview(c.notes)}
+						<!-- A native `<option>` holds one line of plain text and
+						     nothing else, so the note rides in that line and in
+						     `title` rather than as a second row. `notePreview`
+						     is what keeps a pasted note from turning this into
+						     a dropdown one entry wide and a screenful long —
+						     the option itself cannot wrap, cannot clamp, and
+						     will happily render all 4000 characters. The FULL
+						     note is shown under the picker for whichever
+						     connection is selected, so nothing here depends on
+						     a tooltip being read. -->
+						<option value={c.id} title={c.notes ?? undefined}>
+							{isDefault ? "★ " : ""}{c.name} ({typeLabel}){preview
+								? ` — ${preview}`
+								: ""}
 						</option>
 					{/each}
 				</select>
@@ -806,6 +840,21 @@
 						? "Save or reset changes before switching connections"
 						: "Select a connection to view or edit its settings"}
 				</div>
+				{#if selectedNote}
+					<!-- The selected connection's note IN FULL, and the reason
+					     the row above can afford to truncate. Bounded height
+					     with its own scroll: a note is capped at 4000
+					     characters, which is a couple of screens of prose, and
+					     an unbounded block here would push every real control
+					     off the sidebar. `whitespace-pre-wrap` because this is
+					     the one place the user's own paragraph breaks are worth
+					     keeping — every other surface collapses them. -->
+					<p
+						class="text-muted mt-2 max-h-24 overflow-y-auto text-xs break-words whitespace-pre-wrap"
+					>
+						{selectedNote}
+					</p>
+				{/if}
 			</div>
 			{#if !!connection}
 				{#key connection.id}
@@ -893,11 +942,11 @@
 						</div>
 						{#if connection.type === CONNECTION_TYPE.OLLAMA}
 							<OllamaForm bind:connection />
-						{:else if connection.type === CONNECTION_TYPE.OPENAI_CHAT}
+						{:else if connection.type === CONNECTION_TYPE.OPENAI}
 							<OpenAIForm bind:connection />
 						{:else if connection.type === CONNECTION_TYPE.LM_STUDIO}
 							<LmStudioForm bind:connection />
-						{:else if connection.type === CONNECTION_TYPE.LLAMACPP_COMPLETION}
+						{:else if connection.type === CONNECTION_TYPE.LLAMACPP}
 							<LlamaCppForm bind:connection />
 						{:else if connection.type === CONNECTION_TYPE.KOBOLDCPP}
 							<KoboldCppForm bind:connection />
@@ -911,6 +960,49 @@
 							     one needs no case here and no component. -->
 							<ImageConnectionForm bind:connection />
 						{/if}
+
+						<!-- Below the settings, not above them: a note is a
+						     margin note, and the nine forms' real controls are
+						     what someone opened this panel for. Mounted once
+						     here for the same reason ConnectionCapabilities is
+						     — it is a property of a connection, not of a
+						     connection TYPE, so nine pasted copies would be
+						     nine fields to keep in step. -->
+						<div class="mt-4 flex flex-col gap-1">
+							<label class="font-semibold" for="connection-notes">
+								Notes
+							</label>
+							<p id="notes-help" class="text-muted text-xs">
+								For you, not for the app — "use this one for
+								prose, the other for extraction". Shown beside
+								this connection wherever you pick one. Nothing
+								reads it.
+							</p>
+							<textarea
+								id="connection-notes"
+								rows="3"
+								maxlength={NOTE_MAX_LENGTH}
+								bind:value={connection.notes}
+								onblur={() =>
+									(connection.notes = normalizeNote(
+										connection.notes
+									))}
+								class="textarea"
+								placeholder="Anything you want to remember about this connection."
+								aria-describedby="notes-help"
+							></textarea>
+							{#if (connection.notes?.length ?? 0) > NOTE_MAX_LENGTH - 200}
+								<!-- Only near the cap, and only then. `maxlength`
+								     truncates a paste in silence, so the one
+								     moment that silence is a lie is the moment
+								     this appears. -->
+								<p class="text-warning-500 text-xs">
+									{NOTE_MAX_LENGTH -
+										(connection.notes?.length ?? 0)} characters
+									left.
+								</p>
+							{/if}
+						</div>
 
 						{#if connection.id}
 							<!-- Mounted once, here, rather than in each of the nine

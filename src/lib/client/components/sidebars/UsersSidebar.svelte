@@ -7,6 +7,7 @@
 	import UserForm from "../userForms/UserForm.svelte"
 	import UserViewPanel from "../userForms/UserViewPanel.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -99,46 +100,65 @@
 		loadUsers()
 	})
 
+	// Named so `off` can name them too. A bare `socket.off("users:list")`
+	// removes EVERY listener for that event — including any other open users
+	// UI, not just this sidebar's.
+	function handleUsersList(
+		response: SocketEventMap["users:list"]["response"]
+	) {
+		userList = response.users
+		isLoading = false
+	}
+
+	function handleUsersCreate(
+		response: SocketEventMap["users:create"]["response"]
+	) {
+		userList = [...userList, response.user]
+		resetForm()
+		toaster.success({
+			title: "User Created",
+			description: `User "${response.user.username}" has been created successfully.`
+		})
+	}
+
+	function handleUsersUpdate(
+		response: SocketEventMap["users:update"]["response"]
+	) {
+		userList = userList.map((u) =>
+			u.id === response.user.id ? response.user : u
+		)
+		if (viewingUser?.id === response.user.id) {
+			viewingUser = response.user
+		}
+		resetForm()
+		toaster.success({
+			title: "User Updated",
+			description: `User "${response.user.username}" has been updated successfully.`
+		})
+	}
+
+	function handleUsersDelete(
+		_response: SocketEventMap["users:delete"]["response"]
+	) {
+		if (userToDelete) {
+			userList = userList.filter((u) => u.id !== userToDelete!.id)
+			if (viewingUser?.id === userToDelete.id) viewingUser = undefined
+			toaster.success({
+				title: "User Deleted",
+				description: `User has been deleted successfully.`
+			})
+		}
+	}
+
 	onMount(() => {
 		// Register listeners BEFORE emitting
-		socket.on("users:list", (response) => {
-			userList = response.users
-			isLoading = false
-		})
+		socket.on("users:list", handleUsersList)
 
-		socket.on("users:create", (response) => {
-			userList = [...userList, response.user]
-			resetForm()
-			toaster.success({
-				title: "User Created",
-				description: `User "${response.user.username}" has been created successfully.`
-			})
-		})
+		socket.on("users:create", handleUsersCreate)
 
-		socket.on("users:update", (response) => {
-			userList = userList.map((u) =>
-				u.id === response.user.id ? response.user : u
-			)
-			if (viewingUser?.id === response.user.id) {
-				viewingUser = response.user
-			}
-			resetForm()
-			toaster.success({
-				title: "User Updated",
-				description: `User "${response.user.username}" has been updated successfully.`
-			})
-		})
+		socket.on("users:update", handleUsersUpdate)
 
-		socket.on("users:delete", (_response) => {
-			if (userToDelete) {
-				userList = userList.filter((u) => u.id !== userToDelete!.id)
-				if (viewingUser?.id === userToDelete.id) viewingUser = undefined
-				toaster.success({
-					title: "User Deleted",
-					description: `User has been deleted successfully.`
-				})
-			}
-		})
+		socket.on("users:delete", handleUsersDelete)
 
 		// Setting isMounted here is enough to trigger the $effect above (it
 		// reads isMounted as a dependency) — an explicit loadUsers() call here
@@ -148,10 +168,10 @@
 	})
 
 	onDestroy(() => {
-		socket.off("users:list")
-		socket.off("users:create")
-		socket.off("users:update")
-		socket.off("users:delete")
+		socket.off("users:list", handleUsersList)
+		socket.off("users:create", handleUsersCreate)
+		socket.off("users:update", handleUsersUpdate)
+		socket.off("users:delete", handleUsersDelete)
 	})
 </script>
 

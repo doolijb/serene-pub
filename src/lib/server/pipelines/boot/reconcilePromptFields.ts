@@ -36,8 +36,6 @@ import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 
-type Db = { select: any; insert: any; update: any; delete: any }
-
 export interface PromptFieldReport {
 	promptId: number
 	name: string

@@ -73,7 +73,7 @@ import {
 	type AnnotationVocabulary
 } from "./index"
 
-type Db = any
+// db is the global Db — see db/types.d.ts
 
 /**
  * The lane's TTL, as a per-lane value rather than a shared constant.
@@ -225,7 +225,7 @@ async function pickStaleEntry(
 	onlyId?: number
 ): Promise<LaneItem | null> {
 	const vocabulary = await vocabularyFor(db, lorebookId)
-	const rows = (await db
+	const rows = await db
 		.select({
 			id: schema.lorebookEntries.id,
 			title: schema.lorebookEntries.title
@@ -239,7 +239,7 @@ async function pickStaleEntry(
 			)
 		)
 		.orderBy(asc(schema.lorebookEntries.id))
-		.limit(1)) as any[]
+		.limit(1)
 	if (!rows.length) return null
 	return entryItem(
 		db,
@@ -266,7 +266,7 @@ async function pickStaleMessage(
 	const vocabulary = lorebookId
 		? await vocabularyFor(db, lorebookId)
 		: await loadVocabulary(db, null)
-	const rows = (await db
+	const rows = await db
 		.select({ id: schema.messages.id })
 		.from(schema.messages)
 		.innerJoin(
@@ -281,7 +281,7 @@ async function pickStaleMessage(
 			)
 		)
 		.orderBy(desc(schema.messages.id))
-		.limit(1)) as any[]
+		.limit(1)
 	if (!rows.length) return null
 	return messageItem(db, rows[0].id, vocabulary)
 }
@@ -316,11 +316,11 @@ function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 			 * written.
 			 */
 			if (group.sessionId !== undefined) {
-				const [session] = (await db
+				const [session] = await db
 					.select({ lorebookId: schema.sessions.lorebookId })
 					.from(schema.sessions)
 					.where(eq(schema.sessions.id, group.sessionId))
-					.limit(1)) as any[]
+					.limit(1)
 				const message = await pickStaleMessage(
 					db,
 					group.sessionId,
@@ -346,10 +346,10 @@ function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 		 */
 		async global() {
 			const db = await getDb()
-			const books = (await db
+			const books = await db
 				.select({ id: schema.lorebooks.id })
 				.from(schema.lorebooks)
-				.orderBy(asc(schema.lorebooks.id))) as any[]
+				.orderBy(asc(schema.lorebooks.id))
 			for (const book of books) {
 				const item = await pickStaleEntry(db, book.id)
 				if (item) return item
@@ -378,7 +378,7 @@ function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 				 * which is the shape of signal loss the governing rule forbids.
 				 */
 				if (!ctx.vocabulary) return null
-				const rows = (await db
+				const rows = await db
 					.select({
 						id: schema.lorebookEntries.id,
 						title: schema.lorebookEntries.title,
@@ -391,7 +391,7 @@ function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 							entryNeedsAnnotation(db, ctx.vocabulary.hash)
 						)
 					)
-					.limit(1)) as any[]
+					.limit(1)
 				if (!rows.length) return null
 				return entryItem(
 					db,
@@ -403,7 +403,7 @@ function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 			}
 			if (ref.source === MESSAGE_ANNOTATION) {
 				if (!ctx.vocabulary) return null
-				const rows = (await db
+				const rows = await db
 					.select({ id: schema.messages.id })
 					.from(schema.messages)
 					.innerJoin(
@@ -416,7 +416,7 @@ function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 							messageNeedsAnnotation(db, ctx.vocabulary.hash)
 						)
 					)
-					.limit(1)) as any[]
+					.limit(1)
 				if (!rows.length) return null
 				return messageItem(db, rows[0].id, ctx.vocabulary)
 			}

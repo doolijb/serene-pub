@@ -103,8 +103,6 @@ import {
 } from "./permissions"
 import type { SandboxManager } from "./SandboxManager"
 
-type Db = { select: any }
-
 /**
  * The wall-clock ceiling on **one whole fan-out**, however many subscribers it
  * has.

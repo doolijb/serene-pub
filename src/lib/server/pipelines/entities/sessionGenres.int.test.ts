@@ -40,12 +40,12 @@ let db: TestDb
 
 beforeAll(async () => {
 	db = await createTestDb()
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 }, 60_000)
 
 describe("the picker", () => {
 	it("lists exactly the shape-bearing input types — the F29 floor among them", async () => {
-		const modes = await listSessionGenres(db as any)
+		const modes = await listSessionGenres(db)
 		const standard = modes.find((m) => m.genreId === STANDARD_GENRE_ID)
 		expect(standard).toBeTruthy()
 		// The one place "Chat" survives: it is the standard MODE's display
@@ -126,8 +126,8 @@ describe("existing sessions", () => {
 		// of modes land on the F29 floor.
 		expect(session.genreId).toBe(STANDARD_GENRE_ID)
 
-		const mode = await getSessionGenre(db as any, session.genreId)
-		const facts = await sessionShapeFacts(db as any, session.id)
+		const mode = await getSessionGenre(db, session.genreId)
+		const facts = await sessionShapeFacts(db, session.id)
 		expect(shapeViolations(mode!.shape, facts)).toEqual([])
 	})
 })
@@ -135,7 +135,7 @@ describe("existing sessions", () => {
 describe("function routing (19 §3, U-C3)", () => {
 	it("respond is the bucket: the entry node pins the mode's type", async () => {
 		expect(
-			await resolveFunctionSpec(db as any, STANDARD_GENRE_ID, "respond")
+			await resolveFunctionSpec(db, STANDARD_GENRE_ID, "respond")
 		).toBe(RESPOND_SPEC_ID)
 	})
 
@@ -145,14 +145,14 @@ describe("function routing (19 §3, U-C3)", () => {
 		// declaration from the spec would break this test — not a string
 		// comparison in generateResponse.
 		expect(
-			await resolveFunctionSpec(db as any, STANDARD_GENRE_ID, "narrate")
+			await resolveFunctionSpec(db, STANDARD_GENRE_ID, "narrate")
 		).toBe(NARRATE_SPEC_ID)
 	})
 
 	it("a function nothing serves resolves to null — the caller keeps its floor", async () => {
 		expect(
 			await resolveFunctionSpec(
-				db as any,
+				db,
 				STANDARD_GENRE_ID,
 				"summon-dragon"
 			)
@@ -160,7 +160,7 @@ describe("function routing (19 §3, U-C3)", () => {
 		// An unknown mode has no bucket and no contributors either.
 		expect(
 			await resolveFunctionSpec(
-				db as any,
+				db,
 				"chariot.dungeon:input/crawl@1",
 				"respond"
 			)
@@ -214,14 +214,14 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 			} as any)
 			.returning()
 
-		expect(await genreFieldsFor(db as any, session.id)).toEqual({
+		expect(await genreFieldsFor(db, session.id)).toEqual({
 			difficulty: "hard",
 			torchCount: 3
 		})
 
 		// An extension mode's card text takes the same road as core's.
 		const crawl = await getSessionGenre(
-			db as any,
+			db,
 			"chariot.dungeon:input/crawl@1"
 		)
 		expect(crawl!.description).toBe("Torchlit. One persona, no cast.")
@@ -240,13 +240,13 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 				genreFields: { anything: "at all" }
 			} as any)
 			.returning()
-		expect(await genreFieldsFor(db as any, session.id)).toEqual({})
+		expect(await genreFieldsFor(db, session.id)).toEqual({})
 	})
 })
 
 describe("the swap list (19 §5, U-C4)", () => {
 	it("lists core's four strategies, by shape rather than by list", async () => {
-		const strategies = await listSpeakerStrategies(db as any)
+		const strategies = await listSpeakerStrategies(db)
 		expect(strategies.map((s) => s.typeId)).toEqual(
 			expect.arrayContaining([
 				"core:task/turn-round-robin@1",
@@ -273,7 +273,7 @@ describe("the swap list (19 §5, U-C4)", () => {
 			slots: {},
 			i18n: { name: { en: "By seniority" } }
 		} as any)
-		const strategies = await listSpeakerStrategies(db as any)
+		const strategies = await listSpeakerStrategies(db)
 		expect(
 			strategies.find(
 				(s) => s.typeId === "chariot.council:task/turn-seniority@1"
@@ -284,7 +284,7 @@ describe("the swap list (19 §5, U-C4)", () => {
 
 describe("the trigger set (19 §4, U-C5)", () => {
 	it("the narrate button is a row: contributed by the narrate spec, for the standard mode", async () => {
-		const triggers = await listGenreTriggers(db as any, STANDARD_GENRE_ID)
+		const triggers = await listGenreTriggers(db, STANDARD_GENRE_ID)
 		// The narrate row specifically, not the whole set: any core spec that
 		// contributes a button lands here too, and this test is about narrate's
 		// row being a ROW — whole-list equality would make every new spec a
@@ -312,7 +312,7 @@ describe("the trigger set (19 §4, U-C5)", () => {
 		//
 		// This is also the image feature's entry point — if this row is missing
 		// there is no way for a person to reach any of it.
-		const triggers = await listGenreTriggers(db as any, STANDARD_GENRE_ID)
+		const triggers = await listGenreTriggers(db, STANDARD_GENRE_ID)
 		expect(triggers.find((t) => t.function === "generate-image")).toEqual({
 			function: "generate-image",
 			kind: "button",
@@ -335,12 +335,12 @@ describe("the trigger set (19 §4, U-C5)", () => {
 			.set({ activeVersionId: null })
 			.where(eq(schema.pipelineSpecs.id, spec.id))
 		try {
-			const gone = await listGenreTriggers(db as any, STANDARD_GENRE_ID)
+			const gone = await listGenreTriggers(db, STANDARD_GENRE_ID)
 			expect(gone.find((t) => t.function === "narrate")).toBeUndefined()
 			// And routing agrees in the same breath: the same rows feed both.
 			expect(
 				await resolveFunctionSpec(
-					db as any,
+					db,
 					STANDARD_GENRE_ID,
 					"narrate"
 				)
@@ -404,7 +404,7 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 
 		// A cross-type swap refuses, however well the cast would fit.
 		const swap = await upgradeSessionGenre(
-			db as any,
+			db,
 			session.id,
 			STANDARD_GENRE_ID
 		)
@@ -413,19 +413,19 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 		// The upgrade along the same type passes, and the field values ride.
 		expect(
 			await upgradeSessionGenre(
-				db as any,
+				db,
 				session.id,
 				"chariot.dungeon:input/crawl@2"
 			)
 		).toEqual({})
-		expect(await genreFieldsFor(db as any, session.id)).toEqual({
+		expect(await genreFieldsFor(db, session.id)).toEqual({
 			difficulty: "hard",
 			torchCount: 3
 		})
 
 		// Versions move one way.
 		const down = await upgradeSessionGenre(
-			db as any,
+			db,
 			session.id,
 			"chariot.dungeon:input/crawl@1"
 		)
@@ -443,7 +443,7 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 			sessionShape: { personas: { min: 0, max: 0 } }
 		} as any)
 		const tightened = await upgradeSessionGenre(
-			db as any,
+			db,
 			session.id,
 			"chariot.dungeon:input/crawl@3"
 		)
@@ -466,7 +466,7 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 				genreId: "chariot.gone:input/vanished@1"
 			} as any)
 			.returning()
-		const check = await sessionGenreAvailable(db as any, orphan.id)
+		const check = await sessionGenreAvailable(db, orphan.id)
 		expect(check.available).toBe(false)
 		expect(check.reason).toContain("read-only")
 		expect(check.reason).toContain("chariot.gone:input/vanished@1")
@@ -481,7 +481,7 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 			} as any)
 			.returning()
 		expect(
-			(await sessionGenreAvailable(db as any, crawler.id)).available
+			(await sessionGenreAvailable(db, crawler.id)).available
 		).toBe(true)
 
 		// The standard mode is the F29 floor — available by definition.
@@ -490,7 +490,7 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 			.values({ userId: user.id, isGroup: false })
 			.returning()
 		expect(
-			(await sessionGenreAvailable(db as any, standard.id)).available
+			(await sessionGenreAvailable(db, standard.id)).available
 		).toBe(true)
 	})
 })
@@ -525,7 +525,7 @@ describe("session actions resolve through session, preset, then default", () => 
 	const narrate = async () =>
 		(
 			await listSessionFunctions(
-				db as any,
+				db,
 				sessionId,
 				STANDARD_GENRE_ID,
 				userId
@@ -534,7 +534,7 @@ describe("session actions resolve through session, preset, then default", () => 
 
 	it("offers the mode's contributed actions, and not respond", async () => {
 		const all = await listSessionFunctions(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			userId
@@ -557,7 +557,7 @@ describe("session actions resolve through session, preset, then default", () => 
 
 	it("a session row overrides the default, and says it did", async () => {
 		const r = await setSessionFunction(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			"narrate",
@@ -573,7 +573,7 @@ describe("session actions resolve through session, preset, then default", () => 
 
 		// And it is gone from what the view renders and what may fire.
 		const live = await enabledSessionFunctions(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			userId
@@ -583,7 +583,7 @@ describe("session actions resolve through session, preset, then default", () => 
 
 	it("returning it to the default deletes the row rather than storing it", async () => {
 		await setSessionFunction(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			"narrate",
@@ -605,7 +605,7 @@ describe("session actions resolve through session, preset, then default", () => 
 
 	it("refuses an action the mode was never offered, by name", async () => {
 		const r = await setSessionFunction(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			"teleport",
@@ -618,7 +618,7 @@ describe("session actions resolve through session, preset, then default", () => 
 
 	it("refuses a mode the session is not in", async () => {
 		const r = await setSessionFunction(
-			db as any,
+			db,
 			sessionId,
 			"core:input/other@1",
 			"narrate",
@@ -675,14 +675,14 @@ describe("a preset decides what a session includes", () => {
 	}, 30_000)
 
 	it("excluding an action turns it off for sessions on that preset", async () => {
-		const set = await setPresetActions(db as any, configId, {
+		const set = await setPresetActions(db, configId, {
 			includedActions: []
 		})
 		expect(set.ok).toBe(true)
 
 		const n = (
 			await listSessionFunctions(
-				db as any,
+				db,
 				sessionId,
 				STANDARD_GENRE_ID,
 				userId
@@ -695,7 +695,7 @@ describe("a preset decides what a session includes", () => {
 
 	it("a non-admin may not switch on what the preset left out", async () => {
 		const r = await setSessionFunction(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			"narrate",
@@ -708,7 +708,7 @@ describe("a preset decides what a session includes", () => {
 
 	it("an admin may, and it lands on that session alone", async () => {
 		const r = await setSessionFunction(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			"narrate",
@@ -719,7 +719,7 @@ describe("a preset decides what a session includes", () => {
 
 		const n = (
 			await listSessionFunctions(
-				db as any,
+				db,
 				sessionId,
 				STANDARD_GENRE_ID,
 				userId
@@ -741,7 +741,7 @@ describe("a preset decides what a session includes", () => {
 		// Only turning *on* is gated. Refusing someone the ability to give up
 		// something they already have would be a rule with nobody to protect.
 		const r = await setSessionFunction(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			"narrate",
@@ -752,7 +752,7 @@ describe("a preset decides what a session includes", () => {
 	})
 
 	it("refuses to include an action the pipeline's mode never offered", async () => {
-		const r = await setPresetActions(db as any, configId, {
+		const r = await setPresetActions(db, configId, {
 			includedActions: ["teleport"]
 		})
 		expect(r.ok).toBe(false)
@@ -765,7 +765,7 @@ describe("a preset decides what a session includes", () => {
 			.from(schema.pipelineConfigs)
 			.where(eq(schema.pipelineConfigs.isImmutable, true))
 			.limit(1)
-		const r = await setPresetActions(db as any, shipped.id, {
+		const r = await setPresetActions(db, shipped.id, {
 			includedActions: []
 		})
 		expect(r.ok).toBe(false)
@@ -815,7 +815,7 @@ describe("a session runs on a preset", () => {
 
 	it("offers the serving pipeline's presets, and says which is on", async () => {
 		const r = await listSessionPresets(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			{
@@ -832,7 +832,7 @@ describe("a session runs on a preset", () => {
 
 	it("choosing one writes a session-scope selection", async () => {
 		const set = await chooseSessionPreset(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			extraId,
@@ -841,7 +841,7 @@ describe("a session runs on a preset", () => {
 		expect(set.ok).toBe(true)
 
 		const r = await listSessionPresets(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			{
@@ -871,7 +871,7 @@ describe("a session runs on a preset", () => {
 			.where(eq(schema.pipelineConfigs.id, extraId))
 
 		const asUser = await listSessionPresets(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			{ userId, isAdmin: false }
@@ -881,7 +881,7 @@ describe("a session runs on a preset", () => {
 		// An admin still sees it, marked. One they just switched off vanishing
 		// entirely would read as deleted.
 		const asAdmin = await listSessionPresets(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			{ userId, isAdmin: true }
@@ -892,7 +892,7 @@ describe("a session runs on a preset", () => {
 
 	it("refuses a disabled preset at the write, not only in the list", async () => {
 		const denied = await chooseSessionPreset(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			extraId,
@@ -902,7 +902,7 @@ describe("a session runs on a preset", () => {
 		expect(denied.error).toMatch(/not available to choose/)
 
 		const allowed = await chooseSessionPreset(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			extraId,
@@ -923,7 +923,7 @@ describe("a session runs on a preset", () => {
 			.returning()
 
 		const r = await chooseSessionPreset(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			foreign.id,
@@ -941,7 +941,7 @@ describe("a session runs on a preset", () => {
 			.set({ includedActions: [] })
 			.where(eq(schema.pipelineConfigs.id, extraId))
 		await chooseSessionPreset(
-			db as any,
+			db,
 			sessionId,
 			STANDARD_GENRE_ID,
 			extraId,
@@ -953,7 +953,7 @@ describe("a session runs on a preset", () => {
 
 		const n = (
 			await listSessionFunctions(
-				db as any,
+				db,
 				sessionId,
 				STANDARD_GENRE_ID,
 				userId
@@ -982,7 +982,7 @@ describe("a session runs on a preset", () => {
 describe("the respond bucket is read *and* write", () => {
 	it("resolves the standard mode to the reply pipeline", async () => {
 		const slug = await resolveFunctionSpec(
-			db as any,
+			db,
 			STANDARD_GENRE_ID,
 			"respond"
 		)
@@ -1033,7 +1033,7 @@ describe("the respond bucket is read *and* write", () => {
 		})
 		try {
 			const slug = await resolveFunctionSpec(
-				db as any,
+				db,
 				STANDARD_GENRE_ID,
 				"respond"
 			)
@@ -1056,7 +1056,7 @@ describe("the respond bucket is read *and* write", () => {
 			.returning()
 
 		const pipeline = await sessionPipeline(
-			db as any,
+			db,
 			c.id,
 			STANDARD_GENRE_ID,
 			u.id

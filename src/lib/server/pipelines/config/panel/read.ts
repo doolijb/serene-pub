@@ -35,7 +35,6 @@ import {
 import {
 	type ConfigOption,
 	type ConfigStep,
-	type Db,
 	type NamespaceSummary,
 	type NamespaceView,
 	type OptionSource,
@@ -638,9 +637,9 @@ export async function namespaceView(
 			const { genreOfSpec, listGenreTriggers } = await import(
 				"$lib/server/pipelines/entities/sessionGenres"
 			)
-			const genreId = await genreOfSpec(db as any, at.slug)
+			const genreId = await genreOfSpec(db, at.slug)
 			if (!genreId) return []
-			return (await listGenreTriggers(db as any, genreId)).map((t) => ({
+			return (await listGenreTriggers(db, genreId)).map((t) => ({
 				function: t.function,
 				name: t.name,
 				specSlug: t.specSlug,

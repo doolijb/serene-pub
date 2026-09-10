@@ -92,14 +92,36 @@ export function processMessages(
 			// processor's own priority filter would be a second, invisible one.
 			priority: 0
 		})
-		if (one) processed.push(one)
+		// Trimmed at compile as well as at save (ruling 2026-09-08). The two
+		// guards cover different holes: the store cannot trim a mid-stream
+		// partial — the frames split anywhere — and every row written before
+		// the ruling is already stored padded. The template renders
+		// `{{{name}}}: {{{message}}}` per line, so edge whitespace here is a
+		// gap after the colon or a blank line before the next speaker.
+		if (one)
+			processed.push(
+				typeof one.message === "string"
+					? { ...one, message: one.message.trim() }
+					: one
+			)
 	}
 
 	processed.push({
 		id: SEED_MESSAGE_ID,
 		role: "assistant",
 		name: input.seedName || input.charName,
-		message: input.continuationPrefill ?? ""
+		/**
+		 * ⚠ The seed's trim is load-bearing, not tidiness.
+		 *
+		 * This is the one block in the whole prompt rendered *open* on the
+		 * completion path — `contextHandlebarsHelpers.ts` keys `includeClose:
+		 * false` on the `-2` id — so the prompt ends with this text and nothing
+		 * after it. A trailing space on the partial therefore lands *inside*
+		 * the open assistant block, which is exactly the mid-word continue
+		 * (`"the sto"` + `"re."`) that cannot be detected downstream; and the
+		 * Anthropic path rejects a prefill ending in whitespace outright.
+		 */
+		message: (input.continuationPrefill ?? "").trim()
 	})
 
 	return {

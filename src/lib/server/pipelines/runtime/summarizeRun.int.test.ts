@@ -48,6 +48,12 @@ const NO_PAYLOAD: CompiledPrompt = {
 
 /** Pinned to the real action, so a rename cannot pass here — fakeTextAdapter.ts. */
 class FakeStepAdapter implements FakeTextAdapter {
+	/** The composed stop list, handed over at construction. */
+	stops: any
+	withStops(s: any) {
+		this.stops = s
+		return this
+	}
 	private system: string
 	private user: string
 	constructor(p: any) {
@@ -88,7 +94,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -144,7 +150,7 @@ beforeAll(async () => {
 	const { setCapabilityDefault } = await import(
 		"$lib/server/connections/capabilityDefaults"
 	)
-	await setCapabilityDefault(db as any, "text->text", {
+	await setCapabilityDefault(db, "text->text", {
 		connectionId: connection.id,
 		samplingConfigId: sampling.id
 	})
@@ -228,11 +234,11 @@ describe("a summarize run, stopped at the write", () => {
 		const { SUMMARIZE_WORLD_SPEC_ID } = await import(
 			"$lib/server/pipelines/specs/summarize"
 		)
-		const shout = await createScript(db as any, {
+		const shout = await createScript(db, {
 			typeId: "core:script:text/transform@1",
 			name: "Draft shouter"
 		})
-		await updateScript(db as any, shout.id, {
+		await updateScript(db, shout.id, {
 			source: "return text.toUpperCase()"
 		})
 		const [spec] = await db
@@ -255,17 +261,17 @@ describe("a summarize run, stopped at the write", () => {
 			const { resolveSelectedConfig, duplicateConfig, selectConfig } =
 				await import("$lib/server/pipelines/config/named")
 			const shipped = await resolveSelectedConfig(
-				db as any,
+				db,
 				spec.id,
 				spec.slug,
 				{}
 			)
 			const copy = await duplicateConfig(
-				db as any,
+				db,
 				shipped!.configId,
 				"Chain host"
 			)
-			await selectConfig(db as any, spec.id, "instance", 0, copy.id)
+			await selectConfig(db, spec.id, "instance", 0, copy.id)
 			await db.insert(schema.pipelineConfigValues).values({
 				configId: copy.id,
 				nodeKey: batchNode.nodeKey,

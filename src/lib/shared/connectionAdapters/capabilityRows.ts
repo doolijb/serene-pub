@@ -12,12 +12,19 @@
  * ## Nothing here predicts a resolution
  *
  * `resolved` arrives from the server and is shown as given. This module never
- * calls `resolveCapabilities` or `closure`, both of which are importable from
- * client code and would be a one-line temptation: a second implementation of the
- * four layers is precisely the divergence the server-owned column exists to
- * prevent — the screen would say one thing and the run would do another.
- * `IMPLIES` and `EMULATABLE_VIA` ARE read below, but only ever to EXPLAIN an
- * answer that already came back, never to compute one.
+ * writes a second implementation of the four layers — that is precisely the
+ * divergence the server-owned column exists to prevent, the screen saying one
+ * thing while the run does another. `IMPLIES` and `EMULATABLE_VIA` ARE read
+ * below, but only ever to EXPLAIN an answer that already came back, never to
+ * compute one.
+ *
+ * The one exception is `effectiveCapabilities` below, and it is narrow on
+ * purpose: for a key the cache does NOT name, there is no server answer to show,
+ * so it resolves that key through the SDK's own `resolveCapabilities` — the same
+ * function `connections/resolve.ts` calls, over the same four layers, off the
+ * same row. Not a second implementation: the same one, reached for the keys the
+ * cache is silent about. See its own note for why that is the honest reading of
+ * silence and what it costs.
  *
  * ## Three states, and the middle one is the default
  *
@@ -51,22 +58,29 @@ import {
 	gradeLetter,
 	isBasicCapability,
 	isTransformId,
+	resolveCapabilities,
 	topGrade,
 	EMULATABLE_VIA,
 	FEATURES,
 	IMPLIES,
 	TRANSFORMS,
+	WIRE_CAPABILITY,
+	WIRE_MODE_ORDER,
+	type AdapterCapabilities,
 	type Band,
 	type CapabilityId,
 	type CapabilityOverrides,
 	type CapabilitySet,
 	type Declared,
 	type FeatureId,
-	type Grade
+	type Grade,
+	type PresetCapabilities
 } from "@serene-pub/sdk"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 import { presetLabel } from "$lib/shared/utils/connectionDefaults"
 import { adapterCapabilities, PRESET_CAPABILITIES } from "./manifest"
+import { wireModeFor, type WireMode } from "./wireMode"
+import { CONTINUE_REPLY, continueWireModes } from "./continueReply"
 
 /** Where the radio group sits. `auto` is an absent key, not a written value. */
 export type OverrideState = "auto" | "on" | "off"
@@ -207,6 +221,16 @@ export interface CapabilityRowsView {
 	probedAt?: string
 	/** "Never tested" / "Last tested 3d ago" — the panel's honesty line. */
 	testedText: string
+	/**
+	 * Which METHOD this connection is actually called by.
+	 *
+	 * Absent when the type declares no wire mode at all — an A1111 connection is
+	 * not "sent as chat messages", and saying so would be a fresh untruth in the
+	 * panel that exists to remove them.
+	 */
+	wireMode?: WireMode
+	/** The one-line answer to "which of these two switches is in effect?". */
+	wireModeText?: string
 	/** Names the disclosure can put in its summary, so it says what is on. */
 	featuresOnLabels: string[]
 }
@@ -296,12 +320,88 @@ function stateOf(
 	return { state: overrides![id] === false ? "off" : "on", stated: true }
 }
 
+/**
+ * The stored cache, plus a live answer for every key the manifest declares that
+ * the cache does not name.
+ *
+ * ## The silence this reads, and why it is not "off"
+ *
+ * `capabilities.resolved` is a cache, and a cache written by an older build
+ * cannot name a capability that build had never heard of. `continue_reply` is
+ * exactly that: it landed after every existing row's column was written, so the
+ * cache on an upgrading install names neither an on nor an off for it, and
+ * reading absence as off made every row on every install read Off — with the
+ * provenance line underneath it still saying "On by default for this connection
+ * type", because provenance comes from the LAYERS and only the grade came from
+ * the cache. A row that contradicts itself is the failure this panel exists to
+ * remove, and it would have stood until each connection happened to be tested or
+ * saved again. Every server-side answer already resolves live from the row for
+ * this reason — `resolveWireMode` and `resolveContinueRefusal` both say so at
+ * length — so the panel reading the cache was also the one reader disagreeing
+ * with the run.
+ *
+ * ## What it fills, and with what
+ *
+ * Keys the cache NAMES are shown exactly as given: this never re-resolves an
+ * answer the server already has, so a stale grade stays visible rather than
+ * being quietly corrected out from under the person looking at it. Only the
+ * silence is filled, and only for keys `adapter.supports` declares — the row
+ * space, so nothing appears that could not have had a row anyway.
+ *
+ * The fill is `resolveCapabilities` over the row's own four layers, which is the
+ * same function and the same layers `resolveConnectionCapabilities` uses on the
+ * server. So what it shows for an unnamed key is precisely what the column would
+ * hold if it were rewritten right now: a stored override still wins (layer 4
+ * reads the same `overrides`), the last probe still speaks (layer 3 reads the
+ * same stored `probe.found`), and an absence that really did mean "resolved to
+ * 0" resolves to 0 again and stays absent. Nothing is written back — see
+ * `persistCapabilities`, which is the column's only writer; refreshing the cache
+ * belongs to a write path, not to the render.
+ *
+ * ⚠ It does NOT reach the bind guard, which reads the same cache through
+ * `pipelines/runtime/capabilityGuard.ts`. Two reasons, and the first is
+ * structural: that function is handed `{type, capabilities}` and no preset, so
+ * it cannot resolve these four layers even if it wanted to. The second is that
+ * it GRANTS rather than displays — changing what it reads changes which
+ * connections may run. The visible cost is a newly declared TRANSFORM, which
+ * would read on here and still be refused at bind until something rewrites the
+ * column; the cure for that is persistence from a write path, not a second live
+ * read in the guard.
+ */
+function effectiveCapabilities(
+	adapter: AdapterCapabilities,
+	preset: PresetCapabilities | undefined,
+	stored: NonNullable<CapabilityRowsInput["capabilities"]>
+): CapabilitySet {
+	const cached = stored.resolved ?? {}
+	const unnamed = (Object.keys(adapter.supports) as CapabilityId[]).filter(
+		(id) => adapter.supports[id] !== undefined && cached[id] === undefined
+	)
+	// The ordinary case on a current install: the cache names everything the
+	// manifest declares, and this costs one pass over the key space and nothing
+	// else. Returning `cached` itself rather than a copy is deliberate — the
+	// answer is the stored one, unaltered.
+	if (!unnamed.length) return cached
+	const live = resolveCapabilities({
+		adapter,
+		preset,
+		probe: stored.probe?.found,
+		overrides: stored.overrides
+	})
+	const out: CapabilitySet = { ...cached }
+	// Key by key, and only the unnamed ones. Merging `live` wholesale would
+	// overwrite the cache with a prediction — including keys `closure()` grows
+	// that the manifest never declared — which is the divergence the module
+	// header forbids.
+	for (const id of unnamed) if (live[id] !== undefined) out[id] = live[id]!
+	return out
+}
+
 export function buildCapabilityRows(
 	input: CapabilityRowsInput
 ): CapabilityRowsView {
 	const adapter = input.type ? adapterCapabilities(input.type) : undefined
 	const stored = input.capabilities ?? {}
-	const resolved = stored.resolved ?? {}
 	const overrides = stored.overrides
 	const probeFound = stored.probe?.found
 	const probedAt = stored.probe?.at
@@ -328,12 +428,57 @@ export function buildCapabilityRows(
 		? PRESET_CAPABILITIES[input.preset]
 		: undefined
 	const defaults = new Set<string>(adapter.defaults ?? [])
+	// The cache, with the manifest's newer keys resolved rather than read as
+	// off. Below this line `resolved` is the panel's one answer — the wire mode
+	// sentence, every row's grade and `leversFor` all read it.
+	const resolved = effectiveCapabilities(adapter, presetCaps, stored)
+
+	/**
+	 * Which wire mode is IN EFFECT — computed before the rows, because one of
+	 * them depends on it.
+	 *
+	 * See the long note further down for why this is `wireModeFor` and never a
+	 * tie-break of this file's own. It is read twice now: once for the panel's
+	 * own sentence, and once by the `continue_reply` row, whose effective answer
+	 * is the capability AND the wire together.
+	 */
+	const declaresWire = WIRE_MODE_ORDER.some(
+		(m) => adapter.supports[WIRE_CAPABILITY[m]] !== undefined
+	)
+	const wireMode = declaresWire
+		? wireModeFor(input.type, resolved)
+		: undefined
+	const modeName = (m: WireMode) => capabilityLabel(WIRE_CAPABILITY[m])
+
+	/**
+	 * The wire modes that carry a continuation, when this row's answer needs
+	 * qualifying — empty for every capability but one.
+	 *
+	 * ⚠ Applying it here is an OBSERVATION about an answer that already came
+	 * back, not a re-derivation of it: the grade the four layers resolved is read
+	 * as given, and this only says whether the request it would ride on can carry
+	 * it. The same function the verb and the adapter read, so the panel cannot
+	 * promise a Continue button the server refuses — which was the whole failure
+	 * mode, since `continue_reply` is ON by default for every OpenAI-compatible
+	 * connection and chat wire cannot prefill.
+	 */
+	const continueWires = continueWireModes(input.type)
 
 	const row = (id: CapabilityId): CapabilityRow => {
 		const declared = adapter.supports[id]!
 		const { state, stated } = stateOf(overrides, id)
 		const top = topGrade(id)
-		const grade = resolved[id] ?? 0
+		// The wire this connection is actually sent on cannot carry a
+		// continuation, so whatever the layers resolved has no effect. Zeroed
+		// rather than annotated: a row reading "On" beside a Continue button the
+		// server refuses is the screen-says-one-thing failure this panel exists
+		// to remove, and `wireBlocked` below is what says so in words.
+		const wireBlocked =
+			id === CONTINUE_REPLY &&
+			(resolved[id] ?? 0) > 0 &&
+			!!wireMode &&
+			!continueWires.includes(wireMode)
+		const grade = wireBlocked ? 0 : (resolved[id] ?? 0)
 		const on = grade > 0
 
 		// The four layers, read backwards: whoever spoke LAST is who decided.
@@ -388,8 +533,13 @@ export function buildCapabilityRows(
 		// Serene Pub is the one supplying this, and a capability with no such band
 		// has nothing to say here however many grades it grows.
 		const emulated = bandOf(id, grade) === BAND.emulated
-		const derived =
-			contested && state === "off"
+		const derived = wireBlocked
+			? // Named rather than counted, and both modes in the sentence: "change
+				// the wire mode" without saying which one is a hunt through a
+				// panel that has two switches for it.
+				`Sent as ${modeName(wireMode!)}, so this has no effect: a reply can only be continued ` +
+				`when this connection is sent as ${continueWires.map(modeName).join(" or ")}.`
+			: contested && state === "off"
 				? viaNames
 					? `Still on: Serene Pub supplies it through ${viaNames}. Switching that off is what removes it.`
 					: "Still on: something else on this connection supplies it."
@@ -434,6 +584,50 @@ export function buildCapabilityRows(
 		FEATURES as unknown as string[]
 	).map(row)
 
+	/**
+	 * Which wire mode is IN EFFECT, said out loud.
+	 *
+	 * Both switches can read "On" at once — that is the ordinary case for every
+	 * OpenAI-compatible type, whose defaults list both — and a documented
+	 * tie-break then picks one. Until this line, nothing on the panel said which:
+	 * two live controls with one silent outcome, which is the "no control without
+	 * an effect" failure approached from the other side.
+	 *
+	 * ⚠ `wireModeFor` and no tie-break of its own. That is the same function the
+	 * server's `resolveWireMode` calls and the same one `connectionWireMode`
+	 * calls for the completion-template picker, and the order it reads lives in
+	 * the SDK's `WIRE_MODE_ORDER`. A second spelling of the rule here is exactly
+	 * how the screen and the run come to disagree — the module header's standing
+	 * warning, and it applies to this answer as much as to the four layers.
+	 * Counting how many modes came back ON is an OBSERVATION about the answer,
+	 * not a re-derivation of it, the same way `leversFor` reads `IMPLIES`.
+	 *
+	 * `wireMode` itself is resolved above the rows, because the `continue_reply`
+	 * row reads it too — one answer, not two.
+	 */
+	const modesOn = WIRE_MODE_ORDER.filter(
+		(m) => (resolved[WIRE_CAPABILITY[m]] ?? 0) > 0
+	)
+	const otherOn = modesOn.filter((m) => m !== wireMode)
+	const wireModeText = !wireMode
+		? undefined
+		: !modesOn.length
+			? // Neither key resolved: both switched off by hand, or a type that
+				// declares a wire mode without defaulting it. (A column written
+				// by a build that predated these keys used to land here too, and
+				// no longer does — `effectiveCapabilities` resolves a declared
+				// key the cache does not name, so that column now has a real
+				// answer instead of a fallback.) `wireModeFor` answers from the
+				// type's own declaration, which is a fallback and not a fact.
+				`No wire mode is on, so this falls back to what the connection type declares: sent as ${modeName(wireMode)}.`
+			: otherOn.length
+				? // Named rather than counted ("both"), and the winner repeated
+					// rather than pronouned: the sentence has two mode names in it
+					// and an "it" or a "that" lands on the wrong one, which would
+					// tell somebody to switch off precisely the mode they want.
+					`${joinWithAnd(modesOn.map(modeName))} are on, so the tie-break decides: sent as ${modeName(wireMode)}. Switch ${modeName(wireMode)} off to send ${joinWithAnd(otherOn.map((m) => modeName(m).toLowerCase()))} instead.`
+				: `Sent as ${modeName(wireMode)} — the only wire mode on.`
+
 	return {
 		declared: true,
 		transforms,
@@ -441,6 +635,8 @@ export function buildCapabilityRows(
 		tested,
 		probedAt,
 		testedText,
+		...(wireMode ? { wireMode } : {}),
+		...(wireModeText ? { wireModeText } : {}),
 		featuresOnLabels: features.filter((f) => f.on).map((f) => f.label)
 	}
 }

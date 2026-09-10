@@ -273,13 +273,25 @@ every mechanism runs and contributes additively).
 | **connection** | A configured way to reach a model. |
 | **service** | The vendor: Ollama, OpenAI, KoboldCpp. *(never "provider")* |
 | **adapter** | The code that speaks a service's protocol. |
+| **local model** | A model **file this install owns**, on disk — one row in `local_models`. Not a connection and not a service: a connection may *point at* one by bare filename. Vendor-neutral by construction, because `.gguf` is not KoboldCPP's — llama.cpp opens the same bytes — so no row names an engine; which engines can load one is **derived** from format and modality. |
+| **model format** | The **container**: `gguf` · `onnx` · `safetensors`. A property of the bytes, read off the file, so it carries no provenance. ⚠ Says nothing about what the model is *for* — the curated image models are every one of them `.gguf`. |
+| **modality** | What a model is **for**: `text-gen` · `embeddings` · `image-gen` · `ner` · `tts` · … An open vocabulary whose contract is the SDK's connection *shapes*. One word across `connections.modality` and `local_models.modality` — a connection binds a local model of its own modality. ⚠ **Not detectable from a file**, which is the half `kind_source`'s trust ordering grades. |
 | **capability** | What a connection can do: `text->text`, tools, streaming. |
 | **capability grade** | How well it does it. The grades are `none` · `emulated` · `native`, exported by the SDK as `Band` / `BAND` / `bandOf` / `bandsFor` — ⚠ **nothing to do with a retrieval band** (§7). |
 | **sampling preset** | Temperature, penalties, context window. |
-| **prompt format** | How blocks become wire text: Vicuna, ChatML, split-chat. |
+| **wire mode** | Which *method* a service is called by for the same capability: **chat** (role-tagged messages) or **completion** (one text prompt). A connection capability like any other, resolved preset → test → hand-set override (ruled 2026-09-07). Never "chat format" — that collides with prompt format below. |
+| **prompt format** | How blocks become wire text: Vicuna, ChatML, split-chat. ⚠ Meaningful **only in completion wire mode**; in chat mode the roles carry the structure and this must not be offered. The *value* on a connection; the row it names is a **completion template**. |
+| **completion template** | One row in `completion_templates` — per-role prefix/suffix, stop strings, and a render mode. **Data, never code**: a template that can compute is a template that can be made to do something other than format. Built-ins seed immutable; a variant is a **clone**. `connections.prompt_format` is an FK to its `key`. |
+| **render mode** | `flat` (one completion string) or `role_array` (role-tagged messages). An **explicit column**, because it used to be decided by `/split/i` against the format *name* — so any admin-authored name containing "split" would have silently rerouted the pipeline. ⚠ `role_array` is `split_session` only and is **not admin-authorable**; admin templates are flat, which is what keeps them outside the injection surface. |
 
 **Resolved collisions**
 
+- ⚠ **`wire mode` vs `prompt format`.** Both answer "what shape goes on the wire", and
+  conflating them is what let a live defect hide: adapters derived wire mode from their own
+  local flags while the pipeline rendered a prompt format nothing carried. **Wire mode is the
+  *method*** (chat or completion, a property of the connection); **prompt format is the
+  *delimiters*** inside a completion's single prompt string. Chat mode has no prompt format —
+  not a default one, none. Say *wire mode* for the first and never "chat format" for either.
 - ⚠ **`capability`** → *connection* capabilities. A plugin's is a **permission**. The
   manifest itself was never the obstacle it was feared to be: it has always spelled the
   field `permissions`, so the rename reached the code without touching the public
@@ -384,7 +396,7 @@ verified: zeroing every lore signal weight leaves all gate fixtures byte-identic
 
 ### Generic — any service
 
-A context template is **not** LLM-specific. It is the root artifact for a service call, and a
+A context template is **not** LLM-specific. It is the root input of a service call, and a
 service may be anything the app can talk to. A ComfyUI workflow saved as a context template,
 rendered and shipped to a ComfyUI API, is the same shape of thing as a prompt document shipped
 to a chat model. **Do not define these terms in terms of prompts.**
@@ -397,7 +409,8 @@ to a chat model. **Do not define these terms in terms of prompts.**
 | **template variable** | A named slot a template renders: `worldLore`, `characters`, `history`. |
 | **variable template** | A declared *renderer* for one variable (`core:var/world-lore@1`). ⚠ Not the same thing as a context template. |
 | **allocation** | What selection hands to rendering: a **decision** plus its rendered text and reason, ready to be placed. *(was: "context block" — it is not a block)* |
-| **compiled payload** | The finished artifact handed to an adapter. |
+| **artifact (of a run)** | A row a pipeline run produced — a message, file, variant or lore entry — recorded in `pipeline_run_artifacts`. Evidence of the run; it carries no FK to the thing itself. |
+| **compiled payload** | The finished request handed to an adapter. |
 
 ### Chat-shaped services only
 
@@ -600,7 +613,28 @@ Recording *why* a word died is what stops it being reinvented.
 **mechanism** · `role` (entries) → **field role**, in prose · `grant` (models) →
 **lease** · `lane` (specs, retrieval) → **gather branch** / **mechanism** ·
 `runtime` (plugins) → **sandbox** · `capability` (plugins) → **permission** ·
-`ContextBlock` → **`Allocation`**, with assemble's `blocks` out-port → **`allocations`**.
+`ContextBlock` → **`Allocation`**, with assemble's `blocks` out-port → **`allocations`** ·
+`koboldcpp_models` (table) → **`local_models`**, with `koboldCppModels` →
+**`localModels`** and `Select`/`InsertKoboldCppModel` → **`…LocalModel`**.
+
+⚠ **The vendor name was the only vendor-specific thing about that table.** It
+already had what a registry needs — `filename` unique, provenance, a download
+`status`, and a trust ordering on what it claims — and embedding and NER models
+need exactly that. One concept, one table, one scan protocol. It gained `format`
+and `modality`; it deliberately did **not** gain an `engine`, because a `.gguf`
+is not KoboldCPP's and a stored engine would go stale the day a backend is added
+(`enginesFor` derives it instead).
+
+⚠ **`kind` was kept, not collapsed into `modality`**, and the two are not
+synonyms. **`kind`** (`text` · `image` · `unknown`) is a *loader lane* — which of
+koboldcpp's two directories opens the file, which is what a GGUF header read can
+actually answer. **`modality`** is the *role*, in the vocabulary above.
+Collapsing them would make that header read record `text-gen` at `detected` —
+the top of the automatic trust order — for a BERT `.gguf`, whose architecture is
+a language model and whose modality is `embeddings`. That is manufacturing a
+measurement, so instead **one function projects one onto the other**
+(`modalityForKind`) and every write site goes through it, which is what stops
+two columns that mean different things from coming to disagree.
 
 ⚠ **What the *allocation* pass could not reach, and why.** The type renamed; two
 fields did not, and neither is a rename this pass was free to make:

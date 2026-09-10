@@ -15,8 +15,6 @@ import * as schema from "$lib/server/db/schema"
 import { runSpec } from "$lib/server/pipelines/runtime/runTurn"
 import type { Receipt } from "@serene-pub/sdk"
 
-type Db = any
-
 /** The spec whose active published version answers (genre, event), or null. */
 export async function resolveSessionEventSpec(
 	db: Db,

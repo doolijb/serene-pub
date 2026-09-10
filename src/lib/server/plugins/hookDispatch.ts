@@ -36,8 +36,6 @@ import type {
 } from "$lib/server/pipelines/scripts/pluginDispatch"
 import type { ScriptRunResult } from "$lib/server/pipelines/scripts/host"
 
-type Db = { select: any }
-
 /** What the port needs from an installed plugin, resolved once per owner. */
 interface OwnerResolution {
 	/** The sandbox address — `namespace/name`. */

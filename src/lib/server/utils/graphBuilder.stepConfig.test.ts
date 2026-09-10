@@ -24,6 +24,12 @@ vi.mock("./runQueuedLLMCall", () => ({
 vi.mock("./getConnectionAdapter", () => ({
 	getConnectionAdapter: async () => ({
 		Adapter: class {
+			/** The composed stop list, handed over at construction. */
+			stops: any
+			withStops(s: any) {
+				this.stops = s
+				return this
+			}
 			responseFormat = "text"
 			responseSchema: unknown
 			opts: any

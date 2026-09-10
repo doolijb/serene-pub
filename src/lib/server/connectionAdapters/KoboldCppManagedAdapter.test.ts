@@ -324,7 +324,8 @@ describe("KoboldCppManagedAdapter.generateText() — TTL reset after completion"
 		const adapter = makeAdapter({
 			connection: makeConnection({
 				baseUrl: "http://localhost:5001",
-				extraJson: { stream: false, useSession: true }
+				wireMode: "chat",
+				extraJson: { stream: false }
 			})
 		})
 		adapter.withCompiledPrompt({

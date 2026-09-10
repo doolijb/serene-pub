@@ -20,6 +20,18 @@
  *
  * So every write goes through `persistCapabilities`, which rebuilds the cache
  * from whichever durable halves it was given and keeps the rest.
+ *
+ * ⚠ And a cache written by an OLDER BUILD cannot name a capability that build
+ * had never heard of, which is a different staleness from the one the bind
+ * guard's intersection handles and needs the opposite move. The two readers that
+ * matter both make it now: everything in this file resolves LIVE from the row
+ * (see `resolveWireMode` and `resolveContinueRefusal` below), and the capability
+ * panel's row model resolves the keys its cache does not name through this same
+ * `resolveCapabilities` over these same four layers — `capabilityRows`'
+ * `effectiveCapabilities`, which is a READ and writes nothing back. Refreshing
+ * the stored cache is a write path's job and no write path does it on load
+ * today, so an upgrading install's column keeps predating the key until a test
+ * or an edit rewrites it.
  */
 
 import { eq } from "drizzle-orm"
@@ -38,6 +50,9 @@ import {
 	adapterCapabilities,
 	PRESET_CAPABILITIES
 } from "$lib/shared/connectionAdapters/manifest"
+import { wireModeFor } from "$lib/shared/connectionAdapters/wireMode"
+import { continueRefusal } from "$lib/shared/connectionAdapters/continueReply"
+import type { WireMode } from "@serene-pub/sdk"
 
 /** What `connections.capabilities` holds (0175). */
 export type StoredCapabilities = {
@@ -73,7 +88,7 @@ const column = (
  * `storedCapabilities` in `pipelines/runtime/capabilityGuard.ts`, and the
  * difference is load-bearing: it INTERSECTS the cached `resolved` set with the
  * live manifest key space, because the cache outlives the declaration it was
- * built from — a row that resolved `text->image` before OPENAI_CHAT lost the key
+ * built from — a row that resolved `text->image` before OPENAI lost the key
  * still carries it. There used to be a second `storedCapabilities` HERE that
  * returned `.resolved` straight, exported and imported by nothing; the two names
  * were identical, so the first person to reach for "the effective set" had even
@@ -114,6 +129,76 @@ export function resolveConnectionCapabilities(
 		probe: probe ?? stored.probe?.found,
 		overrides: stored.overrides
 	})
+}
+
+/**
+ * Which METHOD this connection wants to be called by: chat or completion.
+ *
+ * ## Resolved LIVE, from the row, rather than read off the cached set
+ *
+ * Everything else that asks what a connection can do reads
+ * `capabilities.resolved` — the cache — because the picker asks it for every row
+ * against every slot and re-resolving there would be wasteful. This does not,
+ * for one reason that outranks that: the cache on an existing row was written by
+ * a build in which these two keys did not exist, so it names neither mode, and
+ * every connection on every upgrading install would answer "no wire mode" until
+ * something happened to re-resolve it. Resolving here from the row's own four
+ * layers costs a handful of object iterations, is immune to a cache written by
+ * an older build, and needs no backfill.
+ *
+ * ⚠ This is THE server-side answer, and both readers must take it from here.
+ * `config/world.ts` puts it on the connection descriptor the assemble node
+ * renders against, and `withWireMode` puts it on the connection an adapter is
+ * handed — so the shape the prompt is BUILT in and the shape it is SENT in are
+ * one value resolved once, not two that have to agree. Two readings of this
+ * question disagreeing is the entire defect wire mode exists to close.
+ */
+export function resolveWireMode(row: CapabilityRow): WireMode {
+	return wireModeFor(row?.type, resolveConnectionCapabilities(row))
+}
+
+/**
+ * Why this connection will not continue a partial reply, or `null` when it will.
+ *
+ * ## Resolved LIVE, from the row — the same reason `resolveWireMode` is
+ *
+ * And more sharply, because `continue_reply` is NEW: every existing row's
+ * `capabilities.resolved` cache was written by a build in which this key did not
+ * exist, so reading it from the cache would answer "off" for every connection on
+ * every upgrading install until each was tested or saved again. Resolving here
+ * from the row's own four layers costs a handful of object iterations and needs
+ * no backfill.
+ *
+ * ## Two questions, one answer
+ *
+ * `continueRefusal` composes them: whether this connection MAY continue (the
+ * capability, through the four layers) and whether the wire it is sent on CAN
+ * (the type's `continuesIn`). The sentence it returns is the one the verb hands
+ * back and the one the button wears as its title, so there is exactly one
+ * wording of each refusal — see that module's header for why all three readers
+ * take it from there.
+ */
+export function resolveContinueRefusal(row: CapabilityRow): string | null {
+	return continueRefusal(row?.type, resolveConnectionCapabilities(row))
+}
+
+/**
+ * A connection row with its wire mode attached, for an adapter to read back.
+ *
+ * The `withCompletionTemplate` precedent exactly: an adapter has no database and
+ * no accessor on it may become async, so a fact it needs is resolved where the
+ * connection is already being LOADED for a run and travels with the row it was
+ * going to receive anyway. Called at the same two sites — `resolveCapabilityTarget`
+ * and `resolveStepConfigs` — for the same reason, and no construction site gains
+ * a parameter.
+ *
+ * ⚠ Returns a NEW object rather than mutating, so a caller holding the row it
+ * passed in still holds a plain row.
+ */
+export function withWireMode<T extends CapabilityRow>(
+	connection: T
+): T & { wireMode: WireMode } {
+	return { ...connection, wireMode: resolveWireMode(connection) }
 }
 
 const BAND_NAMES = new Set<string>(BAND_ORDER)
@@ -191,7 +276,7 @@ export interface PersistCapabilitiesInput {
  * the panel one toggle behind the truth. The two older callers ignore it.
  */
 export async function persistCapabilities(
-	db: any,
+	db: Db,
 	connectionId: number,
 	next: PersistCapabilitiesInput
 ): Promise<StoredCapabilities> {

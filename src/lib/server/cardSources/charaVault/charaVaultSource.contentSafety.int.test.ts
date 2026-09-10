@@ -25,9 +25,14 @@ vi.mock("$lib/server/db", async () => {
 
 // getCardBytes's own disk-cache/session/rate-limiter machinery isn't what's
 // under test here — stub it to hand back a controlled buffer directly so
-// this test never makes a real network call.
+// this test never makes a real network call. BOTH halves of the cache split
+// (2026-09-09): getCardBytes goes through the import cache, getCardDetail
+// through the browse one, and the gate has to hold on either path.
 vi.mock("../diskCache", () => ({
 	getOrFetchCardBytes: async () => fetchedBuffer
+}))
+vi.mock("../importCache", () => ({
+	getOrFetchImportedCardBytes: async () => fetchedBuffer
 }))
 
 // Wraps (not replaces) the real parseCharacterCard so the double-parse

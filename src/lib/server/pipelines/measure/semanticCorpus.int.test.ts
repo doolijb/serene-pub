@@ -254,7 +254,7 @@ const turn = async (
 	overrides: Array<{ nodeKey: string; path: string; value: unknown }> = []
 ) => {
 	const { buildWorld } = await import("$lib/server/pipelines/config/world")
-	const world = await buildWorld(db as any, { sessionId })
+	const world = await buildWorld(db, { sessionId })
 	for (const o of overrides)
 		world.overrides.push({
 			nodeKey: o.nodeKey,
@@ -274,7 +274,7 @@ const turn = async (
 		},
 		seed: "seed:graded",
 		bindings: coreBindings(),
-		host: createHost(db as any, { sessionId, userId }),
+		host: createHost(db, { sessionId, userId }),
 		preview: true
 	} as any)) as any
 }
@@ -368,6 +368,48 @@ describe("the corpus can see the semantic mechanism at all", () => {
 		expect(rankedIds(zeroed)).toEqual(off)
 	}, 60_000)
 
+	it("narrowing topK subtracts the signal and keeps the candidate", async () => {
+		/**
+		 * ⚠ **`topK` reached nothing at all until this fixture had a reason to
+		 * exist.** The binding read `input?.topK` — an in-port name
+		 * `core:query/vector-search@1` does not declare — and fell through to a
+		 * literal `?? 40`, so the declared control resolved through the whole
+		 * scope chain and was handed to no one. Proven the way it was found: set
+		 * it to 1 and watch what the host returns.
+		 *
+		 * The second half is the governing rule, and it is why this is the
+		 * *right* control to narrow: cutting the vector arm to a single hit
+		 * leaves all three entries in the prompt, because the keyword scan found
+		 * them and a mechanism that looked at fewer rows subtracts a signal
+		 * rather than removing a candidate. A `minScore` floor is what could not
+		 * have said that.
+		 */
+		const wide = await turn(MECHANISM_ON)
+		const narrow = await turn([
+			...MECHANISM_ON,
+			{ nodeKey: "semantic.arm.search", path: "topK", value: 1 }
+		])
+
+		const semWide = semanticOf(wide)
+		const semNarrow = semanticOf(narrow)
+
+		// Two query vectors, so a top-1 list each. The stone entry is strictly
+		// last against **both** windows — 0.33 and 0.26 — so it is the one that
+		// can never survive a top-1 cut, whatever the two leaders do about their
+		// tie on the second window.
+		expect(Object.values(semWide).every((v) => v > 0)).toBe(true)
+		expect(semNarrow[stoneId]).toBe(0)
+		// The closest keeps exactly the cosine it had: a narrower list is fewer
+		// rows, not a different measurement of the rows that survive.
+		expect(semNarrow[lightId]).toBeCloseTo(semWide[lightId]!, 10)
+
+		// And nothing left the pool. Same three entries, keyword-found, ranked
+		// on what is left of their evidence.
+		expect([...rankedIds(narrow)].sort()).toEqual(
+			[...rankedIds(wide)].sort()
+		)
+	}, 60_000)
+
 	it("moves the prompt when the semantic signal weight moves", async () => {
 		const on = rankedIds(await turn(MECHANISM_ON))
 		const zeroed = await turn([
@@ -386,5 +428,202 @@ describe("the corpus can see the semantic mechanism at all", () => {
 		])
 
 		expect(rankedIds(zeroed)).not.toEqual(on)
+	}, 60_000)
+})
+
+/**
+ * The attenuation curve, measured rather than argued.
+ *
+ * ## What it replaced, and why a number could not stay
+ *
+ * `core:query/vector-search@1` declared `minScore: 0.35` — *"ignore matches
+ * whose similarity falls below this"* — and nothing anywhere read it. It could
+ * not simply be wired: a floor takes a row **out of the pool**, and a row out of
+ * the pool can no longer be found by keyword, by name or by proximity either, so
+ * one mechanism's opinion would disable four others. The governing rule is that
+ * a weak mechanism *subtracts a signal* and never removes a candidate.
+ *
+ * And a threshold is not portable. Cosine distributions are not comparable
+ * across embedding models — one puts unrelated text near 0.1 and another near
+ * 0.7 — so `0.35` means "almost everything" on the first and "almost nothing" on
+ * the second, and an install that changes model silently changes what its
+ * lorebook retrieves.
+ *
+ * What replaced it is a **shape**: `semantic = cos ** similarityFalloff`, fixed
+ * at 0 and 1, strictly monotonic, defaulting to **1** — the raw cosine, which is
+ * what every install has actually been running while the floor sat unread.
+ *
+ * ## What this file can and cannot say
+ *
+ * It measures the curve's *behaviour* on a graded embedder: that it preserves
+ * the arm's own order at every setting, that no candidate ever leaves the pool,
+ * and how much a vague match is allowed to weigh against a keyword that
+ * actually fired. It cannot say where a real model's noise floor sits — that is
+ * a property of the model, which is the whole reason the control is a shape and
+ * not a number.
+ */
+describe("the similarity curve", () => {
+	const falloff = (value: number) => [
+		...MECHANISM_ON,
+		{ nodeKey: "semantic.arm.search", path: "similarityFalloff", value }
+	]
+
+	/**
+	 * The three cosines this corpus produces, before any shaping.
+	 *
+	 * Maxima over the **two** query windows `queryWindows` emits at
+	 * `currentWindow: 2` — one vector per message, not one per window — which is
+	 * why the middle entry sits higher than a single blended query would put it.
+	 */
+	const RAW = { light: 0.8944, water: 0.7071, stone: 0.3322 }
+
+	it("ships at 1, which is the raw cosine and today's behaviour", async () => {
+		const semantic = semanticOf(await turn(MECHANISM_ON))
+		expect(semantic[lightId]).toBeCloseTo(RAW.light, 4)
+		expect(semantic[waterId]).toBeCloseTo(RAW.water, 4)
+		expect(semantic[stoneId]).toBeCloseTo(RAW.stone, 4)
+
+		// Handing the default explicitly must be the same run.
+		const explicit = semanticOf(await turn(falloff(1)))
+		expect(explicit).toEqual(semantic)
+	}, 60_000)
+
+	/**
+	 * The measurement, and the table this control is chosen on.
+	 *
+	 * | falloff | closest | middle | weakest | closest ÷ weakest |
+	 * |---|---|---|---|---|
+	 * | 1 | 0.894 | 0.707 | 0.332 | 2.7 : 1 |
+	 * | 2 | 0.800 | 0.500 | 0.110 | 7.3 : 1 |
+	 * | 3 | 0.716 | 0.354 | 0.037 | 19.5 : 1 |
+	 * | 4 | 0.640 | 0.250 | 0.012 | 52.6 : 1 |
+	 *
+	 * Two things are true down every column and they are the argument for a
+	 * shape over a threshold: the **order never changes** (a power curve is
+	 * strictly monotonic, so this mechanism can never reorder or silence its own
+	 * hits), and the **weakest is never zero** (fixed at 0 and 1, so the row
+	 * stays in the pool for every other mechanism to find).
+	 */
+	it("sharpens the separation monotonically and drops nobody", async () => {
+		const measured: Array<[number, number, number, number]> = []
+		for (const g of [1, 2, 3, 4]) {
+			const receipt = await turn(falloff(g))
+			const semantic = semanticOf(receipt)
+
+			// Order preserved, at every setting: the curve shapes how much the
+			// signal weighs, never which hit is the better one.
+			expect(semantic[lightId]).toBeGreaterThan(semantic[waterId]!)
+			expect(semantic[waterId]).toBeGreaterThan(semantic[stoneId]!)
+			// Nobody leaves. This is the sentence `minScore` could not say.
+			expect(semantic[stoneId]).toBeGreaterThan(0)
+			expect([...rankedIds(receipt)].sort()).toEqual(
+				[stoneId, waterId, lightId].sort()
+			)
+
+			measured.push([
+				g,
+				semantic[lightId]!,
+				semantic[waterId]!,
+				semantic[stoneId]!
+			])
+		}
+
+		expect(
+			measured.map(([g, l, w, s]) => [
+				g,
+				Number(l.toFixed(3)),
+				Number(w.toFixed(3)),
+				Number(s.toFixed(3))
+			])
+		).toEqual([
+			[1, 0.894, 0.707, 0.332],
+			[2, 0.8, 0.5, 0.11],
+			[3, 0.716, 0.354, 0.037],
+			[4, 0.64, 0.25, 0.012]
+		])
+
+		// Separation strictly increases, and the top is never thrown away with
+		// the bottom: at 3 the weakest has lost 89% of its contribution and the
+		// closest has kept 80% of its own.
+		const spread = measured.map(([, l, , s]) => l / s)
+		expect(spread).toEqual([...spread].sort((a, b) => a - b))
+		expect(spread.map((r) => Number(r.toFixed(1)))).toEqual([
+			2.7, 7.3, 19.5, 52.6
+		])
+	}, 60_000)
+
+	/**
+	 * The decision-relevant number: **how much is a vague match allowed to weigh
+	 * against a keyword the author actually wrote?**
+	 *
+	 * `signalSemantic` is 0.3 and `signalKeyword` is 0.35 on world lore, sized
+	 * so that *keys guarantee and meaning only adds*. Read off the engine's own
+	 * scores rather than multiplied out here — the difference between a run and
+	 * the same run with the semantic weight zeroed is exactly this mechanism's
+	 * contribution.
+	 *
+	 * | falloff | weakest hit's contribution | as a share of one keyword hit |
+	 * |---|---|---|
+	 * | 1 | 0.100 | 28% |
+	 * | 2 | 0.033 | 9% |
+	 * | 3 | 0.011 | 3% |
+	 * | 4 | 0.004 | 1% |
+	 *
+	 * At the shipped 1, an entry the conversation is *not* about — a ruin that
+	 * happens to keep one lamp at its gate — collects a quarter of an authored
+	 * keyword's worth of score for turning up in the vector arm at all. That is
+	 * the number a reader is deciding about when they move this control, and it
+	 * is a property of their model rather than of this app, which is why the
+	 * default leaves it exactly where it has always been.
+	 */
+	it("measures what a weak match weighs against an authored keyword", async () => {
+		const KEYWORD_HIT = 0.35
+		const zeroed = [
+			{
+				nodeKey: "rank",
+				path: "signalSemantic",
+				value: {
+					messages: 0,
+					worldLore: 0,
+					characterLore: 0,
+					history: 0,
+					relationships: 0
+				}
+			}
+		]
+		const scoreOf = (receipt: any, id: number): number =>
+			((node(receipt, "rank")?.output as any)?.decisions ?? []).find(
+				(d: any) => d.candidate.id === id
+			)?.score ?? 0
+
+		const withoutSemantic = scoreOf(
+			await turn([...MECHANISM_ON, ...zeroed]),
+			stoneId
+		)
+
+		const shares: number[] = []
+		for (const g of [1, 2, 3, 4]) {
+			const contribution =
+				scoreOf(await turn(falloff(g)), stoneId) - withoutSemantic
+			expect(contribution).toBeGreaterThan(0)
+			shares.push(contribution / KEYWORD_HIT)
+		}
+
+		expect(shares.map((r) => Math.round(r * 100))).toEqual([28, 9, 3, 1])
+	}, 60_000)
+
+	/**
+	 * The one direction the control may not go.
+	 *
+	 * An exponent below 1 is concave: it *amplifies* the noise floor every
+	 * embedder has, so a candidate the model thinks nothing of scores as though
+	 * it did. There is no install for which that is the intent, so the binding
+	 * clamps rather than trusting the stored value — which is a row of JSON,
+	 * hand-editable, and read on the path to the model.
+	 */
+	it("clamps below 1 rather than amplifying a weak match", async () => {
+		const raw = semanticOf(await turn(MECHANISM_ON))
+		const concave = semanticOf(await turn(falloff(0.25)))
+		expect(concave).toEqual(raw)
 	}, 60_000)
 })

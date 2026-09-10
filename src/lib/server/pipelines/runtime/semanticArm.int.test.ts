@@ -210,7 +210,7 @@ const turn = async (
 	overrides: Array<{ nodeKey: string; path: string; value: unknown }> = []
 ) => {
 	const { buildWorld } = await import("$lib/server/pipelines/config/world")
-	const world = await buildWorld(db as any, { sessionId })
+	const world = await buildWorld(db, { sessionId })
 	for (const o of overrides)
 		world.overrides.push({
 			nodeKey: o.nodeKey,
@@ -230,7 +230,7 @@ const turn = async (
 		},
 		seed: "seed:governing-rule",
 		bindings: coreBindings(),
-		host: createHost(db as any, { sessionId, userId }),
+		host: createHost(db, { sessionId, userId }),
 		preview: true
 	} as any)) as any
 }

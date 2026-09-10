@@ -167,7 +167,7 @@ describe("koboldcpp:downloadModel — one chunk erroring aborts the rest", () =>
 		)
 		expect(finalRes.downloads[filename].status).toBe("error")
 
-		const dbRow = await testDb.query.koboldCppModels.findFirst({
+		const dbRow = await testDb.query.localModels.findFirst({
 			where: (models, { eq }) => eq(models.filename, filename)
 		})
 		expect(dbRow?.status).toBe("error")

@@ -11,9 +11,13 @@
 	interface Props {
 		open: boolean
 		onOpenChange?: (e: { open: boolean }) => void
+		// Fires with the row this modal just created, after it has closed
+		// itself. Lets a host (eg. the session form's character picker) select
+		// the new character immediately instead of re-finding it in a list.
+		onCreated?: (character: SelectCharacter) => void
 	}
 
-	let { open = $bindable(), onOpenChange }: Props = $props()
+	let { open = $bindable(), onOpenChange, onCreated }: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -54,6 +58,12 @@
 	})
 	let validationErrors: ValidationErrors = $state({})
 	let showCancelConfirmation = $state(false)
+	// "characters:create" is broadcast to every socket of the user, and several
+	// CharacterCreatorModal instances can be mounted at once (characters
+	// sidebar, home page, session form). Only the instance that actually
+	// emitted the create may close itself and report the new row. Not $state —
+	// nothing in the markup reads it.
+	let awaitingCreate = false
 
 	// Step definitions
 	const steps = [
@@ -172,6 +182,7 @@
 		delete newCharacter._avatarFile
 		delete newCharacter._avatar
 
+		awaitingCreate = true
 		socket.emit("characters:create", {
 			character: newCharacter,
 			// Client holds a browser File; the server receives it deserialized
@@ -195,6 +206,7 @@
 		}
 		validationErrors = {}
 		currentStep = 0
+		awaitingCreate = false
 		open = false
 	}
 
@@ -243,16 +255,23 @@
 			!!characterData._avatarFile
 	)
 
+	// Keep the reference: socket.off(event) with no listener drops *every*
+	// listener for that event across the whole app, not just this one.
+	const handleCharacterCreated = (
+		res: Sockets.Characters.Create.Response
+	) => {
+		if (!awaitingCreate || !res.character) return
+		const created = res.character
+		resetForm() // This will close the modal and reset data
+		onCreated?.(created)
+	}
+
 	onMount(() => {
-		socket.on("characters:create", (res: any) => {
-			if (res.character) {
-				resetForm() // This will close the modal and reset data
-			}
-		})
+		socket.on("characters:create", handleCharacterCreated)
 	})
 
 	onDestroy(() => {
-		socket.off("characters:create")
+		socket.off("characters:create", handleCharacterCreated)
 	})
 </script>
 

@@ -5,6 +5,7 @@ import { db } from "."
 import * as schema from "./schema"
 import { LOCAL_SERVER_SLUG } from "$lib/shared/constants/Tunnels"
 import { modalityOfShape } from "$lib/shared/constants/ConnectionTypes"
+import { BUILTIN_COMPLETION_TEMPLATES } from "$lib/shared/constants/completionTemplates"
 
 // Re-exported so existing importers keep working; the definition moved out.
 export { DEFAULT_CONTEXT_TEMPLATE }
@@ -370,6 +371,54 @@ export async function sync() {
 		})
 
 		await Promise.all(samplingConfigQueries)
+
+		// Completion Templates
+		//
+		// Seeded from BUILTIN_COMPLETION_TEMPLATES rather than re-typed here, so
+		// the rows a connection references and the framing the renderer actually
+		// uses are one list. A second copy would drift silently: nothing
+		// compares them at runtime, and the symptom of disagreement is a prompt
+		// wrapped in markers the stop strings do not mention.
+		//
+		// EVERY row is `isImmutable: true`. That is load-bearing, not a
+		// preference — the update branch below is `set({ ...data, id: undefined })`,
+		// which re-applies a seed's full contents on every boot. It is safe only
+		// because the server refuses edits to an immutable row, so there are no
+		// user edits for it to revert. A mutable seeded row here would lose a
+		// user's changes on every restart with nothing to catch it.
+		//
+		// No `id` on any of them: seedKey only, per the rationale above.
+		const existingCompletionTemplates =
+			await db.query.completionTemplates.findMany()
+
+		const completionTemplateQueries: Promise<any>[] = []
+
+		for (const template of BUILTIN_COMPLETION_TEMPLATES) {
+			const data: InsertCompletionTemplate = {
+				seedKey: `completion-template-${template.key}`,
+				key: template.key,
+				name: template.name,
+				isImmutable: true,
+				renderMode: template.renderMode,
+				roles: template.roles,
+				fallbackRole: template.fallbackRole,
+				stopStrings: [...template.stopStrings],
+				isSelectable: template.isSelectable
+			}
+			const found = existingCompletionTemplates.find(
+				(c) => c.seedKey === data.seedKey
+			)
+			completionTemplateQueries.push(
+				found
+					? db
+							.update(schema.completionTemplates)
+							.set({ ...data, id: undefined })
+							.where(eq(schema.completionTemplates.id, found.id))
+					: db.insert(schema.completionTemplates).values(data)
+			)
+		}
+
+		await Promise.all(completionTemplateQueries)
 
 		// Context Confings
 
@@ -1068,9 +1117,9 @@ export async function sync() {
 			// for: nothing is selected unless somebody set it, and a null sampling
 			// is not a failure — `resolveSampling(null)` means "let the backend
 			// use its own defaults", which is a legitimate thing to want.
-			const existing = await capabilityDefault(db as any, capability)
+			const existing = await capabilityDefault(db, capability)
 			if (existing === undefined)
-				await setCapabilityDefault(db as any, capability, {
+				await setCapabilityDefault(db, capability, {
 					samplingConfigId: seeded.id
 				})
 		}

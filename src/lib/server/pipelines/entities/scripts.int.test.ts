@@ -34,12 +34,12 @@ const STOP = "core:script:text/stop@1"
 
 beforeAll(async () => {
 	db = await createTestDb()
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 }, 60_000)
 
 describe("the view", () => {
 	it("lists core's script types from registry rows, grouped data intact", async () => {
-		const view = await scriptsView(db as any)
+		const view = await scriptsView(db)
 		const ids = view.types.map((t) => t.typeId)
 		expect(ids).toContain(TRANSFORM)
 		expect(ids).toContain(STOP)
@@ -60,7 +60,7 @@ describe("the view", () => {
 		// on their scripts slot; the type's readable space is the union across
 		// hooks, read from registry rows — a plugin hook widens it with no
 		// core change.
-		const view = await scriptsView(db as any)
+		const view = await scriptsView(db)
 		const transform = view.types.find((t) => t.typeId === TRANSFORM)!
 		expect(transform.extras).toContain("speakerName")
 		expect(transform.extras).toContain("castNames")
@@ -69,7 +69,7 @@ describe("the view", () => {
 
 describe("authoring", () => {
 	it("creates with the type's variable space as the declared I/O", async () => {
-		const row = await createScript(db as any, {
+		const row = await createScript(db, {
 			typeId: TRANSFORM,
 			name: "Slop killer"
 		})
@@ -82,16 +82,16 @@ describe("authoring", () => {
 
 	it("refuses a type this build does not register, naming it", async () => {
 		await expect(
-			createScript(db as any, { typeId: "risu:script:lua/run@1" })
+			createScript(db, { typeId: "risu:script:lua/run@1" })
 		).rejects.toThrow(ScriptNotUsableError)
 	})
 
 	it("names copies uniquely within the type's own pool", async () => {
-		const first = await createScript(db as any, {
+		const first = await createScript(db, {
 			typeId: TRANSFORM,
 			name: "Dedupe me"
 		})
-		const second = await createScript(db as any, {
+		const second = await createScript(db, {
 			typeId: TRANSFORM,
 			name: "Dedupe me"
 		})
@@ -100,21 +100,21 @@ describe("authoring", () => {
 	})
 
 	it("a verdict type refuses out-variables — a declaration the executor would ignore", async () => {
-		const row = await createScript(db as any, { typeId: STOP })
+		const row = await createScript(db, { typeId: STOP })
 		expect(row.varsOut).toEqual([])
 		await expect(
-			updateScript(db as any, row.id, { varsOut: ["text"] })
+			updateScript(db, row.id, { varsOut: ["text"] })
 		).rejects.toThrow(ScriptNotUsableError)
 	})
 
 	it("the variable space is fixed: ports plus hook extras, nothing typed on faith", async () => {
-		const row = await createScript(db as any, { typeId: TRANSFORM })
+		const row = await createScript(db, { typeId: TRANSFORM })
 
 		// An extra some hook supplies is a legal read...
-		await updateScript(db as any, row.id, {
+		await updateScript(db, row.id, {
 			varsIn: ["text", "speakerName"]
 		})
-		const view = await scriptsView(db as any)
+		const view = await scriptsView(db)
 		const stored = view.scripts.find((s) => s.id === row.id)!
 		expect(stored.varsIn).toEqual(["text", "speakerName"])
 
@@ -122,25 +122,25 @@ describe("authoring", () => {
 		// nothing will ever satisfy is the "stores cleanly and does nothing"
 		// shape, one field down.
 		await expect(
-			updateScript(db as any, row.id, { varsIn: ["text", "mood"] })
+			updateScript(db, row.id, { varsIn: ["text", "mood"] })
 		).rejects.toThrow(ScriptNotUsableError)
 
 		// ...and an extra is read-only by construction: it has no legal out.
 		await expect(
-			updateScript(db as any, row.id, { varsOut: ["speakerName"] })
+			updateScript(db, row.id, { varsOut: ["speakerName"] })
 		).rejects.toThrow(ScriptNotUsableError)
 	})
 
 	it("duplicates source and declarations under a fresh name", async () => {
-		const row = await createScript(db as any, {
+		const row = await createScript(db, {
 			typeId: TRANSFORM,
 			name: "Original"
 		})
-		await updateScript(db as any, row.id, {
+		await updateScript(db, row.id, {
 			source: "return text.trim()\n",
 			varsIn: ["text"]
 		})
-		const copy = await duplicateScript(db as any, row.id)
+		const copy = await duplicateScript(db, row.id)
 		expect(copy.name).toContain("Original")
 		expect(copy.source).toBe("return text.trim()\n")
 		expect(copy.isImmutable).toBe(false)
@@ -149,7 +149,7 @@ describe("authoring", () => {
 
 describe("the refusals", () => {
 	it("an immutable row refuses edits and deletion — duplicate to edit", async () => {
-		const [shipped] = await (db as any)
+		const [shipped] = await (db)
 			.insert(schema.pipelineScripts)
 			.values({
 				typeId: TRANSFORM,
@@ -160,18 +160,18 @@ describe("the refusals", () => {
 			})
 			.returning()
 		await expect(
-			updateScript(db as any, shipped.id, { name: "Renamed" })
+			updateScript(db, shipped.id, { name: "Renamed" })
 		).rejects.toThrow(ScriptNotUsableError)
-		await expect(deleteScript(db as any, shipped.id)).rejects.toThrow(
+		await expect(deleteScript(db, shipped.id)).rejects.toThrow(
 			ScriptNotUsableError
 		)
 		// The copy is the way in, exactly like a shipped prompt.
-		const copy = await duplicateScript(db as any, shipped.id)
+		const copy = await duplicateScript(db, shipped.id)
 		expect(copy.isImmutable).toBe(false)
 	})
 
 	it("a referenced script refuses deletion and names the holder", async () => {
-		const row = await createScript(db as any, {
+		const row = await createScript(db, {
 			typeId: TRANSFORM,
 			name: "Held by a chain"
 		})
@@ -179,11 +179,11 @@ describe("the refusals", () => {
 		// A chain is an ordered ref list at the `scripts` slot path (18 §2) —
 		// written here the way U-S3's config layer will write it, so this test
 		// is pinned to the storage ruling rather than to code that exists yet.
-		const [spec] = await (db as any)
+		const [spec] = await (db)
 			.select()
 			.from(schema.pipelineSpecs)
 			.limit(1)
-		await (db as any).insert(schema.pipelineNodeOverrides).values({
+		await (db).insert(schema.pipelineNodeOverrides).values({
 			specId: spec.id,
 			scopeKind: "session",
 			nodeKey: "generate",
@@ -192,20 +192,20 @@ describe("the refusals", () => {
 			value: [row.id]
 		})
 
-		await expect(deleteScript(db as any, row.id)).rejects.toThrow(
+		await expect(deleteScript(db, row.id)).rejects.toThrow(
 			ScriptNotUsableError
 		)
-		const view = await scriptsView(db as any)
+		const view = await scriptsView(db)
 		const held = view.scripts.find((s) => s.id === row.id)!
 		expect(held.usedBy.length).toBeGreaterThan(0)
 	})
 
 	it("a missing row says so", async () => {
-		await expect(deleteScript(db as any, 999_999)).rejects.toThrow(
+		await expect(deleteScript(db, 999_999)).rejects.toThrow(
 			ScriptNotFoundError
 		)
 		await expect(
-			scriptType(db as any, "core:script:text/transform@1")
+			scriptType(db, "core:script:text/transform@1")
 		).resolves.not.toBeNull()
 	})
 })
@@ -217,15 +217,15 @@ describe("sharing (18 §2, U-S7)", () => {
 			importScriptArtifact,
 			parseScriptArtifact
 		} = await import("$lib/server/pipelines/entities/scripts")
-		const row = await createScript(db as any, {
+		const row = await createScript(db, {
 			typeId: TRANSFORM,
 			name: "Round tripper"
 		})
-		await updateScript(db as any, row.id, {
+		await updateScript(db, row.id, {
 			source: "// exact bytes\nreturn text.trim()\n",
 			varsIn: ["text", "speakerName"]
 		})
-		const artifact = await exportScriptArtifact(db as any, [row.id])
+		const artifact = await exportScriptArtifact(db, [row.id])
 		expect(artifact.scripts[0]).toEqual({
 			type: TRANSFORM,
 			name: "Round tripper",
@@ -234,13 +234,13 @@ describe("sharing (18 §2, U-S7)", () => {
 			out: ["text"]
 		})
 
-		await deleteScript(db as any, row.id)
+		await deleteScript(db, row.id)
 		const report = await importScriptArtifact(
-			db as any,
+			db,
 			parseScriptArtifact(JSON.parse(JSON.stringify(artifact)))
 		)
 		expect(report.imported).toEqual([{ name: "Round tripper" }])
-		const view = await scriptsView(db as any)
+		const view = await scriptsView(db)
 		const back = view.scripts.find((s) => s.name === "Round tripper")!
 		expect(back.source).toBe("// exact bytes\nreturn text.trim()\n")
 		expect(back.varsIn).toEqual(["text", "speakerName"])
@@ -251,7 +251,7 @@ describe("sharing (18 §2, U-S7)", () => {
 			"$lib/server/pipelines/entities/scripts"
 		)
 		const report = await importScriptArtifact(
-			db as any,
+			db,
 			parseScriptArtifact({
 				type: TRANSFORM,
 				name: "Bare entry",
@@ -267,7 +267,7 @@ describe("sharing (18 §2, U-S7)", () => {
 		const { importScriptArtifact, parseScriptArtifact } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)
-		await createScript(db as any, { typeId: TRANSFORM, name: "Taken" })
+		await createScript(db, { typeId: TRANSFORM, name: "Taken" })
 		const pack = parseScriptArtifact({
 			serenePub: "scripts@1",
 			scripts: [
@@ -294,7 +294,7 @@ describe("sharing (18 §2, U-S7)", () => {
 				}
 			]
 		})
-		const report = await importScriptArtifact(db as any, pack, [0, 1])
+		const report = await importScriptArtifact(db, pack, [0, 1])
 		expect(report.imported).toEqual([
 			{ name: "Taken", renamed: "Taken (2)" }
 		])
@@ -327,7 +327,7 @@ describe("connection attachment (18 §4b)", () => {
 	let connectionId: number
 
 	beforeAll(async () => {
-		const [conn] = await (db as any)
+		const [conn] = await (db)
 			.insert(schema.connections)
 			.values({ name: "Kobold", type: "koboldcpp" })
 			.returning()
@@ -338,30 +338,30 @@ describe("connection attachment (18 §4b)", () => {
 		const { attachConnectionScript, listConnectionScripts } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)
-		const guard = await createScript(db as any, {
+		const guard = await createScript(db, {
 			typeId: STOP,
 			name: "ChatML guard"
 		})
-		await attachConnectionScript(db as any, connectionId, guard.id)
+		await attachConnectionScript(db, connectionId, guard.id)
 		expect(
-			(await listConnectionScripts(db as any, connectionId)).map(
+			(await listConnectionScripts(db, connectionId)).map(
 				(s) => s.name
 			)
 		).toEqual(["ChatML guard"])
 
 		// A transform never rides a connection: the completion stream is what
 		// flows through it, and everything else attaches on pipeline steps.
-		const filter = await createScript(db as any, {
+		const filter = await createScript(db, {
 			typeId: TRANSFORM,
 			name: "Not a guard"
 		})
 		await expect(
-			attachConnectionScript(db as any, connectionId, filter.id)
+			attachConnectionScript(db, connectionId, filter.id)
 		).rejects.toThrow(ScriptNotUsableError)
 
 		// Attaching twice is a mistake, not a second guard.
 		await expect(
-			attachConnectionScript(db as any, connectionId, guard.id)
+			attachConnectionScript(db, connectionId, guard.id)
 		).rejects.toThrow(ScriptNotUsableError)
 	})
 
@@ -369,14 +369,14 @@ describe("connection attachment (18 §4b)", () => {
 		const { detachConnectionScript } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)
-		const view = await scriptsView(db as any)
+		const view = await scriptsView(db)
 		const guard = view.scripts.find((s) => s.name === "ChatML guard")!
 		expect(guard.usedBy).toContain("connection: Kobold")
-		await expect(deleteScript(db as any, guard.id)).rejects.toThrow(
+		await expect(deleteScript(db, guard.id)).rejects.toThrow(
 			ScriptNotUsableError
 		)
 
-		await detachConnectionScript(db as any, connectionId, guard.id)
-		await expect(deleteScript(db as any, guard.id)).resolves.toBeUndefined()
+		await detachConnectionScript(db, connectionId, guard.id)
+		await expect(deleteScript(db, guard.id)).resolves.toBeUndefined()
 	})
 })

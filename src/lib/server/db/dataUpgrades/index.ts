@@ -1,7 +1,8 @@
 import fs from "fs"
 import path from "path"
 import { sql } from "drizzle-orm"
-import { readMigrationFiles } from "drizzle-orm/migrator"
+import { readMigrationFiles, type MigrationMeta } from "drizzle-orm/migrator"
+import { rawRows } from "../rawRows"
 
 /**
  * Data upgrades — the transformations SQL can't express.
@@ -31,8 +32,16 @@ export interface DataUpgrade {
 	 * stable, and index/order both shift when a migration is inserted.
 	 */
 	afterMigration: string
-	/** Imported only when it is actually going to run. */
-	load: () => Promise<{ run: (tx: any) => Promise<void> }>
+	/**
+	 * Imported only when it is actually going to run.
+	 *
+	 * `MigrationTx` is the raw-SQL half of a transaction and nothing more,
+	 * which is the doctrine below expressed as a type: an upgrade runs against
+	 * the schema as it existed at its anchor migration, not today's, so it must
+	 * not reach for the schema-typed table objects that drift out from under
+	 * it.
+	 */
+	load: () => Promise<{ run: (tx: MigrationTx) => Promise<void> }>
 }
 
 /**
@@ -82,6 +91,39 @@ const MIGRATIONS_SCHEMA = "drizzle"
 const MIGRATIONS_TABLE = "__drizzle_migrations"
 
 /**
+ * Drizzle's own applier, which has no public type.
+ *
+ * `dialect` and `session` are real properties on every `PgDatabase` at runtime
+ * and are marked `@internal`, so declaration emit strips them from the
+ * published `.d.ts`. There is no supported alternative for what this module
+ * does: `drizzle-orm/pglite/migrator`'s `migrate()` applies EVERY pending
+ * migration in one go, and the whole point here is to apply them up to an
+ * anchor, stop, and let a data upgrade join that transaction.
+ *
+ * So it is a cast — but a narrow, named, row-free one. It exposes the applier
+ * and nothing else, which is what separates it from the `db: any` this
+ * parameter used to be: an `any` here made every row read anywhere downstream
+ * of this handle unchecked too, and this cannot.
+ *
+ * ⚠ If a drizzle upgrade ever moves `dialect`/`session`, this throws at the
+ * first batch rather than mis-applying anything — the failure is loud and it is
+ * at boot.
+ */
+type MigrationApplier = {
+	dialect: {
+		migrate(
+			migrations: MigrationMeta[],
+			session: unknown,
+			config: { migrationsFolder: string }
+		): Promise<void>
+	}
+	session: unknown
+}
+
+const applier = (db: MigrationDb): MigrationApplier =>
+	db as MigrationDb & MigrationApplier
+
+/**
  * Apply pending migrations, running each data upgrade inside the same
  * transaction as the migration it is anchored to.
  *
@@ -91,7 +133,7 @@ const MIGRATIONS_TABLE = "__drizzle_migrations"
  * its transaction.
  */
 export async function runMigrationsWithUpgrades(
-	db: any,
+	db: MigrationDb,
 	{
 		migrationsFolder,
 		upgrades = DATA_UPGRADES,
@@ -136,16 +178,18 @@ export async function runMigrationsWithUpgrades(
 	async function flushBatch() {
 		if (!batch.length) return
 		const metas = batch.map((i) => files[i])
-		await db.dialect.migrate(metas, db.session, { migrationsFolder })
+		const { dialect, session } = applier(db)
+		await dialect.migrate(metas, session, { migrationsFolder })
 		batch = []
 	}
 
 	async function highWaterMark(): Promise<number> {
-		const res = await db.execute(
-			sql.raw(`select created_at from "${MIGRATIONS_SCHEMA}"."${MIGRATIONS_TABLE}"
+		const rows = rawRows<{ created_at: unknown }>(
+			await db.execute(
+				sql.raw(`select created_at from "${MIGRATIONS_SCHEMA}"."${MIGRATIONS_TABLE}"
 				order by created_at desc limit 1`)
+			)
 		)
-		const rows = res.rows ?? res
 		return rows.length ? Number(rows[0].created_at) : -1
 	}
 
@@ -163,7 +207,7 @@ export async function runMigrationsWithUpgrades(
 		const meta = files[i]
 		if ((await highWaterMark()) >= meta.folderMillis) continue // already applied
 
-		await db.transaction(async (tx: any) => {
+		await db.transaction(async (tx) => {
 			for (const stmt of meta.sql) await tx.execute(sql.raw(stmt))
 			await tx.execute(
 				sql.raw(`insert into "${MIGRATIONS_SCHEMA}"."${MIGRATIONS_TABLE}"

@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import CharacterSelectModal from "../modals/CharacterSelectModal.svelte"
+	import CharacterCreatorModal from "../modals/CharacterCreatorModal.svelte"
 	import PersonaSelectModal from "../modals/PersonaSelectModal.svelte"
+	import PersonaCreatorModal from "../modals/PersonaCreatorModal.svelte"
 	import ReassignSessionParticipantModal from "../modals/ReassignSessionParticipantModal.svelte"
 	import UserSelectModal from "../modals/UserSelectModal.svelte"
 	import Avatar from "../Avatar.svelte"
@@ -202,6 +204,13 @@
 	// MODALS
 	let showCharacterModal = $state(false)
 	let showPersonaModal = $state(false)
+	// Inline create from the pickers. A fresh install has no characters and no
+	// personas, and the standard genre's floors require one of each — without
+	// these the pickers are dead ends and the first session can never be
+	// created. Close-then-open, never nested: both are skeleton Dialog +
+	// Portal at z-50 and there is no nested-Dialog precedent in the repo.
+	let showCharacterCreator = $state(false)
+	let showPersonaCreator = $state(false)
 	let showGuestModal = $state(false)
 	let showReassignModal = $state(false)
 	let reassignTarget: {
@@ -517,6 +526,10 @@
 			selectedPersonas.length < personasFloor
 		)
 			return
+		// Nothing an administrator has enabled to start this genre with: the
+		// button is disabled for it, and the handler refuses too rather than
+		// posting a create the ruling says has no preset behind it.
+		if (noPresetsForGenre) return
 
 		// Ensure data is synced with current selections
 		const characterIds = selectedCharacters.map((c) => c.id)
@@ -565,6 +578,11 @@
 					promptConfigId: sessionPromptConfigId,
 					narratorPromptConfigId: narratorPromptConfigId,
 					genreId,
+					// The preset picks the genre server-side (23 §9): a
+					// mismatched `genreId` above loses to it, and a null here
+					// is the historical preset-less create, which the handler
+					// still tolerates for programmatic callers.
+					presetId: selectedSessionPresetId,
 					genreFields
 				},
 				characterIds,
@@ -745,6 +763,15 @@
 
 	const handleSessionsModes = (msg: Sockets.Sessions.Genres.Response) => {
 		modesList = msg.genres || []
+	}
+
+	// The create flow's step 2. Same event the admin pages read; the handler
+	// already cuts it to what a non-admin may start.
+	const handleSessionPresetsList = (
+		msg: Sockets.SessionAdmin.Presets.Response
+	) => {
+		sessionPresetsList = msg.presets || []
+		sessionPresetsLoaded = true
 	}
 
 	// The swap list (19 §5): which next-speaker strategy runs this session's
@@ -946,26 +973,161 @@
 		return [...byBare.values()]
 	})
 
-	// The card step (19 §2, second pass): with more than one mode registered,
-	// creation opens on a card per mode — name, description, the shape's facts
-	// — and the form appears once one is chosen. A single-mode build (the F29
-	// floor with an empty registry among them) skips the step entirely, which
-	// is exactly today's behaviour. `!isDirty` is the late-arrival guard: if
-	// the modes list lands after the user already started typing, the cards
-	// never shove the form aside — the dropdown in the form covers that path.
+	/* ── the create flow's three steps (ruled 2026-09-10) ─────────────────
+	 *
+	 * Starting a session is three answers, stacked in one column: the genre,
+	 * then an admin-enabled preset of that genre, then the few session-level
+	 * settings the preset pre-fills. A step with a single answer takes it
+	 * silently rather than asking — which is every stock install, where the
+	 * flow is the settings form alone, exactly as before. Prompt modules and
+	 * blocks are deliberately NOT here: those are admin-side.
+	 */
+	let isCreateFlow = $derived(!session && !editSessionId)
+
+	// The card step (19 §2, second pass): with more than one genre registered,
+	// creation opens on a card per genre — name, description, the shape's facts
+	// — and the steps below appear once one is chosen. A single-genre build (the
+	// F29 floor with an empty registry among them) skips the step entirely,
+	// which is exactly today's behaviour. `isDirty` is the late-arrival guard:
+	// if the genre list lands after the user already started typing, the step
+	// does not reopen underneath them — the dropdown in the settings step
+	// covers that path.
 	let modeChosen = $state(false)
-	let pickingMode = $derived(
-		!session &&
-			!editSessionId &&
-			!modeChosen &&
-			latestModes.length > 1 &&
-			!isDirty
-	)
+	let genreStepShown = $derived(isCreateFlow && latestModes.length > 1)
+	let genreAnswered = $derived(!genreStepShown || modeChosen || isDirty)
 
 	function chooseMode(id: string) {
 		genreId = id
 		reconcileToMode()
 		modeChosen = true
+	}
+
+	// STEP 2 — the preset. `sessionPresets:list` already cuts to the enabled
+	// presets of enabled genres for a non-admin; an administrator's copy
+	// carries the disabled ones too (they administer them), so the picker
+	// filters again rather than offering one nobody may start.
+	let sessionPresetsList: Sockets.SessionAdmin.PresetRow[] = $state([])
+	// Separates "this genre has no presets" from "the list has not landed
+	// yet". Only the first disables Create — a catalogue that never answers
+	// leaves the historical preset-less create working, the same F29 posture
+	// the genre step takes.
+	let sessionPresetsLoaded = $state(false)
+	let selectedSessionPresetId: number | null = $state(null)
+	/** The preset the current pre-fill came from, so a re-run never re-fills. */
+	let appliedPresetId: number | null = null
+
+	// A build that registers exactly one genre has answered step 1 by itself,
+	// so the preset step asks about that genre rather than the standard id the
+	// form starts on. Nothing is written to `genreId` for it: the server
+	// derives the row's genre from the preset anyway, and writing here would
+	// mark a pristine form dirty for a decision the user never made.
+	let effectiveGenreId = $derived(
+		isCreateFlow && latestModes.length === 1
+			? latestModes[0].genreId
+			: genreId
+	)
+	let presetsForGenre = $derived(
+		sessionPresetsList.filter(
+			(p) => p.enabled && p.genreId === effectiveGenreId
+		)
+	)
+	let chosenSessionPreset = $derived(
+		presetsForGenre.find((p) => p.id === selectedSessionPresetId) ?? null
+	)
+	/** Nothing to start this genre with — said out loud, and Create refuses. */
+	let noPresetsForGenre = $derived(
+		isCreateFlow && sessionPresetsLoaded && presetsForGenre.length === 0
+	)
+	// The step asks only when there is something to ask: several enabled
+	// presets, or none at all (which is a refusal, not a choice).
+	let presetStepShown = $derived(
+		isCreateFlow &&
+			genreAnswered &&
+			(presetsForGenre.length > 1 || noPresetsForGenre)
+	)
+	let presetAnswered = $derived(
+		selectedSessionPresetId !== null ||
+			!sessionPresetsLoaded ||
+			presetsForGenre.length === 0
+	)
+
+	// STEP 3 — the settings form. Always the whole component outside creation.
+	let settingsStepShown = $derived(
+		!isCreateFlow || (genreAnswered && presetAnswered)
+	)
+
+	/**
+	 * Step 2's answer. One enabled preset is taken silently (every stock
+	 * install), several open the chooser with the genre's default preselected
+	 * so the settings below are pre-filled from something, none leaves the
+	 * selection empty and Create disabled.
+	 */
+	$effect(() => {
+		if (!isCreateFlow) return
+		// Nothing to select from until the genre above is settled — and a
+		// pre-fill landing before the genre cards are answered would mark the
+		// form dirty, which is the very thing that dismisses them.
+		if (!genreAnswered) return
+		const rows = presetsForGenre
+		const held = untrack(() => selectedSessionPresetId)
+		if (!rows.length) {
+			if (held !== null) chooseSessionPreset(null)
+			return
+		}
+		if (rows.some((p) => p.id === held)) return
+		chooseSessionPreset((rows.find((p) => p.isDefault) ?? rows[0]).id)
+	})
+
+	function chooseSessionPreset(id: number | null) {
+		selectedSessionPresetId = id
+		if (id === null) {
+			appliedPresetId = null
+			return
+		}
+		if (appliedPresetId === id) return
+		appliedPresetId = id
+		applyPresetDefaults(sessionPresetsList.find((p) => p.id === id))
+	}
+
+	/**
+	 * Pre-fill creation from the preset's `defaults` blob (23 §9: "Optional
+	 * pre-fill for creation (fields, lorebook policy…)"). The blob is loose
+	 * JSON with no authoring path yet, so only the keys this form actually
+	 * has are read, each type-checked — anything else in it is ignored
+	 * rather than guessed at.
+	 */
+	function applyPresetDefaults(
+		preset: Sockets.SessionAdmin.PresetRow | undefined
+	) {
+		const d = preset?.defaults
+		if (!d || typeof d !== "object") return
+		if (typeof d.name === "string") name = d.name
+		if (typeof d.scenario === "string") scenario = d.scenario
+		if (
+			typeof d.groupReplyStrategy === "string" &&
+			GroupReplyStrategies.options.some(
+				(o) => o.value === d.groupReplyStrategy
+			)
+		)
+			groupReplyStrategy = d.groupReplyStrategy
+		if (typeof d.lorebookId === "number" || d.lorebookId === null)
+			lorebookId = d.lorebookId as number | null
+		if (Array.isArray(d.tags))
+			selectedTags = d.tags.filter(
+				(t): t is string => typeof t === "string"
+			)
+		if (
+			!!d.genreFields &&
+			typeof d.genreFields === "object" &&
+			!Array.isArray(d.genreFields)
+		) {
+			genreFields = {
+				...genreFields,
+				...(d.genreFields as Record<string, unknown>)
+			}
+			// Declared keys only — the same trim the commit applies.
+			reconcileToMode()
+		}
 	}
 
 	// One line of shape facts for a card — presentation only, derived from
@@ -1210,6 +1372,9 @@
 		socket.emit("tags:list", {})
 		socket.on("sessions:genres", handleSessionsModes)
 		socket.emit("sessions:genres", {})
+		socket.on("sessionPresets:list", handleSessionPresetsList)
+		// Creation only: editing a session never re-asks its preset.
+		if (!editSessionId) socket.emit("sessionPresets:list", {})
 		socket.on("sessions:upgradeGenre", handleSessionsUpgradeMode)
 		socket.on("sessions:speakerStrategies", handleSessionsSpeakerStrategies)
 		socket.on("sessions:accountVisibility", handleAccountVisibility)
@@ -1255,6 +1420,7 @@
 			handleReassignRemovedParticipant
 		)
 		socket.off("sessions:genres", handleSessionsModes)
+		socket.off("sessionPresets:list", handleSessionPresetsList)
 		socket.off("sessions:upgradeGenre", handleSessionsUpgradeMode)
 		socket.off(
 			"sessions:speakerStrategies",
@@ -1343,52 +1509,7 @@
 	}
 </script>
 
-{#if data && pickingMode}
-	<div class="flex min-h-full flex-col gap-6">
-		<div class="flex items-center gap-2">
-			<button
-				class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
-				onclick={handleCloseForm}
-				title="Cancel"
-			>
-				<Icons.ChevronLeft size={16} />
-			</button>
-			<h2 class="flex-1 truncate font-semibold">New Session</h2>
-		</div>
-		<!-- The card step (19 §2, second pass): the mode is the first
-		     decision — it decides which systems exist for the session and is
-		     fixed for life, upgradable along its own type but never swappable
-		     — so it is asked before the form, as cards rendered from rows.
-		     The dropdown inside the form remains for changing the answer
-		     while the session is still unsaved. -->
-		<p class="text-sm opacity-80">
-			What kind of session is this? The mode decides which systems exist —
-			characters, personas, lorebooks, the composer — and stays with the
-			session for its life.
-		</p>
-		<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-			{#each latestModes as mode (mode.genreId)}
-				<button
-					type="button"
-					class="preset-tonal hover:preset-tonal-primary flex flex-col items-start gap-1 rounded-lg p-4 text-left"
-					onclick={() => chooseMode(mode.genreId)}
-				>
-					<span class="font-semibold">{mode.name}</span>
-					{#if mode.description}
-						<span class="text-sm opacity-80">
-							{mode.description}
-						</span>
-					{/if}
-					{#if modeFacts(mode.shape)}
-						<span class="text-xs opacity-60">
-							{modeFacts(mode.shape)}
-						</span>
-					{/if}
-				</button>
-			{/each}
-		</div>
-	</div>
-{:else if data}
+{#if data}
 	<div class="flex min-h-full flex-col gap-6">
 		<div class="flex items-center gap-2">
 			<button
@@ -1401,204 +1522,524 @@
 			<h2 class="flex-1 truncate font-semibold">
 				{session ? "Edit Session" : "New Session"}
 			</h2>
-			<button
-				class="btn btn-sm shrink-0"
-				class:preset-filled-success-500={isDirty}
-				class:preset-tonal-success={!isDirty}
-				onclick={handleSave}
-				disabled={!canSave}
-			>
-				<Icons.Save size={16} />
-				{session ? "Update" : "Create"}
-			</button>
-		</div>
-		{#if isGuest}
-			<p class="preset-tonal-surface rounded-lg p-3 text-sm">
-				You're a guest in this session. You can manage characters,
-				personas, and guests below — session settings (name, scenario,
-				lorebook, tags, etc.) can only be changed by the session owner.
-			</p>
-		{/if}
-		<div>
-			<label class="font-semibold" for="sessionName">Session Name*</label>
-			<input
-				id="sessionName"
-				class="input input-lg w-full {validationErrors.name
-					? 'border-error-500'
-					: ''}"
-				type="text"
-				placeholder="Enter session name"
-				bind:value={name}
-				required
-				disabled={isGuest}
-				oninput={() => {
-					if (validationErrors.name) {
-						const { name, ...rest } = validationErrors
-						validationErrors = rest
-					}
-				}}
-			/>
-			{#if validationErrors.name}
-				<p class="text-error-500 mt-1 text-sm" role="alert">
-					{validationErrors.name}
-				</p>
+			<!-- Nothing to save until the steps above have answers. -->
+			{#if settingsStepShown}
+				<button
+					class="btn btn-sm shrink-0"
+					class:preset-filled-success-500={isDirty}
+					class:preset-tonal-success={!isDirty}
+					onclick={handleSave}
+					disabled={!canSave || noPresetsForGenre}
+				>
+					<Icons.Save size={16} />
+					{session ? "Update" : "Create"}
+				</button>
 			{/if}
 		</div>
 
-		<!-- Mode (19 §2, §6 as ruled). Creation picks freely — each mode once,
-		     at its newest version. An existing session keeps its mode for life:
-		     there is no swap control, only the upgrade along the same type
-		     when the author has shipped a newer version, and even that is
-		     shape-validated server-side with sentence refusals. -->
-		{#if !session && latestModes.length > 1}
-			<div>
-				<label class="font-semibold" for="sessionMode">
-					Session Mode
-				</label>
-				<select
-					id="sessionMode"
-					class="select w-full"
-					bind:value={genreId}
-					onchange={() => {
-						// Data follows the type: refit fields, participants and
-						// the lorebook to the newly selected shape.
-						reconcileToMode()
-					}}
-				>
-					{#each latestModes as mode (mode.genreId)}
-						<option value={mode.genreId}>{mode.name}</option>
-					{/each}
-				</select>
-			</div>
-		{:else if session && !isGuest && modeUpgradeTarget}
-			<div class="flex flex-col gap-1">
-				<span class="font-semibold">Session Mode</span>
-				<div class="flex items-center gap-2">
-					<span class="preset-tonal rounded-lg px-3 py-2 text-sm">
-						{modesList.find((m) => m.genreId === genreId)?.name ??
-							genreId}
-					</span>
-					<button
-						class="btn btn-sm preset-filled-primary-500 shrink-0"
-						title="Upgrade to {modeUpgradeTarget.genreId}"
-						onclick={upgradeMode}
-					>
-						<Icons.ArrowUpCircle size={14} />
-						Upgrade
-					</button>
+		<!-- STEP 1 — Genre (19 §2, second pass; kept under the ruling of
+		     2026-09-10). The genre decides which systems exist for the session
+		     and is fixed for its life — upgradable along its own type, never
+		     swappable — so it is asked before anything else, as cards rendered
+		     from rows. A single-genre build answers it silently; the dropdown
+		     in the settings step below stays the way to change the answer while
+		     the session is still unsaved. -->
+		{#if genreStepShown}
+			<div class="flex flex-col gap-3">
+				<div class="flex items-baseline gap-2">
+					<span class="font-semibold">Genre</span>
+					{#if genreAnswered}
+						<span
+							class="preset-tonal-primary rounded-full px-2 py-0.5 text-xs"
+						>
+							{modesList.find((m) => m.genreId === genreId)?.name ??
+								genreId}
+						</span>
+					{/if}
 				</div>
-				<p class="text-surface-700-300 text-xs">
-					A newer version of this mode is available ({modeUpgradeTarget.genreId}).
-					Upgrading keeps the session and its settings.
-				</p>
+				{#if !genreAnswered}
+					<p class="text-sm opacity-80">
+						What kind of session is this? The genre decides which systems
+						exist — characters, personas, lorebooks, the composer — and
+						stays with the session for its life.
+					</p>
+					<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+						{#each latestModes as mode (mode.genreId)}
+							<button
+								type="button"
+								class="preset-tonal hover:preset-tonal-primary flex flex-col items-start gap-1 rounded-lg p-4 text-left"
+								onclick={() => chooseMode(mode.genreId)}
+							>
+								<span class="font-semibold">{mode.name}</span>
+								{#if mode.description}
+									<span class="text-sm opacity-80">
+										{mode.description}
+									</span>
+								{/if}
+								{#if modeFacts(mode.shape)}
+									<span class="text-xs opacity-60">
+										{modeFacts(mode.shape)}
+									</span>
+								{/if}
+							</button>
+						{/each}
+					</div>
+				{/if}
 			</div>
 		{/if}
 
-		<Tabs
-			value={activeSessionTab}
-			onValueChange={(e) => {
-				activeSessionTab = e.value as typeof activeSessionTab
-				// Fetch the visibility view lazily, only when its tab is opened.
-				if (activeSessionTab === "visibility" && session?.id)
-					socket.emit("sessions:accountVisibility", {
-						sessionId: session.id
-					})
-				// The involved pipelines, likewise — only an existing session
-				// has them (a not-yet-created session has no scope to write to).
-				if (activeSessionTab === "settings" && session?.id)
-					socket.emit("sessions:pipelines", {
-						sessionId: session.id
-					})
-			}}
-		>
-			<!-- Matches the site's underlined tab strip (see PanelTab): no
-			     pill, no fill, a bottom border that colours in on selection.
-			     Only the open tab shows its label — the others are icon-only,
-			     so the strip reads as a tab bar rather than a row of buttons. -->
-			<Tabs.List
-				class="border-surface-200-800 flex items-center gap-1 border-b"
+		<!-- STEP 2 — Preset (ruled 2026-09-10). The bundle an administrator has
+		     enabled for this genre: which pipelines answer its events, which
+		     actions come along, and the pre-fill the settings below start from.
+		     One enabled preset is taken silently rather than asked about; none
+		     is said out loud, because there is then nothing to start. -->
+		{#if presetStepShown}
+			<div class="flex flex-col gap-3">
+				<div class="flex items-baseline gap-2">
+					<span class="font-semibold">Preset</span>
+					{#if chosenSessionPreset}
+						<span
+							class="preset-tonal-primary rounded-full px-2 py-0.5 text-xs"
+						>
+							{chosenSessionPreset.name}
+						</span>
+					{/if}
+				</div>
+				{#if noPresetsForGenre}
+					<p class="preset-tonal-warning rounded-lg p-3 text-sm">
+						No presets available for this genre. An administrator decides
+						which presets a session may start from.
+					</p>
+				{:else}
+					<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+						{#each presetsForGenre as p (p.id)}
+							<button
+								type="button"
+								class="flex flex-col items-start gap-1 rounded-lg p-4 text-left {p.id ===
+								selectedSessionPresetId
+									? 'preset-filled-primary-500'
+									: 'preset-tonal hover:preset-tonal-primary'}"
+								aria-pressed={p.id === selectedSessionPresetId}
+								onclick={() => chooseSessionPreset(p.id)}
+							>
+								<span class="font-semibold">{p.name}</span>
+								{#if p.description}
+									<span class="text-sm opacity-80">
+										{p.description}
+									</span>
+								{/if}
+								{#if p.isDefault}
+									<span class="text-xs opacity-60">
+										Default for this genre
+									</span>
+								{/if}
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
+
+		<!-- STEP 3 — the session's own settings, pre-filled from the preset.
+		     Labelled only when a step above it is on screen: a stock install
+		     (one genre, one preset) shows this form alone, exactly as before. -->
+		{#if settingsStepShown}
+			{#if genreStepShown || presetStepShown}
+				<span class="font-semibold">Settings</span>
+			{/if}
+			{#if isGuest}
+				<p class="preset-tonal-surface rounded-lg p-3 text-sm">
+					You're a guest in this session. You can manage characters,
+					personas, and guests below — session settings (name, scenario,
+					lorebook, tags, etc.) can only be changed by the session owner.
+				</p>
+			{/if}
+			<div>
+				<label class="font-semibold" for="sessionName">Session Name*</label>
+				<input
+					id="sessionName"
+					class="input input-lg w-full {validationErrors.name
+						? 'border-error-500'
+						: ''}"
+					type="text"
+					placeholder="Enter session name"
+					bind:value={name}
+					required
+					disabled={isGuest}
+					oninput={() => {
+						if (validationErrors.name) {
+							const { name, ...rest } = validationErrors
+							validationErrors = rest
+						}
+					}}
+				/>
+				{#if validationErrors.name}
+					<p class="text-error-500 mt-1 text-sm" role="alert">
+						{validationErrors.name}
+					</p>
+				{/if}
+			</div>
+
+			<!-- Mode (19 §2, §6 as ruled). Creation picks freely — each mode once,
+			     at its newest version. An existing session keeps its mode for life:
+			     there is no swap control, only the upgrade along the same type
+			     when the author has shipped a newer version, and even that is
+			     shape-validated server-side with sentence refusals. -->
+			{#if !session && latestModes.length > 1}
+				<div>
+					<label class="font-semibold" for="sessionMode">
+						Session Mode
+					</label>
+					<select
+						id="sessionMode"
+						class="select w-full"
+						bind:value={genreId}
+						onchange={() => {
+							// Data follows the type: refit fields, participants and
+							// the lorebook to the newly selected shape.
+							reconcileToMode()
+						}}
+					>
+						{#each latestModes as mode (mode.genreId)}
+							<option value={mode.genreId}>{mode.name}</option>
+						{/each}
+					</select>
+				</div>
+			{:else if session && !isGuest && modeUpgradeTarget}
+				<div class="flex flex-col gap-1">
+					<span class="font-semibold">Session Mode</span>
+					<div class="flex items-center gap-2">
+						<span class="preset-tonal rounded-lg px-3 py-2 text-sm">
+							{modesList.find((m) => m.genreId === genreId)?.name ??
+								genreId}
+						</span>
+						<button
+							class="btn btn-sm preset-filled-primary-500 shrink-0"
+							title="Upgrade to {modeUpgradeTarget.genreId}"
+							onclick={upgradeMode}
+						>
+							<Icons.ArrowUpCircle size={14} />
+							Upgrade
+						</button>
+					</div>
+					<p class="text-surface-700-300 text-xs">
+						A newer version of this mode is available ({modeUpgradeTarget.genreId}).
+						Upgrading keeps the session and its settings.
+					</p>
+				</div>
+			{/if}
+
+			<Tabs
+				value={activeSessionTab}
+				onValueChange={(e) => {
+					activeSessionTab = e.value as typeof activeSessionTab
+					// Fetch the visibility view lazily, only when its tab is opened.
+					if (activeSessionTab === "visibility" && session?.id)
+						socket.emit("sessions:accountVisibility", {
+							sessionId: session.id
+						})
+					// The involved pipelines, likewise — only an existing session
+					// has them (a not-yet-created session has no scope to write to).
+					if (activeSessionTab === "settings" && session?.id)
+						socket.emit("sessions:pipelines", {
+							sessionId: session.id
+						})
+				}}
 			>
-				<Tabs.Trigger
-					value="participants"
-					title="Participants"
-					aria-label="Participants"
-					class="text-surface-700-300 hover:text-primary-500 data-[selected]:border-primary-500 data-[selected]:text-primary-500 flex items-center gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-2 py-1.5"
+				<!-- Matches the site's underlined tab strip (see PanelTab): no
+				     pill, no fill, a bottom border that colours in on selection.
+				     Only the open tab shows its label — the others are icon-only,
+				     so the strip reads as a tab bar rather than a row of buttons. -->
+				<Tabs.List
+					class="border-surface-200-800 flex items-center gap-1 border-b"
 				>
-					<Icons.Users size={16} aria-hidden="true" />
-					{#if activeSessionTab === "participants"}
-						<span>Participants</span>
-					{/if}
-				</Tabs.Trigger>
-				<Tabs.Trigger
-					value="settings"
-					title="Settings"
-					aria-label="Settings"
-					class="text-surface-700-300 hover:text-primary-500 data-[selected]:border-primary-500 data-[selected]:text-primary-500 flex items-center gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-2 py-1.5"
-				>
-					<Icons.Settings size={16} aria-hidden="true" />
-					{#if activeSessionTab === "settings"}
-						<span>Settings</span>
-					{/if}
-				</Tabs.Trigger>
-				<Tabs.Trigger
-					value="visibility"
-					title="Privacy"
-					aria-label="Privacy"
-					class="text-surface-700-300 hover:text-primary-500 data-[selected]:border-primary-500 data-[selected]:text-primary-500 flex items-center gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-2 py-1.5"
-				>
-					<Icons.Eye size={16} aria-hidden="true" />
-					{#if activeSessionTab === "visibility"}
-						<span>Privacy</span>
-					{/if}
-				</Tabs.Trigger>
-			</Tabs.List>
-			<Tabs.Content value="participants">
-				<div class="flex flex-col gap-6 pt-4">
-					<!-- Capability-gated (19 §2): a section the mode's shape
-					     omits does not exist for this session, so it neither
-					     renders nor blocks saving. -->
-					{#if showCharactersSection}
-						<div>
-							<span class="mb-2 font-semibold">
-								Characters{charactersFloor > 0 ? "*" : ""}
-							</span>
-							{#key session?.sessionCharacters}
+					<Tabs.Trigger
+						value="participants"
+						title="Participants"
+						aria-label="Participants"
+						class="text-surface-700-300 hover:text-primary-500 data-[selected]:border-primary-500 data-[selected]:text-primary-500 flex items-center gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-2 py-1.5"
+					>
+						<Icons.Users size={16} aria-hidden="true" />
+						{#if activeSessionTab === "participants"}
+							<span>Participants</span>
+						{/if}
+					</Tabs.Trigger>
+					<Tabs.Trigger
+						value="settings"
+						title="Settings"
+						aria-label="Settings"
+						class="text-surface-700-300 hover:text-primary-500 data-[selected]:border-primary-500 data-[selected]:text-primary-500 flex items-center gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-2 py-1.5"
+					>
+						<Icons.Settings size={16} aria-hidden="true" />
+						{#if activeSessionTab === "settings"}
+							<span>Settings</span>
+						{/if}
+					</Tabs.Trigger>
+					<Tabs.Trigger
+						value="visibility"
+						title="Privacy"
+						aria-label="Privacy"
+						class="text-surface-700-300 hover:text-primary-500 data-[selected]:border-primary-500 data-[selected]:text-primary-500 flex items-center gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-2 py-1.5"
+					>
+						<Icons.Eye size={16} aria-hidden="true" />
+						{#if activeSessionTab === "visibility"}
+							<span>Privacy</span>
+						{/if}
+					</Tabs.Trigger>
+				</Tabs.List>
+				<Tabs.Content value="participants">
+					<div class="flex flex-col gap-6 pt-4">
+						<!-- Capability-gated (19 §2): a section the mode's shape
+						     omits does not exist for this session, so it neither
+						     renders nor blocks saving. -->
+						{#if showCharactersSection}
+							<div>
+								<span class="mb-2 font-semibold">
+									Characters{charactersFloor > 0 ? "*" : ""}
+								</span>
+								{#key session?.sessionCharacters}
+									<div
+										class="relative mb-2 flex flex-col gap-2"
+										use:dndzone={{
+											items: selectedCharacters,
+											flipDurationMs: 150,
+											dragDisabled: !(
+												selectedCharacters.length > 1
+											),
+											dropFromOthersDisabled: true
+										}}
+										onconsider={(e) =>
+											(selectedCharacters = e.detail.items)}
+										onfinalize={(e) =>
+											(selectedCharacters = e.detail.items)}
+									>
+										{#each selectedCharacters as c, i (c.id)}
+											{@const isActive = session
+												? !!session?.sessionCharacters?.find(
+														(cc) =>
+															cc.characterId === c.id
+													)?.isActive
+												: true}
+											{@const visibility = session
+												? session?.sessionCharacters?.find(
+														(cc) =>
+															cc.characterId === c.id
+													)?.visibility ||
+													SessionCharacterVisibility.VISIBLE
+												: SessionCharacterVisibility.VISIBLE}
+											{@const VisibilityIcon =
+												getVisibilityIcon(visibility)}
+											{@const isSaved =
+												!session ||
+												!!session.sessionCharacters?.some(
+													(cc) => cc.characterId === c.id
+												)}
+											<div
+												class="card preset-filled-surface-100-900 flex flex-col gap-3 p-3 shadow-sm transition-colors"
+												data-dnd-handle
+											>
+												<div class="flex items-start gap-3">
+													<div
+														class="relative w-fit shrink-0"
+													>
+														<span
+															class="text-surface-400 hover:text-primary-500 absolute -top-2 -left-2 z-10 cursor-grab"
+															data-dnd-handle
+															class:hidden={selectedCharacters.length <=
+																1}
+															title="Drag to reorder"
+														>
+															<Icons.GripVertical
+																size={18}
+															/>
+														</span>
+														<Avatar char={c} />
+													</div>
+													<div class="min-w-0 flex-1">
+														<div
+															class="truncate font-semibold select-none"
+														>
+															{c.nickname || c.name}
+														</div>
+														<div
+															class="text-surface-700-300 line-clamp-2 text-xs select-none"
+														>
+															{c.creatorNotes ||
+																c.description ||
+																""}
+														</div>
+													</div>
+													{#if selectedCharacters.length > 1}
+														<div
+															class="flex shrink-0 flex-col gap-0.5"
+														>
+															<button
+																class="btn-ghost rounded p-0.5 disabled:opacity-30"
+																onclick={() =>
+																	moveCharacterUp(
+																		i
+																	)}
+																disabled={i === 0}
+																title="Move up"
+																aria-label="Move {c.nickname ||
+																	c.name} up"
+															>
+																<Icons.ChevronUp
+																	size={16}
+																/>
+															</button>
+															<button
+																class="btn-ghost rounded p-0.5 disabled:opacity-30"
+																onclick={() =>
+																	moveCharacterDown(
+																		i
+																	)}
+																disabled={i ===
+																	selectedCharacters.length -
+																		1}
+																title="Move down"
+																aria-label="Move {c.nickname ||
+																	c.name} down"
+															>
+																<Icons.ChevronDown
+																	size={16}
+																/>
+															</button>
+														</div>
+													{/if}
+												</div>
+												<div
+													class="border-surface-300-700 flex items-center justify-between gap-2 border-t pt-2"
+												>
+													{#if session}
+														<span
+															title={isSaved
+																? "Toggle Character Active"
+																: "Save the session to set this character's active status"}
+															class="flex items-center gap-2"
+														>
+															<Switch
+																name="toggle-character-active-{c.id}"
+																checked={isActive}
+																disabled={!isSaved}
+																onCheckedChange={(
+																	e
+																) =>
+																	toggleCharacterActive(
+																		e,
+																		c
+																	)}
+																aria-label="Toggle character {c.name} active status"
+															>
+																<Switch.Control
+																	class="preset-filled-surface-500 data-[state=checked]:preset-filled-success-500 w-9"
+																>
+																	<Switch.Thumb>
+																		{#if isActive}
+																			<Icons.Smile
+																				size="14"
+																			/>
+																		{:else}
+																			<Icons.Meh
+																				size="14"
+																			/>
+																		{/if}
+																	</Switch.Thumb>
+																</Switch.Control>
+																<Switch.HiddenInput
+																/>
+															</Switch>
+															<span
+																class="text-surface-700-300 text-xs"
+															>
+																{isActive
+																	? "Active"
+																	: "Inactive"}
+															</span>
+														</span>
+														<button
+															class="btn btn-sm {getVisibilityColor(
+																visibility
+															)}"
+															onclick={() =>
+																updateCharacterVisibility(
+																	c,
+																	getNextVisibility(
+																		visibility
+																	)
+																)}
+															title="When not speaking: {SessionCharacterVisibility.options.find(
+																(opt) =>
+																	opt.value ===
+																	visibility
+															)?.description ||
+																"Full character info is included even when they're not speaking"}"
+														>
+															<VisibilityIcon
+																size={16}
+															/>
+															{SessionCharacterVisibility.options.find(
+																(opt) =>
+																	opt.value ===
+																	visibility
+															)?.label || "Full Info"}
+														</button>
+													{:else}
+														<span
+															class="text-surface-700-300 text-xs"
+														>
+															Ready to add
+														</span>
+													{/if}
+													<button
+														class="preset-tonal-error btn btn-sm"
+														onclick={() =>
+															confirmRemoveCharacter(
+																c.id,
+																c.nickname ||
+																	c.name ||
+																	""
+															)}
+														title="Remove from session"
+													>
+														<Icons.X size={16} /> Remove
+													</button>
+												</div>
+											</div>
+										{/each}
+									</div>
+								{/key}
+								<div>
+									<button
+										class="btn btn-sm preset-filled-primary-500 flex items-center"
+										onclick={() => (showCharacterModal = true)}
+									>
+										<Icons.Plus size={16} /> Add Character
+									</button>
+								</div>
+							</div>
+						{/if}
+						{#if showPersonasSection}
+							<div>
+								<span class="mb-2 font-semibold">
+									Personas{personasFloor > 0 ? "*" : ""}
+								</span>
 								<div
 									class="relative mb-2 flex flex-col gap-2"
 									use:dndzone={{
-										items: selectedCharacters,
+										items: selectedPersonas,
 										flipDurationMs: 150,
 										dragDisabled: !(
-											selectedCharacters.length > 1
+											selectedPersonas.length > 1
 										),
 										dropFromOthersDisabled: true
 									}}
 									onconsider={(e) =>
-										(selectedCharacters = e.detail.items)}
+										(selectedPersonas = e.detail.items)}
 									onfinalize={(e) =>
-										(selectedCharacters = e.detail.items)}
+										(selectedPersonas = e.detail.items)}
 								>
-									{#each selectedCharacters as c, i (c.id)}
-										{@const isActive = session
-											? !!session?.sessionCharacters?.find(
-													(cc) =>
-														cc.characterId === c.id
-												)?.isActive
-											: true}
-										{@const visibility = session
-											? session?.sessionCharacters?.find(
-													(cc) =>
-														cc.characterId === c.id
-												)?.visibility ||
-												SessionCharacterVisibility.VISIBLE
-											: SessionCharacterVisibility.VISIBLE}
-										{@const VisibilityIcon =
-											getVisibilityIcon(visibility)}
-										{@const isSaved =
-											!session ||
-											!!session.sessionCharacters?.some(
-												(cc) => cc.characterId === c.id
-											)}
+									{#each selectedPersonas as p, i (p.id)}
 										<div
 											class="card preset-filled-surface-100-900 flex flex-col gap-3 p-3 shadow-sm transition-colors"
 											data-dnd-handle
@@ -1610,7 +2051,7 @@
 													<span
 														class="text-surface-400 hover:text-primary-500 absolute -top-2 -left-2 z-10 cursor-grab"
 														data-dnd-handle
-														class:hidden={selectedCharacters.length <=
+														class:hidden={selectedPersonas.length <=
 															1}
 														title="Drag to reorder"
 													>
@@ -1618,36 +2059,31 @@
 															size={18}
 														/>
 													</span>
-													<Avatar char={c} />
+													<Avatar char={p} />
 												</div>
 												<div class="min-w-0 flex-1">
 													<div
 														class="truncate font-semibold select-none"
 													>
-														{c.nickname || c.name}
+														{p.name}
 													</div>
 													<div
 														class="text-surface-700-300 line-clamp-2 text-xs select-none"
 													>
-														{c.creatorNotes ||
-															c.description ||
-															""}
+														{p.description || ""}
 													</div>
 												</div>
-												{#if selectedCharacters.length > 1}
+												{#if selectedPersonas.length > 1}
 													<div
 														class="flex shrink-0 flex-col gap-0.5"
 													>
 														<button
 															class="btn-ghost rounded p-0.5 disabled:opacity-30"
 															onclick={() =>
-																moveCharacterUp(
-																	i
-																)}
+																movePersonaUp(i)}
 															disabled={i === 0}
 															title="Move up"
-															aria-label="Move {c.nickname ||
-																c.name} up"
+															aria-label="Move {p.name} up"
 														>
 															<Icons.ChevronUp
 																size={16}
@@ -1656,15 +2092,12 @@
 														<button
 															class="btn-ghost rounded p-0.5 disabled:opacity-30"
 															onclick={() =>
-																moveCharacterDown(
-																	i
-																)}
+																movePersonaDown(i)}
 															disabled={i ===
-																selectedCharacters.length -
+																selectedPersonas.length -
 																	1}
 															title="Move down"
-															aria-label="Move {c.nickname ||
-																c.name} down"
+															aria-label="Move {p.name} down"
 														>
 															<Icons.ChevronDown
 																size={16}
@@ -1674,96 +2107,14 @@
 												{/if}
 											</div>
 											<div
-												class="border-surface-300-700 flex items-center justify-between gap-2 border-t pt-2"
+												class="border-surface-300-700 flex items-center justify-end border-t pt-2"
 											>
-												{#if session}
-													<span
-														title={isSaved
-															? "Toggle Character Active"
-															: "Save the session to set this character's active status"}
-														class="flex items-center gap-2"
-													>
-														<Switch
-															name="toggle-character-active-{c.id}"
-															checked={isActive}
-															disabled={!isSaved}
-															onCheckedChange={(
-																e
-															) =>
-																toggleCharacterActive(
-																	e,
-																	c
-																)}
-															aria-label="Toggle character {c.name} active status"
-														>
-															<Switch.Control
-																class="preset-filled-surface-500 data-[state=checked]:preset-filled-success-500 w-9"
-															>
-																<Switch.Thumb>
-																	{#if isActive}
-																		<Icons.Smile
-																			size="14"
-																		/>
-																	{:else}
-																		<Icons.Meh
-																			size="14"
-																		/>
-																	{/if}
-																</Switch.Thumb>
-															</Switch.Control>
-															<Switch.HiddenInput
-															/>
-														</Switch>
-														<span
-															class="text-surface-700-300 text-xs"
-														>
-															{isActive
-																? "Active"
-																: "Inactive"}
-														</span>
-													</span>
-													<button
-														class="btn btn-sm {getVisibilityColor(
-															visibility
-														)}"
-														onclick={() =>
-															updateCharacterVisibility(
-																c,
-																getNextVisibility(
-																	visibility
-																)
-															)}
-														title="When not speaking: {SessionCharacterVisibility.options.find(
-															(opt) =>
-																opt.value ===
-																visibility
-														)?.description ||
-															"Full character info is included even when they're not speaking"}"
-													>
-														<VisibilityIcon
-															size={16}
-														/>
-														{SessionCharacterVisibility.options.find(
-															(opt) =>
-																opt.value ===
-																visibility
-														)?.label || "Full Info"}
-													</button>
-												{:else}
-													<span
-														class="text-surface-700-300 text-xs"
-													>
-														Ready to add
-													</span>
-												{/if}
 												<button
 													class="preset-tonal-error btn btn-sm"
 													onclick={() =>
-														confirmRemoveCharacter(
-															c.id,
-															c.nickname ||
-																c.name ||
-																""
+														confirmRemovePersona(
+															p.id,
+															p.name || ""
 														)}
 													title="Remove from session"
 												>
@@ -1773,779 +2124,664 @@
 										</div>
 									{/each}
 								</div>
-							{/key}
-							<div>
-								<button
-									class="btn btn-sm preset-filled-primary-500 flex items-center"
-									onclick={() => (showCharacterModal = true)}
-								>
-									<Icons.Plus size={16} /> Add Character
-								</button>
-							</div>
-						</div>
-					{/if}
-					{#if showPersonasSection}
-						<div>
-							<span class="mb-2 font-semibold">
-								Personas{personasFloor > 0 ? "*" : ""}
-							</span>
-							<div
-								class="relative mb-2 flex flex-col gap-2"
-								use:dndzone={{
-									items: selectedPersonas,
-									flipDurationMs: 150,
-									dragDisabled: !(
-										selectedPersonas.length > 1
-									),
-									dropFromOthersDisabled: true
-								}}
-								onconsider={(e) =>
-									(selectedPersonas = e.detail.items)}
-								onfinalize={(e) =>
-									(selectedPersonas = e.detail.items)}
-							>
-								{#each selectedPersonas as p, i (p.id)}
-									<div
-										class="card preset-filled-surface-100-900 flex flex-col gap-3 p-3 shadow-sm transition-colors"
-										data-dnd-handle
+								<div>
+									<button
+										class="btn btn-sm preset-filled-primary-500 flex items-center gap-1"
+										onclick={() => (showPersonaModal = true)}
 									>
-										<div class="flex items-start gap-3">
-											<div
-												class="relative w-fit shrink-0"
-											>
-												<span
-													class="text-surface-400 hover:text-primary-500 absolute -top-2 -left-2 z-10 cursor-grab"
-													data-dnd-handle
-													class:hidden={selectedPersonas.length <=
-														1}
-													title="Drag to reorder"
-												>
-													<Icons.GripVertical
-														size={18}
-													/>
-												</span>
-												<Avatar char={p} />
-											</div>
-											<div class="min-w-0 flex-1">
-												<div
-													class="truncate font-semibold select-none"
-												>
-													{p.name}
-												</div>
-												<div
-													class="text-surface-700-300 line-clamp-2 text-xs select-none"
-												>
-													{p.description || ""}
-												</div>
-											</div>
-											{#if selectedPersonas.length > 1}
-												<div
-													class="flex shrink-0 flex-col gap-0.5"
-												>
-													<button
-														class="btn-ghost rounded p-0.5 disabled:opacity-30"
-														onclick={() =>
-															movePersonaUp(i)}
-														disabled={i === 0}
-														title="Move up"
-														aria-label="Move {p.name} up"
-													>
-														<Icons.ChevronUp
-															size={16}
-														/>
-													</button>
-													<button
-														class="btn-ghost rounded p-0.5 disabled:opacity-30"
-														onclick={() =>
-															movePersonaDown(i)}
-														disabled={i ===
-															selectedPersonas.length -
-																1}
-														title="Move down"
-														aria-label="Move {p.name} down"
-													>
-														<Icons.ChevronDown
-															size={16}
-														/>
-													</button>
-												</div>
-											{/if}
-										</div>
+										<Icons.Plus size={16} /> Add Persona
+									</button>
+								</div>
+							</div>
+						{/if}
+
+						{#if session && (removedCharacters.length > 0 || removedPersonas.length > 0)}
+							<div>
+								<span class="mb-2 font-semibold">Removed</span>
+								<p class="text-surface-700-300 mb-2 text-xs">
+									These were removed from the session, but their
+									past messages are kept. Reassign a removed
+									participant's history to a character or persona
+									you own.
+								</p>
+								<div class="flex flex-col gap-2">
+									{#each removedCharacters as rc (rc.id)}
 										<div
-											class="border-surface-300-700 flex items-center justify-end border-t pt-2"
+											class="card preset-filled-surface-100-900 flex items-center justify-between gap-3 p-3"
 										>
+											<span class="truncate text-sm">
+												{rc.name}
+											</span>
 											<button
-												class="preset-tonal-error btn btn-sm"
+												class="btn btn-sm preset-tonal"
 												onclick={() =>
-													confirmRemovePersona(
-														p.id,
-														p.name || ""
+													openReassignModal(
+														"character",
+														rc.id,
+														rc.name
 													)}
-												title="Remove from session"
 											>
-												<Icons.X size={16} /> Remove
+												Reassign…
 											</button>
 										</div>
-									</div>
-								{/each}
-							</div>
-							<div>
-								<button
-									class="btn btn-sm preset-filled-primary-500 flex items-center gap-1"
-									onclick={() => (showPersonaModal = true)}
-								>
-									<Icons.Plus size={16} /> Add Persona
-								</button>
-							</div>
-						</div>
-					{/if}
-
-					{#if session && (removedCharacters.length > 0 || removedPersonas.length > 0)}
-						<div>
-							<span class="mb-2 font-semibold">Removed</span>
-							<p class="text-surface-700-300 mb-2 text-xs">
-								These were removed from the session, but their
-								past messages are kept. Reassign a removed
-								participant's history to a character or persona
-								you own.
-							</p>
-							<div class="flex flex-col gap-2">
-								{#each removedCharacters as rc (rc.id)}
-									<div
-										class="card preset-filled-surface-100-900 flex items-center justify-between gap-3 p-3"
-									>
-										<span class="truncate text-sm">
-											{rc.name}
-										</span>
-										<button
-											class="btn btn-sm preset-tonal"
-											onclick={() =>
-												openReassignModal(
-													"character",
-													rc.id,
-													rc.name
-												)}
+									{/each}
+									{#each removedPersonas as rp (rp.id)}
+										<div
+											class="card preset-filled-surface-100-900 flex items-center justify-between gap-3 p-3"
 										>
-											Reassign…
-										</button>
-									</div>
-								{/each}
-								{#each removedPersonas as rp (rp.id)}
-									<div
-										class="card preset-filled-surface-100-900 flex items-center justify-between gap-3 p-3"
-									>
-										<span class="truncate text-sm">
-											{rp.name}
-										</span>
-										<button
-											class="btn btn-sm preset-tonal"
-											onclick={() =>
-												openReassignModal(
-													"persona",
-													rp.id,
-													rp.name
-												)}
-										>
-											Reassign…
-										</button>
-									</div>
-								{/each}
-							</div>
-						</div>
-					{/if}
-
-					{#if editSessionId && systemSettingsCtx?.settings?.isAccountsEnabled}
-						<!-- Guests Section (only show in edit mode and when accounts are enabled) -->
-						<div>
-							<label
-								class="mb-3 flex items-center justify-between"
-							>
-								<span class="font-semibold">Guests</span>
-								<button
-									class="btn btn-sm preset-filled-primary-500 flex items-center gap-1"
-									onclick={() => (showGuestModal = true)}
-								>
-									<Icons.UserPlus size={16} /> Add Guests
-								</button>
-							</label>
-							<div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
-								{#if selectedGuests.length === 0}
-									<div
-										class="text-surface-700-300 col-span-full text-center text-sm"
-									>
-										No guests added
-									</div>
-								{/if}
-								{#each selectedGuests as guest}
-									<div class="card preset-filled-surface-100-900 p-3">
-										<div class="flex flex-col gap-2">
-											<div
-												class="flex items-center justify-between"
+											<span class="truncate text-sm">
+												{rp.name}
+											</span>
+											<button
+												class="btn btn-sm preset-tonal"
+												onclick={() =>
+													openReassignModal(
+														"persona",
+														rp.id,
+														rp.name
+													)}
 											>
+												Reassign…
+											</button>
+										</div>
+									{/each}
+								</div>
+							</div>
+						{/if}
+
+						{#if editSessionId && systemSettingsCtx?.settings?.isAccountsEnabled}
+							<!-- Guests Section (only show in edit mode and when accounts are enabled) -->
+							<div>
+								<label
+									class="mb-3 flex items-center justify-between"
+								>
+									<span class="font-semibold">Guests</span>
+									<button
+										class="btn btn-sm preset-filled-primary-500 flex items-center gap-1"
+										onclick={() => (showGuestModal = true)}
+									>
+										<Icons.UserPlus size={16} /> Add Guests
+									</button>
+								</label>
+								<div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+									{#if selectedGuests.length === 0}
+										<div
+											class="text-surface-700-300 col-span-full text-center text-sm"
+										>
+											No guests added
+										</div>
+									{/if}
+									{#each selectedGuests as guest}
+										<div class="card preset-filled-surface-100-900 p-3">
+											<div class="flex flex-col gap-2">
 												<div
-													class="flex items-center gap-2"
+													class="flex items-center justify-between"
 												>
-													<Icons.User size={20} />
-													<span class="font-semibold">
-														{resolveUserHandle(
-															guest.user
-														)}
-													</span>
-												</div>
-												<button
-													class="hover:preset-filled-error-500 rounded p-1"
-													onclick={() =>
-														confirmRemoveGuest(
-															guest.userId,
-															resolveUserHandle(
+													<div
+														class="flex items-center gap-2"
+													>
+														<Icons.User size={20} />
+														<span class="font-semibold">
+															{resolveUserHandle(
 																guest.user
-															)
-														)}
-													title="Remove guest"
-												>
-													<Icons.X size={16} />
-												</button>
+															)}
+														</span>
+													</div>
+													<button
+														class="hover:preset-filled-error-500 rounded p-1"
+														onclick={() =>
+															confirmRemoveGuest(
+																guest.userId,
+																resolveUserHandle(
+																	guest.user
+																)
+															)}
+														title="Remove guest"
+													>
+														<Icons.X size={16} />
+													</button>
+												</div>
 											</div>
 										</div>
-									</div>
-								{/each}
+									{/each}
+								</div>
 							</div>
-						</div>
-					{/if}
+						{/if}
 
-					{#if selectedCharacters.length > 1 || selectedPersonas.length > 1}
-						<div>
-							<label
-								class="font-semibold"
-								for="groupReplyStrategy"
-							>
-								Group Reply Strategy
-							</label>
-							<select
-								id="groupReplyStrategy"
-								class="select input-lg w-full"
-								bind:value={groupReplyStrategy}
-								disabled={isGuest}
-							>
-								{#each GroupReplyStrategies.options as opt}
-									{#if opt.value !== GroupReplyStrategies.USER_SPLIT || systemSettingsCtx.settings?.isAccountsEnabled}
-										<option value={opt.value}>
-											{opt.label}
-										</option>
-									{/if}
-								{/each}
-							</select>
-						</div>
-					{/if}
-				</div>
-			</Tabs.Content>
-			<Tabs.Content value="settings">
-				<div class="flex flex-col gap-6 pt-4">
-					<div>
-						<label class="flex gap-1 font-semibold" for="scenario">
-							Scenario <span
-								class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
-								title="This field will be visible in prompts"
-							>
-								<Icons.ScanEye
-									size={16}
-									class="relative top-[1px] inline"
-								/>
-							</span>
-						</label>
-						<textarea
-							id="scenario"
-							class="textarea input-lg w-full"
-							placeholder="Describe the session scenario, setting, or context (optional)"
-							bind:value={scenario}
-							rows={3}
-							disabled={isGuest}
-						></textarea>
-					</div>
-					{#if showLorebookField}
-						<div>
-							<label
-								class="flex gap-1 font-semibold"
-								for="lorebook"
-							>
-								Lorebook{modeShape?.lorebook === "required"
-									? "*"
-									: ""}
-								<span
-									class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
-									title="The session will use world lore, character lore and history entries from this lorebook"
+						{#if selectedCharacters.length > 1 || selectedPersonas.length > 1}
+							<div>
+								<label
+									class="font-semibold"
+									for="groupReplyStrategy"
 								>
-									<Icons.MessageCircleQuestion
+									Group Reply Strategy
+								</label>
+								<select
+									id="groupReplyStrategy"
+									class="select input-lg w-full"
+									bind:value={groupReplyStrategy}
+									disabled={isGuest}
+								>
+									{#each GroupReplyStrategies.options as opt}
+										{#if opt.value !== GroupReplyStrategies.USER_SPLIT || systemSettingsCtx.settings?.isAccountsEnabled}
+											<option value={opt.value}>
+												{opt.label}
+											</option>
+										{/if}
+									{/each}
+								</select>
+							</div>
+						{/if}
+					</div>
+				</Tabs.Content>
+				<Tabs.Content value="settings">
+					<div class="flex flex-col gap-6 pt-4">
+						<div>
+							<label class="flex gap-1 font-semibold" for="scenario">
+								Scenario <span
+									class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
+									title="This field will be visible in prompts"
+								>
+									<Icons.ScanEye
 										size={16}
 										class="relative top-[1px] inline"
 									/>
 								</span>
 							</label>
-							<select
-								id="lorebook"
-								class="select input-lg w-full"
-								bind:value={lorebookId}
+							<textarea
+								id="scenario"
+								class="textarea input-lg w-full"
+								placeholder="Describe the session scenario, setting, or context (optional)"
+								bind:value={scenario}
+								rows={3}
 								disabled={isGuest}
-							>
-								<option value={null}>None</option>
-								{#each lorebookList as lorebook (lorebook.id)}
-									<option value={lorebook.id}>
-										{lorebook.name}
-									</option>
-								{/each}
-							</select>
+							></textarea>
 						</div>
-					{/if}
-
-					<!-- The preset (19 §7). One pipeline configuration, chosen
-					     per session, deciding the settings this session runs on and
-					     which actions it includes. Admins additionally see
-					     disabled presets, marked — one an admin just switched
-					     off vanishing entirely would read as deleted. -->
-					{#if session && !isGuest && presetOptions.length > 0}
-						<div>
-							<label class="font-semibold" for="sessionPreset">
-								Preset
-							</label>
-							<select
-								id="sessionPreset"
-								class="select w-full"
-								value={selectedPreset == null
-									? ""
-									: String(selectedPreset)}
-								onchange={(e) =>
-									choosePreset(e.currentTarget.value)}
-							>
-								{#each presetOptions as p (p.configId)}
-									<option value={String(p.configId)}>
-										{p.isDefault
-											? "★ "
-											: ""}{p.name}{!p.enabled
-											? " (unavailable)"
-											: ""}
-									</option>
-								{/each}
-							</select>
-						</div>
-					{/if}
-
-					<!-- Session actions (19 §3). Three layers decide what a session has:
-					     its own answer, then its preset's included set, then the
-					     companion rule. The permission line runs between the two
-					     lists — anyone may toggle what the preset included; only
-					     an admin may reach into the second list, because that
-					     gives the session something the instance owner did not
-					     offer it. -->
-					{#if session && !isGuest && sessionFunctions.length > 0}
-						<div class="flex flex-col gap-2">
-							<p class="font-semibold">Actions</p>
-							<p class="text-muted-foreground text-xs">
-								What this session can do besides reply. Replying
-								is intrinsic and always available.
-							</p>
-
-							{#each presetActions as f (f.function)}
+						{#if showLorebookField}
+							<div>
 								<label
-									class="flex items-start gap-2 text-sm"
-									for="fn-{f.function}"
+									class="flex gap-1 font-semibold"
+									for="lorebook"
 								>
-									<input
-										id="fn-{f.function}"
-										type="checkbox"
-										class="checkbox mt-0.5"
-										checked={f.enabled}
-										disabled={functionsBusy === f.function}
-										onchange={(e) =>
-											toggleSessionFunction(
-												f.function,
-												e.currentTarget.checked
-											)}
-									/>
-									<span class="flex flex-col">
-										<span>
-											{f.name}
-											{#if f.source === "session"}
-												<span
-													class="text-muted-foreground text-[10px]"
-												>
-													· set for this session
-												</span>
-											{/if}
-										</span>
-										<span
-											class="text-muted-foreground text-xs"
-										>
-											{f.specSlug}
-										</span>
+									Lorebook{modeShape?.lorebook === "required"
+										? "*"
+										: ""}
+									<span
+										class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
+										title="The session will use world lore, character lore and history entries from this lorebook"
+									>
+										<Icons.MessageCircleQuestion
+											size={16}
+											class="relative top-[1px] inline"
+										/>
 									</span>
 								</label>
-							{/each}
-
-							{#if presetActions.length === 0}
-								<p class="text-muted-foreground text-xs italic">
-									This session's preset includes no actions.
-								</p>
-							{/if}
-
-							{#if outsideActions.length > 0}
-								<div
-									class="border-surface-300-700 mt-1 flex flex-col gap-2 border-t pt-2"
-								>
-									<p class="text-xs font-semibold">
-										Not in this preset
-									</p>
-									<p class="text-muted-foreground text-xs">
-										{#if canAddOutsidePreset}
-											Contributed to this mode but left
-											out of the preset. Adding one
-											affects this session only.
-										{:else}
-											Contributed to this mode but not
-											part of your preset. An
-											administrator can add these.
-										{/if}
-									</p>
-									{#each outsideActions as f (f.function)}
-										<label
-											class="flex items-start gap-2 text-sm"
-											for="fn-{f.function}"
-										>
-											<input
-												id="fn-{f.function}"
-												type="checkbox"
-												class="checkbox mt-0.5"
-												checked={f.enabled}
-												disabled={functionsBusy ===
-													f.function ||
-													(!canAddOutsidePreset &&
-														!f.enabled)}
-												onchange={(e) =>
-													toggleSessionFunction(
-														f.function,
-														e.currentTarget.checked
-													)}
-											/>
-											<span class="flex flex-col">
-												<span>{f.name}</span>
-												<span
-													class="text-muted-foreground text-xs"
-												>
-													{f.specSlug}
-												</span>
-											</span>
-										</label>
-									{/each}
-								</div>
-							{/if}
-						</div>
-					{/if}
-
-					<!-- Turn order (19 §5): the dropdown IS the swap list — every
-					     registered next-speaker strategy, an extension's beside
-					     core's. "Pipeline default" inherits the pinned type;
-					     choosing writes a session-scope rebind, and the receipt names
-					     whichever type actually ran. -->
-					{#if session && !isGuest && speakerStrategies.length > 0}
-						<div>
-							<label class="font-semibold" for="turnOrder">
-								Turn Order
-							</label>
-							<div class="flex items-center gap-2">
 								<select
-									id="turnOrder"
-									class="select w-full"
-									bind:value={selectedSpeakerStrategy}
+									id="lorebook"
+									class="select input-lg w-full"
+									bind:value={lorebookId}
+									disabled={isGuest}
 								>
-									<option value={null}>
-										Pipeline default
-									</option>
-									{#each speakerStrategies as s (s.typeId)}
-										<option value={s.typeId}>
-											{s.name}
+									<option value={null}>None</option>
+									{#each lorebookList as lorebook (lorebook.id)}
+										<option value={lorebook.id}>
+											{lorebook.name}
 										</option>
 									{/each}
 								</select>
-								<button
-									class="btn btn-sm preset-filled-primary-500 shrink-0"
-									onclick={applySpeakerStrategy}
-								>
-									Apply
-								</button>
 							</div>
-						</div>
-					{/if}
+						{/if}
 
-					<!-- Mode-declared per-session fields (19 §2): rendered through the one
-		     schema renderer, stored on the session row, supplied back through the
-		     input node's published document. Standard mode declares none. -->
-					{#if Object.keys(modeFieldDecls).length > 0}
-						<div class="flex flex-col gap-2">
-							<p class="font-semibold">Mode Settings</p>
-							<SchemaForm
-								schema={modeFieldDecls as any}
-								bind:values={genreFields}
-							/>
-						</div>
-					{/if}
-
-					<!-- Configurables grouped BY PIPELINE (not by setting
-					     type): every pipeline this chat involves — the reply
-					     pipeline plus each enabled function like narrate — gets
-					     its own card, rendered from the pipeline's own
-					     declarations and written at this session's scope. The
-					     panel already handles connection (text-gen only),
-					     sampling, prompts and tuning per step. -->
-					{#if session?.id && sessionPipelines.length}
-						<div class="flex flex-col gap-3">
+						<!-- The preset (19 §7). One pipeline configuration, chosen
+						     per session, deciding the settings this session runs on and
+						     which actions it includes. Admins additionally see
+						     disabled presets, marked — one an admin just switched
+						     off vanishing entirely would read as deleted. -->
+						{#if session && !isGuest && presetOptions.length > 0}
 							<div>
-								<p class="font-semibold">Pipelines</p>
-								<p class="text-muted-foreground text-xs">
-									Changes here apply to this chat only. Leave a
-									control on its default to inherit the global
-									setting.
-								</p>
+								<label class="font-semibold" for="sessionPreset">
+									Preset
+								</label>
+								<select
+									id="sessionPreset"
+									class="select w-full"
+									value={selectedPreset == null
+										? ""
+										: String(selectedPreset)}
+									onchange={(e) =>
+										choosePreset(e.currentTarget.value)}
+								>
+									{#each presetOptions as p (p.configId)}
+										<option value={String(p.configId)}>
+											{p.isDefault
+												? "★ "
+												: ""}{p.name}{!p.enabled
+												? " (unavailable)"
+												: ""}
+										</option>
+									{/each}
+								</select>
 							</div>
-							{#each sessionPipelines as p (p.slug)}
-								<!-- One card per pipeline: in selectorsOnly the
-								     panel renders a flat selector list, so this
-								     is the only card — no nesting. -->
-								<div
-									class="card preset-filled-surface-100-900-surface flex flex-col gap-2 p-3"
-								>
-									<p class="text-sm font-semibold">
-										{p.label}
+						{/if}
+
+						<!-- Session actions (19 §3). Three layers decide what a session has:
+						     its own answer, then its preset's included set, then the
+						     companion rule. The permission line runs between the two
+						     lists — anyone may toggle what the preset included; only
+						     an admin may reach into the second list, because that
+						     gives the session something the instance owner did not
+						     offer it. -->
+						{#if session && !isGuest && sessionFunctions.length > 0}
+							<div class="flex flex-col gap-2">
+								<p class="font-semibold">Actions</p>
+								<p class="text-muted-foreground text-xs">
+									What this session can do besides reply. Replying
+									is intrinsic and always available.
+								</p>
+
+								{#each presetActions as f (f.function)}
+									<label
+										class="flex items-start gap-2 text-sm"
+										for="fn-{f.function}"
+									>
+										<input
+											id="fn-{f.function}"
+											type="checkbox"
+											class="checkbox mt-0.5"
+											checked={f.enabled}
+											disabled={functionsBusy === f.function}
+											onchange={(e) =>
+												toggleSessionFunction(
+													f.function,
+													e.currentTarget.checked
+												)}
+										/>
+										<span class="flex flex-col">
+											<span>
+												{f.name}
+												{#if f.source === "session"}
+													<span
+														class="text-muted-foreground text-[10px]"
+													>
+														· set for this session
+													</span>
+												{/if}
+											</span>
+											<span
+												class="text-muted-foreground text-xs"
+											>
+												{f.specSlug}
+											</span>
+										</span>
+									</label>
+								{/each}
+
+								{#if presetActions.length === 0}
+									<p class="text-muted-foreground text-xs italic">
+										This session's preset includes no actions.
 									</p>
-									<PipelineConfigOptions
-										slug={p.slug}
-										sessionId={session.id}
-										selectorsOnly
-										showConfigPicker={false}
-										showScopeNote={false}
-									/>
+								{/if}
+
+								{#if outsideActions.length > 0}
+									<div
+										class="border-surface-300-700 mt-1 flex flex-col gap-2 border-t pt-2"
+									>
+										<p class="text-xs font-semibold">
+											Not in this preset
+										</p>
+										<p class="text-muted-foreground text-xs">
+											{#if canAddOutsidePreset}
+												Contributed to this mode but left
+												out of the preset. Adding one
+												affects this session only.
+											{:else}
+												Contributed to this mode but not
+												part of your preset. An
+												administrator can add these.
+											{/if}
+										</p>
+										{#each outsideActions as f (f.function)}
+											<label
+												class="flex items-start gap-2 text-sm"
+												for="fn-{f.function}"
+											>
+												<input
+													id="fn-{f.function}"
+													type="checkbox"
+													class="checkbox mt-0.5"
+													checked={f.enabled}
+													disabled={functionsBusy ===
+														f.function ||
+														(!canAddOutsidePreset &&
+															!f.enabled)}
+													onchange={(e) =>
+														toggleSessionFunction(
+															f.function,
+															e.currentTarget.checked
+														)}
+												/>
+												<span class="flex flex-col">
+													<span>{f.name}</span>
+													<span
+														class="text-muted-foreground text-xs"
+													>
+														{f.specSlug}
+													</span>
+												</span>
+											</label>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/if}
+
+						<!-- Turn order (19 §5): the dropdown IS the swap list — every
+						     registered next-speaker strategy, an extension's beside
+						     core's. "Pipeline default" inherits the pinned type;
+						     choosing writes a session-scope rebind, and the receipt names
+						     whichever type actually ran. -->
+						{#if session && !isGuest && speakerStrategies.length > 0}
+							<div>
+								<label class="font-semibold" for="turnOrder">
+									Turn Order
+								</label>
+								<div class="flex items-center gap-2">
+									<select
+										id="turnOrder"
+										class="select w-full"
+										bind:value={selectedSpeakerStrategy}
+									>
+										<option value={null}>
+											Pipeline default
+										</option>
+										{#each speakerStrategies as s (s.typeId)}
+											<option value={s.typeId}>
+												{s.name}
+											</option>
+										{/each}
+									</select>
+									<button
+										class="btn btn-sm preset-filled-primary-500 shrink-0"
+										onclick={applySpeakerStrategy}
+									>
+										Apply
+									</button>
 								</div>
-							{/each}
-						</div>
-					{/if}
+							</div>
+						{/if}
 
-					<!-- Tags Section -->
-					<div class="pb-10">
-						<label class="font-semibold" for="tagInput">Tags</label>
-						<div class="relative">
-							<input
-								id="tagInput"
-								type="text"
-								bind:value={tagSearchInput}
-								class="input input-lg w-full"
-								placeholder="Add a tag..."
-								disabled={isGuest}
-								onfocus={() => (showTagSuggestions = true)}
-								onblur={() =>
-									setTimeout(
-										() => (showTagSuggestions = false),
-										200
-									)}
-							/>
+						<!-- Mode-declared per-session fields (19 §2): rendered through the one
+			     schema renderer, stored on the session row, supplied back through the
+			     input node's published document. Standard mode declares none. -->
+						{#if Object.keys(modeFieldDecls).length > 0}
+							<div class="flex flex-col gap-2">
+								<p class="font-semibold">Mode Settings</p>
+								<SchemaForm
+									schema={modeFieldDecls as any}
+									bind:values={genreFields}
+								/>
+							</div>
+						{/if}
 
-							<!-- Tag suggestions dropdown -->
-							{#if showTagSuggestions && filteredTags.length > 0}
-								<div
-									class="bg-surface-100-900 absolute z-10 mt-1 max-h-40 w-full overflow-y-auto rounded-lg border shadow-lg"
-								>
-									{#each filteredTags as tag}
+						<!-- Configurables grouped BY PIPELINE (not by setting
+						     type): every pipeline this chat involves — the reply
+						     pipeline plus each enabled function like narrate — gets
+						     its own card, rendered from the pipeline's own
+						     declarations and written at this session's scope. The
+						     panel already handles connection (text-gen only),
+						     sampling, prompts and tuning per step. -->
+						{#if session?.id && sessionPipelines.length}
+							<div class="flex flex-col gap-3">
+								<div>
+									<p class="font-semibold">Pipelines</p>
+									<p class="text-muted-foreground text-xs">
+										Changes here apply to this chat only. Leave a
+										control on its default to inherit the global
+										setting.
+									</p>
+								</div>
+								{#each sessionPipelines as p (p.slug)}
+									<!-- One card per pipeline: in selectorsOnly the
+									     panel renders a flat selector list, so this
+									     is the only card — no nesting. -->
+									<div
+										class="card preset-filled-surface-100-900-surface flex flex-col gap-2 p-3"
+									>
+										<p class="text-sm font-semibold">
+											{p.label}
+										</p>
+										<PipelineConfigOptions
+											slug={p.slug}
+											sessionId={session.id}
+											selectorsOnly
+											showConfigPicker={false}
+											showScopeNote={false}
+										/>
+									</div>
+								{/each}
+							</div>
+						{/if}
+
+						<!-- Tags Section -->
+						<div class="pb-10">
+							<label class="font-semibold" for="tagInput">Tags</label>
+							<div class="relative">
+								<input
+									id="tagInput"
+									type="text"
+									bind:value={tagSearchInput}
+									class="input input-lg w-full"
+									placeholder="Add a tag..."
+									disabled={isGuest}
+									onfocus={() => (showTagSuggestions = true)}
+									onblur={() =>
+										setTimeout(
+											() => (showTagSuggestions = false),
+											200
+										)}
+								/>
+
+								<!-- Tag suggestions dropdown -->
+								{#if showTagSuggestions && filteredTags.length > 0}
+									<div
+										class="bg-surface-100-900 absolute z-10 mt-1 max-h-40 w-full overflow-y-auto rounded-lg border shadow-lg"
+									>
+										{#each filteredTags as tag}
+											<button
+												type="button"
+												class="hover:bg-surface-200-800 w-full px-3 py-2 text-left transition-colors"
+												onclick={() => addTag(tag.name)}
+											>
+												<span
+													class="chip mr-2 {tag.colorPreset ||
+														'preset-filled-primary-500'}"
+												>
+													{tag.name}
+												</span>
+												{#if tag.description}
+													<span
+														class="text-muted-foreground text-sm"
+													>
+														- {tag.description}
+													</span>
+												{/if}
+											</button>
+										{/each}
+									</div>
+								{/if}
+							</div>
+
+							<!-- Selected tags display -->
+							{#if selectedTags.length > 0}
+								<div class="mt-2 flex flex-wrap gap-2">
+									{#each selectedTags as tagName}
+										{@const tag = tagsList.find(
+											(t) => t.name === tagName
+										)}
 										<button
 											type="button"
-											class="hover:bg-surface-200-800 w-full px-3 py-2 text-left transition-colors"
-											onclick={() => addTag(tag.name)}
+											class="chip {tag?.colorPreset ||
+												'preset-filled-primary-500'} group relative"
+											onclick={() => removeTag(tagName)}
+											disabled={isGuest}
+											title={isGuest
+												? tagName
+												: "Click to remove tag"}
 										>
-											<span
-												class="chip mr-2 {tag.colorPreset ||
-													'preset-filled-primary-500'}"
-											>
-												{tag.name}
-											</span>
-											{#if tag.description}
-												<span
-													class="text-muted-foreground text-sm"
-												>
-													- {tag.description}
-												</span>
+											{tagName}
+											{#if !isGuest}
+												<Icons.X
+													size={14}
+													class="ml-1 opacity-60 group-hover:opacity-100"
+												/>
 											{/if}
 										</button>
 									{/each}
 								</div>
 							{/if}
 						</div>
-
-						<!-- Selected tags display -->
-						{#if selectedTags.length > 0}
-							<div class="mt-2 flex flex-wrap gap-2">
-								{#each selectedTags as tagName}
-									{@const tag = tagsList.find(
-										(t) => t.name === tagName
-									)}
-									<button
-										type="button"
-										class="chip {tag?.colorPreset ||
-											'preset-filled-primary-500'} group relative"
-										onclick={() => removeTag(tagName)}
-										disabled={isGuest}
-										title={isGuest
-											? tagName
-											: "Click to remove tag"}
-									>
-										{tagName}
-										{#if !isGuest}
-											<Icons.X
-												size={14}
-												class="ml-1 opacity-60 group-hover:opacity-100"
-											/>
-										{/if}
-									</button>
-								{/each}
-							</div>
-						{/if}
 					</div>
-				</div>
-			</Tabs.Content>
-			<Tabs.Content value="visibility">
-				<div class="flex flex-col gap-5 pt-4">
-					<div class="preset-tonal-surface rounded-lg p-4 text-sm">
-						<div class="flex items-start gap-2">
-							<Icons.Eye size={18} class="mt-0.5 shrink-0" />
-							<div class="flex flex-col gap-1">
-								<p class="font-semibold">
-									What this session sees of your data
-								</p>
-								<p class="text-surface-500">
-									Anything you own and add here becomes visible
-									to this session's other participants, and is
-									read by the pipelines that generate its
-									replies. This shows only your own data — never
-									what anyone else has shared.
-								</p>
+				</Tabs.Content>
+				<Tabs.Content value="visibility">
+					<div class="flex flex-col gap-5 pt-4">
+						<div class="preset-tonal-surface rounded-lg p-4 text-sm">
+							<div class="flex items-start gap-2">
+								<Icons.Eye size={18} class="mt-0.5 shrink-0" />
+								<div class="flex flex-col gap-1">
+									<p class="font-semibold">
+										What this session sees of your data
+									</p>
+									<p class="text-surface-500">
+										Anything you own and add here becomes visible
+										to this session's other participants, and is
+										read by the pipelines that generate its
+										replies. This shows only your own data — never
+										what anyone else has shared.
+									</p>
+								</div>
 							</div>
 						</div>
-					</div>
 
-					{#if !accountVisibility}
-						<p class="text-surface-500 text-sm">Loading…</p>
-					{:else}
-						<p class="text-sm">
-							{#if accountVisibility.isOwner}
-								You are the <span class="font-semibold"
-									>owner</span
-								> of this session.
-							{:else if accountVisibility.isGuest}
-								You are a <span class="font-semibold">guest</span>
-								in this session.
-							{:else}
-								You are a participant in this session.
-							{/if}
-						</p>
-
-						{@const ex = accountVisibility.exposed}
-						{#if ex.characters.length + ex.personas.length + ex.lorebooks.length === 0}
-							<div class="card preset-filled-surface-100-900 p-4 text-sm">
-								You have not added any of your own characters,
-								personas, or lorebooks to this session — so it
-								exposes nothing of yours.
-							</div>
+						{#if !accountVisibility}
+							<p class="text-surface-500 text-sm">Loading…</p>
 						{:else}
-							<div class="flex flex-col gap-3">
-								{#if ex.characters.length}
-									<div
-										class="card preset-filled-surface-100-900 flex flex-col gap-2 p-3"
-									>
-										<div
-											class="flex items-center gap-2 text-sm font-semibold"
-										>
-											<Icons.User size={16} /> Characters
-										</div>
-										<div class="flex flex-wrap gap-2">
-											{#each ex.characters as c}
-												<span
-													class="preset-tonal-primary rounded-full px-3 py-1 text-xs"
-													>{c.name}</span
-												>
-											{/each}
-										</div>
-									</div>
+							<p class="text-sm">
+								{#if accountVisibility.isOwner}
+									You are the <span class="font-semibold"
+										>owner</span
+									> of this session.
+								{:else if accountVisibility.isGuest}
+									You are a <span class="font-semibold">guest</span>
+									in this session.
+								{:else}
+									You are a participant in this session.
 								{/if}
-								{#if ex.personas.length}
-									<div
-										class="card preset-filled-surface-100-900 flex flex-col gap-2 p-3"
-									>
-										<div
-											class="flex items-center gap-2 text-sm font-semibold"
-										>
-											<Icons.UserCircle size={16} /> Personas
-										</div>
-										<div class="flex flex-wrap gap-2">
-											{#each ex.personas as p}
-												<span
-													class="preset-tonal-primary rounded-full px-3 py-1 text-xs"
-													>{p.name}</span
-												>
-											{/each}
-										</div>
-									</div>
-								{/if}
-								{#if ex.lorebooks.length}
-									<div
-										class="card preset-filled-surface-100-900 flex flex-col gap-2 p-3"
-									>
-										<div
-											class="flex items-center gap-2 text-sm font-semibold"
-										>
-											<Icons.BookOpen size={16} /> Lorebooks
-										</div>
-										<div class="flex flex-wrap gap-2">
-											{#each ex.lorebooks as l}
-												<span
-													class="preset-tonal-primary rounded-full px-3 py-1 text-xs"
-													>{l.name}</span
-												>
-											{/each}
-										</div>
-									</div>
-								{/if}
-							</div>
-						{/if}
-
-						<div class="flex flex-col gap-2">
-							<p class="text-sm font-semibold">
-								Who can see the above
 							</p>
-							{#if accountVisibility.viewers.length === 0}
-								<p class="text-surface-500 text-sm">
-									No one else yet — you are the only
-									participant.
-								</p>
+
+							{@const ex = accountVisibility.exposed}
+							{#if ex.characters.length + ex.personas.length + ex.lorebooks.length === 0}
+								<div class="card preset-filled-surface-100-900 p-4 text-sm">
+									You have not added any of your own characters,
+									personas, or lorebooks to this session — so it
+									exposes nothing of yours.
+								</div>
 							{:else}
-								<div class="flex flex-col gap-2">
-									{#each accountVisibility.viewers as v}
+								<div class="flex flex-col gap-3">
+									{#if ex.characters.length}
 										<div
-											class="card preset-filled-surface-100-900 flex items-center justify-between gap-3 p-3 text-sm"
+											class="card preset-filled-surface-100-900 flex flex-col gap-2 p-3"
 										>
-											<span
-												class="flex items-center gap-2"
+											<div
+												class="flex items-center gap-2 text-sm font-semibold"
 											>
-												<Icons.User size={16} />
-												{v.username}
-											</span>
-											<span
-												class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs capitalize"
-												>{v.role}</span
-											>
+												<Icons.User size={16} /> Characters
+											</div>
+											<div class="flex flex-wrap gap-2">
+												{#each ex.characters as c}
+													<span
+														class="preset-tonal-primary rounded-full px-3 py-1 text-xs"
+														>{c.name}</span
+													>
+												{/each}
+											</div>
 										</div>
-									{/each}
+									{/if}
+									{#if ex.personas.length}
+										<div
+											class="card preset-filled-surface-100-900 flex flex-col gap-2 p-3"
+										>
+											<div
+												class="flex items-center gap-2 text-sm font-semibold"
+											>
+												<Icons.UserCircle size={16} /> Personas
+											</div>
+											<div class="flex flex-wrap gap-2">
+												{#each ex.personas as p}
+													<span
+														class="preset-tonal-primary rounded-full px-3 py-1 text-xs"
+														>{p.name}</span
+													>
+												{/each}
+											</div>
+										</div>
+									{/if}
+									{#if ex.lorebooks.length}
+										<div
+											class="card preset-filled-surface-100-900 flex flex-col gap-2 p-3"
+										>
+											<div
+												class="flex items-center gap-2 text-sm font-semibold"
+											>
+												<Icons.BookOpen size={16} /> Lorebooks
+											</div>
+											<div class="flex flex-wrap gap-2">
+												{#each ex.lorebooks as l}
+													<span
+														class="preset-tonal-primary rounded-full px-3 py-1 text-xs"
+														>{l.name}</span
+													>
+												{/each}
+											</div>
+										</div>
+									{/if}
 								</div>
 							{/if}
-						</div>
-					{/if}
-				</div>
-			</Tabs.Content>
-		</Tabs>
+
+							<div class="flex flex-col gap-2">
+								<p class="text-sm font-semibold">
+									Who can see the above
+								</p>
+								{#if accountVisibility.viewers.length === 0}
+									<p class="text-surface-500 text-sm">
+										No one else yet — you are the only
+										participant.
+									</p>
+								{:else}
+									<div class="flex flex-col gap-2">
+										{#each accountVisibility.viewers as v}
+											<div
+												class="card preset-filled-surface-100-900 flex items-center justify-between gap-3 p-3 text-sm"
+											>
+												<span
+													class="flex items-center gap-2"
+												>
+													<Icons.User size={16} />
+													{v.username}
+												</span>
+												<span
+													class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs capitalize"
+													>{v.role}</span
+												>
+											</div>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/if}
+					</div>
+				</Tabs.Content>
+			</Tabs>
+		{/if}
 	</div>
 {/if}
 <CharacterSelectModal
@@ -2555,6 +2791,10 @@
 	)}
 	onOpenChange={(e) => (showCharacterModal = e.open)}
 	onSelect={handleAddCharacter}
+	onCreateNew={() => {
+		showCharacterModal = false
+		showCharacterCreator = true
+	}}
 />
 <PersonaSelectModal
 	open={showPersonaModal}
@@ -2564,6 +2804,23 @@
 	onOpenChange={(e) => (showPersonaModal = e.open)}
 	onSelect={handleAddPersona}
 	returnFullPersona={true}
+	onCreateNew={() => {
+		showPersonaModal = false
+		showPersonaCreator = true
+	}}
+/>
+<!-- The creators close themselves once the row exists; onCreated adds it to
+	the form straight away so the user lands back on the form with the new
+	participant already selected. -->
+<CharacterCreatorModal
+	bind:open={showCharacterCreator}
+	onOpenChange={(e) => (showCharacterCreator = e.open)}
+	onCreated={handleAddCharacter}
+/>
+<PersonaCreatorModal
+	bind:open={showPersonaCreator}
+	onOpenChange={(e) => (showPersonaCreator = e.open)}
+	onCreated={handleAddPersona}
 />
 <ReassignSessionParticipantModal
 	open={showReassignModal}

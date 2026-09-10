@@ -100,7 +100,7 @@ describe("the applier routes plugin-owned types through the dispatch port", () =
 			}
 		}
 
-		const applier = makeScriptApplier(db as any, {
+		const applier = makeScriptApplier(db, {
 			seed: "s",
 			nowMs: 1000,
 			pluginDispatch: dispatch,
@@ -144,7 +144,7 @@ describe("the applier routes plugin-owned types through the dispatch port", () =
 				return { ok: true, value: 3, logs: [], durationMs: 1 }
 			}
 		}
-		const applier = makeScriptApplier(db as any, {
+		const applier = makeScriptApplier(db, {
 			seed: "s",
 			nowMs: 1000,
 			pluginDispatch: dispatch
@@ -167,7 +167,7 @@ describe("the applier routes plugin-owned types through the dispatch port", () =
 		})
 		const rowId = await scriptRow(typeId, "value")
 
-		const applier = makeScriptApplier(db as any, { seed: "s", nowMs: 1000 })
+		const applier = makeScriptApplier(db, { seed: "s", nowMs: 1000 })
 		const out = await applier(site([typeId]), [rowId], "hello")
 
 		expect(out.value).toBe("hello") // untouched
@@ -225,10 +225,10 @@ describe("a real plugin hook fires through the applier", () => {
 		})
 		manager.markReady()
 
-		const applier = makeScriptApplier(db as any, {
+		const applier = makeScriptApplier(db, {
 			seed: "s",
 			nowMs: 1000,
-			pluginDispatch: makePluginHookDispatch(db as any, manager),
+			pluginDispatch: makePluginHookDispatch(db, manager),
 			runId: "run-e2e"
 		})
 

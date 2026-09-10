@@ -128,7 +128,7 @@ const execute = (input: Record<string, unknown> = {}) =>
 		},
 		seed: "seed:lore",
 		bindings: coreBindings(),
-		host: createHost(db as any, { sessionId, userId })
+		host: createHost(db, { sessionId, userId })
 	})
 
 describe("lore retrieval in a pipeline", () => {
@@ -248,7 +248,7 @@ describe("lore retrieval in a pipeline", () => {
 			input: { text: "anything", sessionScope: { sessionId: bare.id } },
 			seed: "seed:lore",
 			bindings: coreBindings(),
-			host: createHost(db as any, { sessionId: bare.id, userId })
+			host: createHost(db, { sessionId: bare.id, userId })
 		})
 		expect(receipt.outcome).toBe("ok")
 		const lore = receipt.nodes.find((n) => n.nodeKey === "lore")!
@@ -256,7 +256,7 @@ describe("lore retrieval in a pipeline", () => {
 	})
 
 	it("lore from another session's lorebook is refused, not filtered", async () => {
-		const host = createHost(db as any, { sessionId, userId })
+		const host = createHost(db, { sessionId, userId })
 		await expect(
 			host.read!(
 				"lorebook_entries",
@@ -345,7 +345,7 @@ describe("character lore is only visible to whoever it belongs to", () => {
 	})
 
 	const readAs = async (currentCharacterId: number | null) => {
-		const host = createHost(db as any, { sessionId: loreSession, userId })
+		const host = createHost(db, { sessionId: loreSession, userId })
 		const rows = (await host.read!(
 			"lorebook_entries",
 			{ sessionId: loreSession, currentCharacterId },
@@ -372,7 +372,7 @@ describe("character lore is only visible to whoever it belongs to", () => {
 	})
 
 	it("never gates world lore, which has no binding to gate on", async () => {
-		const host = createHost(db as any, { sessionId: loreSession, userId })
+		const host = createHost(db, { sessionId: loreSession, userId })
 		const rows = (await host.read!(
 			"lorebook_entries",
 			{ sessionId: loreSession, currentCharacterId: bran },
@@ -428,7 +428,7 @@ describe("a candidate records what it was, not just that it was", () => {
 			},
 			seed: "seed:fingerprint",
 			bindings: coreBindings(),
-			host: createHost(db as any, { sessionId: scoped, userId })
+			host: createHost(db, { sessionId: scoped, userId })
 		})
 		expect(receipt.outcome).toBe("ok")
 		return (receipt.nodes.find((n) => n.nodeKey === "lore")!.output ??
@@ -531,7 +531,7 @@ describe("a candidate records what it was, not just that it was", () => {
 				},
 				seed: "seed:fingerprint-world",
 				bindings: coreBindings(),
-				host: createHost(db as any, { sessionId: scoped, userId })
+				host: createHost(db, { sessionId: scoped, userId })
 			}
 		)
 		expect(receipt.outcome).toBe("ok")

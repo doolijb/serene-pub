@@ -6,6 +6,25 @@ import path from "path"
 import { fileURLToPath } from "url"
 import { spawn } from "child_process"
 
+/**
+ * The lock protocol itself is shared with the app, not restated here.
+ *
+ * This script and `src/lib/server/db/index.ts` write the same `meta.lock` and
+ * read each other's, and they used to describe it differently: 5 seconds here,
+ * 10 there. A drizzle-kit run therefore advertised a lock with half the life
+ * the app assumed, and neither side recorded who was holding it. One module,
+ * imported by both, is what stops that recurring.
+ *
+ * `../src/lib/server/db/lock.js` is deliberately plain JavaScript with no
+ * dependencies beyond node builtins, so this stays runnable by bare `node`,
+ * outside any build.
+ */
+import {
+	checkDatabaseLock,
+	createLockHeartbeat,
+	describeLockHolder
+} from "../src/lib/server/db/lock.js"
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
@@ -37,43 +56,43 @@ function loadEnvFile() {
 // Load .env before doing anything else
 loadEnvFile()
 
-// Lock configuration
-const DEFAULT_LOCK_LENGTH = 5000 // 5 seconds in milliseconds
-let lockUpdateInterval = null
-let metaPath = null
-let lockReleased = false
+let lockHeartbeat = null
 
 // Get data directory with the same logic as the utility function
 function getDataDirectory() {
+	// CI first, then the override, matching getDbDataDir() in
+	// src/lib/server/db/drizzle.config.ts exactly. This used to check the
+	// override first, so with both CI=true and SERENE_PUB_DATA_DIR set the two
+	// locked different meta.json files — the one case where the lock protected
+	// nothing at all.
+	const isCI = process.env.CI === "true"
+	if (isCI) {
+		return path.join(os.homedir(), "SerenePubData")
+	}
+
 	// Check for custom data directory from environment
 	const envDataDir = process.env.SERENE_PUB_DATA_DIR
 	if (envDataDir) {
 		return path.join(envDataDir, "data")
 	}
 
-	// Check for CI environment
-	const isCI = process.env.CI === "true"
-	if (isCI) {
-		return path.join(os.homedir(), "SerenePubData")
-	}
-
 	// Fallback to envPaths logic - we need to import it dynamically
 	try {
 		// Simple fallback calculation without importing envPaths
 		// This mimics what envPaths would return for most systems
-		const os = process.platform
+		const platform = process.platform
 		const home =
 			process.env.HOME || process.env.USERPROFILE || process.env.HOMEPATH
 
 		let dataPath
-		if (os === "darwin") {
+		if (platform === "darwin") {
 			dataPath = path.join(
 				home,
 				"Library",
 				"Application Support",
 				"SerenePub"
 			)
-		} else if (os === "win32") {
+		} else if (platform === "win32") {
 			dataPath = path.join(
 				process.env.APPDATA || path.join(home, "AppData", "Roaming"),
 				"SerenePub"
@@ -92,107 +111,60 @@ function getDataDirectory() {
 	}
 }
 
-function updateDatabaseLock() {
-	try {
-		// Read current meta.json
-		let meta = { version: "0.0.0" }
-		if (fs.existsSync(metaPath)) {
-			meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
-		}
-
-		// Update lock
-		meta.lock = {
-			timestamp: Date.now(),
-			lockLength: DEFAULT_LOCK_LENGTH
-		}
-
-		fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
-	} catch (error) {
-		console.error("Failed to update database lock:", error.message)
-	}
-}
-
-function startLockUpdates() {
-	// Update lock immediately
-	updateDatabaseLock()
+function startLockUpdates(dataDir) {
+	lockHeartbeat = createLockHeartbeat({
+		metaPath: path.join(dataDir, "meta.json"),
+		dataDir,
+		// Recorded in the lock so the app can say who is holding it.
+		label: "db-cli"
+	})
+	lockHeartbeat.start()
 	console.log("Database locked for db operation.")
-
-	// Set up interval to update lock every few seconds
-	lockUpdateInterval = setInterval(() => {
-		updateDatabaseLock()
-	}, DEFAULT_LOCK_LENGTH - 1000) // Update 1 second before lock expires
 }
 
 function stopLockUpdates() {
-	if (lockReleased) {
-		return // Already cleaned up
-	}
-	lockReleased = true
-
-	if (lockUpdateInterval) {
-		clearInterval(lockUpdateInterval)
-		lockUpdateInterval = null
-	}
-
-	// Clear the lock
-	try {
-		if (fs.existsSync(metaPath)) {
-			const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
-			delete meta.lock
-			fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
-			console.log("\nDatabase lock released.")
-		}
-	} catch (error) {
-		console.error("Failed to clear database lock:", error.message)
-	}
+	if (!lockHeartbeat) return
+	const heartbeat = lockHeartbeat
+	lockHeartbeat = null
+	heartbeat.stop()
+	console.log("\nDatabase lock released.")
 }
 
-async function checkDatabaseLock() {
-	try {
-		const dataDir = getDataDirectory()
-		metaPath = path.join(dataDir, "meta.json")
+/**
+ * Refuse to run against a directory somebody else has open.
+ *
+ * Deliberately does not wait: this is a developer command, and a lock held by a
+ * running app is not going to clear on its own. What ownership adds is the
+ * other half — a lock left behind by a process that has since died is now
+ * recognised as stale on the spot, instead of blocking `db:generate` for the
+ * rest of the lock's life after a crash.
+ */
+async function checkForExistingLock(dataDir) {
+	const metaPath = path.join(dataDir, "meta.json")
+	const result = await checkDatabaseLock({ metaPath, waitTimeout: 0 })
 
-		// Check if meta.json exists
-		if (!fs.existsSync(metaPath)) {
-			console.log("meta.json does not exist. Continuing...")
-			return
-		}
-
-		// Read meta.json
-		let meta
-		try {
-			meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
-		} catch (error) {
-			console.error("Failed to read meta.json:", error.message)
-			process.exit(1)
-		}
-
-		// Check if lock exists
-		if (!meta.lock) {
-			console.log("No database lock found. Continuing...")
-			return
-		}
-
-		const currentTime = Date.now()
-		const lockExpiry = meta.lock.timestamp + meta.lock.lockLength
-
-		if (currentTime < lockExpiry) {
-			// Lock is still active
-			const remainingTime = Math.ceil((lockExpiry - currentTime) / 1000)
-			console.error(
-				`Database is currently locked. Lock expires in ${remainingTime} seconds.`
-			)
-			console.error(
-				"Please wait for the lock to expire or stop the running application."
-			)
-			process.exit(1)
-		} else {
-			// Lock is stale
-			console.log("Found stale database lock. Continuing...")
-		}
-	} catch (error) {
-		console.error("Error checking database lock:", error.message)
+	if (!result.ok) {
+		console.error(result.message)
 		process.exit(1)
+	}
+
+	switch (result.evaluation.state) {
+		case "unreadable":
+			console.error(
+				`Failed to read ${metaPath}: ${result.evaluation.reason}`
+			)
+			process.exit(1)
+			break
+		case "stale":
+			console.log(
+				`Found stale database lock (${describeLockHolder(result.evaluation)}). Continuing...`
+			)
+			break
+		case "self":
+			console.log("Database lock belongs to this process. Continuing...")
+			break
+		default:
+			console.log("No database lock found. Continuing...")
 	}
 }
 
@@ -206,11 +178,13 @@ async function runWithLock() {
 	}
 
 	try {
+		const dataDir = getDataDirectory()
+
 		// Check for existing lock first
-		await checkDatabaseLock()
+		await checkForExistingLock(dataDir)
 
 		// Start maintaining our lock
-		startLockUpdates()
+		startLockUpdates(dataDir)
 
 		// Set up cleanup handlers
 		process.on("exit", stopLockUpdates)

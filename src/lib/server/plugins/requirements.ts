@@ -10,8 +10,6 @@
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 
-type Db = any
-
 /** Which of these ids this instance cannot satisfy right now. */
 export async function missingRequirements(
 	db: Db,

@@ -7,9 +7,25 @@
 	import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 	import { isKoboldCppManagedType } from "$lib/shared/utils/connectionServiceItems"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
+	import {
+		NOTE_MAX_LENGTH,
+		normalizeNote
+	} from "$lib/shared/utils/connectionNotes"
 	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
+	import { completionTemplateOptions } from "$lib/client/stores/completionTemplateOptions.svelte"
+	import {
+		usesCompletionTemplate,
+		wireModeFor
+	} from "$lib/shared/connectionAdapters/wireMode"
 
 	const socket = useTypedSocket()
+	/**
+	 * The format picker's options, read from `completion_templates` instead of
+	 * the eight-entry constant that used to sit beside the table — so a template
+	 * an admin authored is offered by the one control that selects it. Falls back
+	 * to the built-ins until the reply lands.
+	 */
+	const formatOptions = completionTemplateOptions()
 	let userCtx: UserCtx = getContext("userCtx")
 
 	// KoboldCPP Manager connections — text and image both — are created from
@@ -21,11 +37,26 @@
 
 	let name = $state("")
 	let type = $state(CONNECTION_TYPE.OLLAMA)
+	/**
+	 * Which METHOD a connection of this type is called by.
+	 *
+	 * Nothing is saved yet, so there is no resolved capability set to read and
+	 * the TYPE's own declaration is the whole answer — which is the correct one
+	 * for a connection nobody has tested or toggled. It moves with the service
+	 * picker above, so choosing Anthropic hides a control Anthropic has no use
+	 * for.
+	 */
+	const showFormat = $derived(
+		usesCompletionTemplate(wireModeFor(type, undefined))
+	)
 	let baseUrl = $state(CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].baseUrl)
 	let model = $state("")
 	let apiKey = $state("")
 	let tokenCounter = $state(TokenCounterOptions.ESTIMATE)
 	let promptFormat = $state(PromptFormats.VICUNA)
+	/** The user's own reminder about this connection; see schema.ts. Free text,
+	 *  read by nobody. */
+	let notes = $state("")
 	let error = $state("")
 	let saving = $state(false)
 
@@ -52,6 +83,9 @@
 			model: model.trim(),
 			tokenCounter,
 			promptFormat,
+			// NULL rather than "" for a blank one, so "never wrote a note" has
+			// exactly one spelling in the column.
+			notes: normalizeNote(notes),
 			extraJson: apiKey.trim() ? { apiKey: apiKey.trim() } : {}
 		}
 	}
@@ -263,18 +297,26 @@
 			</p>
 		{/if}
 
-		<div class="a11y-field">
-			<label for="a11y-conn-prompt-format">Prompt Format</label>
-			<select
-				id="a11y-conn-prompt-format"
-				bind:value={promptFormat}
-				disabled={saving}
-			>
-				{#each PromptFormats.options as opt}
-					<option value={opt.value}>{opt.label}</option>
-				{/each}
-			</select>
-		</div>
+		<!-- A completion template only means something in COMPLETION wire mode:
+		     in chat mode the roles carry the structure, no delimiter is emitted
+		     and no stop string from the template is sent, so this control would
+		     change no byte of any request. The wire-mode switches themselves are
+		     in the Capabilities section, with everything else the connection
+		     declares. -->
+		{#if showFormat}
+			<div class="a11y-field">
+				<label for="a11y-conn-prompt-format">Prompt Format</label>
+				<select
+					id="a11y-conn-prompt-format"
+					bind:value={promptFormat}
+					disabled={saving}
+				>
+					{#each formatOptions.value as opt}
+						<option value={opt.value}>{opt.label}</option>
+					{/each}
+				</select>
+			</div>
+		{/if}
 
 		<div class="a11y-field">
 			<label for="a11y-conn-token-counter">Token Counter</label>
@@ -287,6 +329,22 @@
 					<option value={opt.value}>{opt.label}</option>
 				{/each}
 			</select>
+		</div>
+
+		<div class="a11y-field">
+			<label for="a11y-conn-notes">Notes</label>
+			<p class="a11y-hint">
+				For you, not for the app — "use this one for prose, the other
+				for extraction". Shown beside this connection wherever you pick
+				one. Nothing reads it.
+			</p>
+			<textarea
+				id="a11y-conn-notes"
+				rows="3"
+				maxlength={NOTE_MAX_LENGTH}
+				bind:value={notes}
+				disabled={saving}
+			></textarea>
 		</div>
 
 		<p class="a11y-hint">

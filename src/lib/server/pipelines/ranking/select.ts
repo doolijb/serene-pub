@@ -58,8 +58,14 @@ export interface Signals {
 	entityCooccurrence?: number
 	tfidf?: number
 	lastRefRecency?: number
-	recency?: number
-	sceneAffinity?: number
+	/**
+	 * ⚠ **`recency` and `sceneAffinity` were here and are gone.** Nothing has
+	 * ever written either, on any path — see `SignalWeights` in `weights.ts`
+	 * for why they were removed rather than given producers, and
+	 * `runtime/signalWiring.test.ts` for the guard that stops the pair coming
+	 * back undetected.
+	 */
+	/** How long the entry is against the pool average. See `SignalWeights`. */
 	density?: number
 	/** How tightly the entry's matched keys clustered. See `SignalWeights`. */
 	proximity?: number
@@ -322,10 +328,15 @@ export function score(
 		k * weights.tfidf * (signals.tfidf ?? 0) +
 		// Structural, and unscaled on purpose: "does this matter now" is not a
 		// way of finding something, so a reader turning keyword matching down
-		// must not make an entry less recent.
+		// must not make an entry shorter or less recently mentioned.
+		//
+		// ⚠ Two terms were removed from between these two — `recency` and
+		// `sceneAffinity`, both weighing a signal nothing produced. Removing a
+		// term is normally the float hazard this docblock is about; these two
+		// are the exception and provably so: `w * (undefined ?? 0)` is an exact
+		// positive zero for every finite `w`, and `x + 0` is exact in IEEE-754,
+		// so the surviving sum is bit-for-bit what it was.
 		weights.lastRefRecency * (signals.lastRefRecency ?? 0) +
-		weights.recency * (signals.recency ?? 0) +
-		weights.sceneAffinity * (signals.sceneAffinity ?? 0) +
 		weights.density * (signals.density ?? 0) +
 		k * weights.proximity * (signals.proximity ?? 0) +
 		s * weights.semantic * (signals.semantic ?? 0) +

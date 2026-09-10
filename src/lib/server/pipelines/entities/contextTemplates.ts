@@ -53,8 +53,6 @@ import {
 
 export { contextPoolKeyFor, poolKeyFor }
 
-type Db = { select: any; insert: any; update: any; delete: any }
-
 /** The template named nothing here, or nothing this node can use. */
 export class ContextTemplateNotFoundError extends Error {}
 

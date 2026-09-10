@@ -43,9 +43,10 @@
 	let loading = $state(false)
 	let shown = $state(false)
 	/**
-	 * The session a request has gone out for — one request per session rather
-	 * than one per effect pass, and what makes hiding and re-showing the panel
-	 * free.
+	 * The session the open request has gone out for — one request per reveal
+	 * rather than one per effect pass. Cleared whenever the panel hides, so
+	 * the next reveal asks fresh instead of replaying what a prior reveal
+	 * held.
 	 */
 	let requestedFor = $state<number | null>(null)
 	let order = $state<"used" | "recent">("used")
@@ -80,18 +81,23 @@
 	})
 
 	/**
-	 * Ask once, and only when a reader is looking.
+	 * Ask on every reveal, not just the first.
 	 *
-	 * The single place a request is made — a `reveal()` that emitted as well
-	 * would send two for the same session, because opening the panel re-runs
-	 * this too. `requestedFor` is the marker that makes the second pass a
-	 * no-op; a different session under the same open panel is a different
-	 * answer and drops the held one.
+	 * A reply can land in this session while the panel is hidden, and a
+	 * hidden panel has no open request to catch it — so a reveal has to ask
+	 * fresh rather than trust what it asked for last time. Hiding clears
+	 * `requestedFor`, which is also what makes a same-session effect re-run
+	 * while already shown a no-op; a different session under an open panel
+	 * is a different answer and drops the held one.
 	 */
 	$effect(() => {
 		const id = sessionId
+		if (!shown) {
+			requestedFor = null
+			return
+		}
 		if (id !== requestedFor) usage = null
-		if (!shown || id == null || id === requestedFor) return
+		if (id == null || id === requestedFor) return
 		requestedFor = id
 		loading = true
 		socket.emit("pipelines:sessionEntryUsage", { sessionId: id })

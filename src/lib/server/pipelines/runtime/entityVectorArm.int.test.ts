@@ -174,7 +174,7 @@ const turn = async (
 	overrides: Array<{ nodeKey: string; path: string; value: unknown }> = []
 ) => {
 	const { buildWorld } = await import("$lib/server/pipelines/config/world")
-	const world = await buildWorld(db as any, { sessionId })
+	const world = await buildWorld(db, { sessionId })
 	for (const o of overrides)
 		world.overrides.push({
 			nodeKey: o.nodeKey,
@@ -194,7 +194,7 @@ const turn = async (
 		},
 		seed: "seed:entity-vectors",
 		bindings: coreBindings(),
-		host: createHost(db as any, { sessionId, userId }),
+		host: createHost(db, { sessionId, userId }),
 		preview: true
 	} as any)) as any
 }
@@ -452,9 +452,9 @@ describe("the index invalidates on its own terms", () => {
 		}
 
 		// First pass indexes it.
-		expect((await ensureEntityVectors(db as any, args)).written).toBe(1)
+		expect((await ensureEntityVectors(db, args)).written).toBe(1)
 		// Second pass finds it fresh and writes nothing.
-		expect((await ensureEntityVectors(db as any, args)).written).toBe(0)
+		expect((await ensureEntityVectors(db, args)).written).toBe(0)
 
 		// ⚠ **Rewriting the body does not re-embed the names.** This is the
 		// property the whole separate space exists for, and it cannot be
@@ -463,20 +463,20 @@ describe("the index invalidates on its own terms", () => {
 			.update(schema.lorebookEntries)
 			.set({ content: "They ride the passes in winter." })
 			.where(eq(schema.lorebookEntries.id, ridersId))
-		expect((await ensureEntityVectors(db as any, args)).written).toBe(0)
+		expect((await ensureEntityVectors(db, args)).written).toBe(0)
 
 		// Renaming does.
 		await db
 			.update(schema.lorebookEntries)
 			.set({ title: "The Ashguard" })
 			.where(eq(schema.lorebookEntries.id, ridersId))
-		expect((await ensureEntityVectors(db as any, args)).written).toBe(1)
+		expect((await ensureEntityVectors(db, args)).written).toBe(1)
 
 		// ⚠ And so does the **vocabulary** moving under unchanged text — the
 		// third identity, which has no analogue in the content-vector case.
 		expect(
 			(
-				await ensureEntityVectors(db as any, {
+				await ensureEntityVectors(db, {
 					...args,
 					gazetteerHash: "vocab-2"
 				})

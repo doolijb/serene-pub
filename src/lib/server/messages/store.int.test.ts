@@ -359,3 +359,80 @@ describe("the mirror carries the legacy row's channel (20 §7 greetings)", () =>
 		expect((await getMessage(db, row.id))!.channel).toBe("main")
 	})
 })
+
+describe("the store trims what it commits (ruling 2026-09-08)", () => {
+	it("trims a committed body on insert, in both worlds", async () => {
+		const row = await insertLegacy(db, {
+			sessionId,
+			role: "assistant",
+			content: "  The rain persists.\n\n",
+			metadata: {}
+		})
+		expect(row.content).toBe("The rain persists.")
+		expect(messageText((await getMessage(db, row.id))!)).toBe(
+			"The rain persists."
+		)
+	})
+
+	it("trims a committed body on update", async () => {
+		const row = await insertLegacy(db, {
+			sessionId,
+			role: "assistant",
+			content: "The lock bars the door.",
+			metadata: {}
+		})
+		await updateLegacy(db, row.id, { content: "The lock STILL bars it. " })
+		const [after] = await db
+			.select()
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.id, row.id))
+		expect(after.content).toBe("The lock STILL bars it.")
+	})
+
+	it("trims every committed body in a bulk insert (the importer)", async () => {
+		const rows = await insertLegacyMany(db, [
+			{ sessionId, role: "user", content: " padded user " },
+			{ sessionId, role: "assistant", content: "padded reply\t" }
+		])
+		expect(rows.map((r) => r.content)).toEqual([
+			"padded user",
+			"padded reply"
+		])
+	})
+
+	it("leaves a streaming partial's trailing space alone", async () => {
+		// The frames split anywhere — `"the sto"` then `" re."` — so trimming a
+		// mid-stream write would delete a separator the next frame depends on.
+		const { updateLegacyWhere } = await import("./store")
+		const row = await insertLegacy(db, {
+			sessionId,
+			role: "assistant",
+			content: "",
+			isGenerating: true,
+			metadata: {}
+		})
+		await updateLegacyWhere(
+			db,
+			eq(schema.sessionMessages.id, row.id),
+			{ content: "The rain had just ", isGenerating: true }
+		)
+		const [mid] = await db
+			.select()
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.id, row.id))
+		expect(mid.content).toBe("The rain had just ")
+
+		// …and the write that closes the same run is trimmed, so the row that
+		// survives the turn — and seeds the next continue — has no edge space.
+		await updateLegacyWhere(
+			db,
+			eq(schema.sessionMessages.id, row.id),
+			{ content: "The rain had just started. ", isGenerating: false }
+		)
+		const [final] = await db
+			.select()
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.id, row.id))
+		expect(final.content).toBe("The rain had just started.")
+	})
+})

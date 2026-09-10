@@ -77,7 +77,7 @@ const routedAndLooped = () =>
 describe("route/loop metadata through the store", () => {
 	it("rows carry on_ref, routes and repeat_while; the document round-trips", async () => {
 		const doc = routedAndLooped()
-		const saved = await saveDocument(db as any, doc, { publish: true })
+		const saved = await saveDocument(db, doc, { publish: true })
 
 		const blocks = (await db
 			.select()
@@ -125,7 +125,7 @@ describe("route/loop metadata through the store", () => {
 		})
 
 		// C1 over the new columns: import(export(rows)) is the identity.
-		const back = await loadDocument(db as any, saved.specVersionId)
+		const back = await loadDocument(db, saved.specVersionId)
 		expect(canonicalHash(back)).toBe(canonicalHash(doc))
 		const backRoute = back.blocks.find((b: any) => b.kind === "route") as any
 		expect(backRoute?.routes?.narrate?.default).toBe(true)

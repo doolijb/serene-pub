@@ -328,15 +328,60 @@ describe("PromptBlockFormatter.makeBlock", () => {
 		})
 	})
 
-	describe("unknown format", () => {
-		test("falls back to chatml behavior", () => {
+	/**
+	 * ## The disagreement this describes, and which way it was resolved
+	 *
+	 * This case asserted **ChatML** — the old `switch`'s `default:` arm — while
+	 * `promptFormatOf` (`PromptFormats.test.ts`) asserted **Vicuna** for the same
+	 * class of input. Both were tested, so both were load-bearing, and the app
+	 * could render a prompt in Vicuna markers and stop it on ChatML's in one
+	 * request. It resolves to **Vicuna**, and the reasoning is not a coin toss:
+	 *
+	 *   - Vicuna is what `connections.prompt_format` DEFAULTS TO in the schema,
+	 *     what `connectionDefaults.ts` writes for every local backend, and what
+	 *     the one parity golden containing delimiters was recorded against. Three
+	 *     of the four places that already had an opinion said Vicuna.
+	 *   - ChatML was reachable only from the `default:` arm — never chosen, only
+	 *     fallen into. Nothing anywhere states a preference for it; it was the
+	 *     arm's first case.
+	 *   - The consolidation the change is for only works if there is ONE answer.
+	 *     Leaving this at ChatML would keep two, which is the defect.
+	 *
+	 * The behaviour change is confined to input that names no template: `""`,
+	 * `"tekken"`, and any unrecognised string. All eight real formats are
+	 * byte-identical across every role and both `includeClose` values, pinned
+	 * exhaustively in `completionTemplates.test.ts`.
+	 */
+	describe("a format that names no template", () => {
+		test("falls back to the default template (Vicuna), not to ChatML", () => {
 			expect(
 				PromptBlockFormatter.makeBlock({
 					format: "not-a-real-format",
 					role: "user",
 					content: "hello"
 				})
-			).toBe("<|im_start|>user\nhello<|im_end|>\n")
+			).toBe("### User:\nhello\n")
+		})
+
+		test("an empty format is a cleared one, and answers the same way", () => {
+			// The input the two spellings used to disagree on, stated as bytes.
+			expect(
+				PromptBlockFormatter.makeBlock({
+					format: "",
+					role: "user",
+					content: "hello"
+				})
+			).toBe("### User:\nhello\n")
+		})
+
+		test("so does an absent one", () => {
+			expect(
+				PromptBlockFormatter.makeBlock({
+					format: null,
+					role: "user",
+					content: "hello"
+				})
+			).toBe("### User:\nhello\n")
 		})
 	})
 })

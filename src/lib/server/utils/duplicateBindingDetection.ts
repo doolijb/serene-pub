@@ -15,12 +15,9 @@
 
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
-import type { PgliteDatabase } from "drizzle-orm/pglite"
 import { collectAliases, namesMatch } from "./summarizer/availableSceneCast"
 
-type DbLike = PgliteDatabase<typeof schema>
-
-async function defaultDb(): Promise<DbLike> {
+async function defaultDb(): Promise<Db> {
 	return (await import("$lib/server/db")).db
 }
 
@@ -44,7 +41,7 @@ export const MAX_BINDINGS_FOR_DUPLICATE_DETECTION = 300
 
 export async function findDuplicateCandidates(
 	lorebookId: number,
-	dbInstance?: DbLike
+	dbInstance?: Db
 ): Promise<DuplicateCandidate[]> {
 	const db = dbInstance ?? (await defaultDb())
 

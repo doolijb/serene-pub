@@ -22,6 +22,12 @@ class FakeAdapter {
 	injected: any
 	promptBuilder: any = {}
 	constructor(_p: any) {}
+	/** The composed stop list. Recorded so a test can assert what was handed over. */
+	stops: any
+	withStops(s: any) {
+		this.stops = s
+		return this
+	}
 	withCompiledPrompt(p: any) {
 		this.injected = p
 		return this
@@ -77,7 +83,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -178,16 +184,16 @@ describe("function bindings (19 §3)", () => {
 
 		// Both serve; the companion (core) wins by default.
 		expect(
-			await functionCandidates(db as any, STANDARD, "narrate")
+			await functionCandidates(db, STANDARD, "narrate")
 		).toEqual(expect.arrayContaining([CORE_NARRATE, STAGE_NARRATE]))
 		expect(
-			await resolveFunctionSpec(db as any, STANDARD, "narrate", {
+			await resolveFunctionSpec(db, STANDARD, "narrate", {
 				sessionId
 			})
 		).toBe(CORE_NARRATE)
 
 		// This session picks the foreign contributor.
-		const bound = await bindFunction(db as any, {
+		const bound = await bindFunction(db, {
 			scope: { kind: "session", id: sessionId },
 			genreId: STANDARD,
 			functionKey: "narrate",
@@ -196,13 +202,13 @@ describe("function bindings (19 §3)", () => {
 		})
 		expect(bound.error).toBeUndefined()
 		expect(
-			await resolveFunctionSpec(db as any, STANDARD, "narrate", {
+			await resolveFunctionSpec(db, STANDARD, "narrate", {
 				sessionId
 			})
 		).toBe(STAGE_NARRATE)
 		// Another session still gets the default — the binding is scoped.
 		expect(
-			await resolveFunctionSpec(db as any, STANDARD, "narrate", {
+			await resolveFunctionSpec(db, STANDARD, "narrate", {
 				sessionId: sessionId + 999
 			})
 		).toBe(CORE_NARRATE)
@@ -217,7 +223,7 @@ describe("function bindings (19 §3)", () => {
 		)
 
 		// The respond spec does not serve narrate.
-		const refused = await bindFunction(db as any, {
+		const refused = await bindFunction(db, {
 			scope: { kind: "session", id: sessionId },
 			genreId: STANDARD,
 			functionKey: "narrate",
@@ -237,7 +243,7 @@ describe("function bindings (19 §3)", () => {
 			.set({ activeVersionId: null })
 			.where(eq(schema.pipelineSpecs.id, spec.id))
 		expect(
-			await resolveFunctionSpec(db as any, STANDARD, "narrate", {
+			await resolveFunctionSpec(db, STANDARD, "narrate", {
 				sessionId
 			})
 		).toBe(CORE_NARRATE)
@@ -251,7 +257,7 @@ describe("function bindings (19 §3)", () => {
 			.update(schema.pipelineSpecs)
 			.set({ activeVersionId: version.id })
 			.where(eq(schema.pipelineSpecs.id, spec.id))
-		const cleared = await bindFunction(db as any, {
+		const cleared = await bindFunction(db, {
 			scope: { kind: "session", id: sessionId },
 			genreId: STANDARD,
 			functionKey: "narrate",
@@ -260,7 +266,7 @@ describe("function bindings (19 §3)", () => {
 		})
 		expect(cleared.error).toBeUndefined()
 		expect(
-			await resolveFunctionSpec(db as any, STANDARD, "narrate", {
+			await resolveFunctionSpec(db, STANDARD, "narrate", {
 				sessionId
 			})
 		).toBe(CORE_NARRATE)
@@ -275,13 +281,13 @@ describe("the strategy swap (19 §5)", () => {
 			"$lib/server/pipelines/runtime/runTurn"
 		)
 
-		const set = await setSessionSpeakerStrategy(db as any, {
+		const set = await setSessionSpeakerStrategy(db, {
 			sessionId,
 			userId,
 			typeId: "core:task/turn-round-robin@1"
 		})
 		expect(set.error).toBeUndefined()
-		expect(await getSessionSpeakerStrategy(db as any, sessionId)).toBe(
+		expect(await getSessionSpeakerStrategy(db, sessionId)).toBe(
 			"core:task/turn-round-robin@1"
 		)
 
@@ -289,7 +295,7 @@ describe("the strategy swap (19 §5)", () => {
 		// no speaker at all. The rebound strategy decides — Alice has never
 		// replied, so the rotation seats her.
 		const receipt = await runTurn({
-			db: db as any,
+			db: db,
 			sessionId,
 			userId,
 			currentCharacterId: null,
@@ -313,7 +319,7 @@ describe("the strategy swap (19 §5)", () => {
 			"$lib/server/pipelines/boot/bootstrap"
 		)
 
-		const refused = await setSessionSpeakerStrategy(db as any, {
+		const refused = await setSessionSpeakerStrategy(db, {
 			sessionId,
 			userId,
 			typeId: "core:task/assemble@2"
@@ -321,7 +327,7 @@ describe("the strategy swap (19 §5)", () => {
 		expect(refused.error).toContain("not a next-speaker strategy")
 
 		// The generic setter refuses on shape too.
-		const generic = await setNodeRebind(db as any, {
+		const generic = await setNodeRebind(db, {
 			scope: { kind: "session", id: sessionId },
 			specSlug: "core:spec/respond",
 			nodeKey: "speaker",
@@ -345,8 +351,8 @@ describe("the strategy swap (19 §5)", () => {
 			updatedBy: userId
 		})
 		const doc = await applyNodeRebinds(
-			db as any,
-			await loadPublished(db as any, "core:spec/respond"),
+			db,
+			await loadPublished(db, "core:spec/respond"),
 			{ specSlug: "core:spec/respond", sessionId }
 		)
 		const prompt = (doc.nodes as any[]).find((n) => n.key === "prompt")
@@ -360,12 +366,12 @@ describe("the strategy swap (19 §5)", () => {
 	it("clearing restores the pin — reset-is-delete", async () => {
 		const { setSessionSpeakerStrategy, getSessionSpeakerStrategy } =
 			await import("$lib/server/pipelines/entities/bindings")
-		const cleared = await setSessionSpeakerStrategy(db as any, {
+		const cleared = await setSessionSpeakerStrategy(db, {
 			sessionId,
 			userId,
 			typeId: null
 		})
 		expect(cleared.error).toBeUndefined()
-		expect(await getSessionSpeakerStrategy(db as any, sessionId)).toBe(null)
+		expect(await getSessionSpeakerStrategy(db, sessionId)).toBe(null)
 	})
 })

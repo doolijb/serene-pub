@@ -67,7 +67,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const make = async (name: string) =>
 		(
@@ -88,7 +88,7 @@ beforeAll(async () => {
 	const { setCapabilityDefault } = await import(
 		"$lib/server/connections/capabilityDefaults"
 	)
-	await setCapabilityDefault(db as any, "text->text", {
+	await setCapabilityDefault(db, "text->text", {
 		connectionId: instanceDefaultId
 	})
 
@@ -120,7 +120,7 @@ afterAll(async () => {
 /** What the panel shows and the executor resolves — one read, so they cannot differ. */
 const resolvedConnection = async () => {
 	const { buildWorld } = await import("$lib/server/pipelines/config/world")
-	const world = await buildWorld(db as any, {
+	const world = await buildWorld(db, {
 		sessionId,
 		specId: RESPOND_SPEC_ID
 	})

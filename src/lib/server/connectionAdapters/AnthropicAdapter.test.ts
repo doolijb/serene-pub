@@ -16,11 +16,14 @@ vi.mock("$lib/server/embedding", () => ({
 
 const anthropicConstructorMock = vi.fn()
 const messagesCreateMock = vi.fn()
+// Hoisted like `create` above (it was a per-instance `vi.fn()`) so a test can
+// hand the adapter a stream of its own to iterate.
+const messagesStreamMock = vi.fn()
 vi.mock("@anthropic-ai/sdk", () => ({
 	default: class {
 		messages = {
 			create: (...args: any[]) => messagesCreateMock(...args),
-			stream: vi.fn()
+			stream: (...args: any[]) => messagesStreamMock(...args)
 		}
 		constructor(...args: any[]) {
 			anthropicConstructorMock(...args)
@@ -54,6 +57,7 @@ vi.mock("$lib/server/adapters/attachments", async (importOriginal) => {
 	}
 })
 
+const { REDACTED_THINKING_NOTICE } = await import("./AnthropicAdapter")
 const exportsDefault = (await import("./AnthropicAdapter")).default
 
 function makeConnection(overrides: Record<string, any> = {}): any {
@@ -446,5 +450,296 @@ describe("AnthropicAdapter — attachments on the wire", () => {
 			])
 		).rejects.toThrow(/clip\.wav \(attachment 1\).*images and PDFs/s)
 		expect(messagesCreateMock).not.toHaveBeenCalled()
+	})
+})
+
+/**
+ * `redacted_thinking` — the reasoning block with nothing readable in it.
+ *
+ * Anthropic returns one when its safety systems flag part of the model's
+ * internal reasoning: the block carries an encrypted `data` blob and no text.
+ * The adapter matched only `type === "thinking"` / `"text"` (and
+ * `thinking_delta` / `text_delta` while streaming), so a redacted block simply
+ * vanished — the user enabled Extended Thinking, the model DID think, and the
+ * panel stayed empty with nothing saying why.
+ *
+ * The choice made here: surface a short fixed NOTICE, never the `data` blob.
+ * The blob is opaque ciphertext only Anthropic can read, can run to kilobytes,
+ * and would be persisted into the message record for no one's benefit; an empty
+ * panel, meanwhile, is indistinguishable from "thinking is broken", which is
+ * exactly the report that started this work.
+ *
+ * ⚠ Shape confirmed against the installed SDK (@anthropic-ai/sdk 0.105.0):
+ * `RawContentBlockDelta` is `TextDelta | InputJSONDelta | CitationsDelta |
+ * ThinkingDelta | SignatureDelta` — there is NO redacted-thinking delta — while
+ * `RawContentBlockStartEvent.content_block` does include `RedactedThinkingBlock`.
+ * So a redacted block arrives whole, on `content_block_start`.
+ */
+describe("AnthropicAdapter — redacted_thinking", () => {
+	const BLOB = "EqoBCkYIBBgCKkBmx4Onc0RedactedCiphertextNotForHumans=="
+
+	function mockCompilePrompt(adapter: any) {
+		adapter.withCompiledPrompt({
+			prompt: "hi",
+			messages: [{ role: "user", content: "hi" }],
+			meta: {} as any
+		} as any)
+	}
+
+	function eventStream(events: any[]) {
+		return {
+			async *[Symbol.asyncIterator]() {
+				for (const event of events) yield event
+			},
+			controller: { abort: vi.fn() }
+		}
+	}
+
+	test("non-streaming: a redacted block is reported, and its ciphertext is not", async () => {
+		messagesCreateMock.mockResolvedValueOnce({
+			content: [
+				{ type: "redacted_thinking", data: BLOB },
+				{ type: "text", text: "Hello there." }
+			]
+		})
+		const adapter = makeAdapter()
+		mockCompilePrompt(adapter)
+
+		const result = await adapter.generateText()
+		expect(result.completionResult).toBe("Hello there.")
+		expect(result.thinkingContent).toBe(REDACTED_THINKING_NOTICE)
+		expect(result.thinkingContent).not.toContain(BLOB)
+	})
+
+	test("non-streaming: a redacted block alongside a readable one keeps both, on their own lines", async () => {
+		messagesCreateMock.mockResolvedValueOnce({
+			content: [
+				{ type: "thinking", thinking: "Pondering deeply." },
+				{ type: "redacted_thinking", data: BLOB },
+				{ type: "text", text: "Hello there." }
+			]
+		})
+		const adapter = makeAdapter()
+		mockCompilePrompt(adapter)
+
+		const result = await adapter.generateText()
+		expect(result.thinkingContent).toBe(
+			`Pondering deeply.\n${REDACTED_THINKING_NOTICE}`
+		)
+	})
+
+	test("non-streaming: thinkingContent stays undefined when nothing was thought", async () => {
+		messagesCreateMock.mockResolvedValueOnce({
+			content: [{ type: "text", text: "Hello there." }]
+		})
+		const adapter = makeAdapter()
+		mockCompilePrompt(adapter)
+
+		const result = await adapter.generateText()
+		expect(result.thinkingContent).toBeUndefined()
+	})
+
+	test("streaming: a redacted block arrives on content_block_start and reaches thinkingCb", async () => {
+		messagesStreamMock.mockReturnValueOnce(
+			eventStream([
+				{
+					type: "content_block_start",
+					index: 0,
+					content_block: { type: "redacted_thinking", data: BLOB }
+				},
+				{
+					type: "content_block_delta",
+					index: 1,
+					delta: { type: "text_delta", text: "Hello there." }
+				}
+			])
+		)
+		const adapter = makeAdapter({
+			extraJson: { apiKey: "sk-ant-test", stream: true }
+		})
+		mockCompilePrompt(adapter)
+
+		const result = await adapter.generateText()
+		let content = ""
+		let thinking = ""
+		await (result.completionResult as any)(
+			(chunk: string) => {
+				content += chunk
+			},
+			(chunk: string) => {
+				thinking += chunk
+			}
+		)
+		expect(thinking).toBe(REDACTED_THINKING_NOTICE)
+		expect(thinking).not.toContain(BLOB)
+		expect(content).toBe("Hello there.")
+	})
+
+	test("streaming: readable thinking then a redacted block — the notice does not glue onto the prose", async () => {
+		messagesStreamMock.mockReturnValueOnce(
+			eventStream([
+				{
+					type: "content_block_start",
+					index: 0,
+					content_block: { type: "thinking", thinking: "" }
+				},
+				{
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "thinking_delta", thinking: "Pondering." }
+				},
+				{
+					type: "content_block_start",
+					index: 1,
+					content_block: { type: "redacted_thinking", data: BLOB }
+				},
+				{
+					type: "content_block_delta",
+					index: 2,
+					delta: { type: "text_delta", text: "Hello there." }
+				}
+			])
+		)
+		const adapter = makeAdapter({
+			extraJson: { apiKey: "sk-ant-test", stream: true }
+		})
+		mockCompilePrompt(adapter)
+
+		const result = await adapter.generateText()
+		let thinking = ""
+		await (result.completionResult as any)(
+			() => {},
+			(chunk: string) => {
+				thinking += chunk
+			}
+		)
+		expect(thinking).toBe(`Pondering.\n${REDACTED_THINKING_NOTICE}`)
+	})
+
+	test("streaming: an ordinary content_block_start does not emit a notice", async () => {
+		messagesStreamMock.mockReturnValueOnce(
+			eventStream([
+				{
+					type: "content_block_start",
+					index: 0,
+					content_block: { type: "text", text: "" }
+				},
+				{
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "text_delta", text: "Hello there." }
+				}
+			])
+		)
+		const adapter = makeAdapter({
+			extraJson: { apiKey: "sk-ant-test", stream: true }
+		})
+		mockCompilePrompt(adapter)
+
+		const result = await adapter.generateText()
+		let content = ""
+		let thinking = ""
+		await (result.completionResult as any)(
+			(chunk: string) => {
+				content += chunk
+			},
+			(chunk: string) => {
+				thinking += chunk
+			}
+		)
+		expect(thinking).toBe("")
+		expect(content).toBe("Hello there.")
+	})
+})
+
+/**
+ * Continuing a partial reply — the Messages API's own prefill, not a plea.
+ *
+ * `buildAnthropicMessages` used to append `{role:"user", content:"Please
+ * continue."}` whenever the payload ended on an assistant turn. That is not a
+ * continuation: the model reads a fresh instruction and starts a new reply,
+ * which `joinContinuation` then glues onto the partial. The Messages API takes
+ * a trailing assistant turn as a PREFILL — the model writes the next characters
+ * of that turn — so the seed goes as-is.
+ */
+describe("AnthropicAdapter — continuing a reply", () => {
+	/** Send a payload whose last turn is the assistant seed being continued. */
+	async function continueWith(
+		seed: string,
+		connectionOverrides: Record<string, any> = {}
+	) {
+		messagesCreateMock.mockClear()
+		messagesCreateMock.mockResolvedValue({
+			content: [{ type: "text", text: " and then it rained." }]
+		})
+		const adapter = makeAdapter(connectionOverrides)
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [
+				{ role: "system", content: "Be brief." },
+				{ role: "user", content: "What happened next?" },
+				{ role: "assistant", content: seed }
+			],
+			meta: {} as any
+		} as any)
+		await adapter.generateText()
+		return messagesCreateMock.mock.calls[0]?.[0]
+	}
+
+	test("the seed stays the LAST message, and no user turn is invented", async () => {
+		const body = await continueWith("She opened the door")
+		expect(body.messages.at(-1)).toEqual({
+			role: "assistant",
+			content: "She opened the door"
+		})
+		expect(JSON.stringify(body.messages)).not.toContain("Please continue")
+	})
+
+	test("trailing whitespace is stripped — the prefill validator rejects it", async () => {
+		// Anthropic's own rule for a final `text` block on a prefilled turn.
+		// Sending it back verbatim is a 400 on a request that looks fine here.
+		const body = await continueWith("She opened the door  \n")
+		expect(body.messages.at(-1).content).toBe("She opened the door")
+	})
+
+	test("an assistant turn in the MIDDLE is still followed by the user's", async () => {
+		// Few-shot and ordinary history: only a TRAILING assistant turn is a
+		// prefill, and merging or padding those would rewrite the conversation.
+		messagesCreateMock.mockClear()
+		messagesCreateMock.mockResolvedValue({
+			content: [{ type: "text", text: "ok" }]
+		})
+		const adapter = makeAdapter()
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [
+				{ role: "user", content: "hi" },
+				{ role: "assistant", content: "hello" },
+				{ role: "user", content: "again" }
+			],
+			meta: {} as any
+		} as any)
+		await adapter.generateText()
+		const body = messagesCreateMock.mock.calls[0]?.[0]
+		expect(body.messages.map((m: any) => m.role)).toEqual([
+			"user",
+			"assistant",
+			"user"
+		])
+	})
+
+	test("a seed that is only whitespace is dropped rather than sent empty", async () => {
+		// The API refuses an empty text block, and an all-whitespace prefill is
+		// one after the strip. Dropping the turn leaves a well-formed request
+		// that generates from the user's turn, which is what an empty partial
+		// means anyway.
+		const body = await continueWith("   ")
+		expect(body.messages.at(-1).role).toBe("user")
+		expect(JSON.stringify(body.messages)).not.toContain("Please continue")
+	})
+
+	test("the adapter reports HOW it continues, and it is a real prefill", async () => {
+		const adapter = makeAdapter() as any
+		expect(adapter.continuationRoute.kind).toBe("prefill")
 	})
 })

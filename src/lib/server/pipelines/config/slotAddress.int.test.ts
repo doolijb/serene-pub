@@ -59,7 +59,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [admin] = await db
 		.insert(schema.users)
@@ -99,7 +99,7 @@ beforeAll(async () => {
 	const { setCapabilityDefault } = await import(
 		"$lib/server/connections/capabilityDefaults"
 	)
-	await setCapabilityDefault(db as any, "text->text", {
+	await setCapabilityDefault(db, "text->text", {
 		connectionId: defaultId
 	})
 
@@ -122,8 +122,8 @@ beforeAll(async () => {
 				eq(schema.pipelineConfigs.isImmutable, true)
 			)
 		)
-	const copy = await duplicateConfig(db as any, shipped.id, "Slot address copy")
-	await selectConfig(db as any, spec.id, "instance", 0, copy.id, adminId)
+	const copy = await duplicateConfig(db, shipped.id, "Slot address copy")
+	await selectConfig(db, spec.id, "instance", 0, copy.id, adminId)
 }, 60_000)
 
 const viewer = () => ({ userId: adminId, isAdmin: true })
@@ -133,7 +133,7 @@ const allOptions = (v: NamespaceView): ConfigOption[] =>
 
 const connectionOption = async (): Promise<ConfigOption> => {
 	const v = (await namespaceView(
-		db as any,
+		db,
 		SECRET,
 		RESPOND_SPEC_ID,
 		viewer()
@@ -157,7 +157,7 @@ describe("a connection pick reaches the executor", () => {
 	it("is stored at the one address everything agrees on", async () => {
 		const option = await connectionOption()
 		await writeOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer(),
@@ -178,7 +178,7 @@ describe("a connection pick reaches the executor", () => {
 	it("survives buildWorld → resolveConfig at that same address", async () => {
 		const option = await connectionOption()
 		await writeOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer(),
@@ -187,7 +187,7 @@ describe("a connection pick reaches the executor", () => {
 		)
 
 		const nodeKey = await nodeKeyOf(option)
-		const world = await buildWorld(db as any, { specId: RESPOND_SPEC_ID })
+		const world = await buildWorld(db, { specId: RESPOND_SPEC_ID })
 		const resolved = resolveConfig(world, [nodeKey])
 
 		expect(resolved[nodeKey]?.connection?.[SLOT_VALUE]).toBeDefined()
@@ -202,7 +202,7 @@ describe("a connection pick reaches the executor", () => {
 		// anything because the default is a different row.
 		const option = await connectionOption()
 		await writeOption(
-			db as any,
+			db,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer(),
@@ -211,7 +211,7 @@ describe("a connection pick reaches the executor", () => {
 		)
 
 		const nodeKey = await nodeKeyOf(option)
-		const world = await buildWorld(db as any, { specId: RESPOND_SPEC_ID })
+		const world = await buildWorld(db, { specId: RESPOND_SPEC_ID })
 		const resolved = resolveConfig(world, [nodeKey])
 		const picked = String(resolved[nodeKey]!.connection![SLOT_VALUE])
 
@@ -230,7 +230,7 @@ describe("a connection pick reaches the executor", () => {
 	it("still falls back to the instance default when nothing is picked", async () => {
 		// The fallback is correct behaviour, not the bug — the bug was that it was
 		// the ONLY behaviour. A node with no pick must still resolve.
-		const world = await buildWorld(db as any, { specId: RESPOND_SPEC_ID })
+		const world = await buildWorld(db, { specId: RESPOND_SPEC_ID })
 		expect(Object.values(world.activeConnection)).toContain(String(defaultId))
 	})
 })

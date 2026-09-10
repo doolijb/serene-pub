@@ -84,7 +84,7 @@ async function seedOpenRouter(name: string) {
 		.insert(schema.connections)
 		.values({
 			name,
-			type: CONNECTION_TYPE.OPENAI_CHAT,
+			type: CONNECTION_TYPE.OPENAI,
 			preset: "openrouter"
 		})
 		.returning()
@@ -144,7 +144,7 @@ describe("connections:update refuses to store a preset that is not a slug", () =
 			.insert(schema.connections)
 			.values({
 				name: "Custom endpoint",
-				type: CONNECTION_TYPE.OPENAI_CHAT,
+				type: CONNECTION_TYPE.OPENAI,
 				preset: null
 			})
 			.returning()
@@ -276,7 +276,7 @@ describe("a preset must belong to the type the row ends up with", () => {
 			{
 				connection: {
 					id: row.id,
-					type: CONNECTION_TYPE.OPENAI_CHAT,
+					type: CONNECTION_TYPE.OPENAI,
 					preset: "openrouter"
 				} as any
 			},
@@ -300,7 +300,7 @@ describe("an existing row with an unrecognised slug stays readable", () => {
 			.insert(schema.connections)
 			.values({
 				name: "Legacy slug",
-				type: CONNECTION_TYPE.OPENAI_CHAT,
+				type: CONNECTION_TYPE.OPENAI,
 				preset: "some-retired-service"
 			})
 			.returning()
@@ -333,7 +333,7 @@ describe("an existing row with an unrecognised slug stays readable", () => {
 			.insert(schema.connections)
 			.values({
 				name: "Legacy slug 2",
-				type: CONNECTION_TYPE.OPENAI_CHAT,
+				type: CONNECTION_TYPE.OPENAI,
 				preset: "some-retired-service"
 			})
 			.returning()
@@ -382,7 +382,7 @@ describe("create and update now agree", () => {
 			{
 				connection: {
 					name: "Created with a number",
-					type: CONNECTION_TYPE.OPENAI_CHAT,
+					type: CONNECTION_TYPE.OPENAI,
 					preset: 3
 				} as any
 			},
@@ -403,7 +403,7 @@ describe("create and update now agree", () => {
 			{
 				connection: {
 					name: "Created with a slug",
-					type: CONNECTION_TYPE.OPENAI_CHAT,
+					type: CONNECTION_TYPE.OPENAI,
 					preset: "groq"
 				} as any
 			},

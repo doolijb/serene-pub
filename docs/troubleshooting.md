@@ -39,6 +39,131 @@ This page collects the most common ways Serene Pub gets stuck, organized by area
 - **A standard user or second admin forgot their passphrase.** An admin resets it from the Users panel — **Edit** the account and fill in **New Passphrase** / **Confirm Passphrase**; leaving those fields blank leaves the existing passphrase untouched.
 - **Locked out of the `admin` account after enabling User Accounts.** There's currently no self-service or API recovery path for this — no reset endpoint, no CLI script. The only way back in is direct database access to update the stored passphrase hash. Avoid this situation by keeping your admin passphrase somewhere safe and creating a second admin account once accounts are enabled. See [If the admin account itself is locked out](./users-and-accounts.md#if-the-admin-account-itself-is-locked-out).
 
+## Database
+
+### Database won't open
+
+**Symptom.** Serene Pub starts, but every page answers with "Serene Pub started, but the database could not be opened." (HTTP 503) and no part of the app works. Launched from a terminal, the startup log carries a multi-line `[db] The database could not be opened.` report naming the same paths.
+
+**Cause.** Serene Pub stores everything in an embedded PostgreSQL data directory. A force-quit, an out-of-memory kill, or a power loss can stop the server mid-write and leave that directory in a state PostgreSQL refuses to start on. The boot log's `[db] previous shutdown: clean | unclean | unknown` line says which ending the last run had — `unclean` means nothing ran on the way out, which is the usual case here.
+
+**Serene Pub changes nothing on its own.** It does not repair, move, or delete the data directory in this state, and it will keep serving that page until the database opens. Everything below is done by hand, and the first step of all of them is a copy.
+
+#### Where your data is
+
+The database lives in a `data/` folder inside your data directory:
+
+| OS      | Data directory                            |
+| ------- | ----------------------------------------- |
+| Linux   | `~/.local/share/SerenePub`                |
+| Windows | `%LOCALAPPDATA%\SerenePub\Data`           |
+| macOS   | `~/Library/Application Support/SerenePub` |
+
+If you've set [`SERENE_PUB_DATA_DIR`](./environment-variables.md#serene_pub_data_dir-is-the-one-exception), it's that directory instead. You never have to guess: the startup log's `Using PGlite database at:` line names the exact path, and so does the 503 page.
+
+Inside `<data directory>/data` you'll find:
+
+- **`serene-pub.db/`** — the database. It's a **folder**, not a file, and it is the thing that won't open.
+- **`meta.json`** — a small sibling file holding the schema version and `cryptoSecretKey`. That key encrypts stored API passphrases and signs login sessions, and it is **not** inside `serene-pub.db/` or inside any backup archive — a copy travels _beside_ each one instead, see below. Keep it. Losing it means re-entering every saved API key and everyone logging in again — but it also means a restored or brand-new database still works with your existing credentials, which is why it survives everything below.
+- **`backups/`** — `.tgz` archives of the whole `serene-pub.db/` folder, named `serene-pub-<version>-<timestamp>.tgz`. One is taken **once a day** and one **before a version upgrade runs migrations**; you can take one any time from **Settings → Data** or with `npm run db:recover -- --backup`. None are ever deleted automatically. A fresh install often has none at all.
+
+    Two settings in **Admin → Settings → Backups** control this: _Back up daily_ (on by default), and _Include user files_ (off by default). Neither ever deletes anything — turning daily backups off just stops new ones being taken.
+
+- **`backups/<archive>.tgz.meta.json`** — a copy of `meta.json` as it was when that backup was taken, kept _beside_ the archive rather than inside it so the archive stays exactly what `tar -xzf` and Serene Pub both expect. It is what lets a restored database's stored API passphrases still decrypt. Archives taken before this existed simply don't have one, and restore then keeps your current `meta.json`.
+- **`backups/<archive>.tgz.users.tgz`** — your user files (media and avatars: everything under `<data directory>/data/users/`), archived beside the dump when _Include user files_ is on. Present only for backups taken with that setting on, so most installs have none. Beside rather than inside for the same reason as `meta.json`, and separate because it is by far the larger of the two: a dump is measured in megabytes, a media library has no ceiling.
+
+    Card-import caches (`users/<id>/cache/`) are deliberately left out — they're rebuilt from the cards you still have.
+
+    It matters more than its size suggests. Avatars are real foreign keys into the database's `files` table, so a database restored **without** its user files points at images that were never archived.
+
+- **`serene-pub.db.broken-<timestamp>/`** — a database a recovery set aside. Serene Pub never deletes one; **Settings → Data** and the recovery page both list them with a delete button when you want the space back.
+- **`users.broken-<timestamp>/`** — the user files a restore replaced, moved aside the same way and just as permanently. Only appears when you restore a backup that carries user files.
+
+#### The quickest route: the recovery page
+
+When the database won't open, Serene Pub still starts and still answers on its usual address — it just serves one page instead of the app. Open it (the same URL you always use) and follow the **Open recovery** button. Launched from a desktop shortcut or the applications menu, the launcher opens that page in your browser for you as soon as it sees the app come up in this state, and if the app never starts at all it writes `serene-pub-last-error.log` into your data directory (and raises a desktop dialog where one is available) instead of failing silently. On macOS that includes double-clicking `Serene Pub.app` from the Dock or Finder — the bundle runs the same launcher, so it opens the recovery page for you and leaves the same log, without a dialog (raising one there costs a Finder permission prompt of its own). From there you can:
+
+- **Restore a backup** — the broken database is _moved_ to `serene-pub.db.broken-<date>` in the same folder and the backup is unpacked in its place. Nothing is deleted. The archive is checked before anything moves, and the restored copy has to open before it is put in place; if it doesn't, the attempt is left as `serene-pub.db.restore-failed-<date>` and your database is untouched. If the backup carries user files, the confirmation page offers to put those back too (ticked by default) — your current `users/` is moved to `users.broken-<date>`, again without deleting anything.
+- **Start fresh** — moves the broken database aside and creates an empty one on the next start. `meta.json` is left alone, so your login and saved API passphrases keep working.
+- **Download the broken database** as a `.tgz`, for a bug report or for the `pg_resetwal` route below.
+- **Delete** a backup or a set-aside database, one at a time, with a confirmation.
+
+Each action asks you to confirm on a second page that restates exactly what will move, and every one of them is written to the server log and to `meta.json`'s `recoveryLog`.
+
+**The recovery page only answers this machine and your local network** (loopback and the private ranges — `10.x`, `172.16–31.x`, `192.168.x`, link-local, and IPv6 `fc00::/7`). There is no database in this state, so there are no accounts and nothing to log in with; the address is the only credential there is. Anything else gets a bare 503 that names no paths and offers no actions. If you reach your instance only through a tunnel or a reverse proxy, use the command line instead — a forwarded `X-Forwarded-For` is deliberately not believed here.
+
+#### From a terminal: `npm run db:recover`
+
+The same operations, for Docker, a NAS, or anything reached over SSH. Run it with Serene Pub **stopped** — it takes the same database lock the other `db:` commands do, and refuses if the app is holding it.
+
+```
+npm run db:recover -- --list                 # what's here, and what can be restored
+npm run db:recover -- --backup [label]       # take one now (needs a database that opens)
+npm run db:recover -- --restore <file>       # put a backup in place of the current database
+npm run db:recover -- --fresh                # set the current one aside, start empty
+npm run db:recover -- --delete-backup <file>
+npm run db:recover -- --delete-aside <dir>
+```
+
+`--restore` and `--fresh` print exactly what will move and wait for you to type `yes`. Add `--yes` to answer in advance — required when there is no terminal to ask (a script, a container's entrypoint).
+
+Two more flags cover the user-file tier:
+
+- `--users` with `--backup` archives `users/` beside the dump for this backup, whatever the stored setting says.
+- `--no-users` with `--restore` leaves your current `users/` alone. Without it, a backup that carries user files puts them back and moves the ones you have to `users.broken-<date>` — which is the default because a database restored on its own points at media that came with it.
+
+#### Restore the newest backup by hand
+
+Do this with Serene Pub **stopped**. Nothing here deletes anything.
+
+1. Move the broken database aside — **never delete it.** It is still the only copy of anything newer than your last backup, and it may be repairable.
+
+    ```
+    cd "<data directory>/data"
+    mv serene-pub.db serene-pub.db.broken-2026-09-09
+    ```
+
+    On Windows, rename the `serene-pub.db` folder in Explorer.
+
+2. Pick the newest archive in `backups/` — the 503 page and the startup log both name it — and extract it into a **new, empty** `serene-pub.db` folder:
+
+    ```
+    mkdir serene-pub.db
+    tar -xzf backups/serene-pub-0.5.9-2026-02-02T00-00-00.tgz -C serene-pub.db
+    ```
+
+    `tar` will print `Removing leading '/' from member names`. That is expected: the archive stores the database's own paths from its root, and every tar that ships with Linux, macOS and Windows strips that leading slash. Check afterwards that `serene-pub.db/PG_VERSION` and `serene-pub.db/base` exist — if the folder came out empty, or with one folder inside it, you extracted to the wrong place.
+
+3. **`meta.json` is not in the archive**, and the safe default is to leave the one you have exactly where it is. If it is missing or unreadable, Serene Pub creates a new one with a new key and your saved API passphrases will no longer decrypt.
+
+    If the backup has a companion `backups/<archive>.tgz.meta.json` and you are restoring an _old_ backup, the passphrases stored inside that database were encrypted with the key in the companion, not the one you have now. Copy `cryptoSecretKey` (and `version`) across by hand — keep a copy of your current `meta.json` first — or let the recovery page or `npm run db:recover -- --restore` do it, which is what they do automatically and why they keep the file they replaced as `meta.json.replaced-<date>`.
+
+4. If the backup has a `backups/<archive>.tgz.users.tgz` beside it and you want the media that came with it, move your current `users/` aside — again, don't delete it — and unpack the tier in its place. The archive contains a single `users/` folder, so extract it into the data directory itself, not into `users/`:
+
+    ```
+    mv users users.broken-2026-09-09
+    tar -xzf backups/serene-pub-0.5.9-2026-02-02T00-00-00.tgz.users.tgz -C .
+    ```
+
+    Skip this and your media stays exactly as it is — which is fine, except that avatars added since the backup will point at images the restored database has no rows for, and the other way round.
+
+5. Start Serene Pub. You are back at the moment that backup was taken; anything after it is only in the folder you set aside in step 1.
+
+**If there is no backup**, moving `serene-pub.db` aside on its own is enough to start over — this is what the recovery page's **Start fresh** and `npm run db:recover -- --fresh` do — Serene Pub creates a new, empty database on the next launch. Sessions, characters and lorebooks are gone, but because `meta.json` stays, stored passphrases and accounts still work. Keep the folder you moved aside until you're certain you don't want it repaired.
+
+#### Advanced: repairing the directory with `pg_resetwal`
+
+Only worth trying if the data since your last backup matters. Verified once, on 2026-08-12, with data fully intact — but it can also make things worse, which is why it is done on a copy.
+
+This needs PostgreSQL 16 client binaries that Serene Pub does not ship (`apt-get download postgresql-16` then `dpkg -x`; the `.deb` is the route because the npm embedded-postgres package lacks `pg_resetwal`).
+
+1. Work on a **copy** of `serene-pub.db`; remove `postmaster.pid` (the embedded server writes a synthetic one).
+2. `pg_controldata -D <copy>` — if state is "shut down" with a valid checkpoint, recovery is likely.
+3. `pg_resetwal -n -D <copy>` (dry run), then without `-n`.
+4. Open the copy with Serene Pub before swapping it in — point `SERENE_PUB_DATA_DIR` at a scratch directory containing it, rather than replacing your real one to find out.
+
+Partial or table-level repair isn't covered: none of the tooling for it ships with Serene Pub.
+
 ## Document View
 
 - **Can't find the way back to the standard site.** Press **Ctrl+Shift+Y** from anywhere — it's a toggle, so it switches you back the same way it switched you in. The header's **Browse Standard Site** button and the Settings page's **Turn Off Document View** button both work too; see [Document View](./document-view.md#leaving-document-view) for the difference between them.

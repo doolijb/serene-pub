@@ -51,6 +51,7 @@
 	import Select, {
 		type SelectOption
 	} from "$lib/client/components/inputs/Select.svelte"
+	import { notePreview } from "$lib/shared/utils/connectionNotes"
 	import { outputKindOf } from "$lib/shared/capabilities/samplingShape"
 	import type { ComboRow } from "$lib/shared/capabilities/combos"
 
@@ -385,13 +386,35 @@
 									     the list makes "why isn't mine there"
 									     unanswerable here. -->
 									{#each options as opt (opt.id)}
+										{@const preview = notePreview(
+											opt.notes
+										)}
+										<!-- Two different things after the
+										     name, and the order is the point:
+										     the REASON is the app's verdict on
+										     this row and decides whether it can
+										     be picked at all, so it comes
+										     first; the note is the user's own
+										     reminder and is display-only.
+										     `notePreview` bounds the note
+										     because an `<option>` can neither
+										     wrap nor clamp; the tooltip carries
+										     both IN FULL, and keeps the reason
+										     even when a note is present —
+										     losing "why is this one greyed out"
+										     to make room for a note would be a
+										     bad trade. -->
 										<option
 											value={String(opt.id)}
 											disabled={!opt.eligible}
-											title={opt.reason}
+											title={[opt.reason, opt.notes]
+												.filter(Boolean)
+												.join("\n\n") || undefined}
 										>
 											{opt.name}{opt.reason
 												? ` — ${opt.reason}`
+												: ""}{preview
+												? ` · ${preview}`
 												: ""}
 										</option>
 									{/each}

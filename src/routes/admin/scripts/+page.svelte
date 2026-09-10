@@ -151,73 +151,89 @@
 
 	/* --- socket wiring ------------------------------------------------ */
 
+	// Named so `off` can name them too. A bare `socket.off("pipelines:scripts")`
+	// removes EVERY listener for that event — including any other open
+	// page's, which then stops updating for the rest of the session.
+	function handlePipelinesScripts(res: Sockets.Pipelines.Scripts.Response) {
+		view = res
+		loading = false
+	}
+
+	function handlePipelinesScriptsError(res: { error?: string }) {
+		if (res.error) toaster.error({ title: res.error })
+		loading = false
+	}
+
+	function handlePipelinesExportScripts(
+		res: Sockets.Pipelines.ScriptShare.ExportResponse
+	) {
+		if (res.blob && res.filename)
+			downloadBlob(res as { blob: unknown; filename: string })
+	}
+
+	function handlePipelinesExportScriptsError(res: { error?: string }) {
+		if (res.error) toaster.error({ title: res.error })
+	}
+
+	function handlePipelinesImportScripts(
+		res: Sockets.Pipelines.ScriptShare.ImportResponse
+	) {
+		if (res.scripts) view = res.scripts
+		importOpen = false
+		const skippedForReal = (res.report?.skipped ?? []).filter(
+			(s) => s.reason !== "not selected"
+		)
+		toaster.success({
+			title: `Imported ${res.report?.imported.length ?? 0} script${
+				(res.report?.imported.length ?? 0) === 1 ? "" : "s"
+			}`,
+			...(skippedForReal.length
+				? {
+						description: skippedForReal
+							.map((s) => `${s.name}: ${s.reason}`)
+							.join(" · ")
+					}
+				: {})
+		})
+	}
+
+	function handlePipelinesImportScriptsError(res: { error?: string }) {
+		if (res.error) toaster.error({ title: res.error })
+	}
+
 	onMount(() => {
 		if (!userCtx.user?.isAdmin) {
 			goto("/")
 			return
 		}
-		socket.on(
-			"pipelines:scripts",
-			(res: Sockets.Pipelines.Scripts.Response) => {
-				view = res
-				loading = false
-			}
-		)
-		socket.on("pipelines:scripts:error", (res: { error?: string }) => {
-			if (res.error) toaster.error({ title: res.error })
-			loading = false
-		})
-		socket.on(
-			"pipelines:exportScripts",
-			(res: Sockets.Pipelines.ScriptShare.ExportResponse) => {
-				if (res.blob && res.filename)
-					downloadBlob(res as { blob: unknown; filename: string })
-			}
-		)
+		socket.on("pipelines:scripts", handlePipelinesScripts)
+		socket.on("pipelines:scripts:error", handlePipelinesScriptsError)
+		socket.on("pipelines:exportScripts", handlePipelinesExportScripts)
 		socket.on(
 			"pipelines:exportScripts:error",
-			(res: { error?: string }) => {
-				if (res.error) toaster.error({ title: res.error })
-			}
+			handlePipelinesExportScriptsError
 		)
-		socket.on(
-			"pipelines:importScripts",
-			(res: Sockets.Pipelines.ScriptShare.ImportResponse) => {
-				if (res.scripts) view = res.scripts
-				importOpen = false
-				const skippedForReal = (res.report?.skipped ?? []).filter(
-					(s) => s.reason !== "not selected"
-				)
-				toaster.success({
-					title: `Imported ${res.report?.imported.length ?? 0} script${
-						(res.report?.imported.length ?? 0) === 1 ? "" : "s"
-					}`,
-					...(skippedForReal.length
-						? {
-								description: skippedForReal
-									.map((s) => `${s.name}: ${s.reason}`)
-									.join(" · ")
-							}
-						: {})
-				})
-			}
-		)
+		socket.on("pipelines:importScripts", handlePipelinesImportScripts)
 		socket.on(
 			"pipelines:importScripts:error",
-			(res: { error?: string }) => {
-				if (res.error) toaster.error({ title: res.error })
-			}
+			handlePipelinesImportScriptsError
 		)
 		socket.emit("pipelines:scripts", {})
 	})
 
 	onDestroy(() => {
-		socket.off("pipelines:scripts")
-		socket.off("pipelines:scripts:error")
-		socket.off("pipelines:exportScripts")
-		socket.off("pipelines:exportScripts:error")
-		socket.off("pipelines:importScripts")
-		socket.off("pipelines:importScripts:error")
+		socket.off("pipelines:scripts", handlePipelinesScripts)
+		socket.off("pipelines:scripts:error", handlePipelinesScriptsError)
+		socket.off("pipelines:exportScripts", handlePipelinesExportScripts)
+		socket.off(
+			"pipelines:exportScripts:error",
+			handlePipelinesExportScriptsError
+		)
+		socket.off("pipelines:importScripts", handlePipelinesImportScripts)
+		socket.off(
+			"pipelines:importScripts:error",
+			handlePipelinesImportScriptsError
+		)
 	})
 </script>
 

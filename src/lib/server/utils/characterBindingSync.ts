@@ -32,11 +32,8 @@ import {
 	resolvePersonaName
 } from "$lib/shared/utils/resolveCharacterName"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
-import type { PgliteDatabase } from "drizzle-orm/pglite"
 
-type DbLike = PgliteDatabase<typeof schema>
-
-async function defaultDb(): Promise<DbLike> {
+async function defaultDb(): Promise<Db> {
 	return (await import("$lib/server/db")).db
 }
 
@@ -63,7 +60,7 @@ async function defaultDb(): Promise<DbLike> {
  */
 export async function syncLorebookBindingsForCharacter(
 	characterId: number,
-	dbInstance?: DbLike
+	dbInstance?: Db
 ): Promise<void> {
 	const db = dbInstance ?? (await defaultDb())
 	await db.transaction(async (tx) => {
@@ -125,7 +122,7 @@ export async function syncLorebookBindingsForCharacter(
  */
 export async function syncLorebookBindingsForPersona(
 	personaId: number,
-	dbInstance?: DbLike
+	dbInstance?: Db
 ): Promise<void> {
 	const db = dbInstance ?? (await defaultDb())
 	await db.transaction(async (tx) => {
@@ -171,7 +168,7 @@ export async function resolveOrCreateBinding(
 		characterId?: number | null
 		personaId?: number | null
 	},
-	dbInstance?: DbLike
+	dbInstance?: Db
 ): Promise<number> {
 	const db = dbInstance ?? (await defaultDb())
 	if (!characterId && !personaId)
@@ -232,7 +229,7 @@ export async function resolveOrCreateBinding(
  * every bound-insert path syncs on creation (as they all now do).
  */
 export async function backfillMissingBindingNames(
-	dbInstance?: DbLike
+	dbInstance?: Db
 ): Promise<void> {
 	const db = dbInstance ?? (await defaultDb())
 	const staleBoundBindings = await db.query.lorebookBindings.findMany({

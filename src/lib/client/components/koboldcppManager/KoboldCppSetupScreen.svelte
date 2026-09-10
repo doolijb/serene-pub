@@ -24,24 +24,29 @@
 		socket.emit("koboldcpp:setManagedMode", { mode: "external" })
 	}
 
+	// Named so `off` can name them too. A bare `socket.off("koboldcpp:setManagedMode")`
+	// removes EVERY listener for that event — including KoboldCppSidebar's, which
+	// listens for the same event and would stop updating for the rest of the session.
+	function handleSetManagedMode(
+		msg: Sockets.KoboldCPP.SetManagedMode.Response
+	) {
+		saving = false
+		if (!msg.success) toaster.error({ title: "Failed to save mode" })
+	}
+
+	function handleSetManagedModeError() {
+		saving = false
+		toaster.error({ title: "Failed to save mode" })
+	}
+
 	onMount(() => {
-		socket.on(
-			"koboldcpp:setManagedMode",
-			(msg: Sockets.KoboldCPP.SetManagedMode.Response) => {
-				saving = false
-				if (!msg.success)
-					toaster.error({ title: "Failed to save mode" })
-			}
-		)
-		socket.on("koboldcpp:setManagedMode:error", () => {
-			saving = false
-			toaster.error({ title: "Failed to save mode" })
-		})
+		socket.on("koboldcpp:setManagedMode", handleSetManagedMode)
+		socket.on("koboldcpp:setManagedMode:error", handleSetManagedModeError)
 	})
 
 	onDestroy(() => {
-		socket.off("koboldcpp:setManagedMode")
-		socket.off("koboldcpp:setManagedMode:error")
+		socket.off("koboldcpp:setManagedMode", handleSetManagedMode)
+		socket.off("koboldcpp:setManagedMode:error", handleSetManagedModeError)
 	})
 </script>
 

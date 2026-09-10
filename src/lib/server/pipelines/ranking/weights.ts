@@ -80,8 +80,37 @@ export interface SignalWeights {
 	entityCooccurrence: number
 	tfidf: number
 	lastRefRecency: number
-	recency: number
-	sceneAffinity: number
+	/**
+	 * ⚠ **`recency` and `sceneAffinity` were here and are gone.**
+	 *
+	 * Neither had a producer — no mechanism has ever written `signals.recency`
+	 * or `signals.sceneAffinity` — so both weights multiplied a permanent zero
+	 * while `score()` read them, `DEFAULT_SIGNAL_WEIGHTS` gave them non-zero
+	 * numbers on two bands, and `core:task/rank-hybrid@1` declared, validated
+	 * and stored them. The contracts file carries the argument for removing
+	 * rather than building producers; the short version is that each needs a
+	 * design decision (which date orders a dated entry; what scene a session is
+	 * *in*) that a wiring change is not entitled to make.
+	 *
+	 * Removing the two terms from `score()` is bit-for-bit inert: `w * 0` is an
+	 * exact positive zero and `x + 0` is exact in IEEE-754, so every score the
+	 * app has produced is unchanged to the last bit.
+	 */
+	/**
+	 * How long this entry is against the pool's average, capped at 1.
+	 *
+	 * ⚠ **It had no producer either, and now it has one.** `densitySignal` sat
+	 * in `signals.ts` with no caller for exactly as long as this weight sat
+	 * here with nothing to weigh. The scan writes it on every candidate now,
+	 * for `proximity`'s reason: the number costs nothing (the lengths are
+	 * already measured) and a signal nobody can see the value of is a signal
+	 * nobody can decide to weight.
+	 *
+	 * **0 in every lore band**, so wiring the producer changes no score. Length
+	 * is a proxy for how much an entry has to say, and it is a *good* proxy in
+	 * a book that mixes one-line stubs with real articles and a poor one in a
+	 * book of even entries — which is why it is a slider and not a policy.
+	 */
 	density: number
 	/**
 	 * How much an embedding thinks this entry is *about* what is being said.
@@ -165,8 +194,6 @@ const NO_SIGNALS: SignalWeights = {
 	entityCooccurrence: 0,
 	tfidf: 0,
 	lastRefRecency: 0,
-	recency: 0,
-	sceneAffinity: 0,
 	density: 0,
 	proximity: 0,
 	semantic: 0,
@@ -203,22 +230,36 @@ export const DEFAULT_SIGNAL_WEIGHTS: Record<RetrievalBand, SignalWeights> = {
 	worldLore: { ...LORE_SIGNALS, entityCooccurrence: 0.35 },
 	/** 0.2, unchanged: character lore's question is presence, and it did not move. */
 	characterLore: LORE_SIGNALS,
-	/** `:1239`. Note history carries no `priorityBonus` today. */
+	/**
+	 * `:1239`. Note history carries no `priorityBonus` today.
+	 *
+	 * ⚠ It carried `recency: 0.2` and `sceneAffinity: 0.1` as well, and those
+	 * are the two numbers that made the dead weights look alive: unlike the
+	 * `messages` band they sat on a source the shipped pipeline really does
+	 * populate. Nothing ever produced either signal, so they weighed a zero on
+	 * every turn of every install. See `SignalWeights`.
+	 */
 	history: {
 		...NO_SIGNALS,
 		keyword: 0.35,
-		recency: 0.2,
 		tfidf: 0.1,
-		sceneAffinity: 0.1,
 		lastRefRecency: 0.1,
 		semantic: 0.3,
 		entityVector: 0.2
 	},
-	/** `:1277`. */
+	/**
+	 * `:1277`.
+	 *
+	 * ⚠ **Not populated on any shipped path**, which is what let three weights
+	 * hide here: the entity mechanism's `messages` out-port is deliberately
+	 * unwired (see `respond`), so nothing ranked a message and nothing noticed
+	 * that two of these three had no producer at all. `density` is produced now
+	 * and is left at 0.1 here rather than tidied — no mechanism writes it on a
+	 * *message* candidate either way, so the number cannot change an outcome
+	 * and moving it would be a re-tune with no reason attached.
+	 */
 	messages: {
 		...NO_SIGNALS,
-		recency: 0.3,
-		sceneAffinity: 0.15,
 		tfidf: 0.1,
 		density: 0.1
 	},
@@ -495,10 +536,11 @@ export const DEFAULT_SEMANTIC: SemanticParams = {
  *   · **name** — `nameMatch`, `entityCooccurrence`,
  *     `entityVector`                                 → "this is called that"
  *
- * The other five are **structural**, and deliberately unscaled: `recency`,
- * `lastRefRecency`, `sceneAffinity`, `density` and the priority bonus answer
- * *"does this matter now"* rather than *"did we find it"*. An entry does not
- * become less recent because somebody turned keyword matching down.
+ * The other three are **structural**, and deliberately unscaled:
+ * `lastRefRecency`, `density` and the priority bonus answer *"does this matter
+ * now"* rather than *"did we find it"*. An entry does not stop being long, or
+ * stop having come up a moment ago, because somebody turned keyword matching
+ * down.
  *
  * ⚠ **Not the same axis as `GroupWeights.share`, and they sit on one screen.**
  * A share divides the token budget between sources, so raising one lowers the

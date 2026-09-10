@@ -37,38 +37,42 @@
 		return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
 	}
 
+	// Named so `off` can name them too. A bare `socket.off("koboldcpp:downloadProgress")`
+	// removes EVERY listener for that event.
+	function handleDownloadProgress(
+		msg: Sockets.KoboldCPP.DownloadProgress.Response
+	) {
+		downloads = msg.downloads
+	}
+
+	function handleGetDownloadProgress(
+		msg: Sockets.KoboldCPP.GetDownloadProgress.Response
+	) {
+		downloads = msg.downloads
+	}
+
+	function handleCancelDownload() {}
+
+	function handleClearDownloadHistory(
+		msg: Sockets.KoboldCPP.ClearDownloadHistory.Response
+	) {
+		if (msg.success) downloads = {}
+	}
+
 	onMount(() => {
-		socket.on(
-			"koboldcpp:downloadProgress",
-			(msg: Sockets.KoboldCPP.DownloadProgress.Response) => {
-				downloads = msg.downloads
-			}
-		)
-
-		socket.on(
-			"koboldcpp:getDownloadProgress",
-			(msg: Sockets.KoboldCPP.GetDownloadProgress.Response) => {
-				downloads = msg.downloads
-			}
-		)
-
-		socket.on("koboldcpp:cancelDownload", () => {})
-
-		socket.on(
-			"koboldcpp:clearDownloadHistory",
-			(msg: Sockets.KoboldCPP.ClearDownloadHistory.Response) => {
-				if (msg.success) downloads = {}
-			}
-		)
+		socket.on("koboldcpp:downloadProgress", handleDownloadProgress)
+		socket.on("koboldcpp:getDownloadProgress", handleGetDownloadProgress)
+		socket.on("koboldcpp:cancelDownload", handleCancelDownload)
+		socket.on("koboldcpp:clearDownloadHistory", handleClearDownloadHistory)
 
 		socket.emit("koboldcpp:getDownloadProgress", {})
 	})
 
 	onDestroy(() => {
-		socket.off("koboldcpp:downloadProgress")
-		socket.off("koboldcpp:getDownloadProgress")
-		socket.off("koboldcpp:cancelDownload")
-		socket.off("koboldcpp:clearDownloadHistory")
+		socket.off("koboldcpp:downloadProgress", handleDownloadProgress)
+		socket.off("koboldcpp:getDownloadProgress", handleGetDownloadProgress)
+		socket.off("koboldcpp:cancelDownload", handleCancelDownload)
+		socket.off("koboldcpp:clearDownloadHistory", handleClearDownloadHistory)
 	})
 </script>
 

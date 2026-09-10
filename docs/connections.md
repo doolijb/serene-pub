@@ -21,7 +21,7 @@ Serene Pub ships seven text-generation connection types, each with its own form 
 | `lmstudio`            | LM Studio          | Beginner (GUI) - Minimal setup required    |
 | `ollama`              | Ollama             | Beginner (No GUI) - Minimal setup required |
 | `openai`              | OpenAI Session     | Beginner - Nothing to install              |
-| `llamacpp_completion` | Llama.cpp          | Intermediate - Not for beginners           |
+| `llamacpp`            | Llama.cpp          | Intermediate - Not for beginners           |
 | `koboldcpp`           | KoboldCPP          | Beginner (GUI) - Simple setup              |
 | `koboldcpp_managed`   | KoboldCPP Manager  | Beginner (GUI) - Managed by Serene Pub     |
 | `anthropic`           | Anthropic (Claude) | Beginner - Nothing to install              |
@@ -35,15 +35,15 @@ Serene Pub ships seven text-generation connection types, each with its own form 
 
 A connection names exactly **one** model, and which kind of model it names is decided by its type — so a text model and an image model are always two connections, even when they run on the same KoboldCPP process. `koboldcpp_managed_image` isn't offered in the New Connection picker at all: like its text counterpart, it's created for you from the KoboldCPP Manager (see [KoboldCPP Manager connections](#koboldcpp-manager-connections)).
 
-Every form shares a similar skeleton — a **Test Connection** button that reports "Test: Okay!" or "Test: Failed!" (with the underlying error message shown below it), a **Token Counter** dropdown, and a collapsible **Advanced Settings** section holding the Base URL and stream/behavior toggles. Forms that talk to a session-completion API also expose a **Use Session Mode** toggle; when it's switched off, a **Prompt Format** dropdown appears so you can pick how the raw text prompt is assembled instead.
+Every form shares a similar skeleton — a **Test Connection** button that reports "Test: Okay!" or "Test: Failed!" (with the underlying error message shown below it), a **Token Counter** dropdown, and a collapsible **Advanced Settings** section holding the Base URL and stream/behavior toggles. Whether a connection sends chat messages or a rendered text completion is a connection **capability**, not a form switch — see the **Chat messages** / **Text completion** control (auto/on/off, with provenance) in the Capabilities panel; when text completion is in effect, a **Prompt Format** dropdown appears so you can pick how the raw text prompt is assembled.
 
 ## LM Studio
 
-The LM Studio form has a **Model** dropdown (populated by a **Refresh Models** button that queries LM Studio's REST API) and a **Test Connection** button. Advanced Settings hold the **Base URL** (default `ws://localhost:1234` — note LM Studio's default here is a `ws://` URL, not `http://`), a **Use Session Mode** checkbox, a **Stream** checkbox, and a **Keep Alive (seconds)** field (default 60) controlling how long LM Studio keeps the model resident after a request. LM Studio's REST API must be enabled in LM Studio's own settings before Serene Pub can reach it.
+The LM Studio form has a **Model** dropdown (populated by a **Refresh Models** button that queries LM Studio's REST API) and a **Test Connection** button. Advanced Settings hold the **Base URL** (default `ws://localhost:1234` — note LM Studio's default here is a `ws://` URL, not `http://`), a **Stream** checkbox, and a **Keep Alive (seconds)** field (default 60) controlling how long LM Studio keeps the model resident after a request. Whether requests are sent as chat messages or a rendered text completion is a connection **capability**, not a form switch — see the **Chat messages** / **Text completion** control (auto/on/off, with provenance shown below it) in the Capabilities panel. LM Studio's REST API must be enabled in LM Studio's own settings before Serene Pub can reach it.
 
 ## Ollama
 
-The Ollama connection form has a **Model** dropdown populated via **Refresh Models**, plus **Test Connection**. Advanced Settings expose the **Base URL** (default `http://localhost:11434/`), a **Keep Alive** control split into a number field and a unit dropdown (`ms` / `s` / `m` / `h`, default `300ms`), and three switches: **Use Session Mode**, **Stream**, and **Think** (passes Ollama's `think` flag for reasoning-capable models). This connection type talks to a manually-installed, already-running Ollama server — for browsing, pulling, and deleting Ollama models from inside Serene Pub, see [Ollama Manager](#ollama-manager) below, which is a separate admin sidebar from this connection form.
+The Ollama connection form has a **Model** dropdown populated via **Refresh Models**, plus **Test Connection**. Advanced Settings expose the **Base URL** (default `http://localhost:11434/`), a **Keep Alive** control split into a number field and a unit dropdown (`ms` / `s` / `m` / `h`, default `5m`), and two switches: **Stream** and **Think** (passes Ollama's `think` flag for reasoning-capable models). Whether requests are sent as chat messages or a rendered text completion is a connection **capability** now, not a form switch — see the **Chat messages** / **Text completion** control (auto/on/off, with provenance shown below it) in the Capabilities panel. This connection type talks to a manually-installed, already-running Ollama server — for browsing, pulling, and deleting Ollama models from inside Serene Pub, see [Ollama Manager](#ollama-manager) below, which is a separate admin sidebar from this connection form.
 
 ## OpenAI Session & Compatible Endpoint Presets
 
@@ -85,7 +85,7 @@ Llama.cpp connects to `llama-server`'s completion API. It's the simplest form: a
 
 ## Anthropic (Claude)
 
-The Anthropic form has a **Model** dropdown (via **Refresh Models**), **Test Connection**, a **Token Counter** dropdown, and an **API Key** field (placeholder `sk-ant-...`). Advanced Settings hold a **Stream** switch and an **Extended Thinking** switch — enabling it reveals a **Thinking Budget Tokens** field (1024–32000, default 8000) controlling how many tokens Claude may spend thinking before responding. Extended thinking requires a Claude 3.7+ model. The default connection preset points at `https://api.anthropic.com` with model `claude-sonnet-4-5` and (notably) an `OpenAI`-style default Prompt Format rather than the `Claude` one, since Anthropic responses go through native session mode by default rather than a rendered text prompt.
+The Anthropic form has a **Model** dropdown (via **Refresh Models**), **Test Connection**, a **Token Counter** dropdown, and an **API Key** field (placeholder `sk-ant-...`). Advanced Settings hold a **Stream** switch and an **Extended Thinking** switch — enabling it reveals a **Thinking Budget Tokens** field (1024–32000, default 8000) controlling how many tokens Claude may spend thinking before responding. Extended thinking requires a Claude 3.7+ model. The default connection preset points at `https://api.anthropic.com` with model `claude-sonnet-4-5` and (notably) an `OpenAI`-style default Prompt Format rather than the `Claude` one, since Anthropic sends chat messages — its only wire — rather than a rendered text prompt.
 
 ### Where the API keys come from
 
@@ -95,9 +95,8 @@ For OpenAI Session and Anthropic, obtain a key from the respective service's con
 
 The plain **KoboldCPP** connection type talks to a KoboldCPP instance you run and manage yourself — either on the same machine or a remote one — via KoboldCPP's native API. If the [KoboldCPP Manager](#koboldcpp-manager) is enabled system-wide, this form shows a warning banner suggesting you use a **KCPP Manager** connection instead, unless this particular connection is deliberately pointed at a _different_ KoboldCPP instance than the one the manager controls.
 
-The form has a **Test Connection** button, a **Prompt Format** dropdown (shown only when Use Session Mode is off), a **Token Counter** dropdown, and an Advanced Settings section with the **Base URL** (default `http://localhost:5001`) plus a long list of KoboldCPP-specific request options, all as toggle switches unless noted:
+The form has a **Test Connection** button, a **Prompt Format** dropdown (shown only when text completion is in effect), a **Token Counter** dropdown, and an Advanced Settings section with the **Base URL** (default `http://localhost:5001`) plus a long list of KoboldCPP-specific request options, all as toggle switches unless noted. Whether requests are sent as chat messages or a rendered text completion is a connection **capability**, not a form switch — see the **Chat messages** / **Text completion** control (auto/on/off, with provenance shown below it) in the Capabilities panel:
 
-- **Use Session Mode** — use OpenAI-style session completion instead of raw text completion.
 - **Stream** — stream tokens as they're generated.
 - **Use Memory** — when on, reveals a **Memory Text** textarea whose contents are forcefully prepended to every prompt sent to this connection.
 - **Trim Stop Sequences** — strip stop sequences out of the returned text.
@@ -186,7 +185,7 @@ A common cause on Docker and NAS-hosted deployments: the app's data directory (w
 
 Once the Manager has a binary installed (or is connected to an external instance with `--admin` enabled) and at least one model downloaded, you create a **KoboldCPP Manager**-type connection to actually use a model in sessions — this is the `koboldcpp_managed` connection type from the [types table](#connection-types-at-a-glance) above, distinct from the manager sidebar itself. Its form is disabled (with a warning banner) until the Manager is enabled system-wide.
 
-The form's **Model** dropdown is populated straight from the Manager's model list (with its own refresh button) — picking one here is equivalent to using **Set Default** from the Models tab. Prompt Format, Token Counter, and the same long list of KoboldCPP request switches (Use Session Mode, Stream, Use Memory, Trim Stop Sequences, Render Special Tokens, Bypass EOS Token, Retain Grammar State, Return Logprobs, Replace Instruct Placeholders, Thinking/Reasoning) all work exactly as on the plain KoboldCPP form. The Base URL field is hidden entirely — Advanced Settings notes "Base URL is managed by KoboldCPP Manager's configured address and isn't set per-connection." Underneath those familiar fields, a **Managed mode launch settings** section holds:
+The form's **Model** dropdown is populated straight from the Manager's model list (with its own refresh button) — picking one here is equivalent to using **Set Default** from the Models tab. Prompt Format, Token Counter, and the same long list of KoboldCPP request switches (Stream, Use Memory, Trim Stop Sequences, Render Special Tokens, Bypass EOS Token, Retain Grammar State, Return Logprobs, Replace Instruct Placeholders, Thinking/Reasoning) all work exactly as on the plain KoboldCPP form. The Base URL field is hidden entirely — Advanced Settings notes "Base URL is managed by KoboldCPP Manager's configured address and isn't set per-connection." Underneath those familiar fields, a **Managed mode launch settings** section holds:
 
 - **GPU Layers** — number of model layers to offload to GPU; `-1` autofits as many as will fit, `0` forces CPU-only. Default `-1`.
 - **Flash Attention** — toggle KoboldCPP's flash-attention kernel. Default off.
@@ -291,7 +290,7 @@ Context templates — the Handlebars-style templates that assemble the full requ
 
 ## Prompt Formats and Token Counters
 
-Every connection form that can operate in text-completion mode (Use Session Mode off, or always for Llama.cpp) exposes a **Prompt Format** dropdown controlling how the assembled Context Config template gets flattened into a single text prompt with the right instruction/turn markers for the target model family:
+Every connection form that can operate in text-completion mode (selected via the **Chat messages** / **Text completion** control in the Capabilities panel, or always for Llama.cpp) exposes a **Prompt Format** dropdown controlling how the assembled Context Config template gets flattened into a single text prompt with the right instruction/turn markers for the target model family:
 
 - **Vicuna** (the default)
 - **ChatML**
@@ -304,6 +303,25 @@ Every connection form that can operate in text-completion mode (Use Session Mode
 Picking the wrong format for a given model typically shows up as the model ignoring turn boundaries or continuing past where it should stop — if a text-completion connection is producing garbled or run-on output, checking this dropdown against the model's actual training format is a good first step. Prompt Format is unrelated to Session Prompts (the free-text instruction templates covered in [Prompt Configs](./prompt-configs.md)) despite the name similarity — Session Prompts supply _what_ to say, Prompt Format controls _how it's laid out_ on the wire.
 
 Every connection form also has a **Token Counter** dropdown, used for client-side token-budget estimates (for example, deciding how much lorebook/history content fits under a Sampling Config's Context Tokens limit) rather than for anything sent to the model itself. Options are **Estimate** (a fast heuristic, the default, and the only sensible choice for models without a dedicated counter below) plus tokenizer-specific counters for **OpenAI GPT-2/3**, **GPT-3.5 Turbo**, **GPT-4**, **GPT-4o**, **Llama**, **Llama 3**, **Mistral/Mixtral**, **Anthropic Claude**, **Cohere**, **Google Gemini/PaLM**, and **Google Gemma**. Picking the counter that actually matches your model gives more accurate context-budget math; picking the wrong one (or leaving it on Estimate for a model with unusual tokenization) can cause the app to under- or over-estimate how much history/lore fits in the remaining context.
+
+## Stop sequences
+
+A stop sequence is a string that ends the reply the moment the model writes it. Serene Pub composes one list per request, from three sources, and each entry carries the **kind** it came from:
+
+- **`format`** — the stop strings on the connection's **completion template** (the row behind the Prompt Format above). These name the template's own delimiters, such as ChatML's `<|im_end|>` or Vicuna's `### `.
+- **`speaker`** — a `Name:` label for every character and persona in the scene _except_ whoever is speaking. The speaker's own name is deliberately left out: the prompt already seeds `Ash: `, and stopping on `Ash:` would return an empty reply from any model that opens by repeating the name.
+- **`explicit`** — whatever you type into the reply step's **Stop sequences** parameter, one per line. `{{char}}` and `{{user}}` are interpolated.
+
+**The wire rule.** Which kinds are actually sent depends on the connection's wire mode (the **Chat messages** / **Text completion** control in the Capabilities panel):
+
+| Wire                | `format`  | `speaker` | `explicit` |
+| ------------------- | --------- | --------- | ---------- |
+| **Text completion** | sent      | sent      | sent       |
+| **Chat messages**   | held back | held back | sent       |
+
+On a chat wire the roles carry the structure of the conversation, so a completion template's delimiters and a transcript's speaker labels have nothing in the prompt to match — and sending them anyway _overrides_ the model's own native stop tokens on servers such as Ollama's OpenAI-compatibility layer, which truncates replies for no gain. Your own stop sequences are your choice rather than the template's, so those ride either wire.
+
+Entries the wire rule holds back are **reported, not discarded**: a reply's **What actually fired** panel shows a **Stops** row listing what was sent (with its kind) and what was held back and why, so "my stop sequence did nothing" and "my reply ran on past its turn" are answerable rather than guessed at. Where the backend names the sequence it actually matched — llama.cpp is the only one that reports the word rather than a reason code — that entry is highlighted.
 
 ## Testing, defaults, and everyday management
 

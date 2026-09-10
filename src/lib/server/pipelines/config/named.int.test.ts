@@ -40,7 +40,7 @@ let specVersionId: number
 
 beforeAll(async () => {
 	db = await createTestDb()
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [spec] = await db
 		.select()
@@ -59,7 +59,7 @@ const valuesOf = async (configId: number) =>
 describe("the shipped default", () => {
 	it("exists for the pipeline, immutable and marked default", async () => {
 		const res = await ensureDefaultConfig(
-			db as any,
+			db,
 			specId,
 			specVersionId,
 			RESPOND_SPEC_ID
@@ -77,7 +77,7 @@ describe("the shipped default", () => {
 
 	it("is created once, not once per boot", async () => {
 		const again = await ensureDefaultConfig(
-			db as any,
+			db,
 			specId,
 			specVersionId,
 			RESPOND_SPEC_ID
@@ -178,7 +178,7 @@ describe("what a new version does to a tuned config", () => {
 
 	it("culls a value the new version no longer declares", async () => {
 		await reconcileConfigs(
-			db as any,
+			db,
 			specId,
 			specVersionId,
 			RESPOND_SPEC_ID
@@ -193,7 +193,7 @@ describe("what a new version does to a tuned config", () => {
 	it("leaves a notice saying what was removed, and what it held", async () => {
 		// A notice that says "your value was removed" without saying what it was
 		// asks the user to remember something they configured months ago.
-		const notices = await pendingNotices(db as any, mine)
+		const notices = await pendingNotices(db, mine)
 		const culled = notices.filter((n: any) => n.kind === "culled")
 		expect(culled).toHaveLength(1)
 		expect(culled[0].path).toBe("aParamThisVersionDoesNotDeclare")
@@ -257,15 +257,15 @@ describe("what a new version does to a tuned config", () => {
 	it("is a no-op the second time", async () => {
 		// Reconciliation runs on every publish. One that kept writing would grow
 		// a notice list nobody could read.
-		const before = (await pendingNotices(db as any, mine)).length
+		const before = (await pendingNotices(db, mine)).length
 		const report = await reconcileConfigs(
-			db as any,
+			db,
 			specId,
 			specVersionId,
 			RESPOND_SPEC_ID
 		)
 		expect(report).toEqual([])
-		expect((await pendingNotices(db as any, mine)).length).toBe(before)
+		expect((await pendingNotices(db, mine)).length).toBe(before)
 	})
 })
 
@@ -301,7 +301,7 @@ describe("which config a scope has selected", () => {
 
 	it("falls back to what core shipped when nothing has chosen", async () => {
 		const res = await resolveSelectedConfig(
-			db as any,
+			db,
 			specId,
 			RESPOND_SPEC_ID,
 			{}
@@ -323,10 +323,10 @@ describe("which config a scope has selected", () => {
 	it("prefers the nearer scope, session over instance — the whole chain now", async () => {
 		// The user step is gone (ruled 2026-08-24): a person's choice of
 		// config is made per session, or it is the instance's.
-		await selectConfig(db as any, specId, "instance", 0, mine, userId)
+		await selectConfig(db, specId, "instance", 0, mine, userId)
 		expect(
 			(await resolveSelectedConfig(
-				db as any,
+				db,
 				specId,
 				RESPOND_SPEC_ID,
 				{}
@@ -334,7 +334,7 @@ describe("which config a scope has selected", () => {
 		).toBe("instance")
 
 		await selectConfig(
-			db as any,
+			db,
 			specId,
 			"session",
 			sessionId,
@@ -342,7 +342,7 @@ describe("which config a scope has selected", () => {
 			userId
 		)
 		expect(
-			(await resolveSelectedConfig(db as any, specId, RESPOND_SPEC_ID, {
+			(await resolveSelectedConfig(db, specId, RESPOND_SPEC_ID, {
 				sessionId
 			}))!.source
 		).toBe("session")
@@ -364,7 +364,7 @@ describe("which config a scope has selected", () => {
 		for (const r of rows) expect(r.configId).toBeNull()
 
 		const res = await resolveSelectedConfig(
-			db as any,
+			db,
 			specId,
 			RESPOND_SPEC_ID,
 			{ sessionId }
@@ -387,7 +387,7 @@ describe("which config a scope has selected", () => {
 
 		await expect(
 			selectConfig(
-				db as any,
+				db,
 				specId,
 				"session",
 				sessionId,
@@ -461,7 +461,7 @@ describe("the narrator split, from an older configuration", () => {
 
 	it("culls what the narrator cannot render, and keeps what it can", async () => {
 		await reconcileConfigs(
-			db as any,
+			db,
 			narrateSpecId,
 			narrateVersionId,
 			"core:spec/narrate"
@@ -531,7 +531,7 @@ describe("an author preset that sets a whole settings slot", () => {
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.slug, slug))
 		const res = await ensureDefaultConfig(
-			db as any,
+			db,
 			spec.id,
 			spec.activeVersionId!,
 			slug
@@ -565,7 +565,7 @@ describe("an author preset that sets a whole settings slot", () => {
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.slug, "core:spec/generate-image"))
 		const res = await ensureDefaultConfig(
-			db as any,
+			db,
 			spec.id,
 			spec.activeVersionId!,
 			"core:spec/generate-image"
@@ -603,7 +603,7 @@ describe("naming what was culled", () => {
 		// already holds — one that actually declares a labelled field — so its
 		// declarations, and their labels, are the real ones rather than a
 		// fixture's idea of them.
-		const live = await declarations(db as any, specVersionId)
+		const live = await declarations(db, specVersionId)
 		const source = live.find((d) => !!d.path && !!d.label)!
 		const [node] = await db
 			.select()
@@ -634,7 +634,7 @@ describe("naming what was culled", () => {
 			position: 0
 		})
 
-		const decls = await declarations(db as any, prior.id)
+		const decls = await declarations(db, prior.id)
 		const d = decls.find(
 			(x) =>
 				x.nodeKey === "retiredStep" &&
@@ -666,12 +666,12 @@ describe("naming what was culled", () => {
 
 	it("labels the cull with what the version that declared it called it", async () => {
 		await reconcileConfigs(
-			db as any,
+			db,
 			specId,
 			specVersionId,
 			RESPOND_SPEC_ID
 		)
-		const culled = (await pendingNotices(db as any, mine)).filter(
+		const culled = (await pendingNotices(db, mine)).filter(
 			(n: any) => n.kind === "culled" && n.path === retired.path
 		)
 		expect(culled).toHaveLength(1)
@@ -683,7 +683,7 @@ describe("naming what was culled", () => {
 		// Back-fills answer the same question a cull does — "why is this
 		// different today" — and an unlabelled row beside a labelled one reads
 		// as a bug in the screen rather than as a quieter kind of notice.
-		const backfilled = (await pendingNotices(db as any, mine)).filter(
+		const backfilled = (await pendingNotices(db, mine)).filter(
 			(n: any) => n.kind === "backfilled"
 		)
 		expect(backfilled.length).toBeGreaterThan(0)
@@ -739,8 +739,8 @@ describe("dismissing a notice", () => {
 	})
 
 	it("acknowledges one without touching the other", async () => {
-		expect(await acknowledgeNotices(db as any, configId, first)).toBe(1)
-		const left = await pendingNotices(db as any, configId)
+		expect(await acknowledgeNotices(db, configId, first)).toBe(1)
+		const left = await pendingNotices(db, configId)
 		expect(left.map((n: any) => n.path)).toEqual(["goneTwo"])
 	})
 
@@ -755,8 +755,8 @@ describe("dismissing a notice", () => {
 	})
 
 	it("is idempotent, and re-reading does not resurrect it", async () => {
-		expect(await acknowledgeNotices(db as any, configId, first)).toBe(0)
-		const left = await pendingNotices(db as any, configId)
+		expect(await acknowledgeNotices(db, configId, first)).toBe(0)
+		const left = await pendingNotices(db, configId)
 		expect(left.map((n: any) => n.path)).toEqual(["goneTwo"])
 	})
 
@@ -767,7 +767,7 @@ describe("dismissing a notice", () => {
 			.insert(schema.pipelineConfigs)
 			.values({ specId, name: "Somebody else's tuning" })
 			.returning()
-		expect(await acknowledgeNotices(db as any, other.id, first)).toBe(0)
+		expect(await acknowledgeNotices(db, other.id, first)).toBe(0)
 		const [row] = await db
 			.select()
 			.from(schema.pipelineConfigNotices)
@@ -776,7 +776,7 @@ describe("dismissing a notice", () => {
 	})
 
 	it("clears everything pending when no notice is named", async () => {
-		expect(await acknowledgeNotices(db as any, configId)).toBe(1)
-		expect(await pendingNotices(db as any, configId)).toEqual([])
+		expect(await acknowledgeNotices(db, configId)).toBe(1)
+		expect(await pendingNotices(db, configId)).toEqual([])
 	})
 })

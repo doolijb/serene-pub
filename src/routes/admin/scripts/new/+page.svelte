@@ -40,46 +40,54 @@
 	const scopeLabel = (content: string) =>
 		content.charAt(0).toUpperCase() + content.slice(1)
 
+	// Named so `off` can name them too. A bare `socket.off("pipelines:scripts")`
+	// removes EVERY listener for that event — including any other open
+	// page's, which then stops updating for the rest of the session.
+	function handlePipelinesScripts(res: Sockets.Pipelines.Scripts.Response) {
+		view = res
+		loading = false
+		if (!typeId && res.types?.length) typeId = res.types[0].typeId
+	}
+
+	function handlePipelinesCreateScript(
+		res: Sockets.Pipelines.ScriptWrite.Response
+	) {
+		const created = res.scripts?.scripts?.find(
+			(s) => !priorIds.has(s.id)
+		)
+		toaster.success({ title: "Script created" })
+		goto(
+			created
+				? `/admin/scripts/${created.id}`
+				: "/admin/scripts"
+		)
+	}
+
+	function handlePipelinesCreateScriptError(res: { error?: string }) {
+		if (res.error) toaster.error({ title: res.error })
+	}
+
 	onMount(() => {
 		if (!userCtx.user?.isAdmin) {
 			goto("/")
 			return
 		}
-		socket.on(
-			"pipelines:scripts",
-			(res: Sockets.Pipelines.Scripts.Response) => {
-				view = res
-				loading = false
-				if (!typeId && res.types?.length) typeId = res.types[0].typeId
-			}
-		)
-		socket.on(
-			"pipelines:createScript",
-			(res: Sockets.Pipelines.ScriptWrite.Response) => {
-				const created = res.scripts?.scripts?.find(
-					(s) => !priorIds.has(s.id)
-				)
-				toaster.success({ title: "Script created" })
-				goto(
-					created
-						? `/admin/scripts/${created.id}`
-						: "/admin/scripts"
-				)
-			}
-		)
+		socket.on("pipelines:scripts", handlePipelinesScripts)
+		socket.on("pipelines:createScript", handlePipelinesCreateScript)
 		socket.on(
 			"pipelines:createScript:error",
-			(res: { error?: string }) => {
-				if (res.error) toaster.error({ title: res.error })
-			}
+			handlePipelinesCreateScriptError
 		)
 		socket.emit("pipelines:scripts", {})
 	})
 
 	onDestroy(() => {
-		socket.off("pipelines:scripts")
-		socket.off("pipelines:createScript")
-		socket.off("pipelines:createScript:error")
+		socket.off("pipelines:scripts", handlePipelinesScripts)
+		socket.off("pipelines:createScript", handlePipelinesCreateScript)
+		socket.off(
+			"pipelines:createScript:error",
+			handlePipelinesCreateScriptError
+		)
 	})
 
 	function create() {

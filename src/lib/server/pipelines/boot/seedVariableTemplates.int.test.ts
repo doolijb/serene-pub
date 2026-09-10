@@ -49,7 +49,7 @@ beforeAll(async () => {
 	const dbModule = await import("$lib/server/db")
 	db = dbModule.db as unknown as TestDb
 	await (await import("$lib/server/db/defaults")).sync()
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 }, 180_000)
 
 afterAll(async () => {
@@ -78,7 +78,7 @@ describe("a renamed shipped layout is an update, not a second row", () => {
 			.set({ name: "Whatever it used to be called" })
 			.where(eq(schema.pipelineVariableTemplates.id, before!.id))
 
-		const report = await seedVariableTemplates(db as any)
+		const report = await seedVariableTemplates(db)
 
 		const after = await rowBySeedKey(seedKeyFor(t))
 		expect(after!.id, "the rename minted a new row").toBe(before!.id)
@@ -88,7 +88,7 @@ describe("a renamed shipped layout is an update, not a second row", () => {
 	})
 
 	it("still ships exactly one row per shipped layout", async () => {
-		await seedVariableTemplates(db as any)
+		await seedVariableTemplates(db)
 		const seeded = await db
 			.select()
 			.from(schema.pipelineVariableTemplates)

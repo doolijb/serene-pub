@@ -1,10 +1,7 @@
-import Handlebars from "handlebars"
 import {
 	capabilitiesFromFlags,
 	flagsFrom
 } from "$lib/server/koboldcpp/probeCapabilities"
-import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
-import { StopStrings } from "../utils/StopStrings"
 import { TokenCounters } from "../utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import {
@@ -134,26 +131,33 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		return samplingLimit
 	}
 
-	compilePrompt(args: {}) {
-		return super.compilePrompt({
-			// Default true — matches every connection type's actual form
-			// default (connectionDefaults.ts) and Ollama/LMStudio's adapter
-			// fallback. Only an old/malformed connection missing this field
-			// entirely would ever hit the fallback.
-			useSessionFormat: this.connection.extraJson?.useSession ?? true,
-			...args
-		})
-	}
-
 	async generateText(): Promise<TextGenResult> {
 		const baseUrl =
 			normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:5001"
 		// Default true — matches CONNECTION_DEFAULTS[KOBOLDCPP].extraJson.stream
-		// (connectionDefaults.ts), same reasoning as useSession below.
+		// (connectionDefaults.ts). Still an `extraJson` flag, and correctly so:
+		// whether to stream is a preference about this connection, not a claim
+		// about what the backend can express. Wire mode below was the one flag in
+		// here that WAS such a claim, which is why it left.
 		const stream = this.connection.extraJson?.stream ?? true
 		const useMemory = this.connection.extraJson?.useMemory ?? false
-		// Default true — see compilePrompt() above for why.
-		const useSession = this.connection.extraJson?.useSession ?? true
+		/**
+		 * Which of KoboldCPP's two endpoints this request goes to.
+		 *
+		 * This read `extraJson.useSession ?? true`, and that flag is gone. It was
+		 * an adapter-local answer to a question the RENDER also had to answer, and
+		 * on the pipeline path the two could not see each other: the render always
+		 * produced one flat string while this defaulted to the chat endpoint, so
+		 * `compiledPrompt.messages` was `undefined`, `JSON.stringify` dropped the
+		 * key, and KoboldCPP was posted a `/v1/chat/completions` body with no
+		 * messages in it at all.
+		 *
+		 * The connection answers it now — resolved once from its capability
+		 * layers, read here and by `config/world.ts` when the prompt was built.
+		 * A person who wants the other endpoint switches the capability, and that
+		 * hand-set value outranks every later test.
+		 */
+		const useSession = this.isChatWire
 		// A fresh key per generation — lets abort() tell KoboldCPP exactly which
 		// in-flight generation to actually stop computing.
 		this.genKey = crypto.randomUUID()
@@ -161,27 +165,13 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		const enableThinking: boolean | null =
 			this.connection.extraJson?.enableThinking ?? null
 
-		// Prepare stop strings
-		const stopStrings = StopStrings.get({
-			format: this.connection.promptFormat || "chatml",
-			characters:
-				this.session.sessionCharacters?.map((cc) => cc.character) || [],
-			personas:
-				this.session.sessionPersonas?.map((cp) => cp.persona) || [],
-			currentCharacterId: this.currentCharacterId ?? undefined
-		})
-		const characterName = resolveCharacterName(
-			this.session.sessionCharacters?.[0]?.character
-		)
-		const personaName =
-			this.session.sessionPersonas?.[0]?.persona?.name || "user"
-		const stopContext: Record<string, string> = {
-			char: characterName,
-			user: personaName
-		}
-		const stop_sequence = stopStrings.map((str) =>
-			Handlebars.compile(str)(stopContext)
-		)
+		// The stop sequences this request will send — composed by
+		// `connections/stops.ts` and handed over at construction, never built
+		// here (ruling 2026-09-10). On the chat wire the list arrives holding
+		// the author's own sequences alone: a completion template's delimiters
+		// have nothing to bite on there, and sending them overrides the model's
+		// native stop tokens.
+		const stop_sequence = this.stops
 
 		// Compile prompt using PromptBuilder
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
@@ -213,14 +203,40 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 			// extension the OpenAI-compat endpoint may or may not honor — harmless
 			// to include either way, and abort() below still works via the plain
 			// fetch abort for this mode regardless.
+			// ⚠ The messages, CHECKED. `compiledPrompt.messages!` asserted an
+			// array that a completion-shaped payload does not carry, and
+			// `JSON.stringify` drops an `undefined` value outright — so the
+			// request went out with no `messages` key and KoboldCPP was asked to
+			// continue a conversation it had never been shown. A refusal here
+			// names the disagreement; a silent request does not.
+			//
+			// Deliberately not a fallback to `promptTextFor`: rebuilding a flat
+			// prompt would put a locally-decided wire mode back, which is the
+			// defect rather than the recovery.
+			if (!Array.isArray(compiledPrompt.messages))
+				throw new Error(
+					"this KoboldCPP connection is chat wire mode, but the prompt it was " +
+						"handed carries no messages. The render and the send are reading " +
+						"different wire modes — check that the assemble node's connection " +
+						"slot is wired to the sending Provider (slot.connectionOf)."
+				)
 			requestBody = {
 				model: this.connection.model || "koboldcpp",
-				messages: compiledPrompt.messages!,
+				messages: compiledPrompt.messages,
 				max_tokens:
 					samplingParams.max_length ||
 					samplingParams.n_predict ||
 					100,
 				stream,
+				// The chat leg sent NO stop sequences at all until the ruling of
+				// 2026-09-10, which meant an author's own list was discarded on
+				// this wire — a control that stored a value nothing read. What
+				// arrives here has already had the template's delimiters and the
+				// transcript's speaker labels removed by the composer, so only
+				// the author's own sequences can reach the OpenAI-compatible
+				// `stop` field. Omitted entirely when there are none, rather than
+				// sent as an empty array.
+				...(stop_sequence.length ? { stop: stop_sequence } : {}),
 				genkey: this.genKey,
 				...samplingParams,
 				// Bugfix: koboldcpp never reads a top-level "enable_thinking"
@@ -271,19 +287,6 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				requestBody.memory = this.connection.extraJson.memory
 			}
 		}
-
-		// TEMPORARY DEBUG — remove after diagnosing the Gemma 4
-		// thinking-not-appearing report.
-		console.log(
-			"[KCPP DEBUG] useSession:",
-			useSession,
-			"stream:",
-			stream,
-			"enableThinking:",
-			enableThinking,
-			"requestBody keys:",
-			Object.keys(requestBody)
-		)
 
 		// Handle streaming vs non-streaming
 		if (stream) {
@@ -358,12 +361,6 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 										continue
 									}
 									if (useSession) {
-										// TEMPORARY DEBUG — remove after diagnosing
-										// the Gemma 4 thinking-not-appearing report.
-										console.log(
-											"[KCPP DEBUG] raw delta:",
-											JSON.stringify(data.choices?.[0])
-										)
 										// OpenAI session format
 										// A 200 stream doesn't guarantee a real
 										// completion — eg. no model loaded comes
@@ -404,7 +401,17 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 											contentCb(chunk)
 										}
 									} else {
-										// KoboldCPP text format
+										// KoboldCPP text format.
+										//
+										// Same as the non-streaming branch
+										// below: reasoning is not absent, it is
+										// INLINE in the token stream. Koboldcpp's
+										// `encapsulate_thinking` (default on)
+										// does hold back a partial tag prefix
+										// across SSE boundaries here, so a
+										// `<think>` is never split between two
+										// events — which is a help to the shared
+										// parser, not a channel for this adapter.
 										if (data.token) {
 											content += data.token
 											contentCb(data.token)
@@ -489,12 +496,6 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				let content: string
 				let thinkingContent: string | undefined
 				if (useSession) {
-					// TEMPORARY DEBUG — remove after diagnosing the Gemma 4
-					// thinking-not-appearing report.
-					console.log(
-						"[KCPP DEBUG] non-stream raw message:",
-						JSON.stringify(data.choices?.[0]?.message)
-					)
 					// OpenAI session format response
 					content = data.choices?.[0]?.message?.content || ""
 					// See the streaming branch's identical read above for why
@@ -503,7 +504,18 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 						data.choices?.[0]?.message?.reasoning_content ||
 						undefined
 				} else {
-					// KoboldCPP text format response
+					// KoboldCPP text format response.
+					//
+					// ⚠ No `thinkingContent` here, and that is NOT "completion
+					// mode cannot reason". `/api/v1/generate` is koboldcpp's
+					// native API (api_format 2), whose reply is this one text
+					// field — its serializer emits a fixed key set with no
+					// reasoning member, and the extraction that builds
+					// `reasoning_content` is gated on the chat-completions
+					// formats. The think tags are not stripped either: they
+					// come back INLINE in `results[0].text`, exactly as the
+					// model wrote them, for the shared inline-tag parser to
+					// take. There is no field here for an adapter to read.
 					content = data.results?.[0]?.text || ""
 				}
 

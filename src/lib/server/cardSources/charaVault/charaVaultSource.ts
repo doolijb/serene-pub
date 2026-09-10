@@ -19,6 +19,7 @@ import {
 	CHARAVAULT_IMAGE_FETCH_TIMEOUT_MS
 } from "./session"
 import { getOrFetchCardBytes } from "../diskCache"
+import { getOrFetchImportedCardBytes } from "../importCache"
 import { parseCharacterCard } from "$lib/server/utils/characterCardParser"
 import {
 	applyDefaultContentFilter,
@@ -265,32 +266,53 @@ export async function fetchCharaVaultCardResponse(
 }
 
 /**
- * Fetches (via the disk cache) and parses a card's bytes exactly once,
+ * Fetches (via a disk cache) and parses a card's bytes exactly once,
  * shared by getCardBytes (needs the raw bytes) and getCardDetail (needs the
  * parsed description/lorebook presence) — previously each caller triggered
  * its own full parseCharacterCard() call, a confirmed duplicate parse on
  * every card-detail view.
+ *
+ * `cache` picks which half of the split (ruling 2026-09-09) the bytes go
+ * through, and the two are deliberately NOT shared:
+ *
+ *   · "browse" — a detail view is an external search result. Temp directory,
+ *     keyed by ref alone, shared across users and instances.
+ *   · "import" — these bytes become the user's avatar. Their own data
+ *     directory, keyed per user.
+ *
+ * The cost, stated rather than hidden: viewing a card's details and then
+ * importing it fetches the PNG twice, one extra interactive rate-limit slot.
+ * Reading the browse cache on the import path would give that back and reopen
+ * the exact defect the split closes — a second instance's temp file being
+ * imported as this instance's character.
  */
 async function getCardBytesAndParsed(
 	ref: unknown,
-	ctx: CardSourceContext
+	ctx: CardSourceContext,
+	cache: "browse" | "import"
 ): Promise<{
 	buffer: Buffer
 	parsed: Awaited<ReturnType<typeof parseCharacterCard>>
 }> {
 	const { folder, file } = toCharaVaultCardRef(ref)
-	const buffer = await getOrFetchCardBytes(
-		`charavault:${folder}/${file}`,
-		async (signal) => {
-			const response = await fetchCharaVaultCardResponse(
-				ref,
-				"interactive",
-				signal
-			)
-			return Buffer.from(await response.arrayBuffer())
-		},
-		ctx.signal
-	)
+	const key = `charavault:${folder}/${file}`
+	const fetcher = async (signal: AbortSignal) => {
+		const response = await fetchCharaVaultCardResponse(
+			ref,
+			"interactive",
+			signal
+		)
+		return Buffer.from(await response.arrayBuffer())
+	}
+	const buffer =
+		cache === "import"
+			? await getOrFetchImportedCardBytes(
+					ctx.userId,
+					key,
+					fetcher,
+					ctx.signal
+				)
+			: await getOrFetchCardBytes(key, fetcher, ctx.signal)
 	// assertContentAllowed already parses (skipping the avatar decode
 	// neither caller needs) and returns the parsed result — reused here
 	// instead of re-parsing the same buffer a second time.
@@ -422,7 +444,7 @@ export const charaVaultSource: CardSource = {
 		}
 	},
 	async getCardBytes(ref: unknown, ctx: CardSourceContext): Promise<Buffer> {
-		const { buffer } = await getCardBytesAndParsed(ref, ctx)
+		const { buffer } = await getCardBytesAndParsed(ref, ctx, "import")
 		return buffer
 	},
 	async getCardDetail(
@@ -436,9 +458,11 @@ export const charaVaultSource: CardSource = {
 		// Character Card V2/V3 file, the exact format parseCharacterCard()
 		// already fully understands (same parser the import flow uses), so
 		// read the description straight out of the card's own embedded
-		// data instead. Reuses getCardBytes()'s disk cache — this doesn't
-		// cost an extra CharaVault request for a card that's already been
-		// viewed/downloaded.
+		// data instead. Goes through the BROWSE cache — a detail view is an
+		// external search result, and it shares that cache with the image
+		// proxy's thumbnail for the same ref, so a card whose grid tile has
+		// already loaded costs no extra CharaVault request here. An import of
+		// the same card does cost one (see getCardBytesAndParsed).
 		//
 		// Deliberately NOT caught-and-swallowed into a resolved {} — a
 		// resolved value gets cached by cachedCardDetail()'s TtlCache for
@@ -447,7 +471,7 @@ export const charaVaultSource: CardSource = {
 		// the real issue is gone. Let it reject; the cache correctly skips
 		// caching a rejection, and the client's existing "No description
 		// provided" fallback already degrades gracefully either way.
-		const { parsed } = await getCardBytesAndParsed(ref, ctx)
+		const { parsed } = await getCardBytesAndParsed(ref, ctx, "browse")
 		const { card, lorebook } = parsed
 		const data = card.toSpecV3().data
 		return {

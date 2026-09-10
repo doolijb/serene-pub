@@ -1,6 +1,11 @@
 import { building } from "$app/environment"
 import { eq } from "drizzle-orm"
 import { db, dbReady } from "$lib/server/db"
+import {
+	describeDatabaseUnopenable,
+	isDatabaseUnopenableError,
+	type DatabaseUnopenableError
+} from "$lib/server/db/errors"
 import * as schema from "$lib/server/db/schema"
 
 /**
@@ -127,6 +132,43 @@ export const startupTasks: StartupTask[] = [
 	},
 	{
 		/**
+		 * A default layout preset per genre (PLAN 25 redesign).
+		 *
+		 * HERE, and not beside the other seeds in `db/index.ts`, because a
+		 * genre is a ROW: `listSessionGenres` reads published create specs, and
+		 * those are written by the `pipelines` task above and by plugin specs
+		 * the `plugins` task publishes. Seeding from db/index.ts would run
+		 * before either and see nothing but the standard floor — the reconciler
+		 * would appear to work while quietly seeding one genre forever.
+		 *
+		 * The standard genre is unioned in regardless, so the floor gets its
+		 * default even on a build where pipelines bootstrap failed. The
+		 * reconciler is idempotent, and its prune is scoped to the genres it is
+		 * handed, so a genre missing from this pass keeps the default it has.
+		 *
+		 * Known gap: a plugin installed while the server is RUNNING registers
+		 * its genre after this task, so that genre has no default preset until
+		 * the next boot. Harmless — an absent default resolves to `{}`, which
+		 * is the built-in arrangement — but it is why the presets list can be
+		 * empty for a freshly installed genre.
+		 */
+		name: "layout-presets",
+		run: async () => {
+			const { syncLayoutPresets } = await import(
+				"$lib/server/db/layoutPresets"
+			)
+			const { listSessionGenres, STANDARD_GENRE_ID } = await import(
+				"$lib/server/pipelines/entities/sessionGenres"
+			)
+			const genres = await listSessionGenres(db)
+			await syncLayoutPresets([
+				{ genreId: STANDARD_GENRE_ID },
+				...genres.map((g) => ({ genreId: g.genreId }))
+			])
+		}
+	},
+	{
+		/**
 		 * Managed local processes: recover from however the last run ended,
 		 * then start whatever is configured to start on its own.
 		 *
@@ -165,19 +207,57 @@ export const startupTasks: StartupTask[] = [
 		name: "downloads",
 		run: async () => {
 			await db
-				.update(schema.koboldCppModels)
+				.update(schema.localModels)
 				.set({
 					status: "error",
 					errorMessage: "Server restarted during download"
 				})
-				.where(eq(schema.koboldCppModels.status, "downloading"))
+				.where(eq(schema.localModels.status, "downloading"))
 		}
 	}
 ]
 
+/**
+ * Whether the database opened, and what to say if it did not.
+ *
+ * A *state* rather than a rejection, and that is the whole point of it. A
+ * `dbReady` that rejected used to reject `appReady` with it, which every entry
+ * point awaits — so the app answered every request with a stack trace, or from
+ * a desktop shortcut with nothing at all, and the owner was never told that
+ * their data was still sitting untouched in a directory with backups next to
+ * it. Recorded here instead, the HTTP server comes up and can explain itself.
+ *
+ * Only `DatabaseUnopenableError` lands here. Anything else still rejects
+ * `appReady` exactly as it did — an unrecognised boot failure is not something
+ * to serve a friendly page about.
+ */
+export type DatabaseState =
+	| { ok: true }
+	| { ok: false; error: DatabaseUnopenableError }
+
+let databaseState: DatabaseState = { ok: true }
+
+/**
+ * Meaningful only after `appReady` has settled — every caller awaits that
+ * first, so the optimistic initial value is never the one anybody reads.
+ */
+export function getDatabaseState(): DatabaseState {
+	return databaseState
+}
+
 async function runStartupTasks(): Promise<void> {
 	if (building) return
-	await dbReady
+	try {
+		await dbReady
+	} catch (error) {
+		if (!isDatabaseUnopenableError(error)) throw error
+		databaseState = { ok: false, error }
+		console.error(describeDatabaseUnopenable(error))
+		// Every task below queries the database. Running them would turn one
+		// clear explanation into a screen of failures with a different cause
+		// named in each.
+		return
+	}
 	for (const task of startupTasks) {
 		try {
 			await task.run()
@@ -198,5 +278,82 @@ async function runStartupTasks(): Promise<void> {
  * Started here at module scope but deliberately **not** awaited at module
  * scope: doing so would make this an async module in a cycle with `db`, which
  * is the exact shape that deadlocks the production bundle (see db/index.ts).
+ *
+ * Reassignable only for `restartAfterRecovery()` below. Every consumer reads it
+ * through the live binding — `hooks.server.ts` re-imports this module per
+ * request — so a replacement is seen by the next request rather than by nobody.
  */
-export const appReady: Promise<void> = runStartupTasks()
+export let appReady: Promise<void> = runStartupTasks()
+
+/**
+ * Whether the instance came up, and what stopped it if not.
+ *
+ * Its own type rather than `DatabaseState`, because the two answer different
+ * questions once a recovery has happened: `DatabaseState` is what the app is
+ * serving *now*, while this is what the attempt just did — and an attempt can
+ * fail for a reason (a migration, a seed) that is not "the database will not
+ * open" and has no business being reported as one.
+ */
+export type RecoveryRestart = { ok: true } | { ok: false; error: unknown }
+
+/**
+ * Come up properly, on an instance that booted into recovery mode.
+ *
+ * The other half of `reopenDatabase()`: that one gets the database open, this
+ * one runs everything that was skipped because it could not be. Both are needed
+ * and neither is enough — a restore that reopened the database but never ran
+ * the startup tasks would give the owner an app with no plugins, no pipeline
+ * specs, no layout presets and no managed services, which looks like a second,
+ * stranger failure rather than a recovery.
+ *
+ * **Guarded to the recovery direction only.** It refuses on an instance whose
+ * database is already fine, because re-running these tasks on a live instance
+ * would reconcile managed services and reinstall shutdown handlers underneath a
+ * running app for no reason. There is no path here that turns a healthy
+ * instance into a restarting one.
+ */
+export async function restartAfterRecovery(): Promise<RecoveryRestart> {
+	if (databaseState.ok) return { ok: true }
+
+	const { reopenDatabase } = await import("$lib/server/db")
+	const opened = await reopenDatabase()
+	if (!opened.ok) {
+		// Still broken. `databaseState` keeps an explanation so the recovery
+		// page goes on saying something true, but the error handed BACK is this
+		// attempt's — a migration that failed on a restored database is not the
+		// boot failure that state is still carrying, and showing the old one
+		// would send the owner after the wrong problem.
+		if (isDatabaseUnopenableError(opened.error)) {
+			databaseState = { ok: false, error: opened.error }
+			console.error(describeDatabaseUnopenable(opened.error))
+		} else {
+			console.error(
+				"[db] The database was replaced, but bringing it up failed:",
+				opened.error
+			)
+		}
+		return { ok: false, error: opened.error }
+	}
+
+	databaseState = { ok: true }
+	appReady = runStartupTasks()
+	await appReady
+
+	// The socket server never attached, because there was nothing for its
+	// handlers to query (see loadSockets.server.ts). Now there is.
+	try {
+		const { attachSocketServerAfterRecovery } = await import(
+			"$lib/server/sockets/loadSockets.server"
+		)
+		await attachSocketServerAfterRecovery()
+	} catch (error) {
+		// A recovered instance with no sockets is still a recovered instance,
+		// and a restart fixes it. Failing the recovery over this would not.
+		console.warn(
+			"[db] Recovered, but the socket server did not attach — restart Serene Pub:",
+			error
+		)
+	}
+
+	return { ok: true }
+}

@@ -11,15 +11,28 @@
 	import * as Icons from "@lucide/svelte"
 	import PluginFrame from "$lib/client/components/frames/PluginFrame.svelte"
 	import WidgetHost from "$lib/client/sessionLayout/WidgetHost.svelte"
+	import WidgetStyleOverlay from "$lib/client/sessionLayout/WidgetStyleOverlay.svelte"
+	import {
+		effectiveWidgetSkin,
+		widgetStylesStore
+	} from "$lib/client/stores/widgetStyles.svelte"
 	import { nativeSurface } from "$lib/client/surfaces/registry"
 	import type { PanelInstance } from "$lib/client/surfaces/types"
 	import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
+	import type { PlacementInput } from "$lib/shared/widgets/context"
 
 	interface Props {
 		instance: PanelInstance
 		manager: SurfaceManager
 		sessionId: number | null
 		session?: unknown
+		/**
+		 * This panel's measured cell geometry, threaded in by the zone that drew
+		 * it (PLAN 25). Handed to whichever body this panel has: a native widget
+		 * reads it off its ctx, a frame is pushed it. Absent only where no zone
+		 * placed it (a pop-over flyout) — see `WidgetHost`'s `UNPLACED`.
+		 */
+		placement?: PlacementInput
 		/** In the drawer overlay? Hides the drawer-pin, adds a close-drawer. */
 		inDrawer?: boolean
 		/**
@@ -49,6 +62,7 @@
 		manager,
 		sessionId,
 		session,
+		placement,
 		inDrawer = false,
 		chrome = "grid",
 		hideHeader = false,
@@ -96,10 +110,36 @@
 	let frameMessages = $derived(
 		$state.snapshot((session as any)?.sessionMessages ?? []) as unknown[]
 	)
+
+	/* ── the frame's skin (PLAN 25, ruled 2026-08-30) ────────────────────
+	 * A frame widget is treated identically to a native one minus the iframe,
+	 * so it resolves its skin through the SAME store `WidgetHost` uses — the
+	 * pinned row, or the unsaved draft while its editor is open. Only the
+	 * injection differs: `PluginFrame` posts it into the frame's own document
+	 * as `{ t: "style" }` instead of writing a scoped `<style>` out here.
+	 *
+	 * Resolved HERE rather than inside `PluginFrame` because a frame surface is
+	 * not always a widget: the page and session-view frames have no widget id to
+	 * resolve against, and they pass no skin at all. */
+	// Called for the subscription, not the value — the same reason WidgetHost
+	// calls it: it is what starts the one fetch, and `effectiveWidgetSkin` reads
+	// the same module state, so the derived below re-runs when the rows or the
+	// pins land. Idempotent, so a panel that is not a frame pays nothing for it
+	// beyond the call.
+	widgetStylesStore()
+	let frameSkin = $derived(
+		instance.surface.kind === "frame"
+			? effectiveWidgetSkin(instance.id)
+			: undefined
+	)
 </script>
 
+<!-- `relative` is the widget-style overlay's containing block (PLAN 25): the
+     overlay is rendered by WidgetHost, whose own wrapper is `display: contents`
+     and so has no box to position against. It changes nothing on its own — the
+     panel card is the box a person points at, which is what the overlay covers. -->
 <section
-	class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden {isPrimary
+	class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden {isPrimary
 		? ''
 		: 'bg-surface-50-950 border-surface-200-800 rounded-lg border shadow-sm'}"
 	data-panel-id={instance.id}
@@ -190,17 +230,32 @@
 				channels={instance.channels}
 				messages={frameMessages}
 				props={{ panelId: instance.id, title: instance.title }}
+				skin={frameSkin}
+				{placement}
+				source={manager}
 				{suspended}
 				onAction={onFrameAction}
+			/>
+			<!-- The style controls for the frame, on the SAME terms a native
+			     widget gets them (PLAN 25). Outside the iframe by construction,
+			     which is the happy accident here: the skin being edited lands
+			     inside the frame's document and so cannot restyle — or hide — the
+			     controls you would use to take it back off. Renders nothing at all
+			     outside Style mode. -->
+			<WidgetStyleOverlay
+				widgetId={instance.id}
+				label={instance.title}
+				mount="frame"
 			/>
 		{:else if NativeCmp}
 			<!-- Provide the unified widget ctx around the native surface (PLAN
 			     25). Additive: NativeCmp still gets its legacy props, and a
 			     migrated one reads ctx via useWidgetContext(). Native passes the
 			     LIVE message array (not the frame's snapshot) so ctx stays
-			     reactive. Placement is the WidgetHost default until a zone host
-			     threads real grid geometry. A session-less panel (sessionId
-			     null) has nothing to project, so it renders bare. -->
+			     reactive, the zone's measured `placement`, and the manager as
+			     the session event source — the same three the frame branch above
+			     posts over its port. A session-less panel (sessionId null) has
+			     nothing to project, so it renders bare. -->
 			{#if session}
 				<WidgetHost
 					widget={{
@@ -212,6 +267,8 @@
 					messages={((session as any)?.sessionMessages ?? []) as any}
 					channels={instance.channels}
 					props={{ panelId: instance.id, title: instance.title }}
+					{placement}
+					source={manager}
 					onAction={onFrameAction}
 				>
 					<NativeCmp

@@ -73,7 +73,7 @@ beforeAll(async () => {
 	)
 	db = (await import("$lib/server/db")).db as unknown as TestDb
 	await (await import("$lib/server/db/defaults")).sync()
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -157,11 +157,11 @@ const worldLoreLane = async () => {
 		},
 		seed: "seed:admit",
 		bindings: coreBindings(),
-		world: await buildWorld(db as any, {
+		world: await buildWorld(db, {
 			sessionId,
 			specId: RESPOND_SPEC_ID
 		}),
-		host: createHost(db as any, { sessionId, userId }),
+		host: createHost(db, { sessionId, userId }),
 		// Stops before the provider, which needs a connection this test has no
 		// business supplying. Every node under test runs upstream of it.
 		preview: true
@@ -190,7 +190,7 @@ const selectedConfigId = async () => {
 		"$lib/server/pipelines/config/named"
 	)
 	const selected = await resolveSelectedConfig(
-		db as any,
+		db,
 		respondSpecRow.id,
 		RESPOND_SPEC_ID,
 		{ sessionId }
@@ -268,7 +268,7 @@ describe("a stored threshold reaches the scan", () => {
 			expect(on.diagnostics.admittedByEvidence).toBe(1)
 			expect(on.diagnostics.entities).toContain("Emberfall")
 			expect(on.diagnostics.extractorVersion).toBe(
-				"core:extract/entities-heuristic@1"
+				"core:extract/entities-heuristic@2"
 			)
 		} finally {
 			await setThreshold(0)

@@ -104,6 +104,43 @@ export function variantRelPath(
 }
 
 /**
+ * The bucket holding card bytes fetched in order to IMPORT a card.
+ *
+ * Ruling 2026-09-09: image assets belong in the user's data directory, not the
+ * OS temp directory; external search results are the one exception. Import
+ * bytes are not that exception — they BECOME the character's or persona's
+ * avatar — so they get a user-level bucket here rather than a shared temp
+ * directory keyed by `source:ref` alone, which two instances on one machine
+ * were observed sharing.
+ *
+ * Two segments, unlike every other bucket, so `cache/` reads as one thing an
+ * admin may delete wholesale without touching `uploads/` or an entity's own
+ * directory. Nothing derives a bucket back from a path, so the extra segment
+ * costs nothing.
+ *
+ * ⚠ Not a media row. Nothing under `cache/` has a `files` row, a variant, a
+ * uuid or a visibility — it is bytes on the way to `createMedia`, deleted by
+ * its own size cap. It lives under this root only so `resolveMediaPath` jails
+ * it and so a user's data directory is genuinely all of that user's data.
+ */
+export const CARD_IMPORT_CACHE_BUCKET = path.join("cache", "cards")
+
+/**
+ * `data/users/{userId}/cache/cards/{hash}.{ext}` — rules 1 and 3, spent on the
+ * import cache. `hash` is `sha256(source:ref)`, so nothing about the upstream
+ * reference reaches a path segment.
+ */
+export function cardImportCacheRelPath(
+	userId: number,
+	hash: string,
+	ext: string
+): string {
+	return mediaRelPath({ userId }, hash, ext, {
+		bucket: CARD_IMPORT_CACHE_BUCKET
+	})
+}
+
+/**
  * Resolve a stored relative path to an absolute one, asserting containment.
  *
  * The id-addressed route (28 §7) means `relPath` comes from a row rather than

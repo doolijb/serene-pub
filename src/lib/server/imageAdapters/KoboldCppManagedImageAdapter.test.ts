@@ -26,7 +26,7 @@ vi.mock("$lib/server/db", () => ({
 	db: {
 		query: {
 			koboldCppSettings: { findFirst: async () => settings },
-			koboldCppModels: { findMany: async () => models }
+			localModels: { findMany: async () => models }
 		}
 	}
 }))

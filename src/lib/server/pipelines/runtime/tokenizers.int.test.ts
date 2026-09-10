@@ -124,14 +124,14 @@ beforeAll(async () => {
 		.returning()
 	llamaConnectionId = llama.id
 
-	await setCapabilityDefault(db as any, TEXT_CAPABILITY, {
+	await setCapabilityDefault(db, TEXT_CAPABILITY, {
 		connectionId: gpt4oConnectionId
 	})
 }, 60_000)
 
 describe("tokenizerFor — which connection's setting a run budgets with", () => {
 	it("reads the column off the registered text->text default", async () => {
-		expect(await tokenizerFor(db as any, sessionId)).toBe(
+		expect(await tokenizerFor(db, sessionId)).toBe(
 			TokenCounterOptions.OPENAI_GPT4O
 		)
 	})
@@ -142,7 +142,7 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 			.set({ connectionId: llamaConnectionId })
 			.where(eq(schema.sessions.id, sessionId))
 
-		expect(await tokenizerFor(db as any, sessionId)).toBe(
+		expect(await tokenizerFor(db, sessionId)).toBe(
 			TokenCounterOptions.LLAMA
 		)
 
@@ -154,11 +154,11 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 
 	it("says nothing rather than guessing when no default is registered", async () => {
 		// Cleared, not deleted — the state a deleted connection leaves behind.
-		await setCapabilityDefault(db as any, TEXT_CAPABILITY, {
+		await setCapabilityDefault(db, TEXT_CAPABILITY, {
 			connectionId: null
 		})
-		expect(await tokenizerFor(db as any, sessionId)).toBeUndefined()
-		await setCapabilityDefault(db as any, TEXT_CAPABILITY, {
+		expect(await tokenizerFor(db, sessionId)).toBeUndefined()
+		await setCapabilityDefault(db, TEXT_CAPABILITY, {
 			connectionId: gpt4oConnectionId
 		})
 	})
@@ -176,7 +176,7 @@ describe("the id reaches the number", () => {
 			},
 			seed: "seed:tokenizer",
 			bindings: coreBindings(),
-			host: createHost(db as any, { sessionId, userId }),
+			host: createHost(db, { sessionId, userId }),
 			preview: true,
 			tokenizer
 		} as any)
@@ -194,7 +194,7 @@ describe("the id reaches the number", () => {
 	}
 
 	it("counts a candidate with the connection's tokenizer, not the estimate", async () => {
-		const id = await tokenizerFor(db as any, sessionId)
+		const id = await tokenizerFor(db, sessionId)
 		expect(id).toBe(TokenCounterOptions.OPENAI_GPT4O)
 
 		const gpt4o = await loadTokenizer(id)

@@ -228,6 +228,34 @@
 		})
 	}
 
+	// ── Backups (ruled 2026-09-10) ───────────────────────────────────────────
+
+	function handleBackupDailyClick(event: { checked: boolean }) {
+		if (!userCtx.user?.isAdmin) {
+			toaster.error({
+				title: "Access denied",
+				description: "Admin privileges required"
+			})
+			return
+		}
+		socket?.emit("systemSettings:updateBackupSettings", {
+			backupDaily: event.checked
+		})
+	}
+
+	function handleBackupIncludeUserFilesClick(event: { checked: boolean }) {
+		if (!userCtx.user?.isAdmin) {
+			toaster.error({
+				title: "Access denied",
+				description: "Admin privileges required"
+			})
+			return
+		}
+		socket?.emit("systemSettings:updateBackupSettings", {
+			backupIncludeUserFiles: event.checked
+		})
+	}
+
 	// ── Context Debugging functions ──────────────────────────────────────────
 
 	function handleContextDebuggingEnabledClick(event: { checked: boolean }) {
@@ -855,6 +883,62 @@
 					</Switch.Label>
 				</Switch>
 			</div>
+		</div>
+
+		<!--
+			Backups (ruled 2026-09-10). The list of backups, Back up now and
+			Delete are in Settings → Data; what belongs here is the pair of
+			instance-wide policies an admin sets once.
+		-->
+		<div class="card preset-filled-surface-100-900 space-y-4 p-4">
+			<h3 class="text-lg font-semibold">Backups</h3>
+
+			<div class="flex items-center gap-2">
+				<Switch
+					name="backup-daily"
+					checked={systemSettingsCtx.settings?.backupDaily ?? true}
+					onCheckedChange={handleBackupDailyClick}
+				>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+					<Switch.Label class="font-semibold">
+						Back up daily
+					</Switch.Label>
+				</Switch>
+			</div>
+			<p class="text-muted-foreground text-sm">
+				Takes a copy of the database once a day, on top of the one
+				always taken before a version upgrade. Backups are never deleted
+				on their own — see Settings → Data to remove one.
+			</p>
+
+			<div class="flex items-center gap-2">
+				<Switch
+					name="backup-include-user-files"
+					checked={systemSettingsCtx.settings
+						?.backupIncludeUserFiles ?? false}
+					onCheckedChange={handleBackupIncludeUserFilesClick}
+				>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+					<Switch.Label class="font-semibold">
+						Include user files
+					</Switch.Label>
+				</Switch>
+			</div>
+			<p class="text-muted-foreground text-sm">
+				Archives media and avatars beside each backup, so a restored
+				database still has the images it points at — this makes backups
+				much larger, which is why it is off by default.
+			</p>
 		</div>
 
 		<!-- Summarization Settings -->

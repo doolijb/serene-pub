@@ -41,6 +41,12 @@
 		rows: number
 		items: GsPos[]
 	}
+	/**
+	 * The default square cell edge (px). Exported because a caller that has to
+	 * reason about a zone's column count before it is measured — the Move tab's
+	 * screen-size simulator — must speak the same module this grid does.
+	 */
+	export const GS_CELL_PX = 48
 </script>
 
 <script lang="ts">
@@ -60,20 +66,70 @@
 	import { SvelteSet } from "svelte/reactivity"
 	import type { GridStack, GridStackNode } from "gridstack"
 	import "gridstack/dist/gridstack.min.css"
+	import { frameCovers, reexpress, seedPositions } from "./arrangedGeometry"
 
 	interface Props {
 		items: GsItem[]
 		/** Fixed square cell edge (px). Cells are exactly this; partials culled. */
 		cell?: number
+		/**
+		 * The saved arrangement `items` were restored from, if any — the frame
+		 * whose cell grid their x/y/w/h are expressed in. Read once, at seed
+		 * time: it is what lets a zone drawn in a smaller window re-express the
+		 * arrangement instead of crushing it, and what tells this zone it has
+		 * nothing of its own to report yet (see `emit`).
+		 */
+		frame?: GsLayout
+		/**
+		 * The zone's docked/flyout state, for the card's pin toggle. `undefined`
+		 * (the middle) has no pin at all — it is the session, not a rail.
+		 */
+		pinned?: boolean
+		/** Flip that state. Absent = this zone cannot be pinned (the middle). */
+		onTogglePin?: () => void
 		onChange?: (layout: GsLayout) => void
 		onRemove?: (id: string) => void
+		/**
+		 * A USER GESTURE happened in this zone (drag, resize, cross-zone drop,
+		 * fit/dock, anchor toggle, group/ungroup) — as opposed to the layout
+		 * changing on its own.
+		 *
+		 * `onChange` cannot answer that question: gridstack fires `change` for a
+		 * re-column just as it does for a drag, so a caller that only watches
+		 * `onChange` cannot tell an edit from a re-measure. The screen-size
+		 * simulator has to (it re-measures on purpose, and must not mistake its
+		 * own clamp for the user rearranging things), so the gestures report
+		 * themselves at the source.
+		 */
+		onGesture?: () => void
 	}
 
-	let { items, cell = 48, onChange, onRemove }: Props = $props()
+	let {
+		items,
+		cell = GS_CELL_PX,
+		frame,
+		pinned,
+		onTogglePin,
+		onChange,
+		onRemove,
+		onGesture
+	}: Props = $props()
 
 	let hostEl: HTMLDivElement
 	let grid: GridStack | undefined
 	let cols = $state(6)
+	/**
+	 * A hand has been on this zone since it was seeded. Until then the zone is
+	 * a RESTORE — everything in it came out of the saved frame — and `emit`
+	 * stays quiet rather than reporting the window size the editor happened to
+	 * be opened at as an arrangement the user made.
+	 */
+	let touched = false
+	/** A user gesture: report it, and stop being a restore. */
+	function gesture() {
+		touched = true
+		onGesture?.()
+	}
 
 	// ── grouping (editor concept gridstack doesn't model) ──────────────────
 	// Selection is reactive so the group toolbar tracks it. `gridMeta`/`gridEmit`
@@ -102,6 +158,11 @@
 		const gsc = gscOf(id)
 		if (!gsc) return
 		gsc.classList.toggle("grouped", !!group)
+		// The id itself, not just its hue: a card dragged into another zone
+		// recovers its group from this attribute (see `dropped`), so a group made
+		// in THIS session has to stamp it exactly as the seeded markup does.
+		if (group) gsc.dataset.group = group
+		else delete gsc.dataset.group
 		if (group) gsc.style.setProperty("--ghue", String(hueFromId(group)))
 		else gsc.style.removeProperty("--ghue")
 	}
@@ -124,6 +185,7 @@
 			applyGroupDom(id, gid)
 		}
 		clearSelection()
+		gesture()
 		gridEmit?.()
 	}
 	function ungroupSelected() {
@@ -134,6 +196,7 @@
 			applyGroupDom(id, undefined)
 		}
 		clearSelection()
+		gesture()
 		gridEmit?.()
 	}
 	let rows = $state(6)
@@ -175,6 +238,44 @@
 			`</span>`
 		)
 	}
+	/** A pushpin, drawn rather than spelled so it inherits the button's color. */
+	const PIN_SVG =
+		`<svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true" ` +
+		`fill="none" stroke="currentColor" stroke-width="2.2" ` +
+		`stroke-linecap="round" stroke-linejoin="round">` +
+		`<path d="M12 16v6"/><path d="M9 3h6l-1 6 3 4v3H7v-3l3-4z"/></svg>`
+	/**
+	 * The zone's pin, offered on every card in it (ruled 2026-08-30): pinned is
+	 * a docked rail that takes layout space, unpinned collapses to icons that
+	 * fly the panels out over the session. It is the ZONE's state — the rail is
+	 * docked or it isn't — so every card in the zone shows the same toggle, and
+	 * it drives the very state the live rail's own pin button does.
+	 */
+	function pinControl(on: boolean): string {
+		return (
+			`<button class="gsc-btn gsc-pin${on ? " active" : ""}" data-act="pin"` +
+			` title="${on ? "Unpin" : "Pin to the side"}"` +
+			` aria-label="${on ? "Unpin" : "Pin to the side"}"` +
+			` aria-pressed="${on}">${PIN_SVG}</button>`
+		)
+	}
+	/** Bring every card's pin button in line with the zone's current state. */
+	function applyPinDom(on: boolean) {
+		hostEl
+			?.querySelectorAll<HTMLElement>(".gsc-pin")
+			.forEach((b) => {
+				b.classList.toggle("active", on)
+				b.setAttribute("aria-pressed", String(on))
+				b.setAttribute("aria-label", on ? "Unpin" : "Pin to the side")
+				b.setAttribute("title", on ? "Unpin" : "Pin to the side")
+			})
+	}
+	// The cards are gridstack-owned HTML built once at seed, so a pin flipped
+	// anywhere (this zone's other cards, the live rail) is reflected here.
+	$effect(() => {
+		if (onTogglePin) applyPinDom(!!pinned)
+	})
+
 	function cardHtml(
 		it: GsItem,
 		a: GsAnchor = it.anchor ?? {},
@@ -190,7 +291,8 @@
 			`<button class="gsc-btn" data-act="fit-h" title="Fit height">&#8597;</button>` +
 			`<button class="gsc-btn" data-act="dock-top" title="Dock to top">&#8607;</button>` +
 			`<button class="gsc-btn" data-act="dock-bottom" title="Dock to bottom">&#8615;</button>` +
-			anchorControls(a)
+			anchorControls(a) +
+			(onTogglePin ? pinControl(!!pinned) : "")
 		const gcls = group ? " grouped" : ""
 		const gstyle = group ? ` style="--ghue:${hueFromId(group)}"` : ""
 		// The group id is stamped as a data-attr (not just the hue) so a card
@@ -298,6 +400,13 @@
 		)!
 
 		const init = untrack(() => items)
+		// The saved frame these items came out of, as it stood when the zone was
+		// seeded. Held as a local (not the live prop) so a later emit can't be
+		// judged against a frame it never drew.
+		const seedFrame = untrack(() => frame)
+		// Nothing has been added or removed since that frame was saved, so this
+		// zone is a faithful restore and has nothing of its own to report.
+		const restoring = frameCovers(init, seedFrame)
 		// Editor-only per-widget metadata gridstack doesn't model (anchored edges,
 		// tab-group membership). Tracked here keyed by id, mutated by the anchor
 		// toggles / grouping, and reported back through `emit` so the captured
@@ -306,68 +415,62 @@
 		const anyAnchor = (a: GsAnchor) =>
 			!!(a.top || a.right || a.bottom || a.left)
 		grid!.batchUpdate()
-		// Resolve default placement against the measured grid. Bottom-docked
-		// items reserve rows from the bottom; a fill item takes what's left; the
-		// rest stack from the top. Everything full-width unless it states a w.
-		const bottomReserve = init
-			.filter((it) => it.place === "bottom")
-			.reduce((s, it) => s + (it.h ?? 3), 0)
-		let topY = 0
-		let bottomY = rows
+		// Default placement + the re-expression of a restored arrangement into
+		// the grid as measured now — pure, and tested in ./arrangedGeometry.
+		const seeded = seedPositions(init, cols, rows, seedFrame)
+		const placed = new Map(seeded.map((p) => [p.id, p]))
 		init.forEach((it) => {
-			const fullW = it.w ?? cols
-			let x = it.x ?? 0
-			let y = it.y ?? 0
-			let w = fullW
-			let h = it.h ?? 3
-			if (it.x == null && it.y == null) {
-				if (it.place === "bottom") {
-					h = it.h ?? 3
-					bottomY -= h
-					x = 0
-					y = bottomY
-					w = fullW
-				} else if (it.place === "fill") {
-					x = 0
-					y = topY
-					w = fullW
-					h = Math.max(1, rows - bottomReserve - topY)
-					topY = y + h
-				} else {
-					x = 0
-					y = topY
-					w = fullW
-					topY += h
-				}
-			}
-			// Clamp to what THIS zone can hold: a restored arrangement may carry
-			// geometry captured in a wider/taller zone (different viewport), and an
-			// out-of-bounds w/x would overflow or clip. A no-op for the default
-			// place branches, which already fit.
-			w = Math.min(w, cols)
-			h = Math.min(h, rows)
-			x = Math.min(Math.max(0, x), Math.max(0, cols - w))
-			y = Math.min(Math.max(0, y), Math.max(0, rows - h))
+			const p = placed.get(it.id)!
 			meta.set(it.id, { anchor: { ...(it.anchor ?? {}) }, group: it.group })
 			// NB: not gridstack-`locked` — a required widget (chat) is still fully
 			// draggable/resizable; `locked` in GsItem only hides its remove button.
 			grid!.addWidget({
 				id: it.id,
-				x,
-				y,
-				w,
-				h,
+				x: p.x,
+				y: p.y,
+				w: p.w,
+				h: p.h,
 				content: cardHtml(it, meta.get(it.id)!.anchor, it.group)
 			})
 		})
 		grid!.batchUpdate(false)
+		applyPinDom(!!untrack(() => pinned))
 		// Expose the live metadata + reporter so the template's group actions reach
 		// them (they run outside init).
 		gridMeta = meta
 
-		const emit = () => {
+		/**
+		 * The arrangement a RE-MEASURE re-expresses from: the saved frame while
+		 * this zone is still a faithful restore, otherwise the arrangement as
+		 * this zone last reported it. Updated only by an emit the USER caused —
+		 * never by the re-measure's own result. Re-expressing from the last
+		 * clamp is what loses a layout: narrow → wide would give back nothing
+		 * but the narrow column's coordinates, scaled up (see the
+		 * ResizeObserver below, and `reexpress` in ./arrangedGeometry).
+		 */
+		let ref: GsLayout = seedFrame ?? { cols, rows, items: seeded }
+		/**
+		 * True while the ResizeObserver is re-expressing. gridstack fires a
+		 * `change` for every node it moves; the re-measure reports its result
+		 * once, at the end, rather than a card at a time.
+		 */
+		let remeasuring = false
+
+		const emit = (authored = true) => {
+			if (remeasuring) return
+			// A zone that is still a restore reports NOTHING. gridstack fires
+			// `change` for its own re-measure (the column count follows the
+			// window, and a restored card is drawn where the zone has room for
+			// it) exactly as it does for a drag, so an unguarded emit hands the
+			// editor the current window's clamp as if the user had arranged it —
+			// and the next Done writes that over the real arrangement. Opening
+			// the editor in a smaller window would destroy a layout, silently and
+			// unrecoverably. Only a hand on a card (`touched`) speaks for the
+			// user; until then the saved frame already in the editor's hands IS
+			// this zone's arrangement, unclamped, and it stays that way.
+			if (!touched && restoring) return
 			const nodes = grid!.save(false) as GridStackNode[]
-			onChange?.({
+			const layout: GsLayout = {
 				cols,
 				rows,
 				items: nodes.map((n) => {
@@ -382,10 +485,17 @@
 						...(m?.group ? { group: m.group } : {})
 					}
 				})
-			})
+			}
+			if (authored) ref = layout
+			onChange?.(layout)
 		}
 		gridEmit = emit
-		grid!.on("change added removed", emit)
+		// gridstack hands its listeners an Event; `emit`'s first argument is
+		// whether the arrangement is the user's, so it is called by hand here.
+		grid!.on("change added removed", () => emit())
+		// The gesture half of the same story: `change` covers both a drag and a
+		// re-column, but `dragstop`/`resizestop` fire ONLY for a hand on a card.
+		grid!.on("dragstop resizestop", gesture)
 		emit() // seed the initial arrangement immediately
 
 		// Cross-zone drop: refit the incoming card to THIS zone's grid. Each zone
@@ -401,6 +511,10 @@
 			node: GridStackNode
 		) => {
 			if (!node?.el) return
+			// A card dragged in from another zone: the drag ended over THIS grid,
+			// so the source grid's dragstop is the only one that fires. Reported
+			// before the refit below, whose `update` emits.
+			gesture()
 			const w = Math.min(node.w ?? 1, cols)
 			const h = Math.min(node.h ?? 1, rows)
 			const x = Math.min(node.x ?? 0, Math.max(0, cols - w))
@@ -432,6 +546,16 @@
 				const node = grid!.engine.nodes.find((n) => n.el === el)
 				if (!node?.el) return
 				const a = act.getAttribute("data-act")
+				// The pin is the ZONE's, not this card's: it moves no cell, so it
+				// is deliberately not a gesture — pinning a rail must not make a
+				// previewed width's clamp count as an arrangement the user made.
+				if (a === "pin") {
+					onTogglePin?.()
+					return
+				}
+				// fit / dock / anchor are all deliberate edits, same as a drag —
+				// reported BEFORE the update whose `change` emits.
+				gesture()
 				if (a === "fit-w") grid!.update(node.el, { x: 0, w: cols })
 				else if (a === "fit-h")
 					grid!.update(node.el, { h: fitHeight(node) })
@@ -475,6 +599,9 @@
 			e.stopPropagation()
 			const id = btn.getAttribute("data-remove")!
 			const node = grid!.engine.nodes.find((n) => String(n.id) === id)
+			// Taking a card out is an edit like any other, and `removeWidget`
+			// emits — so say so first.
+			touched = true
 			if (node?.el) grid!.removeWidget(node.el)
 			selected.delete(id)
 			onRemove?.(id)
@@ -482,20 +609,67 @@
 		hostEl.addEventListener("click", onClick)
 
 		// On zone resize, re-derive how many WHOLE cells fit each axis (partials
-		// culled). Columns drive gridstack's layout; rows just bound the height.
+		// culled) and RE-EXPRESS the arrangement into the grid as measured now
+		// — the same proportional maths the seed uses, from the same reference.
+		//
+		// NOT gridstack's own re-layout. `column(n, "list")` compacts the whole
+		// zone into a single column and throws x/y away, so one drag after a
+		// re-column commits that stack as the user's arrangement; `"none"` is
+		// no kinder in the end, since `columnChanged` still clamps x into
+		// `column - 1` and w into `column`, and a wide layout that has been
+		// through a phone-width preview comes back from it narrow. Neither can
+		// do better, because both are asked to transform the CURRENT cells and
+		// the wide ones are already gone by the second pass.
+		//
+		// `reexpress(ref, …)` is a pure function of the arrangement as last
+		// AUTHORED, so narrow → wide lands exactly where it started while
+		// narrow still shows the squeeze — the doc's "panels are squeezed to
+		// fit", and the simulator's preview stays honest because the squeeze is
+		// real and the arrangement it is a view of is untouched.
 		const ro = new ResizeObserver(() => {
 			const p = hostEl.parentElement
 			if (!p || !grid) return
 			const c = cellsIn(p.clientWidth || hostEl.clientWidth)
 			const r = cellsIn(p.clientHeight || hostEl.clientHeight)
-			if (c !== cols) {
-				cols = c
-				grid.column(cols, "list")
+			if (c === cols && r === rows) return
+			cols = c
+			rows = r
+			// Both halves: `opts.maxRow` bounds the container, `engine.maxRow`
+			// is what actually vetoes a move — leave the engine on the row
+			// count the zone was built at and a taller zone can never place a
+			// card in the rows it just gained.
+			grid.opts.maxRow = rows
+			grid.engine.maxRow = rows
+			remeasuring = true
+			try {
+				// gridstack's own column change goes FIRST and outside the
+				// batch: `columnChanged` opens and closes an engine batch of
+				// its own, and the engine's batch flag is a boolean rather
+				// than a count — one opened around it would be shut halfway.
+				grid.column(cols, "none")
+				grid.batchUpdate()
+				for (const q of reexpress(ref, cols, rows)) {
+					const node = grid.engine.nodes.find(
+						(n) => String(n.id) === q.id
+					)
+					if (node?.el)
+						grid.update(node.el, {
+							x: q.x,
+							y: q.y,
+							w: q.w,
+							h: q.h
+						})
+				}
+			} finally {
+				// Never leave the zone batched or muted: either would be a
+				// zone that silently stops reporting the user's arrangement.
+				grid.batchUpdate(false)
+				remeasuring = false
 			}
-			if (r !== rows) {
-				rows = r
-				grid.opts.maxRow = rows
-			}
+			// One report for the whole re-measure, and NOT an authored one:
+			// this is the arrangement drawn at the size it is being drawn at,
+			// not a new arrangement to re-express the next resize from.
+			emit(false)
 		})
 		if (hostEl.parentElement) ro.observe(hostEl.parentElement)
 
@@ -681,11 +855,22 @@
 			color-mix(in oklab, var(--color-surface-50) 30%, transparent);
 	}
 	/* A set anchor stays lit even without hover, so the anchored edges read at a
-	   glance; unset ones reveal on hover like the other controls. */
-	:global(.grid-stack .gsc-anch.active) {
+	   glance; unset ones reveal on hover like the other controls. Same for a
+	   pinned zone: docked is the state worth seeing without reaching for it. */
+	:global(.grid-stack .gsc-anch.active),
+	:global(.grid-stack .gsc-pin.active) {
 		opacity: 1 !important;
 		background: var(--color-primary-300);
 		color: var(--color-surface-950);
+	}
+	/* The pin sits past the anchor cluster, with the same divider setting it
+	   off — it is the ZONE's state, not this card's. */
+	:global(.grid-stack .gsc-pin) {
+		margin-inline-start: 0.15rem;
+		padding-inline-start: 0.2rem;
+		border-inline-start: 1px solid
+			color-mix(in oklab, var(--color-surface-50) 30%, transparent);
+		inline-size: 1.35rem;
 	}
 	/* Identify the anchored boundaries: a thick accent border on each anchored
 	   edge of the card. Independent per side, so multiple anchors stack. */

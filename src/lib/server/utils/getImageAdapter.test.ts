@@ -59,7 +59,7 @@ describe("getImageAdapter", () => {
 
 	it("refuses OpenAI chat, which has no image code of any kind", async () => {
 		// The live bug this pairs with. `PRESET_CAPABILITIES["openai-official"]`
-		// asserted `text->image`, the OPENAI_CHAT declaration was `probed`, so it
+		// asserted `text->image`, the OPENAI declaration was `probed`, so it
 		// resolved `native`, the bind guard passed — and then THIS threw, minutes
 		// into a session, from a file whose name tells the user nothing. The
 		// manifest no longer grants the key; this is the second half saying the
@@ -69,7 +69,7 @@ describe("getImageAdapter", () => {
 		// statement about this repo, which has no adapter for it — and that is
 		// exactly what the derivation is meant to report.
 		await expect(
-			getImageAdapter(CONNECTION_TYPE.OPENAI_CHAT)
+			getImageAdapter(CONNECTION_TYPE.OPENAI)
 		).rejects.toThrow(/No image adapter/)
 	})
 })

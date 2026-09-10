@@ -198,13 +198,13 @@ export function getSamplingKeyMap(
 	connectionType: string
 ): Record<string, string> {
 	switch (connectionType) {
-		case CONNECTION_TYPE.OPENAI_CHAT:
+		case CONNECTION_TYPE.OPENAI:
 			return openAISamplingKeyMap
 		case CONNECTION_TYPE.OLLAMA:
 			return ollamaSamplingKeyMap
 		case CONNECTION_TYPE.LM_STUDIO:
 			return lmStudioSamplingKeyMap
-		case CONNECTION_TYPE.LLAMACPP_COMPLETION:
+		case CONNECTION_TYPE.LLAMACPP:
 			return llamaCppSamplingKeyMap
 		case CONNECTION_TYPE.KOBOLDCPP:
 		case CONNECTION_TYPE.KOBOLDCPP_MANAGED:

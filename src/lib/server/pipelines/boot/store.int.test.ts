@@ -84,8 +84,8 @@ describe("pipeline store", () => {
 		const doc = sessionTurn()
 		const before = canonicalHash(doc)
 
-		const saved = await saveDocument(db as any, doc, { publish: true })
-		const back = await loadDocument(db as any, saved.specVersionId)
+		const saved = await saveDocument(db, doc, { publish: true })
+		const back = await loadDocument(db, saved.specVersionId)
 
 		expect(canonicalHash(back)).toBe(before)
 		expect(back).toEqual(doc)
@@ -93,8 +93,8 @@ describe("pipeline store", () => {
 
 	it("round-trips nested blocks, which is where the mapping actually breaks", async () => {
 		const doc = agentic()
-		const saved = await saveDocument(db as any, doc)
-		const back = await loadDocument(db as any, saved.specVersionId)
+		const saved = await saveDocument(db, doc)
+		const back = await loadDocument(db, saved.specVersionId)
 
 		expect(canonicalHash(back)).toBe(canonicalHash(doc))
 		// Named explicitly because losing either is silent: the block's members
@@ -108,8 +108,8 @@ describe("pipeline store", () => {
 
 	it("stores presets as rows and returns them intact (F4)", async () => {
 		const doc = sessionTurn()
-		const saved = await saveDocument(db as any, doc)
-		const back = await loadDocument(db as any, saved.specVersionId)
+		const saved = await saveDocument(db, doc)
+		const back = await loadDocument(db, saved.specVersionId)
 
 		expect(back.presets[0]?.slug).toBe("balanced")
 		expect(back.presets[0]?.default).toBe(true)
@@ -120,8 +120,8 @@ describe("pipeline store", () => {
 
 	it("re-saving a semver replaces that version rather than duplicating it", async () => {
 		const doc = sessionTurn()
-		const first = await saveDocument(db as any, doc)
-		const second = await saveDocument(db as any, doc)
+		const first = await saveDocument(db, doc)
+		const second = await saveDocument(db, doc)
 
 		expect(second.specId).toBe(first.specId)
 		const versions = await db
@@ -133,7 +133,7 @@ describe("pipeline store", () => {
 
 	it("the database refuses a sixth kind (F1)", async () => {
 		const doc = sessionTurn()
-		const saved = await saveDocument(db as any, doc)
+		const saved = await saveDocument(db, doc)
 		await expect(
 			db.insert(schema.pipelineNodes).values({
 				specVersionId: saved.specVersionId,
@@ -149,7 +149,7 @@ describe("pipeline store", () => {
 
 	it("the database refuses an unbounded repeat (F9)", async () => {
 		const doc = sessionTurn()
-		const saved = await saveDocument(db as any, doc)
+		const saved = await saveDocument(db, doc)
 		await expect(
 			db.insert(schema.pipelineBlocks).values({
 				specVersionId: saved.specVersionId,
@@ -169,7 +169,7 @@ describe("pipeline store", () => {
 			to: "nowhere",
 			toPort: "text"
 		})
-		await expect(saveDocument(db as any, doc)).rejects.toThrow(
+		await expect(saveDocument(db, doc)).rejects.toThrow(
 			/references a node this version does not contain/
 		)
 	})
@@ -190,7 +190,7 @@ describe("an async block offers its mode", () => {
 	// suite's side effect passes or fails on ordering.
 	let versionId: number
 	beforeAll(async () => {
-		const saved = await saveDocument(db as any, agentic(), {
+		const saved = await saveDocument(db, agentic(), {
 			publish: true
 		})
 		versionId = saved.specVersionId
@@ -202,7 +202,7 @@ describe("an async block offers its mode", () => {
 		)
 		const { BLOCK_MODE_DECL } = await import("@serene-pub/sdk")
 
-		const decls = await declarations(db as any, versionId)
+		const decls = await declarations(db, versionId)
 
 		const mode = decls.find(
 			(d) => d.nodeKey === "gather" && d.path === "mode"
@@ -245,12 +245,12 @@ describe("an async block offers its mode", () => {
 				)
 				.build()
 		)
-		const saved = await saveDocument(db as any, mapped, { publish: true })
+		const saved = await saveDocument(db, mapped, { publish: true })
 
 		const { declarations } = await import(
 			"$lib/server/pipelines/config/panel"
 		)
-		const decls = await declarations(db as any, saved.specVersionId)
+		const decls = await declarations(db, saved.specVersionId)
 		const blocks = (await db
 			.select()
 			.from(schema.pipelineBlocks)

@@ -4,6 +4,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
+	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 
 	interface Props {
 		selectedPath: string | null
@@ -104,41 +105,69 @@
 			.replace(/\b\w/g, (c) => c.toUpperCase())
 	}
 
+	// Named so `off` can name them too. A bare
+	// `socket.off("userSettings:listBackgrounds")` removes EVERY listener for
+	// that event — including other components listening for the same event —
+	// which then stops updating for the rest of the session.
+	function handleUserSettingsListBackgrounds(
+		msg: Sockets.UserSettings.ListBackgrounds.Response
+	) {
+		isLoading = false
+		defaults = msg.defaults
+		uploads = msg.uploads
+	}
+
+	function handleUserSettingsUploadBackground(
+		msg: Sockets.UserSettings.UploadBackground.Response
+	) {
+		isUploading = false
+		if (msg.success) {
+			toaster.success({ title: "Background uploaded" })
+			// list refresh is triggered server-side after upload
+		} else {
+			toaster.error({ title: "Upload failed" })
+		}
+	}
+
+	function handleUserSettingsUploadBackgroundError(
+		_msg: SocketEventMap["userSettings:uploadBackground:error"]["response"]
+	) {
+		isUploading = false
+		toaster.error({ title: "Upload failed" })
+	}
+
 	onMount(() => {
 		socket.on(
 			"userSettings:listBackgrounds",
-			(msg: Sockets.UserSettings.ListBackgrounds.Response) => {
-				isLoading = false
-				defaults = msg.defaults
-				uploads = msg.uploads
-			}
+			handleUserSettingsListBackgrounds
 		)
 
 		socket.on(
 			"userSettings:uploadBackground",
-			(msg: Sockets.UserSettings.UploadBackground.Response) => {
-				isUploading = false
-				if (msg.success) {
-					toaster.success({ title: "Background uploaded" })
-					// list refresh is triggered server-side after upload
-				} else {
-					toaster.error({ title: "Upload failed" })
-				}
-			}
+			handleUserSettingsUploadBackground
 		)
 
-		socket.on("userSettings:uploadBackground:error", (_msg) => {
-			isUploading = false
-			toaster.error({ title: "Upload failed" })
-		})
+		socket.on(
+			"userSettings:uploadBackground:error",
+			handleUserSettingsUploadBackgroundError
+		)
 
 		socket.emit("userSettings:listBackgrounds", {})
 	})
 
 	onDestroy(() => {
-		socket.off("userSettings:listBackgrounds")
-		socket.off("userSettings:uploadBackground")
-		socket.off("userSettings:uploadBackground:error")
+		socket.off(
+			"userSettings:listBackgrounds",
+			handleUserSettingsListBackgrounds
+		)
+		socket.off(
+			"userSettings:uploadBackground",
+			handleUserSettingsUploadBackground
+		)
+		socket.off(
+			"userSettings:uploadBackground:error",
+			handleUserSettingsUploadBackgroundError
+		)
 	})
 
 	// Visible tiles per section (filter out broken ones)

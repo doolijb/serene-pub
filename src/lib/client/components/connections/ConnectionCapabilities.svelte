@@ -41,6 +41,14 @@
 	 * response. `closure()` and `resolveCapabilities()` are importable from here
 	 * and are never called: a second implementation of the four layers is the
 	 * exact divergence this design exists to prevent.
+	 *
+	 * One row value does not come from the stored cache, and it is not computed
+	 * here either: a key the manifest DECLARES that the column does not name has
+	 * no cached answer to show, so `buildCapabilityRows` resolves that key alone
+	 * through the SDK's own resolver — the same one the server calls, over the
+	 * same four layers off the same row. See `effectiveCapabilities` there. It
+	 * changes nothing about this file: the response is still the whole truth this
+	 * component renders, and this component still computes none of it.
 	 */
 	import { onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
@@ -254,6 +262,13 @@
 		value outranks every test that comes after it.
 	</p>
 	<p class="text-muted text-xs">{rows.testedText}</p>
+	<!-- Which of the two wire switches is in effect. Above the Advanced
+	     disclosure the switches themselves live behind, because the outcome is
+	     what a person needs and the pair of switches is where they would go
+	     looking for it. -->
+	{#if rows.wireModeText}
+		<p class="text-muted text-xs">{rows.wireModeText}</p>
+	{/if}
 	<div aria-live="polite" aria-atomic="true" class="sr-only">
 		{announcement}
 	</div>

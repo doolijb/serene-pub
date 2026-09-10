@@ -94,6 +94,19 @@ export function flagsFrom(data: unknown): KoboldCppFlags {
  * returns and every already-tested connection resolves it immediately, with no
  * re-test. Do not "clean up" this mapping to match what resolution consumes —
  * that would trade a fact for a derived detail, and would have to be undone.
+ *
+ * ## ⚠ WIRE MODE is absent here, and that is the same rule pointed the other way
+ *
+ * `wire_chat` and `wire_completion` are declared for both KoboldCPP types, and
+ * neither is probed. This endpoint reports which MODELS are loaded — txt2img,
+ * vision, tts, transcribe, embeddings — and says nothing whatever about which
+ * endpoints exist, because both `/v1/chat/completions` and `/api/v1/generate`
+ * are always there. An entry here would therefore be an INVENTION rather than a
+ * recording, which is precisely what the paragraph above forbids in the opposite
+ * direction: this function's contract is "what the server said", and the server
+ * did not say this. The manifest declares both as plain `native`, and
+ * `resolveCapabilities` consults a probe only for an `{unproven: true}`
+ * declaration — so a line added here would also be inert. Do not add one.
  */
 export function capabilitiesFromFlags(flags: KoboldCppFlags): CapabilitySet {
 	// `topGrade(id)` rather than a literal, because "as good as this gets" is a

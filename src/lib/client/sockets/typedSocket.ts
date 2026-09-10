@@ -663,6 +663,41 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.PanelLayout.Set.Params
 		response: Sockets.Sessions.PanelLayout.Set.Response
 	}
+	"sessions:layoutPreset:save": {
+		params: Sockets.Sessions.PanelLayout.Save.Params
+		response: Sockets.Sessions.PanelLayout.Save.Response
+	}
+	// Managing what you saved (PLAN 25 redesign). Genre-scoped rather than
+	// session-scoped: a preset belongs to a genre and an author, so the reply
+	// names the genre its refreshed `presets` list is for and a client on
+	// another genre ignores the list. A refusal ("Built-in layouts can't be
+	// renamed…") rides the MAIN channel with `ok: false` and a sentence — the
+	// `:error` twins are only the generic throw path, and are deliberately not
+	// in HANDLED_ERROR_EVENTS so Layout's catch-all toasts them.
+	"sessions:layoutPreset:rename": {
+		params: Sockets.Sessions.PanelLayout.Rename.Params
+		response: Sockets.Sessions.PanelLayout.Rename.Response
+	}
+	"sessions:layoutPreset:rename:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"sessions:layoutPreset:delete": {
+		params: Sockets.Sessions.PanelLayout.Delete.Params
+		response: Sockets.Sessions.PanelLayout.Delete.Response
+	}
+	"sessions:layoutPreset:delete:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"sessions:layoutPreset:usage": {
+		params: Sockets.Sessions.PanelLayout.Usage.Params
+		response: Sockets.Sessions.PanelLayout.Usage.Response
+	}
+	"sessions:layoutPreset:usage:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"sessions:triggers": {
 		params: Sockets.Sessions.Triggers.Params
 		response: Sockets.Sessions.Triggers.Response
@@ -766,6 +801,10 @@ export type SocketEventMap = {
 	"sessions:getNarratorName": {
 		params: Sockets.Sessions.GetNarratorName.Params
 		response: Sockets.Sessions.GetNarratorName.Response
+	}
+	"sessions:sideCharacterOptions": {
+		params: Sockets.Sessions.SideCharacterOptions.Params
+		response: Sockets.Sessions.SideCharacterOptions.Response
 	}
 	"sessions:list:error": {
 		params: never
@@ -1022,6 +1061,33 @@ export type SocketEventMap = {
 		response: Sockets.ErrorResponse
 	}
 
+	// Backups (PLAN-pglite-recovery P2) — admin only. No restore event: see
+	// the Backups namespace in shared/sockets/types.ts.
+	"backups:list": {
+		params: Sockets.Backups.List.Params
+		response: Sockets.Backups.List.Response
+	}
+	"backups:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"backups:create": {
+		params: Sockets.Backups.Create.Params
+		response: Sockets.Backups.Create.Response
+	}
+	"backups:create:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"backups:delete": {
+		params: Sockets.Backups.Delete.Params
+		response: Sockets.Backups.Delete.Response
+	}
+	"backups:delete:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
 	// Tunnels (plan 26) — its own namespace, never folded into Connections.
 	"tunnels:get": {
 		params: Sockets.Tunnels.Get.Params
@@ -1180,6 +1246,46 @@ export type SocketEventMap = {
 	"pipelines:runExplain:error": {
 		params: never
 		response: { error?: string }
+	}
+	// The same explanation, asked from the composer about a turn that has not
+	// happened yet — a real preview run against the draft in the box. Answered
+	// on a button rather than on a keystroke: a turn is a real run with a real
+	// embedding call behind it (`EntryFireTest`'s rule).
+	"pipelines:previewRetrieval": {
+		params: Sockets.Pipelines.PreviewRetrieval.Params
+		response: Sockets.Pipelines.PreviewRetrieval.Response
+	}
+	// The handler answers its own refusals on the channel above, with the
+	// sentence saying which one it was; this is `register()`'s synthesised
+	// fallback for a throw it did not expect, listened to so the panel stops
+	// waiting rather than spinning forever.
+	"pipelines:previewRetrieval:error": {
+		params: never
+		response: { error?: string }
+	}
+	// And the same explanation addressed the way a reader asks for it: by the
+	// message, not by a run id they were never given. Gated on the session
+	// (owner or guest), so a participant can read why a reply in their own
+	// conversation said what it said.
+	"pipelines:messageExplain": {
+		params: Sockets.Pipelines.MessageExplain.Params
+		response: Sockets.Pipelines.MessageExplain.Response
+	}
+	"pipelines:messageExplain:error": {
+		params: never
+		response: { error?: string }
+	}
+	// Which runs produced a given row, asked from the row rather than from the
+	// workspace: the gallery is looking at an image and wants to know what made
+	// it. Gated on the artifact — the media handlers' own owner check for a
+	// file, the session for a message — never on who owns the run.
+	"pipelines:artifactRuns": {
+		params: Sockets.Pipelines.ArtifactRuns.Params
+		response: Sockets.Pipelines.ArtifactRuns.Response
+	}
+	"pipelines:artifactRuns:error": {
+		params: never
+		response: Sockets.Pipelines.ArtifactRuns.Response
 	}
 	// Everything that has ever fired in one session — the aggregate the single
 	// run's explanation cannot give, because a decision belongs to a turn.
@@ -1534,6 +1640,56 @@ export type SocketEventMap = {
 	"promptConfigs:setUserActive:error": {
 		params: never
 		response: { error?: string }
+	}
+
+	// Completion template events (the delimiters a prompt is wrapped in)
+	"completionTemplates:list": {
+		params: Sockets.CompletionTemplates.List.Params
+		response: Sockets.CompletionTemplates.List.Response
+	}
+	"completionTemplates:get": {
+		params: Sockets.CompletionTemplates.Get.Params
+		response: Sockets.CompletionTemplates.Get.Response
+	}
+	"completionTemplates:get:error": {
+		params: never
+		response: { error?: string }
+	}
+	"completionTemplates:create": {
+		params: Sockets.CompletionTemplates.Create.Params
+		response: Sockets.CompletionTemplates.Create.Response
+	}
+	"completionTemplates:create:error": {
+		params: never
+		response: { error?: string }
+	}
+	"completionTemplates:update": {
+		params: Sockets.CompletionTemplates.Update.Params
+		response: Sockets.CompletionTemplates.Update.Response
+	}
+	"completionTemplates:update:error": {
+		params: never
+		response: { error?: string }
+	}
+	"completionTemplates:delete": {
+		params: Sockets.CompletionTemplates.Delete.Params
+		response: Sockets.CompletionTemplates.Delete.Response
+	}
+	"completionTemplates:delete:error": {
+		params: never
+		response: { error?: string }
+	}
+	"completionTemplates:clone": {
+		params: Sockets.CompletionTemplates.Clone.Params
+		response: Sockets.CompletionTemplates.Clone.Response
+	}
+	"completionTemplates:clone:error": {
+		params: never
+		response: { error?: string }
+	}
+	"completionTemplates:options": {
+		params: Sockets.CompletionTemplates.Options.Params
+		response: Sockets.CompletionTemplates.Options.Response
 	}
 
 	// Narrator Prompt Config events ("Session Prompts: Narrator")
@@ -2009,6 +2165,14 @@ export type SocketEventMap = {
 		params: Sockets.SystemSettings.UpdateScriptsEnabled.Params
 		response: Sockets.SystemSettings.UpdateScriptsEnabled.Response
 	}
+	"systemSettings:updateBackupSettings": {
+		params: Sockets.SystemSettings.UpdateBackupSettings.Params
+		response: Sockets.SystemSettings.UpdateBackupSettings.Response
+	}
+	"systemSettings:updateBackupSettings:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"systemSettings:updateLegacyConfigsVisible": {
 		params: Sockets.SystemSettings.UpdateLegacyConfigsVisible.Params
 		response: Sockets.SystemSettings.UpdateLegacyConfigsVisible.Response
@@ -2268,6 +2432,43 @@ export type SocketEventMap = {
 	"lorebooks:bindingsForCharacter:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
+	}
+
+	// Binding suggestions — derived candidates, stored decisions
+	"bindingSuggestions:list": {
+		params: Sockets.BindingSuggestions.List.Params
+		response: Sockets.BindingSuggestions.List.Response
+	}
+	"bindingSuggestions:ignore": {
+		params: Sockets.BindingSuggestions.Ignore.Params
+		response: Sockets.BindingSuggestions.Ignore.Response
+	}
+	"bindingSuggestions:unignore": {
+		params: Sockets.BindingSuggestions.Unignore.Params
+		response: Sockets.BindingSuggestions.Unignore.Response
+	}
+	"bindingSuggestions:add": {
+		params: Sockets.BindingSuggestions.Add.Params
+		response: Sockets.BindingSuggestions.Add.Response
+	}
+	// The handlers refuse by throwing, so `register()` synthesises these — the
+	// only channel a refusal ("already added", "name already taken") reaches the
+	// manager on. Listened to, or an accepted-then-refused row spins forever.
+	"bindingSuggestions:list:error": {
+		params: never
+		response: { error?: string }
+	}
+	"bindingSuggestions:ignore:error": {
+		params: never
+		response: { error?: string }
+	}
+	"bindingSuggestions:unignore:error": {
+		params: never
+		response: { error?: string }
+	}
+	"bindingSuggestions:add:error": {
+		params: never
+		response: { error?: string }
 	}
 
 	// Lorebook entry events — one namespace, every declared type
@@ -2703,6 +2904,50 @@ export type SocketEventMap = {
 		response: Sockets.ErrorResponse
 	}
 
+	// Widget styles (PLAN 25) — the skins a session widget wears. Every
+	// mutation is answered by an unfiltered `widgetStyles:list` push to the
+	// actor, so the client never has to patch a row off a mutation reply.
+	"widgetStyles:list": {
+		params: Sockets.WidgetStyles.List.Params
+		response: Sockets.WidgetStyles.List.Response
+	}
+	"widgetStyles:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"widgetStyles:create": {
+		params: Sockets.WidgetStyles.Create.Params
+		response: Sockets.WidgetStyles.Create.Response
+	}
+	"widgetStyles:create:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"widgetStyles:update": {
+		params: Sockets.WidgetStyles.Update.Params
+		response: Sockets.WidgetStyles.Update.Response
+	}
+	"widgetStyles:update:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"widgetStyles:delete": {
+		params: Sockets.WidgetStyles.Delete.Params
+		response: Sockets.WidgetStyles.Delete.Response
+	}
+	"widgetStyles:delete:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"widgetStyles:clone": {
+		params: Sockets.WidgetStyles.Clone.Params
+		response: Sockets.WidgetStyles.Clone.Response
+	}
+	"widgetStyles:clone:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
 	// Global error/success events
 	error: {
 		params: never
@@ -2728,10 +2973,19 @@ export interface TypedSocket {
 		listener: (data: SocketEventMap[K]["response"]) => void
 	): void
 
-	// Type-safe off method
+	/**
+	 * Type-safe off method.
+	 *
+	 * WARNING: omitting `listener` removes EVERY listener for `event` across
+	 * the whole app, not just the caller's — socket.io treats `off(event,
+	 * undefined)` as "remove all". A component tearing itself down that way
+	 * silently kills sibling components' listeners for the rest of the
+	 * session. `listener` is therefore required — always pass the same
+	 * function reference you gave `on`.
+	 */
 	off<K extends keyof SocketEventMap>(
 		event: K,
-		listener?: (data: SocketEventMap[K]["response"]) => void
+		listener: (data: SocketEventMap[K]["response"]) => void
 	): void
 
 	// Type-safe once method - listener fires at most once, then auto-removes
@@ -2782,7 +3036,7 @@ export function createTypedSocket(): TypedSocket {
 
 		off: (<K extends keyof SocketEventMap>(
 			event: K,
-			listener?: (data: SocketEventMap[K]["response"]) => void
+			listener: (data: SocketEventMap[K]["response"]) => void
 		) => {
 			if (socket.off) {
 				socket.off(event as string, listener)

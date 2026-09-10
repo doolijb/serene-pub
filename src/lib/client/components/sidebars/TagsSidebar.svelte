@@ -366,46 +366,61 @@
 		panelsCtx.openPanel({ key: "sessions", toggle: false })
 	}
 
+	// Named so `off` can name them too. A bare `socket.off("tags:list")`
+	// removes EVERY listener for that event — including any other open tags
+	// UI, not just this sidebar's.
+	function handleTagsList(msg: any) {
+		tagsList = msg.tagsList || []
+		isLoading = false
+	}
+
+	// The generic **:error listener in Layout.svelte already toasts this —
+	// this just stops the spinner from spinning forever if the initial
+	// fetch fails, so it settles into the (accurate enough) empty state.
+	function handleTagsListError() {
+		isLoading = false
+	}
+
+	function handleTagsCreate(msg: any) {
+		toaster.success({
+			title: "Tag Created",
+			description: `Tag "${msg.tag.name}" created successfully.`
+		})
+	}
+
+	function handleTagsUpdate(msg: any) {
+		selectedTag = msg.tag
+		toaster.success({
+			title: "Tag Updated",
+			description: `Tag "${msg.tag.name}" updated successfully.`
+		})
+	}
+
+	function handleTagsDelete(msg: any) {
+		toaster.success({
+			title: "Tag Deleted",
+			description: "Tag deleted successfully."
+		})
+	}
+
+	function handleTagsGetRelatedData(msg: any) {
+		relatedCharacters = msg.tagData.characters || []
+		relatedPersonas = msg.tagData.personas || []
+		relatedLorebooks = msg.tagData.lorebooks || []
+		relatedSessions = msg.tagData.sessions || []
+	}
+
 	onMount(() => {
-		socket.on("tags:list", (msg: any) => {
-			tagsList = msg.tagsList || []
-			isLoading = false
-		})
-		// The generic **:error listener in Layout.svelte already toasts this —
-		// this just stops the spinner from spinning forever if the initial
-		// fetch fails, so it settles into the (accurate enough) empty state.
-		socket.on("tags:list:error", () => {
-			isLoading = false
-		})
+		socket.on("tags:list", handleTagsList)
+		socket.on("tags:list:error", handleTagsListError)
 
-		socket.on("tags:create", (msg: any) => {
-			toaster.success({
-				title: "Tag Created",
-				description: `Tag "${msg.tag.name}" created successfully.`
-			})
-		})
+		socket.on("tags:create", handleTagsCreate)
 
-		socket.on("tags:update", (msg: any) => {
-			selectedTag = msg.tag
-			toaster.success({
-				title: "Tag Updated",
-				description: `Tag "${msg.tag.name}" updated successfully.`
-			})
-		})
+		socket.on("tags:update", handleTagsUpdate)
 
-		socket.on("tags:delete", (msg: any) => {
-			toaster.success({
-				title: "Tag Deleted",
-				description: "Tag deleted successfully."
-			})
-		})
+		socket.on("tags:delete", handleTagsDelete)
 
-		socket.on("tags:getRelatedData", (msg: any) => {
-			relatedCharacters = msg.tagData.characters || []
-			relatedPersonas = msg.tagData.personas || []
-			relatedLorebooks = msg.tagData.lorebooks || []
-			relatedSessions = msg.tagData.sessions || []
-		})
+		socket.on("tags:getRelatedData", handleTagsGetRelatedData)
 
 		socket.emit("tags:list", {})
 
@@ -415,12 +430,12 @@
 	})
 
 	onDestroy(() => {
-		socket.off("tags:list")
-		socket.off("tags:list:error")
-		socket.off("tags:create")
-		socket.off("tags:update")
-		socket.off("tags:delete")
-		socket.off("tags:getRelatedData")
+		socket.off("tags:list", handleTagsList)
+		socket.off("tags:list:error", handleTagsListError)
+		socket.off("tags:create", handleTagsCreate)
+		socket.off("tags:update", handleTagsUpdate)
+		socket.off("tags:delete", handleTagsDelete)
+		socket.off("tags:getRelatedData", handleTagsGetRelatedData)
 		onclose = undefined
 	})
 </script>

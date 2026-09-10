@@ -6,7 +6,7 @@
  * define", the way `connections.capabilities.resolved` is a cache of the four
  * resolution layers. A cache with no check is a second source of truth, and this
  * one had already drifted in both directions before anybody wrote this file:
- * OPENAI_CHAT declared `text->image` with no image module registered for it at
+ * OPENAI declared `text->image` with no image module registered for it at
  * all (an image slot bound the connection, then `getImageAdapter` threw minutes
  * later), and A1111 declared `text+image->image` and `image->image` while
  * `A1111Adapter` reported `img2img: false` and dropped `init` on the floor. Three
@@ -70,6 +70,10 @@ import {
 	adapterCapabilities
 } from "$lib/shared/connectionAdapters/manifest"
 import {
+	CONTINUE_REPLY,
+	continueWireModes
+} from "$lib/shared/connectionAdapters/continueReply"
+import {
 	ACTION_FEATURES,
 	ACTION_NAMES,
 	ACTION_TRANSFORM,
@@ -82,6 +86,8 @@ import {
 	gradeOf,
 	isTransformId,
 	topGrade,
+	WIRE_CAPABILITY,
+	WIRE_MODE_ORDER,
 	type CapabilityId,
 	type Declared,
 	type GradeSpec
@@ -239,6 +245,83 @@ describe("the manifest is a checked cache of what the adapters implement", () =>
 			).toEqual([])
 		})
 
+		test(`${type} declares a wire mode iff it generates text`, () => {
+			/**
+			 * A text adapter has to be CALLABLE, and wire mode is how.
+			 *
+			 * `wireModeFor` walks the resolved set, then the type's declaration,
+			 * and then falls back to `chat` — a last resort no registered text
+			 * type should ever reach. This is what keeps that true: a type that
+			 * implements `generateText` and declares neither wire capability
+			 * would be called by a guessed method rather than a chosen one, and
+			 * the guess is right for four of the seven.
+			 *
+			 * The other direction matters as much. An image-only adapter
+			 * declaring a wire mode would render two switches in the capability
+			 * panel that nothing reads — the same orphan-feature failure the
+			 * test above catches for `tools`, spelled out here because these two
+			 * ids are the ones a reader is most likely to add "just in case".
+			 */
+			const supports = adapterCapabilities(type)?.supports ?? {}
+			const declared = WIRE_MODE_ORDER.filter(
+				(m) => supports[WIRE_CAPABILITY[m]] !== undefined
+			)
+			const generatesText = implementedActions(type).has("generateText")
+			expect(
+				declared.length > 0,
+				generatesText
+					? `${type} implements generateText() but declares neither wire_chat nor wire_completion, so nothing says how to call it.`
+					: `${type} declares ${declared.join(" and ")} but implements no generateText(), so no request would ever read it.`
+			).toBe(generatesText)
+		})
+
+		test(`${type} declares continue_reply iff a wire of its carries one`, () => {
+			/**
+			 * The one capability whose answer is a PAIR, and the net under it.
+			 *
+			 * `supports.continue_reply` is the permission — graded through the
+			 * four layers, which is where the per-model half belongs (Claude 4.6
+			 * rejects a prefill; Claude 4.5 accepts one). `continuesIn` is the
+			 * mechanism: which of this type's wire modes leaves the assistant
+			 * block open for the model to write into. Neither is derivable from
+			 * the other, so both are declared — and two hand-written halves of
+			 * one fact is exactly the drift this whole file exists to catch.
+			 *
+			 * Either direction is a live bug. A capability with no wire behind it
+			 * renders a switch that can never take effect. A wire with no
+			 * capability is a continuation no layer can ever grant, so the button
+			 * stays dark on a backend that would have prefilled perfectly.
+			 */
+			const supports = adapterCapabilities(type)?.supports ?? {}
+			const declaresCapability = supports[CONTINUE_REPLY] !== undefined
+			const wires = continueWireModes(type)
+			expect(
+				declaresCapability,
+				declaresCapability
+					? `${type} declares continue_reply but no continuesIn, so nothing could ever honour the switch.`
+					: `${type} declares continuesIn ${wires.join(" and ")} but no continue_reply, so no layer can grant it.`
+			).toBe(wires.length > 0)
+
+			// And every wire it claims to continue in is a wire it declares at
+			// all — `continuesIn: ["chat"]` on a completion-only type would
+			// resolve to "never", silently.
+			const undeclared = wires.filter(
+				(m) => supports[WIRE_CAPABILITY[m]] === undefined
+			)
+			expect(
+				undeclared,
+				`${type} says it continues in ${undeclared.join(" and ")}, which it does not declare as a wire mode at all.`
+			).toEqual([])
+
+			// And it generates text. A continuation is a reply resumed; there is
+			// nothing to resume on an adapter that writes no replies.
+			if (wires.length)
+				expect(
+					implementedActions(type).has("generateText"),
+					`${type} declares continuesIn but implements no generateText().`
+				).toBe(true)
+		})
+
 		test(`${type}'s declared grades are sayable on their own scales`, () => {
 			// `gradeOf` is pure, total and clamping — it has to be, because it runs
 			// during resolution at boot and throwing there would take the server
@@ -296,7 +379,7 @@ describe("the registry and the manifest describe the same set of types", () => {
 
 	test("every manifest entry has at least one adapter module", () => {
 		// The other direction, and the sharper one: an entry with no module is a
-		// list of capabilities nothing can deliver, which is exactly the OPENAI_CHAT
+		// list of capabilities nothing can deliver, which is exactly the OPENAI
 		// `text->image` failure generalised.
 		const unbacked = Object.keys(ADAPTER_MANIFEST).filter(
 			(t) => !ADAPTER_REGISTRY[t]

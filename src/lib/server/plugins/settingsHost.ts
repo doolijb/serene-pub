@@ -43,8 +43,6 @@ import {
 	type EncryptedToken
 } from "$lib/server/utils/tokenCrypto"
 
-type Db = { select: any; update: any }
-
 /** Own HKDF class — see tokenCrypto.ts on why this must never be defaulted. */
 export const PLUGIN_SETTINGS_KEY_INFO = "serene-pub:pluginSetting:v1"
 

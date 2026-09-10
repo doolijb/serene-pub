@@ -168,7 +168,7 @@ export async function resolveModelPath(
  * behaviour on a flat install, and the reason nothing about it changes.
  *
  * ⚠ The union across ALL of these has to be built before `listModels` runs its
- * stale sweep. That sweep deletes every `koboldcpp_models` row whose filename
+ * stale sweep. That sweep deletes every `local_models` row whose filename
  * the scan did not see, so sweeping after scanning one directory would wipe the
  * other's rows — silently, on the first listing after a second directory is set,
  * looking exactly like every model vanishing at once.

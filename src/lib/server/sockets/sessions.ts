@@ -8,11 +8,12 @@ import {
 	deleteLegacy,
 	hasNativeSteps
 } from "$lib/server/messages/store"
-import { verbRefusal } from "$lib/server/messages/verbs"
+import { continueVerbRefusal, verbRefusal } from "$lib/server/messages/verbs"
 import {
 	DEFAULT_CHANNEL,
-	channelsOf,
-	resolveChannel
+	canonicalChannel,
+	channelWhere,
+	channelsOf
 } from "$lib/server/messages/channels"
 import { and, asc, count, desc, eq, inArray, isNull, lt, or } from "drizzle-orm"
 import {
@@ -48,20 +49,21 @@ import {
 } from "$lib/server/connections/visibility"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import {
+	canApplyLayoutPreset,
+	deleteUserLayoutPreset,
+	layoutPresetUsage,
+	listLayoutPresets,
+	renameUserLayoutPreset,
+	resolveActivePresetLayout,
+	saveUserLayoutPreset
+} from "$lib/server/db/layoutPresets"
+import {
 	resolveCharacterName,
 	resolvePersonaName
 } from "$lib/shared/utils/resolveCharacterName"
 import { withSessionTriggerLock } from "$lib/server/utils/sessionTriggerLock"
+import type { SideCharacterFact } from "$lib/server/pipelines/entities/sideCharacter"
 import { findOrCreateTagId } from "$lib/server/utils/tags"
-import type { ExtractTablesWithRelations } from "drizzle-orm"
-import type { PgliteDatabase, PgliteTransaction } from "drizzle-orm/pglite"
-
-type Executor =
-	| PgliteDatabase<typeof schema>
-	| PgliteTransaction<
-			typeof schema,
-			ExtractTablesWithRelations<typeof schema>
-	  >
 import {
 	MAX_CHAT_MESSAGE_LENGTH,
 	MAX_NARRATOR_INSTRUCTIONS_LENGTH
@@ -202,7 +204,7 @@ async function processSessionTags(
 	sessionId: number,
 	tagNames: string[],
 	userId: number,
-	dbOrTx: Executor = db
+	dbOrTx: Db = db
 ) {
 	// Get existing tags for this session that belong to the user
 	const existingSessionTags = await dbOrTx.query.sessionTags.findMany({
@@ -364,7 +366,7 @@ async function buildSessionsListFor(
 		"$lib/server/pipelines/entities/sessionGenres"
 	)
 	const genreNames = new Map(
-		(await listSessionGenres(db as any).catch(() => [])).map((m) => [
+		(await listSessionGenres(db).catch(() => [])).map((m) => [
 			m.genreId,
 			m.name
 		])
@@ -541,7 +543,7 @@ export const sessionsCreateHandler: Handler<
 			const { getSessionGenre, shapeViolations, STANDARD_GENRE_ID } =
 				await import("$lib/server/pipelines/entities/sessionGenres")
 			const genreId = (params.session as any).genreId ?? STANDARD_GENRE_ID
-			const mode = await getSessionGenre(db as any, genreId)
+			const mode = await getSessionGenre(db, genreId)
 			// The F29 spirit: the standard mode is the floor, available even
 			// when the type registry never synced (a bootstrap conflict
 			// disables pipelines, never sessionting — DECOMPOSITION §19). Only a
@@ -685,8 +687,8 @@ export const sessionsCreateHandler: Handler<
 		if (!seededByPipeline) {
 			// The floor: the same halves the pipeline's nodes call, invoked
 			// directly, honoring the genre shape's greeting declaration.
-			const greetingShape = (await getSessionGenre(db as any, genreId))
-				?.shape?.greeting
+			const greetingShape = (await getSessionGenre(db, genreId))?.shape
+				?.greeting
 			if (greetingShape?.enabled !== false) {
 				const { collectSessionGreetings, writeSessionGreetings } =
 					await import("$lib/server/sessions/greetings")
@@ -804,20 +806,30 @@ async function getPromptSessionFromDb(sessionId: number, userId: number) {
 		where: (c, { eq }) => eq(c.id, sessionId),
 		with: {
 			sessionMessages: {
-				// One lane, not the session (20 §7). This snapshot feeds
+				// One channel, not the session (20 §7). This snapshot feeds
 				// prompt construction and next-speaker selection, so an
 				// unscoped read here would put a side conversation into the
 				// prompt and let it decide whose turn it is. The trigger comes
 				// from the session's composer, which is `main`; a per-channel
 				// composer is later work and is what would pass one in.
 				//
+				// `channelWhere` rather than an equality on the column: a bare
+				// slug is the WHOLE channel (ruling 2026-09-09), so `main` is
+				// every lane of main and not `main:1` alone. Nothing moves
+				// today — no row is on `main:2` — but an equality here would
+				// have quietly meant something different from every other read
+				// of `main` the moment one was.
+				//
 				// ⚠ Deliberately unlike `getSessionFromDB`, which stays
-				// unscoped: the client renders every lane and each widget
+				// unscoped: the client renders every channel and each widget
 				// filters to its own (`scopeMessages`).
 				where: (cm, { eq, and }) =>
 					and(
 						eq(cm.isHidden, false),
-						eq(cm.channel, DEFAULT_CHANNEL)
+						channelWhere(
+							schema.sessionMessages.channel,
+							DEFAULT_CHANNEL
+						)
 					),
 				orderBy: (cm, { asc }) => asc(cm.id)
 			},
@@ -973,7 +985,7 @@ export const sessionsModesHandler: Handler<
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		const res: Sockets.Sessions.Genres.Response = {
-			genres: (await listSessionGenres(db as any)) as any
+			genres: (await listSessionGenres(db)) as any
 		}
 		emitToUser("sessions:genres", res)
 		return res
@@ -1003,7 +1015,7 @@ export const sessionsUpgradeModeHandler: Handler<
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		const { error } = await upgradeSessionGenre(
-			db as any,
+			db,
 			params.sessionId,
 			params.genreId
 		)
@@ -1047,12 +1059,12 @@ export const sessionsFunctionCandidatesHandler: Handler<
 				.limit(1)
 			const genreId = session?.genreId ?? STANDARD_GENRE_ID
 			res.candidates = await functionCandidates(
-				db as any,
+				db,
 				genreId,
 				params.function
 			)
 			res.resolved = await resolveFunctionSpec(
-				db as any,
+				db,
 				genreId,
 				params.function,
 				{ sessionId: params.sessionId }
@@ -1099,7 +1111,7 @@ export const sessionsBindFunctionHandler: Handler<
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, params.sessionId))
 			.limit(1)
-		const { error } = await bindFunction(db as any, {
+		const { error } = await bindFunction(db, {
 			scope:
 				scopeKind === "instance"
 					? { kind: "instance", id: 0 }
@@ -1136,11 +1148,8 @@ export const sessionsSpeakerStrategiesHandler: Handler<
 			const { getSessionSpeakerStrategy } = await import(
 				"$lib/server/pipelines/entities/bindings"
 			)
-			res.strategies = await listSpeakerStrategies(db as any)
-			res.selected = await getSessionSpeakerStrategy(
-				db as any,
-				params.sessionId
-			)
+			res.strategies = await listSpeakerStrategies(db)
+			res.selected = await getSessionSpeakerStrategy(db, params.sessionId)
 		}
 		emitToUser("sessions:speakerStrategies", res)
 		return res
@@ -1166,7 +1175,7 @@ export const sessionsSetSpeakerStrategyHandler: Handler<
 		const { setSessionSpeakerStrategy } = await import(
 			"$lib/server/pipelines/entities/bindings"
 		)
-		const { error } = await setSessionSpeakerStrategy(db as any, {
+		const { error } = await setSessionSpeakerStrategy(db, {
 			sessionId: params.sessionId,
 			userId,
 			typeId: params.typeId
@@ -1245,9 +1254,30 @@ export const sessionsTriggerFunctionHandler: Handler<
 				)
 				if (!access.hasAccess || !access.isOwner)
 					return fail("Session not found.")
+				// ⚠ Three now, not two. `narrate-character` needs the same
+				// bespoke lifecycle `narrate` does — a modal whose first step
+				// is *who speaks*, and the streaming message row that answer
+				// creates — so routing it here would run it with no speaker
+				// and produce a turn spoken by nobody in particular. Refusing
+				// by name says so instead.
+				//
+				// ⚠ **Four, since `continue` became a function key** (ruling
+				// 2026-09-08, D-2). Its lifecycle is `sessionMessages:continue`
+				// and the whole of a continue is the text already on a
+				// particular row: this route can name a subject message but
+				// cannot flip it to generating, cannot hold the session's
+				// trigger lock across the write, and supplies no prefill — so a
+				// genre that bound `continue` to a spec of its own would find
+				// this route firing it as an ordinary turn that appends a fresh
+				// reply. That is exactly `narrate-character`'s failure, and it
+				// refuses the same way. Until now the refusal below said
+				// "nothing serves 'continue'", which was true only because no
+				// spec contributed it.
 				if (
 					params.function === "respond" ||
-					params.function === "narrate"
+					params.function === "narrate" ||
+					params.function === "narrate-character" ||
+					params.function === "continue"
 				)
 					return fail(
 						`'${params.function}' has its own trigger event — this route serves contributed functions.`
@@ -1262,7 +1292,7 @@ export const sessionsTriggerFunctionHandler: Handler<
 				// Read-only when the mode is missing (19 §6) — a trigger is a
 				// new turn like any other.
 				const modeCheck = await sessionGenreAvailable(
-					db as any,
+					db,
 					params.sessionId
 				)
 				if (!modeCheck.available) return fail(modeCheck.reason!)
@@ -1288,7 +1318,7 @@ export const sessionsTriggerFunctionHandler: Handler<
 					"$lib/server/pipelines/entities/sessionGenres"
 				)
 				const offered = await listSessionFunctions(
-					db as any,
+					db,
 					params.sessionId,
 					genreId,
 					userId
@@ -1301,7 +1331,7 @@ export const sessionsTriggerFunctionHandler: Handler<
 					)
 
 				const specId = await resolveFunctionSpec(
-					db as any,
+					db,
 					genreId,
 					params.function,
 					{ sessionId: params.sessionId }
@@ -1414,10 +1444,7 @@ export const sessionsTriggerFunctionHandler: Handler<
 								sessionId: params.sessionId,
 								currentCharacterId: null
 							},
-							fields: await genreFieldsFor(
-								db as any,
-								params.sessionId
-							)
+							fields: await genreFieldsFor(db, params.sessionId)
 						}
 					})
 				} finally {
@@ -1549,7 +1576,7 @@ export const sessionsPipelinesHandler: Handler<
 				"Respond"
 			)
 			const fns = await enabledSessionFunctions(
-				db as any,
+				db,
 				params.sessionId,
 				genreId,
 				userId
@@ -1627,7 +1654,7 @@ export const sessionsViewHandler: Handler<
 				.where(eq(schema.sessions.id, params.sessionId))
 				.limit(1)
 			const mode = await getSessionGenre(
-				db as any,
+				db,
 				session?.genreId ?? STANDARD_GENRE_ID
 			)
 			// The session's lanes (20 §7): `main` plus whatever the genre
@@ -1635,6 +1662,24 @@ export const sessionsViewHandler: Handler<
 			// a genre gains a channel by declaring one, and a session of that
 			// genre has it from that moment.
 			res.channels = channelsOf(mode?.shape)
+
+			// Whether Continue is offered at all, and why not when it is not.
+			//
+			// Computed HERE because this handler is already the one that reads
+			// the genre — `messageVerbs` is half the answer — and because it
+			// fires once when the session opens rather than once per message.
+			// The other half is the connection the session's replies resolve
+			// to: most cannot resume a partial reply as a true prefill, and the
+			// button that fires anyway produces a second beginning glued onto
+			// the first. Exactly the same function the verb refuses with, so
+			// the greyed-out button's tooltip and the refusal a fired verb
+			// returns are one sentence rather than two that must agree.
+			const refusal = await continueVerbRefusal(
+				db,
+				params.sessionId,
+				userId
+			)
+			if (refusal) res.continueRefusal = refusal
 
 			const viewPlugin = (mode?.shape as any)?.view
 			if (typeof viewPlugin === "string") {
@@ -1695,10 +1740,27 @@ export const sessionsViewHandler: Handler<
 	}
 }
 
+/** The session's genre id, or the standard floor when the row is gone. */
+async function genreOfSession(sessionId: number): Promise<string> {
+	const [row] = await db
+		.select({ genreId: schema.sessions.genreId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	return row?.genreId ?? "core:genre/chat"
+}
+
 /**
- * Read the caller's surface-grid layout for a session (21 §10). No row yet →
- * an empty blob; the client then derives its default layout from the mode's
- * declared panels. Access-gated like every other session read.
+ * Read the caller's surface-grid layout for a session (21 §10, extended by the
+ * PLAN 25 preset redesign). No row yet → an empty blob; the client then derives
+ * its default layout from the mode's declared panels. Access-gated like every
+ * other session read.
+ *
+ * `layout` is returned EXACTLY as it always was — the preset fields are strictly
+ * additive, and the preset's own content never enters it. That is the whole
+ * compatibility guarantee: a session that already has an arrangement in `layout`
+ * gets back byte-identical bytes, and the client's manager reads its own slots
+ * in preference to the preset base, so nothing it renders can change.
  */
 export const sessionsPanelLayoutGetHandler: Handler<
 	Sockets.Sessions.PanelLayout.Get.Params,
@@ -1709,9 +1771,17 @@ export const sessionsPanelLayoutGetHandler: Handler<
 		const userId = socket.user!.id
 		const access = await checkSessionAccess(params.sessionId, userId)
 		let layout: Record<string, unknown> = {}
+		let layoutPresetId: number | null = null
+		let layoutSettings: Record<string, unknown> = {}
+		let presetLayout: Record<string, unknown> = {}
+		let presets: Sockets.Sessions.LayoutPreset[] = []
 		if (access.hasAccess) {
 			const [row] = await db
-				.select({ layout: schema.sessionPanelLayouts.layout })
+				.select({
+					layout: schema.sessionPanelLayouts.layout,
+					layoutPresetId: schema.sessionPanelLayouts.layoutPresetId,
+					layoutSettings: schema.sessionPanelLayouts.layoutSettings
+				})
 				.from(schema.sessionPanelLayouts)
 				.where(
 					and(
@@ -1725,20 +1795,55 @@ export const sessionsPanelLayoutGetHandler: Handler<
 				.limit(1)
 			if (row?.layout && typeof row.layout === "object")
 				layout = row.layout as Record<string, unknown>
+			layoutPresetId = row?.layoutPresetId ?? null
+			if (row?.layoutSettings && typeof row.layoutSettings === "object")
+				layoutSettings = row.layoutSettings as Record<string, unknown>
+
+			const genreId = await genreOfSession(params.sessionId)
+			presetLayout = await resolveActivePresetLayout(
+				genreId,
+				userId,
+				layoutPresetId
+			)
+			presets = await listLayoutPresets(genreId, userId)
 		}
 		const res: Sockets.Sessions.PanelLayout.Get.Response = {
 			sessionId: params.sessionId,
-			layout
+			layout,
+			layoutPresetId,
+			layoutSettings,
+			presetLayout,
+			presets
 		}
 		emitToUser("sessions:panelLayout:get", res)
 		return res
 	}
 }
 
+/** Guard behind `layoutPresetId`: this session's genre, and seeded or mine. */
+async function mayApplyPreset(
+	presetId: number,
+	sessionId: number,
+	userId: number
+): Promise<boolean> {
+	return canApplyLayoutPreset(
+		presetId,
+		await genreOfSession(sessionId),
+		userId
+	)
+}
+
 /**
- * Persist the caller's surface-grid layout for a session (21 §10). One row per
- * (user, session); upsert. The `layout` blob is stored verbatim — its shape is
- * the client surface manager's business, forward-compatible by design.
+ * Persist the caller's surface-grid layout for a session (21 §10, extended by
+ * the PLAN 25 preset redesign). One row per (user, session); upsert. The
+ * `layout` blob is stored verbatim — its shape is the client surface manager's
+ * business, forward-compatible by design.
+ *
+ * `layoutPresetId` and `layoutSettings` are written ONLY when the caller sends
+ * the key. That is not politeness, it is the correctness condition: the surface
+ * manager's debounced save knows nothing about presets and posts `layout`
+ * alone, several times a minute. If absence meant "clear", every drag of a
+ * gutter would silently reset the user's chosen preset.
  */
 export const sessionsPanelLayoutSetHandler: Handler<
 	Sockets.Sessions.PanelLayout.Set.Params,
@@ -1750,17 +1855,46 @@ export const sessionsPanelLayoutSetHandler: Handler<
 		const access = await checkSessionAccess(params.sessionId, userId)
 		let ok = false
 		let error: string | undefined
+		const setsPreset = "layoutPresetId" in params
+		const setsSettings = "layoutSettings" in params
 		if (!access.hasAccess) {
 			error = "No access to this session"
 		} else if (!params.layout || typeof params.layout !== "object") {
 			error = "Invalid layout"
+		} else if (
+			setsSettings &&
+			(!params.layoutSettings ||
+				typeof params.layoutSettings !== "object")
+		) {
+			error = "Invalid layout settings"
+		} else if (
+			setsPreset &&
+			params.layoutPresetId != null &&
+			!(await mayApplyPreset(
+				params.layoutPresetId,
+				params.sessionId,
+				userId
+			))
+		) {
+			// Not this session's genre, or somebody else's preset. Refuse rather
+			// than store: a pinned id that resolves for its author would render
+			// a stranger's layout to whoever pinned it.
+			error = "Unknown layout preset"
 		} else {
+			// Built conditionally so an absent key leaves its column alone.
+			// Typed against the table so a mistyped column name is a compile
+			// error rather than a silently ignored write.
+			const changes: Partial<
+				typeof schema.sessionPanelLayouts.$inferInsert
+			> = { layout: params.layout }
+			if (setsPreset) changes.layoutPresetId = params.layoutPresetId
+			if (setsSettings) changes.layoutSettings = params.layoutSettings
 			await db
 				.insert(schema.sessionPanelLayouts)
 				.values({
 					sessionId: params.sessionId,
 					userId,
-					layout: params.layout
+					...changes
 				})
 				.onConflictDoUpdate({
 					target: [
@@ -1768,7 +1902,7 @@ export const sessionsPanelLayoutSetHandler: Handler<
 						schema.sessionPanelLayouts.sessionId
 					],
 					set: {
-						layout: params.layout,
+						...changes,
 						updatedAt: new Date()
 					}
 				})
@@ -1780,6 +1914,165 @@ export const sessionsPanelLayoutSetHandler: Handler<
 			error
 		}
 		emitToUser("sessions:panelLayout:set", res)
+		return res
+	}
+}
+
+/**
+ * Save the caller's current arrangement as a user-authored layout preset for
+ * this session's genre (PLAN 25 redesign). Definitions only — this never
+ * touches the caller's active selection; applying the new preset is a separate
+ * `panelLayout:set`, so "save" and "switch to it" stay independent decisions.
+ */
+export const sessionsLayoutPresetSaveHandler: Handler<
+	Sockets.Sessions.PanelLayout.Save.Params,
+	Sockets.Sessions.PanelLayout.Save.Response
+> = {
+	event: "sessions:layoutPreset:save",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const access = await checkSessionAccess(params.sessionId, userId)
+		const name = typeof params.name === "string" ? params.name.trim() : ""
+		let ok = false
+		let error: string | undefined
+		let preset: Sockets.Sessions.LayoutPreset | undefined
+		let presets: Sockets.Sessions.LayoutPreset[] = []
+		if (!access.hasAccess) {
+			error = "No access to this session"
+		} else if (!name) {
+			error = "A preset needs a name"
+		} else if (!params.layout || typeof params.layout !== "object") {
+			error = "Invalid layout"
+		} else {
+			const genreId = await genreOfSession(params.sessionId)
+			preset = await saveUserLayoutPreset({
+				genreId,
+				userId,
+				name,
+				layout: params.layout
+			})
+			presets = await listLayoutPresets(genreId, userId)
+			ok = true
+		}
+		const res: Sockets.Sessions.PanelLayout.Save.Response = {
+			sessionId: params.sessionId,
+			ok,
+			error,
+			preset,
+			presets
+		}
+		emitToUser("sessions:layoutPreset:save", res)
+		return res
+	}
+}
+
+/**
+ * Rename one of the caller's OWN layout presets (PLAN 25 redesign).
+ *
+ * Not session-scoped: a preset belongs to a genre and an author, not to the
+ * session you happened to be looking at when you saved it. So there is no
+ * session access check here — the only question is authorship, and it is asked
+ * once, in `db/layoutPresets.ts`, for all three of rename/delete/usage.
+ *
+ * The refreshed list rides the response exactly as `layoutPreset:save`'s does,
+ * so the Presets tab never re-fetches to see its own edit.
+ */
+export const sessionsLayoutPresetRenameHandler: Handler<
+	Sockets.Sessions.PanelLayout.Rename.Params,
+	Sockets.Sessions.PanelLayout.Rename.Response
+> = {
+	event: "sessions:layoutPreset:rename",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const outcome = await renameUserLayoutPreset({
+			presetId: params.id,
+			userId,
+			name: params.name
+		})
+		const res: Sockets.Sessions.PanelLayout.Rename.Response = outcome.ok
+			? {
+					id: params.id,
+					ok: true,
+					genreId: outcome.preset.genreId,
+					preset: outcome.preset,
+					presets: await listLayoutPresets(
+						outcome.preset.genreId,
+						userId
+					)
+				}
+			: {
+					id: params.id,
+					ok: false,
+					error: outcome.error,
+					// A refusal names no genre and lists nothing: it must not say
+					// where an id it declined to touch actually lives.
+					presets: []
+				}
+		emitToUser("sessions:layoutPreset:rename", res)
+		return res
+	}
+}
+
+/**
+ * Delete one of the caller's own layout presets, saying how many sessions were
+ * on it.
+ *
+ * The count is the point. `session_panel_layouts.layout_preset_id` is
+ * `ON DELETE SET NULL`, so deleting a preset silently drops every session using
+ * it back to the genre default — correct, but invisible. Returning the number
+ * lets the client ask first (`layoutPreset:usage`) and confirm with it, and
+ * makes the after-the-fact report agree with that warning by construction.
+ */
+export const sessionsLayoutPresetDeleteHandler: Handler<
+	Sockets.Sessions.PanelLayout.Delete.Params,
+	Sockets.Sessions.PanelLayout.Delete.Response
+> = {
+	event: "sessions:layoutPreset:delete",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const outcome = await deleteUserLayoutPreset({
+			presetId: params.id,
+			userId
+		})
+		const res: Sockets.Sessions.PanelLayout.Delete.Response = outcome.ok
+			? {
+					id: outcome.id,
+					ok: true,
+					genreId: outcome.genreId,
+					affectedSessions: outcome.affectedSessions,
+					presets: await listLayoutPresets(outcome.genreId, userId)
+				}
+			: {
+					id: params.id,
+					ok: false,
+					error: outcome.error,
+					affectedSessions: 0,
+					presets: []
+				}
+		emitToUser("sessions:layoutPreset:delete", res)
+		return res
+	}
+}
+
+/**
+ * How many sessions are on one of the caller's own presets — the number the
+ * delete confirmation warns with, behind the same authorship gate as the delete
+ * it precedes.
+ */
+export const sessionsLayoutPresetUsageHandler: Handler<
+	Sockets.Sessions.PanelLayout.Usage.Params,
+	Sockets.Sessions.PanelLayout.Usage.Response
+> = {
+	event: "sessions:layoutPreset:usage",
+	handler: async (socket, params, emitToUser) => {
+		const outcome = await layoutPresetUsage({
+			presetId: params.id,
+			userId: socket.user!.id
+		})
+		const res: Sockets.Sessions.PanelLayout.Usage.Response = outcome.ok
+			? { id: outcome.id, ok: true, sessions: outcome.sessions }
+			: { id: params.id, ok: false, error: outcome.error, sessions: 0 }
+		emitToUser("sessions:layoutPreset:usage", res)
 		return res
 	}
 }
@@ -1816,7 +2109,7 @@ export const sessionsTriggersHandler: Handler<
 			// same call gates `triggerFunction`, so presence and press agree
 			// by construction rather than by both being kept in step.
 			res.triggers = (await enabledSessionFunctions(
-				db as any,
+				db,
 				params.sessionId,
 				session?.genreId ?? STANDARD_GENRE_ID
 			)) as any
@@ -1857,7 +2150,7 @@ export const sessionsPresetsHandler: Handler<
 				.where(eq(schema.sessions.id, params.sessionId))
 				.limit(1)
 			const r = await listSessionPresets(
-				db as any,
+				db,
 				params.sessionId,
 				session?.genreId ?? STANDARD_GENRE_ID,
 				{ userId, isAdmin: !!socket.user!.isAdmin }
@@ -1910,7 +2203,7 @@ export const sessionsChoosePresetHandler: Handler<
 			.limit(1)
 
 		const r = await chooseSessionPreset(
-			db as any,
+			db,
 			params.sessionId,
 			session?.genreId ?? STANDARD_GENRE_ID,
 			params.configId,
@@ -1965,7 +2258,7 @@ export const sessionsFunctionsHandler: Handler<
 		}
 		if (access.hasAccess && access.isOwner)
 			res.functions = (await listSessionFunctions(
-				db as any,
+				db,
 				params.sessionId,
 				genreId,
 				userId
@@ -2015,7 +2308,7 @@ export const sessionsSetFunctionHandler: Handler<
 		const genreId = session?.genreId ?? STANDARD_GENRE_ID
 
 		const r = await setSessionFunction(
-			db as any,
+			db,
 			params.sessionId,
 			genreId,
 			params.function,
@@ -2385,7 +2678,7 @@ export const sessionsUpdateHandler: Handler<
 						.where(eq(schema.sessions.id, params.session.id!))
 						.limit(1)
 					const mode = await getSessionGenre(
-						db as any,
+						db,
 						row?.genreId ?? STANDARD_GENRE_ID
 					)
 					const declared = Object.keys(
@@ -3275,7 +3568,11 @@ export const sessionsBranchHandler: Handler<
 									// each copy keeps its lane (20 §7). The
 									// new session has the same genre, so it
 									// has the same channels to keep them on.
-									channel: resolveChannel(
+									// Canonicalised because this is a write —
+									// the source row already is one, and a
+									// write path that trusts that is a write
+									// path that stops being true later.
+									channel: canonicalChannel(
 										(message as any).channel
 									),
 									content: message.content,
@@ -3583,10 +3880,7 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 				const { sessionGenreAvailable } = await import(
 					"$lib/server/pipelines/entities/sessionGenres"
 				)
-				const modeCheck = await sessionGenreAvailable(
-					db as any,
-					sessionId
-				)
+				const modeCheck = await sessionGenreAvailable(db, sessionId)
 				if (!modeCheck.available) {
 					const res: Sockets.SessionMessages.SendPersonaMessage.Response =
 						{ sessionMessage: undefined, error: modeCheck.reason }
@@ -4073,11 +4367,22 @@ export const sessionMessagesContinueHandler: Handler<
 						return res
 					}
 
-					// The mode's declared verb policy (20 §4).
-					const continueRefusal = await verbRefusal(
+					// The mode's declared verb policy (20 §4), AND whether the
+					// connection this session's replies run on can actually
+					// resume a partial one.
+					//
+					// The second half is not a nicety. A continuation is only a
+					// continuation when the model is handed the text so far
+					// inside an open assistant turn; every other shape produces
+					// a fresh reply that `joinContinuation` glues onto the
+					// partial, and the seam reads as the model repeating itself
+					// rather than as a fault. `continueVerbRefusal` composes the
+					// two and hands back one sentence — the same one the button
+					// wears as its title, from the same resolution.
+					const continueRefusal = await continueVerbRefusal(
 						db,
 						messageToContinue.sessionId,
-						"continue"
+						userId
 					)
 					if (continueRefusal) {
 						const res: Sockets.SessionMessages.Continue.Response = {
@@ -4286,6 +4591,9 @@ export const sessionMessagesSwipeLeftHandler: Handler<
 				// If not on the first swipe, update the current index and content
 				data.metadata!.swipes!.currentIdx =
 					(data.metadata!.swipes!.currentIdx || 0) - 1
+				// history entries may carry pre-ruling edge whitespace (2026-09-08);
+				// updateLegacyWhere's trimCommittedContent trims it below since
+				// isGenerating is guaranteed false this far past the guard above.
 				data.content =
 					data.metadata!.swipes!.history[
 						data.metadata!.swipes!.currentIdx
@@ -4422,6 +4730,9 @@ export const sessionMessagesSwipeRightHandler: Handler<
 					// If not on the last swipe, just update the current index and content
 					data.metadata!.swipes!.currentIdx =
 						(data.metadata!.swipes!.currentIdx || 0) + 1
+					// history entries may carry pre-ruling edge whitespace (2026-09-08);
+					// updateLegacyWhere's trimCommittedContent trims it below — this
+					// branch only runs for an already-completed entry, never mid-stream.
 					data.content =
 						data.metadata!.swipes!.history[
 							data.metadata!.swipes!.currentIdx
@@ -5308,6 +5619,31 @@ export const triggerNarratorResponseHandler: Handler<
 					}
 				}
 
+				/**
+				 * The trigger's first step (ruling 2026-09-07): who speaks.
+				 *
+				 * Absent, this is world narration and everything below is what
+				 * it always was. Present, it is a **side character** — a
+				 * participant for this turn with no cast row, no position and
+				 * no place in the rotation. Resolved here rather than inside
+				 * the run because the answer is also the message's display
+				 * name, and the row is written before the pipeline starts.
+				 */
+				let sideCharacter: SideCharacterFact | null = null
+				if (params.speaker) {
+					const { resolveSideCharacter } = await import(
+						"$lib/server/pipelines/entities/sideCharacter"
+					)
+					const resolution = await resolveSideCharacter(
+						db,
+						params.sessionId,
+						userId,
+						params.speaker
+					)
+					if (!resolution.ok) return { error: resolution.error }
+					sideCharacter = resolution.speaker
+				}
+
 				// Resolve the effective narrator config (session override → user active →
 				// system default) up front so the message's display name is
 				// snapshotted at generation time — later renaming a config, or
@@ -5316,8 +5652,24 @@ export const triggerNarratorResponseHandler: Handler<
 				const effectiveNarratorConfig =
 					await resolveNarratorPromptConfig(session, userId)
 				const narratorName =
-					effectiveNarratorConfig?.narratorName || "Narrator"
+					sideCharacter?.name ||
+					effectiveNarratorConfig?.narratorName ||
+					"Narrator"
 
+				/**
+				 * ⚠ `characterId` stays **null** even when a real character was
+				 * picked, and that is the whole of "not inserted into the
+				 * round-robin" surviving contact with the database.
+				 *
+				 * `getNextCharacterTurn` drops `isNarratorResponse` rows before
+				 * it matches ids, so the flag alone would be enough — but the
+				 * column is also what `computeDueCharacter` reads on every
+				 * *other* path, and a side-character turn is not the character's
+				 * turn in any of them. Writing the id would make one row mean
+				 * "they spoke" to some readers and "they did not" to others.
+				 * The identity is not lost: it rides on `metadata.speaker`,
+				 * which is where the run and the receipt read it from.
+				 */
 				const narratorMessage: InsertSessionMessage = {
 					userId,
 					sessionId: params.sessionId,
@@ -5332,7 +5684,8 @@ export const triggerNarratorResponseHandler: Handler<
 						narratorName,
 						...(params.instructions
 							? { narratorInstructions: params.instructions }
-							: {})
+							: {}),
+						...(sideCharacter ? { speaker: sideCharacter } : {})
 					}
 				}
 
@@ -5364,6 +5717,50 @@ export const triggerNarratorResponseHandler: Handler<
 				}
 			}
 		})
+}
+
+/**
+ * Who a side-character turn may be spoken by (ruling 2026-09-07).
+ *
+ * The dropdown half of the trigger's first step; the free-form half needs no
+ * list, which is exactly why both are offered. Owner-only, like the trigger it
+ * feeds — this enumerates the person's own characters, and a guest listing the
+ * owner's roster is a different question from a guest reading the session.
+ *
+ * ⚠ Reading this list changes nothing. It is not a membership offer: choosing
+ * somebody here names a voice for one turn and never writes a cast row.
+ */
+export const sessionsSideCharacterOptionsHandler: Handler<
+	Sockets.Sessions.SideCharacterOptions.Params,
+	Sockets.Sessions.SideCharacterOptions.Response
+> = {
+	event: "sessions:sideCharacterOptions",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const access = await checkSessionAccess(params.sessionId, userId)
+		if (!access.hasAccess || !access.isOwner) {
+			const denied = {
+				sessionId: params.sessionId,
+				characters: [],
+				error: "Session not found."
+			}
+			emitToUser("sessions:sideCharacterOptions", denied)
+			return denied
+		}
+		const { listSideCharacterOptions } = await import(
+			"$lib/server/pipelines/entities/sideCharacter"
+		)
+		const res: Sockets.Sessions.SideCharacterOptions.Response = {
+			sessionId: params.sessionId,
+			characters: await listSideCharacterOptions(
+				db,
+				params.sessionId,
+				userId
+			)
+		}
+		emitToUser("sessions:sideCharacterOptions", res)
+		return res
+	}
 }
 
 // Lets the client label the Narrator trigger button/modal correctly BEFORE any
@@ -5770,6 +6167,10 @@ export function registerSessionHandlers(
 	register(socket, sessionsViewHandler, emitToUser)
 	register(socket, sessionsPanelLayoutGetHandler, emitToUser)
 	register(socket, sessionsPanelLayoutSetHandler, emitToUser)
+	register(socket, sessionsLayoutPresetSaveHandler, emitToUser)
+	register(socket, sessionsLayoutPresetRenameHandler, emitToUser)
+	register(socket, sessionsLayoutPresetDeleteHandler, emitToUser)
+	register(socket, sessionsLayoutPresetUsageHandler, emitToUser)
 	register(socket, sessionsPipelinesHandler, emitToUser)
 	register(socket, sessionsTriggerFunctionHandler, emitToUser)
 	register(socket, sessionsPresetsHandler, emitToUser)
@@ -5802,6 +6203,7 @@ export function registerSessionHandlers(
 	register(socket, triggerGenerateMessageHandler, emitToUser)
 	register(socket, triggerNarratorResponseHandler, emitToUser)
 	register(socket, sessionsGetNarratorNameHandler, emitToUser)
+	register(socket, sessionsSideCharacterOptionsHandler, emitToUser)
 	register(socket, toggleSessionCharacterActiveHandler, emitToUser)
 	register(socket, updateSessionCharacterVisibilityHandler, emitToUser)
 	register(socket, sessionsAccountVisibilityHandler, emitToUser)

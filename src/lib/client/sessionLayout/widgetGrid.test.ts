@@ -8,6 +8,8 @@ import {
 	cellsFromPx,
 	defaultChatLayout,
 	loadChatLayout,
+	placementOf,
+	stackPlacements,
 	trackFor,
 	updateWidget,
 	widgetItemStyle,
@@ -201,5 +203,162 @@ describe("anchoring → self-alignment (fixed/bounded widgets only)", () => {
 				44
 			)
 		).toContain("align-self:stretch")
+	})
+})
+
+/**
+ * Real placement (PLAN 25): the geometry a zone hands each widget so its
+ * `layout.v1` describes where it actually sits, not a single-widget default.
+ */
+describe("placementOf — a widget's cell geometry", () => {
+	const zone = { cols: 4, rows: 20 }
+
+	it("zone carries the grid's dims AND this widget's 1-based start cell", () => {
+		const p = placementOf({
+			zone,
+			box: { x: 0, y: 14, w: 4, h: 5 },
+			widthPx: 300
+		})
+		expect(p.zone).toEqual({ columns: 4, column: 1, rows: 20, row: 15 })
+		expect(p.box.cols).toBe(4)
+		expect(p.box.rows).toBe(5)
+	})
+
+	it("edges: a full-width box mid-zone touches left+right only", () => {
+		const p = placementOf({
+			zone,
+			box: { x: 0, y: 14, w: 4, h: 5 },
+			widthPx: 300
+		})
+		expect(p.box.edges).toEqual({
+			top: false,
+			right: true,
+			bottom: false,
+			left: true
+		})
+	})
+
+	it("edges: a box filling the zone touches all four", () => {
+		const p = placementOf({
+			zone,
+			box: { x: 0, y: 0, w: 4, h: 20 },
+			widthPx: 300
+		})
+		expect(p.box.edges).toEqual({
+			top: true,
+			right: true,
+			bottom: true,
+			left: true
+		})
+	})
+
+	it("edges: an inset box touches none", () => {
+		const p = placementOf({
+			zone: { cols: 8, rows: 8 },
+			box: { x: 2, y: 2, w: 3, h: 3 },
+			widthPx: 300
+		})
+		expect(p.box.edges).toEqual({
+			top: false,
+			right: false,
+			bottom: false,
+			left: false
+		})
+	})
+
+	it("a box overhanging the zone still reads as touching (a clamp is not a gap)", () => {
+		const p = placementOf({
+			zone: { cols: 4, rows: 4 },
+			box: { x: 0, y: 2, w: 6, h: 9 },
+			widthPx: 300
+		})
+		expect(p.box.edges.right).toBe(true)
+		expect(p.box.edges.bottom).toBe(true)
+	})
+
+	it("tier is the app's breakpoints applied to the widget's OWN box", () => {
+		const at = (widthPx: number) =>
+			placementOf({ zone, box: { x: 0, y: 0, w: 4, h: 1 }, widthPx }).tier
+		expect(at(320)).toBe("compact")
+		expect(at(640)).toBe("cozy")
+		expect(at(1024)).toBe("roomy")
+		expect(at(1440)).toBe("wide")
+		// Unmeasured (first paint) is honestly the narrowest class, not a guess.
+		expect(at(0)).toBe("compact")
+	})
+
+	it("box.rows is the occupied rows unless the zone's tracks aren't cells", () => {
+		const box = { x: 0, y: 0, w: 4, h: 6 }
+		expect(placementOf({ zone, box, widthPx: 300 }).box.rows).toBe(6)
+		// null = the contract's "grows / is unbounded" (a 1fr or auto track).
+		expect(placementOf({ zone, box, widthPx: 300, rows: null }).box.rows).toBeNull()
+		// …and an explicit cell height never changes which edges it touches.
+		const p = placementOf({ zone, box, widthPx: 300, rows: null })
+		expect(p.box.edges.top).toBe(true)
+		expect(p.box.edges.bottom).toBe(false)
+	})
+
+	it("carries pinned / collapsed / drawered through, defaulting to false", () => {
+		const bare = placementOf({ zone, box: { x: 0, y: 0, w: 1, h: 1 }, widthPx: 0 })
+		expect([bare.pinned, bare.collapsed, bare.drawered]).toEqual([
+			false,
+			false,
+			false
+		])
+		const p = placementOf({
+			zone,
+			box: { x: 0, y: 0, w: 1, h: 1 },
+			widthPx: 0,
+			pinned: true,
+			collapsed: true,
+			drawered: true
+		})
+		expect([p.pinned, p.collapsed, p.drawered]).toEqual([true, true, true])
+	})
+})
+
+describe("stackPlacements — the MVP zone stack", () => {
+	it("gives each stacked widget its own row, full width", () => {
+		const ws = widgetsInZone(defaultChatLayout(), "middle")
+		const ps = stackPlacements(ws, { columns: 6, widthPx: 700 })
+		expect(ps.map((p) => p.zone.row)).toEqual([1, 2])
+		expect(ps.every((p) => p.zone.rows === 2)).toBe(true)
+		expect(ps.every((p) => p.zone.columns === 6 && p.box.cols === 6)).toBe(true)
+	})
+
+	it("messages touch the top, composer the bottom, both the sides", () => {
+		const ws = widgetsInZone(defaultChatLayout(), "middle")
+		const [messages, composer] = stackPlacements(ws, {
+			columns: 6,
+			widthPx: 700
+		})
+		expect(messages.box.edges).toEqual({
+			top: true,
+			right: true,
+			bottom: false,
+			left: true
+		})
+		expect(composer.box.edges).toEqual({
+			top: false,
+			right: true,
+			bottom: true,
+			left: true
+		})
+	})
+
+	it("a grow/fixed height is unbounded; a cell-bounded one reports its cells", () => {
+		const base = defaultChatLayout()
+		const ws = widgetsInZone(
+			updateWidget(base, "composer", {
+				size: { w: "grow", h: { minCells: 3 } }
+			}),
+			"middle"
+		)
+		const [messages, composer] = stackPlacements(ws, {
+			columns: 6,
+			widthPx: 700
+		})
+		expect(messages.box.rows).toBeNull() // grow
+		expect(composer.box.rows).toBe(3)
 	})
 })

@@ -51,28 +51,44 @@
 		}
 	})
 
+	// Named so `off` can name them too. A bare
+	// `socket.off("lorebooks:bindingsForCharacter")` removes EVERY listener for
+	// that event — including other components listening for the same event —
+	// which then stops updating for the rest of the session.
+	function handleLorebooksBindingsForCharacter(
+		message: Sockets.Lorebooks.BindingsForCharacter.Response
+	) {
+		if (!character || message.characterId !== character.id) return
+		exportableLorebooks = message.lorebooks
+	}
+
+	function handleLorebooksBindingsForCharacterError(
+		msg: Sockets.ErrorResponse
+	) {
+		toaster.error({
+			title: msg.error || "Failed to fetch lorebooks for this character"
+		})
+	}
+
 	onMount(() => {
 		socket.on(
 			"lorebooks:bindingsForCharacter",
-			(message: Sockets.Lorebooks.BindingsForCharacter.Response) => {
-				if (!character || message.characterId !== character.id) return
-				exportableLorebooks = message.lorebooks
-			}
+			handleLorebooksBindingsForCharacter
 		)
 		socket.on(
 			"lorebooks:bindingsForCharacter:error",
-			(msg: Sockets.ErrorResponse) => {
-				toaster.error({
-					title:
-						msg.error ||
-						"Failed to fetch lorebooks for this character"
-				})
-			}
+			handleLorebooksBindingsForCharacterError
 		)
 
 		return () => {
-			socket.off("lorebooks:bindingsForCharacter")
-			socket.off("lorebooks:bindingsForCharacter:error")
+			socket.off(
+				"lorebooks:bindingsForCharacter",
+				handleLorebooksBindingsForCharacter
+			)
+			socket.off(
+				"lorebooks:bindingsForCharacter:error",
+				handleLorebooksBindingsForCharacterError
+			)
 		}
 	})
 

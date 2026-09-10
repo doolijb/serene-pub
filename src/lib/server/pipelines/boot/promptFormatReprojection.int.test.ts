@@ -37,19 +37,29 @@ const MIGRATION = readFileSync(
 )
 
 /**
- * The journal `when` this migration is registered under.
+ * The journal `when` this migration is registered under, and the greatest one
+ * registered BEFORE it.
  *
  * Read out of the journal rather than typed twice: the number is the whole of
  * whether an upgrade runs this file, and a copy of it here that drifted from the
  * journal would assert against itself.
  */
-const JOURNAL_WHEN: number = (() => {
+const { JOURNAL_WHEN, PRECEDING_MAX } = (() => {
 	const journal = JSON.parse(readFileSync("drizzle/meta/_journal.json", "utf8"))
-	const entry = journal.entries.find(
-		(e: { tag: string }) => e.tag === "0095_prompt_format_reprojection"
+	const entries = journal.entries as Array<{
+		tag: string
+		idx: number
+		when: number
+	}>
+	const entry = entries.find(
+		(e) => e.tag === "0095_prompt_format_reprojection"
 	)
 	expect(entry, "0095 has no journal entry, so it runs nowhere").toBeTruthy()
-	return entry.when as number
+	const preceding = entries.filter((e) => e.idx < entry!.idx)
+	return {
+		JOURNAL_WHEN: entry!.when,
+		PRECEDING_MAX: Math.max(...preceding.map((e) => e.when))
+	}
 })()
 
 /** Apply it the way the migrator does — statement by statement. */
@@ -89,13 +99,13 @@ async function booted(): Promise<TestDb> {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	const report = await bootstrapPipelines(db as any)
+	const report = await bootstrapPipelines(db)
 	expect(report.conflict, report.conflict ?? "").toBeUndefined()
 	return db
 }
 
 describe("0095 re-projects what it names", () => {
-	it("is the newest migration in the journal, so an upgrade runs it", async () => {
+	it("is ordered after everything registered before it, so an upgrade runs it", async () => {
 		/**
 		 * ⚠ The half a fresh database normally cannot check.
 		 *
@@ -107,23 +117,26 @@ describe("0095 re-projects what it names", () => {
 		 * integration test can see the difference.
 		 *
 		 * What IS checkable here is the property that decides it: this
-		 * migration's `when` has to be the greatest in the journal. Drizzle
-		 * stores that number as `created_at`, so the newest applied row naming
+		 * migration's `when` has to exceed every `when` registered ahead of it.
+		 * Not "is the greatest in the journal" — that was the same fact while
+		 * 0095 was the last file, and it stopped being true the moment 0096 was
+		 * generated, which would have read as this migration breaking rather
+		 * than as a newer one arriving.
+		 *
+		 * Drizzle stores the number as `created_at`, so the applied row naming
 		 * this file's `when` is the same fact an upgrade would compare against.
-		 * It also catches the other half of the pairing — a `.sql` file with no
-		 * journal entry runs nowhere at all, and every other test in this file
-		 * would still pass because they read the SQL from disk.
+		 * That half also catches the other half of the pairing — a `.sql` file
+		 * with no journal entry runs nowhere at all, and every other test in
+		 * this file would still pass because they read the SQL from disk.
 		 */
 		const db = await createTestDb()
 		const applied: any = await db.execute(
 			`SELECT created_at FROM drizzle.__drizzle_migrations
-			 ORDER BY created_at DESC LIMIT 2`
+			 ORDER BY created_at ASC`
 		)
 		const rows = (applied.rows ?? applied) as Array<{ created_at: number }>
-		expect(Number(rows[0].created_at)).toBe(JOURNAL_WHEN)
-		expect(Number(rows[0].created_at)).toBeGreaterThan(
-			Number(rows[1].created_at)
-		)
+		expect(rows.map((r) => Number(r.created_at))).toContain(JOURNAL_WHEN)
+		expect(PRECEDING_MAX).toBeLessThan(JOURNAL_WHEN)
 	}, 60_000)
 
 
@@ -192,7 +205,7 @@ describe("0095 re-projects what it names", () => {
 		const { bootstrapPipelines } = await import(
 			"$lib/server/pipelines/boot/bootstrap"
 		)
-		const report = await bootstrapPipelines(db as any)
+		const report = await bootstrapPipelines(db)
 		expect(report.conflict, report.conflict ?? "").toBeUndefined()
 		expect(
 			report.specs.find((s) => s.id === "core:spec/respond")?.action
@@ -256,7 +269,7 @@ describe("the shared slot adds nothing for anyone to configure", () => {
 			"$lib/server/pipelines/config/panel"
 		)
 		const conns = (
-			await declarations(db as any, spec.activeVersionId!)
+			await declarations(db, spec.activeVersionId!)
 		).filter((d: any) => d.control === "connection-ref")
 
 		// The two embedding Providers declare their own — unshared, and

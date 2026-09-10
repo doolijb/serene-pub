@@ -23,7 +23,6 @@ import {
 	tfidfSignal,
 	buildTermFreq,
 	lastRefRecencySignal,
-	positionRecencySignal,
 	densitySignal,
 	buildLastRefMap,
 	keywordMatch,
@@ -355,11 +354,12 @@ describe("other signals", () => {
 		expect(lastRefRecencySignal(100, 100)).toBe(1)
 	})
 
-	it("position recency is 0 for oldest and 1 for newest", () => {
-		expect(positionRecencySignal(0, 5)).toBe(0)
-		expect(positionRecencySignal(4, 5)).toBe(1)
-		expect(positionRecencySignal(0, 1)).toBe(1)
-	})
+	// ⚠ `position recency is 0 for oldest and 1 for newest` was here and is
+	// gone with `positionRecencySignal`. It was the only caller that helper ever
+	// had — a green assertion about a function no mechanism ran, weighing a
+	// signal `core:task/rank-hybrid@1` declared and nothing produced. A unit
+	// test on a helper cannot see that nobody calls it, which is the whole
+	// reason `runtime/signalWiring.test.ts` exists.
 
 	it("density is length against the average, capped", () => {
 		expect(densitySignal(50, 100)).toBe(0.5)
@@ -429,18 +429,20 @@ describe("parameters reproduce today's constants", () => {
 		)
 	})
 
+	/**
+	 * ⚠ `recency: 0.2` and `sceneAffinity: 0.1` were asserted here on history,
+	 * and `recency: 0.3` / `sceneAffinity: 0.15` on messages. All four are gone
+	 * with the two weights: nothing produced either signal, so the numbers this
+	 * test pinned were pinning arithmetic that could not run.
+	 */
 	it("history and message weights match, including history having no priority bonus", () => {
 		expect(DEFAULT_SIGNAL_WEIGHTS.history).toMatchObject({
 			keyword: 0.35,
-			recency: 0.2,
 			tfidf: 0.1,
-			sceneAffinity: 0.1,
 			lastRefRecency: 0.1,
 			priorityBonus: 0
 		})
 		expect(DEFAULT_SIGNAL_WEIGHTS.messages).toMatchObject({
-			recency: 0.3,
-			sceneAffinity: 0.15,
 			tfidf: 0.1,
 			density: 0.1,
 			keyword: 0

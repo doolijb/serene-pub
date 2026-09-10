@@ -15,6 +15,9 @@
 	 *   { t: "message",  message }                          // one update
 	 *   { t: "channel",  channel, messages }   // panel surfaces: one lane's msgs (21)
 	 *   { t: "props",    props }               // panel surfaces: declared props (21)
+	 *   { t: "style",    css, vars }           // panel surfaces: the widget skin (25)
+	 *   { t: "layout",   layout }              // panel surfaces: layout.v1 (25)
+	 *   { t: "event",    event }               // panel surfaces: one host event (25)
 	 *   { t: "suspend" } / { t: "resume" }     // off-screen idle, never a reload (21)
 	 *
 	 * frame → host:
@@ -29,11 +32,35 @@
 	 * it to idle), and `resume` wakes it. This is what caps many-frame cost
 	 * without ever paying a reload (21 §7).
 	 *
+	 * `style` is the widget-skin half of PLAN 25 (ruled 2026-08-30): a frame
+	 * widget is treated identically to a native one, host-resolved skin and all
+	 * — the only difference being that its CSS is injected into the frame's OWN
+	 * document rather than a scoped `<style>` out here. The frame is expected to
+	 * keep one `<style id="sp-widget-style">`, replaced in place, and to set
+	 * `vars` on its `document.documentElement`.
+	 *
+	 * It is PUSHED, never negotiated: a frame that has never heard of it — an old
+	 * sample, a third-party plugin — falls through its own switch and ignores it,
+	 * which is the whole of the compatibility story. Nothing here waits for an
+	 * ack, so an unstyled frame costs one dropped message and no error. See
+	 * `frameStyle.ts` for the sanitiser boundary this crosses.
+	 *
 	 * The init post targets `"*"` by necessity — an opaque origin matches no
 	 * targetOrigin — which is safe *because* the channel port rides the
 	 * message: only the document inside this exact frame receives it.
 	 */
 	import { onDestroy } from "svelte"
+	import {
+		eventInScope,
+		scopeMessages,
+		WidgetMessageFeed,
+		type PlacementInput,
+		type SurfaceMessage,
+		type WidgetEvent,
+		type WidgetEventSource
+	} from "$lib/shared/widgets/context"
+	import { buildEventMessage, buildLayoutMessage } from "./framePlacement"
+	import { buildStyleMessage } from "./frameStyle"
 
 	interface Props {
 		src: string
@@ -51,6 +78,28 @@
 		channels?: string[]
 		/** Panel surfaces (21): declared props posted as `{ t: "props" }`. */
 		props?: Record<string, unknown>
+		/**
+		 * Panel surfaces (25): the widget skin this frame should wear, already
+		 * resolved by the host (`effectiveWidgetSkin`, so an unsaved draft shows
+		 * while it is being typed). Undefined on the surfaces that are not
+		 * widgets — a page or session-view frame — and no `style` is posted at all
+		 * for those.
+		 */
+		skin?: { css: string; vars: Record<string, string> }
+		/**
+		 * Panel surfaces (25): this widget's measured cell geometry, pushed as
+		 * `{ t: "layout" }` — the same `layout.v1` a native widget reads off its
+		 * ctx. Undefined on the surfaces that are not widgets, and no `layout`
+		 * is posted at all for those.
+		 */
+		placement?: PlacementInput
+		/**
+		 * Panel surfaces (25): the session-level event source (the
+		 * `SurfaceManager`). Its events are filtered to `channels` here, exactly
+		 * as `WidgetHost` filters them for a native widget, and forwarded as
+		 * `{ t: "event" }`.
+		 */
+		source?: WidgetEventSource
 		/** Panel surfaces (21): idle the frame off-screen without unmounting. */
 		suspended?: boolean
 		onAction?: (
@@ -69,6 +118,9 @@
 		messages,
 		channels,
 		props,
+		skin,
+		placement,
+		source,
 		suspended = false,
 		onAction,
 		class: klass = ""
@@ -140,6 +192,16 @@
 			post({ t: "messages", messages })
 		}
 		if (props !== undefined) post({ t: "props", props })
+		// Sanitised at the boundary rather than by the caller: this is the one
+		// place a skin crosses into a frame, so it is the one place that has to
+		// be right. An EMPTY skin is still posted — taking a style off has to
+		// reach the frame too, and a host that simply stopped posting would
+		// leave the last one applied for ever.
+		if (skin !== undefined) post(buildStyleMessage(skin))
+		// Placement rides in `push()` for the same reload-safe reason `style`
+		// does: a frame that reloads replays `ready`, and everything it needs to
+		// draw itself has to arrive again without the host being asked.
+		if (placement !== undefined) post(buildLayoutMessage(placement))
 	}
 
 	// Re-feed on data change — the frame renders what the host chose to post,
@@ -149,7 +211,60 @@
 		void messages
 		void channels
 		void props
+		void skin
+		void placement
 		push()
+	})
+
+	/* ── events (PLAN 25) ──────────────────────────────────────────────────
+	 * The frame's half of the `on` verb. `WidgetHost` owns a bus per native
+	 * widget and feeds it from the widget's scoped message list, its placement,
+	 * and the session source; this does the same three from the same helpers,
+	 * and posts each result as `{ t: "event" }`.
+	 *
+	 * It is a second DELIVERY, not a second implementation — the scoping
+	 * (`scopeMessages`/`eventInScope`), the diff (`WidgetMessageFeed`) and the
+	 * projection (`buildLayoutMessage`) are the shared ones, which is what keeps
+	 * "a frame is a native widget minus the iframe" true rather than aspirational.
+	 * It lives here rather than in `Panel` because a frame is not always a panel,
+	 * and every frame surface that receives messages should hear about them. */
+	function emit(e: WidgetEvent) {
+		post(buildEventMessage(e))
+	}
+
+	// `message:created`, scoped exactly as the `channel` posts above are, so a
+	// frame is never told about a message it was not also sent. The feed seeds
+	// silently, so a frame mounted onto a loaded session hears about arrivals
+	// from then on and not about its own backlog.
+	const feed = new WidgetMessageFeed()
+	$effect(() => {
+		const list = (messages ?? []) as SurfaceMessage[]
+		const scoped = scopeMessages(list, channels ?? [])
+		for (const e of feed.take(scoped)) emit(e)
+	})
+
+	// `layout:changed` — the notification beside the `{ t: "layout" }` state
+	// push, so a frame can react to a move without diffing the pushes itself.
+	// The FIRST placement is what it mounted with, not a change.
+	let lastLayout: string | null = null
+	$effect(() => {
+		if (placement === undefined) return
+		const msg = buildLayoutMessage(placement)
+		const key = JSON.stringify(msg.layout)
+		if (key === lastLayout) return
+		const first = lastLayout === null
+		lastLayout = key
+		if (!first) emit({ kind: "layout:changed", layout: msg.layout })
+	})
+
+	// The session-level fan-out, narrowed to this frame's declared channels.
+	$effect(() => {
+		const src = source
+		if (!src) return
+		const declared = [...(channels ?? [])]
+		return src.subscribe((e) => {
+			if (eventInScope(e, declared)) emit(e)
+		})
 	})
 
 	// Suspend/resume: idle an off-screen frame without unmounting it. Tracked

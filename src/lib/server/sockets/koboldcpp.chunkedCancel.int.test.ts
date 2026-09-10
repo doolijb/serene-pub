@@ -185,8 +185,8 @@ describe("koboldcpp:cancelDownload — chunked in-flight requests", () => {
 		)
 		expect(finalRes.downloads[filename].status).toBe("cancelled")
 
-		const dbRow = await testDb.query.koboldCppModels.findFirst({
-			where: eq(schema.koboldCppModels.filename, filename)
+		const dbRow = await testDb.query.localModels.findFirst({
+			where: eq(schema.localModels.filename, filename)
 		})
 		expect(dbRow).toBeUndefined()
 

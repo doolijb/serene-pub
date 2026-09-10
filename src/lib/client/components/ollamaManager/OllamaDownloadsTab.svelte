@@ -69,30 +69,40 @@
 		socket.emit("ollama:clearDownloadHistory", {})
 	}
 
-	onMount(() => {
-		socket.on(
-			"ollamaPullProgress",
-			(message: Sockets.Ollama.PullProgress.Response) => {
-				// Server sends the entire downloadingQuants object
-				downloadingQuants = message.downloadingQuants || {}
-			}
-		)
+	// Named so `off` can name them too. A bare `socket.off("ollamaPullProgress")`
+	// removes EVERY listener for that event — including other components
+	// listening for the same event — which then stops updating for the rest
+	// of the session.
+	function handleOllamaPullProgress(
+		message: Sockets.Ollama.PullProgress.Response
+	) {
+		// Server sends the entire downloadingQuants object
+		downloadingQuants = message.downloadingQuants || {}
+	}
 
-		socket.on(
-			"ollama:getDownloadProgress",
-			(message: Sockets.Ollama.GetDownloadProgress.Response) => {
-				// Load initial download progress state
-				downloadingQuants = message.downloadingQuants || {}
-			}
-		)
+	function handleOllamaGetDownloadProgress(
+		message: Sockets.Ollama.GetDownloadProgress.Response
+	) {
+		// Load initial download progress state
+		downloadingQuants = message.downloadingQuants || {}
+	}
+
+	function handleOllamaClearDownloadHistory(
+		message: Sockets.Ollama.ClearDownloadHistory.Response
+	) {
+		if (message.success) {
+			downloadingQuants = {}
+		}
+	}
+
+	onMount(() => {
+		socket.on("ollamaPullProgress", handleOllamaPullProgress)
+
+		socket.on("ollama:getDownloadProgress", handleOllamaGetDownloadProgress)
 
 		socket.on(
 			"ollama:clearDownloadHistory",
-			(message: Sockets.Ollama.ClearDownloadHistory.Response) => {
-				if (message.success) {
-					downloadingQuants = {}
-				}
-			}
+			handleOllamaClearDownloadHistory
 		)
 
 		// Request current download progress from server after setting up listeners
@@ -100,9 +110,15 @@
 	})
 
 	onDestroy(() => {
-		socket.off("ollamaPullProgress")
-		socket.off("ollama:getDownloadProgress")
-		socket.off("ollama:clearDownloadHistory")
+		socket.off("ollamaPullProgress", handleOllamaPullProgress)
+		socket.off(
+			"ollama:getDownloadProgress",
+			handleOllamaGetDownloadProgress
+		)
+		socket.off(
+			"ollama:clearDownloadHistory",
+			handleOllamaClearDownloadHistory
+		)
 	})
 </script>
 

@@ -1,6 +1,9 @@
 <script lang="ts">
-	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
+	import { completionTemplateOptions } from "$lib/client/stores/completionTemplateOptions.svelte"
+	import { connectionWireMode } from "$lib/client/stores/connectionWireMode.svelte"
+	import { usesCompletionTemplate } from "$lib/shared/connectionAdapters/wireMode"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
+	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { onMount, onDestroy } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -30,7 +33,31 @@
 
 	let { connection = $bindable() } = $props()
 
+	/**
+	 * A completion template only means something in COMPLETION wire mode.
+	 *
+	 * The same gate the other five forms carry, and it became reachable here
+	 * the day this type gained a chat leg: `llamacpp` names the SERVICE now, so
+	 * a connection of it can be switched to llama-server's OpenAI-compatible
+	 * route — where the roles carry the structure, no delimiter is emitted and
+	 * no stop string from the template is sent. The picker would be a saved
+	 * preference that changes no byte of any request.
+	 *
+	 * Read through the store rather than off `connection.capabilities`, so the
+	 * wire-mode switches in the capability panel underneath take effect here at
+	 * once — that panel deliberately never writes into `connection`.
+	 */
+	const wireMode = connectionWireMode()
+	const showFormat = $derived(usesCompletionTemplate(wireMode.of(connection)))
+
 	const socket = useTypedSocket()
+	/**
+	 * The format picker's options, read from `completion_templates` instead of
+	 * the eight-entry constant that used to sit beside the table — so a template
+	 * an admin authored is offered by the one control that selects it. Falls back
+	 * to the built-ins until the reply lands.
+	 */
+	const formatOptions = completionTemplateOptions()
 	const defaultExtraJson = {
 		stream: false
 	}
@@ -86,7 +113,7 @@
 	let isValid = $derived.by(() => {
 		return (
 			connection &&
-			connection.type === "llamacpp" &&
+			connection.type === CONNECTION_TYPE.LLAMACPP &&
 			connection.baseUrl &&
 			connection.model
 		)
@@ -166,12 +193,14 @@
 			{/if}
 		</button>
 	</div>
-	<Select
-		class="mt-2"
-		label="Prompt Format"
-		options={PromptFormats.options}
-		bind:value={connection.promptFormat}
-	/>
+	{#if showFormat}
+		<Select
+			class="mt-2"
+			label="Prompt Format"
+			options={formatOptions.value}
+			bind:value={connection.promptFormat}
+		/>
+	{/if}
 	<Select
 		class="mt-2"
 		label="Token Counter"

@@ -38,6 +38,12 @@ class FakeAdapter implements FakeTextAdapter {
 	injected: any
 	promptBuilder: any = {}
 	constructor(_p: any) {}
+	/** The composed stop list. Recorded so a test can assert what was handed over. */
+	stops: any
+	withStops(s: any) {
+		this.stops = s
+		return this
+	}
 	withCompiledPrompt(p: any) {
 		this.injected = p
 		return this
@@ -89,7 +95,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -194,7 +200,7 @@ beforeAll(async () => {
 		"$lib/server/pipelines/entities/contextTemplateDefaults"
 	)
 	const { declarations } = await import("$lib/server/pipelines/config/panel")
-	const template = await createContextTemplate(db as any, {
+	const template = await createContextTemplate(db, {
 		nodeTypeId: CONTEXT_TEMPLATE_NODE_TYPE,
 		name: "Turn Template",
 		source: contextConfig.template!
@@ -208,7 +214,7 @@ beforeAll(async () => {
 	// reference now, so the history and lore queries have one too, and picking
 	// the first one silently configures the wrong node.
 	const decl = (
-		await declarations(db as any, respondSpec.activeVersionId!)
+		await declarations(db, respondSpec.activeVersionId!)
 	).find(
 		(d) =>
 			d.control === "context-template-ref" &&
@@ -220,17 +226,17 @@ beforeAll(async () => {
 		const { resolveSelectedConfig, duplicateConfig, selectConfig } =
 			await import("$lib/server/pipelines/config/named")
 		const shipped = await resolveSelectedConfig(
-			db as any,
+			db,
 			respondSpec.id,
 			RESPOND_SPEC_ID,
 			{}
 		)
 		const copy = await duplicateConfig(
-			db as any,
+			db,
 			shipped!.configId,
 			"Turn host"
 		)
-		await selectConfig(db as any, respondSpec.id, "instance", 0, copy.id)
+		await selectConfig(db, respondSpec.id, "instance", 0, copy.id)
 		await db
 			.insert(schema.pipelineConfigValues)
 			.values({
@@ -255,7 +261,7 @@ beforeAll(async () => {
 const turn = async (over: any = {}) => {
 	const { runTurn } = await import("$lib/server/pipelines/runtime/runTurn")
 	return await runTurn({
-		db: db as any,
+		db: db,
 		sessionId,
 		userId,
 		currentCharacterId: characterId,
@@ -332,7 +338,7 @@ describe("running a turn", () => {
 		)
 		await expect(
 			runTurn({
-				db: db as any,
+				db: db,
 				sessionId,
 				userId,
 				currentCharacterId: characterId,
@@ -446,7 +452,7 @@ describe("script chains on a turn", () => {
 		const { resolveSelectedConfig, duplicateConfig, selectConfig } =
 			await import("$lib/server/pipelines/config/named")
 		const selected = await resolveSelectedConfig(
-			db as any,
+			db,
 			specId,
 			(spec as any).slug,
 			{}
@@ -459,12 +465,12 @@ describe("script chains on a turn", () => {
 			.limit(1)
 		if ((cfg as any).isImmutable) {
 			const copy = await duplicateConfig(
-				db as any,
+				db,
 				configId,
 				"Chain host"
 			)
 			configId = copy.id
-			await selectConfig(db as any, specId, "instance", 0, configId)
+			await selectConfig(db, specId, "instance", 0, configId)
 		}
 		await db
 			.delete(schema.pipelineConfigValues)
@@ -508,21 +514,21 @@ describe("script chains on a turn", () => {
 		const { createScript } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)
-		const shout = await createScript(db as any, {
+		const shout = await createScript(db, {
 			typeId: "core:script:text/transform@1",
 			name: "Turn shouter"
 		})
 		const { updateScript } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)
-		await updateScript(db as any, shout.id, {
+		await updateScript(db, shout.id, {
 			source: "ctx.log('shouting'); return text.toUpperCase()"
 		})
-		const broken = await createScript(db as any, {
+		const broken = await createScript(db, {
 			typeId: "core:script:text/transform@1",
 			name: "Turn breaker"
 		})
-		await updateScript(db as any, broken.id, {
+		await updateScript(db, broken.id, {
 			source: "return definitely.not.defined"
 		})
 		await attachChain([broken.id, shout.id])
@@ -559,16 +565,16 @@ describe("script chains on a turn", () => {
 		const { createScript, updateScript } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)
-		const late = await createScript(db as any, {
+		const late = await createScript(db, {
 			typeId: "core:script:text/stop@1",
 			name: "Late stop"
 		})
-		await updateScript(db as any, late.id, { source: "return 17" })
-		const early = await createScript(db as any, {
+		await updateScript(db, late.id, { source: "return 17" })
+		const early = await createScript(db, {
 			typeId: "core:script:text/stop@1",
 			name: "Early stop"
 		})
-		await updateScript(db as any, early.id, {
+		await updateScript(db, early.id, {
 			source: "return text.indexOf('ride')"
 		})
 		await attachChain([late.id, early.id])
@@ -579,7 +585,10 @@ describe("script chains on a turn", () => {
 			.select()
 			.from(schema.sessionMessages)
 			.where(eq(schema.sessionMessages.sessionId, sessionId))
-		expect(rows.map((r) => r.content)).toContain("The Ashguard ")
+		// The receipt keeps what the script chain produced (above, with its
+		// trailing space); the store trims every committed body (ruling
+		// 2026-09-08), so the row is the trimmed form.
+		expect(rows.map((r) => r.content)).toContain("The Ashguard")
 
 		const apps = receiptScripts(receipt)
 		const winner = apps.find((a: any) => a.won)
@@ -593,14 +602,14 @@ describe("script chains on a turn", () => {
 		const { createScript, updateScript } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)
-		const off = await createScript(db as any, {
+		const off = await createScript(db, {
 			typeId: "core:script:text/transform@1",
 			name: "Turn muted"
 		})
-		await updateScript(db as any, off.id, {
+		await updateScript(db, off.id, {
 			source: "return 'never'"
 		})
-		await updateScript(db as any, off.id, { enabled: false })
+		await updateScript(db, off.id, { enabled: false })
 		await attachChain([off.id])
 
 		const { generatedText } = await import(
@@ -617,11 +626,11 @@ describe("script chains on a turn", () => {
 		const { createScript, updateScript } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)
-		const roll = await createScript(db as any, {
+		const roll = await createScript(db, {
 			typeId: "core:script:text/transform@1",
 			name: "Turn roller"
 		})
-		await updateScript(db as any, roll.id, {
+		await updateScript(db, roll.id, {
 			source: "return text + ' [d20:' + (1 + Math.floor(ctx.random() * 20)) + ']'"
 		})
 		await attachChain([roll.id])
@@ -641,11 +650,11 @@ describe("script chains on a turn", () => {
 		const { createScript, updateScript } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)
-		const shout = await createScript(db as any, {
+		const shout = await createScript(db, {
 			typeId: "core:script:text/transform@1",
 			name: "Turn switched-off shouter"
 		})
-		await updateScript(db as any, shout.id, {
+		await updateScript(db, shout.id, {
 			source: "return text.toUpperCase()"
 		})
 		await attachChain([shout.id])
@@ -677,11 +686,11 @@ describe("script chains on a turn", () => {
 		const { createScript, updateScript } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)
-		const expander = await createScript(db as any, {
+		const expander = await createScript(db, {
 			typeId: "core:script:text/transform@1",
 			name: "Turn expander"
 		})
-		await updateScript(db as any, expander.id, {
+		await updateScript(db, expander.id, {
 			// The user typed a nickname; the script resolves it to the key the
 			// lorebook actually uses.
 			source: "return text.replace('the riders', 'the ashguard')"
@@ -693,8 +702,24 @@ describe("script chains on a turn", () => {
 			seed: "turn:scripts-input",
 			text: "Tell me about the riders."
 		})
+		/**
+		 * Either wire shape, flattened — the ORDER is what this asserts.
+		 *
+		 * The test before this one registers a KoboldCPP connection as the
+		 * instance default and leaves it registered, and that connection resolves
+		 * to chat wire mode: assemble emits role-tagged messages and `rendered`
+		 * is undefined. Reading only the string made this depend on which
+		 * connection a previous test happened to leave behind. Joining the
+		 * messages preserves their order, which is the whole claim — the
+		 * injection sits after the newest real message and before the seed line,
+		 * whatever shape the connection takes.
+		 */
+		const out = receipt.preview?.context?.rendered
 		const rendered: string =
-			receipt.preview?.context?.rendered?.rendered ?? ""
+			out?.rendered ??
+			(out?.messages ?? [])
+				.map((m: { content: string }) => m.content)
+				.join("\n")
 		// The keyword scan saw the transformed text, so the entry fired.
 		expect(rendered).toContain("The Ashguard")
 
@@ -714,7 +739,23 @@ describe("script chains on a turn", () => {
 		await attachChain([]) // no pipeline chain: the connection acts alone
 		const [conn] = await db
 			.insert(schema.connections)
-			.values({ name: "Turn Kobold", type: "koboldcpp" })
+			.values({
+				name: "Turn Kobold",
+				type: "koboldcpp",
+				/**
+				 * ⚠ Completion wire mode, and it is this FIXTURE's property
+				 * rather than a preference.
+				 *
+				 * This connection stays registered as the instance default for
+				 * every test after this one, and the file's context template
+				 * (`Turn Context`, above) is written without `{{#systemBlock}}`
+				 * and friends — deliberately minimal, so the injection cases can
+				 * read positions out of one flat string. A chat-mode connection
+				 * would render that template into a conversation with no role
+				 * blocks to find, which `assemble.ts` refuses by name.
+				 */
+				capabilities: { overrides: { wire_chat: false } }
+			})
 			.returning()
 		// "The instance default connection carries it" is the whole point of this
 		// test, and since 0181 that means a registered `connection_defaults` row
@@ -724,20 +765,20 @@ describe("script chains on a turn", () => {
 		const { setCapabilityDefault } = await import(
 			"$lib/server/connections/capabilityDefaults"
 		)
-		await setCapabilityDefault(db as any, "text->text", {
+		await setCapabilityDefault(db, "text->text", {
 			connectionId: conn.id
 		})
 
 		const { createScript, updateScript, attachConnectionScript } =
 			await import("$lib/server/pipelines/entities/scripts")
-		const guard = await createScript(db as any, {
+		const guard = await createScript(db, {
 			typeId: "core:script:text/stop@1",
 			name: "Dawn guard"
 		})
-		await updateScript(db as any, guard.id, {
+		await updateScript(db, guard.id, {
 			source: "return text.indexOf('at dawn')"
 		})
-		await attachConnectionScript(db as any, conn.id, guard.id)
+		await attachConnectionScript(db, conn.id, guard.id)
 
 		try {
 			const receipt = await turn({ seed: "turn:connection-stop" })
@@ -769,7 +810,7 @@ describe("script chains on a turn", () => {
 			const { detachConnectionScript } = await import(
 				"$lib/server/pipelines/entities/scripts"
 			)
-			await detachConnectionScript(db as any, conn.id, guard.id)
+			await detachConnectionScript(db, conn.id, guard.id)
 		}
 	})
 
@@ -781,11 +822,11 @@ describe("script chains on a turn", () => {
 		const { createScript, updateScript } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)
-		const reminder = await createScript(db as any, {
+		const reminder = await createScript(db, {
 			typeId: "core:script:messages/inject@1",
 			name: "Turn reminder"
 		})
-		await updateScript(db as any, reminder.id, {
+		await updateScript(db, reminder.id, {
 			source: "return [{ role: 'system', content: '[Stay terse.]', depth: 0 }]"
 		})
 		await attachChain([reminder.id], "core:task/build-template-context")

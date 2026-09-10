@@ -28,6 +28,7 @@
  * the port.
  */
 import { getContext } from "svelte"
+import { formatChannel, parseChannel } from "@serene-pub/sdk"
 import type { WidgetScope, WidgetTier } from "./types"
 
 export type Payload = Record<string, unknown>
@@ -102,14 +103,31 @@ export interface MenuResult {
 }
 
 export type WidgetEvent =
-	| { kind: "message:created"; messageId: number; channel: string }
+	| {
+			kind: "message:created"
+			/** The channel as stored — canonical, so lane 1 is the bare slug. */
+			channel: string
+			/** …taken apart, so a widget need not parse it (ruling 2026-09-09). */
+			slug: string
+			lane: number
+			messageId: number
+	  }
 	| { kind: "message:updated"; messageId: number }
 	| { kind: "message:deleted"; messageId: number }
 	| { kind: "message:delta"; messageId: number; delta: string }
 	| { kind: "generation:start"; messageId?: number }
 	| { kind: "generation:end"; messageId?: number; aborted: boolean }
-	| { kind: "channel:activated"; channel: string }
+	| { kind: "channel:activated"; channel: string; slug: string; lane: number }
 	| { kind: "selection:changed"; messageId: number | null }
+	/**
+	 * This widget's placement changed — it moved, resized, changed tier, or was
+	 * collapsed/drawered. The new `layout.v1` rides along so a listener needs no
+	 * second read; native consumers can equally just read `ctx.layout.v1`, which
+	 * is already reactive. It exists for the frame lane, where a push is the
+	 * only reactivity there is, and is emitted on both so the two stay
+	 * field-for-field identical.
+	 */
+	| { kind: "layout:changed"; layout: LayoutV1 }
 	| { kind: string; payload?: Payload }
 
 export interface WidgetVerbs {
@@ -174,14 +192,196 @@ export function deriveChrome(p: PlacementInput): LayoutV1["chrome"] {
 	}
 }
 
-/** Filter the full log to a widget's lanes (empty channels = the whole log). */
+/**
+ * A predicate for "is this channel one the widget declared?".
+ *
+ * A declaration is read as the ruling defines it (2026-09-09): a **bare slug is
+ * the whole channel**, every lane under it, because a channel's lanes are
+ * allocated at runtime and a declaration written ahead of time could not name
+ * them — the cell-phone panel declares `text-messages` once and gets the sixth
+ * conversation the day a pipeline opens it. A declaration that does name a lane
+ * (`text-messages:2`) is that lane alone.
+ *
+ * ONE matcher, because the data half (which messages a widget sees) and the
+ * event half (which arrivals it hears about) must agree exactly: a widget that
+ * is told about a message it cannot then find in `messages.v1` is a bug the
+ * widget author cannot fix.
+ */
+export function channelMatcher(
+	channels: string[]
+): (channel: unknown) => boolean {
+	if (!channels.length) return () => true
+	/** Declared as a whole channel. */
+	const slugs = new Set<string>()
+	/** Declared down to the lane, keyed canonically so `x:1` finds a bare `x`. */
+	const lanes = new Set<string>()
+	for (const declared of channels) {
+		const ref = parseChannel(declared)
+		if (ref.explicit) lanes.add(formatChannel(ref))
+		else slugs.add(ref.slug)
+	}
+	return (channel: unknown) => {
+		const ref = parseChannel(channel)
+		return slugs.has(ref.slug) || lanes.has(formatChannel(ref))
+	}
+}
+
+/** Filter the full log to a widget's channels (empty channels = the whole log). */
 export function scopeMessages(
 	messages: SurfaceMessage[],
 	channels: string[]
 ): SurfaceMessage[] {
 	if (!channels.length) return messages
-	const set = new Set(channels)
-	return messages.filter((m) => set.has(m.channel ?? "main"))
+	const matches = channelMatcher(channels)
+	return messages.filter((m) => matches(m.channel))
+}
+
+/**
+ * Is a session-level host event this widget's business?
+ *
+ * Events that name a channel are scoped by the same matcher the data half uses.
+ * An event that names NO channel is not channel news at all (a generation
+ * starting, a layout change) and reaches every widget — absence of a channel is
+ * "not about a channel", never "about a channel you did not declare".
+ */
+export function eventInScope(e: WidgetEvent, channels: string[]): boolean {
+	const channel = (e as { channel?: unknown }).channel
+	if (typeof channel !== "string") return true
+	return channelMatcher(channels)(channel)
+}
+
+// ─── Events ───────────────────────────────────────────────────────────────────
+
+/**
+ * The per-widget event bus behind the `on` verb.
+ *
+ * Deliberately tiny and transport-neutral: `WidgetHost` owns one per native
+ * widget and `PluginFrame` owns one per frame, so the two lanes deliver the
+ * same events from the same code and a frame is once again a native widget
+ * minus the iframe.
+ *
+ * `"*"` is a real kind here — it receives every event — which is what lets the
+ * frame lane forward the lot over the port without enumerating a union it would
+ * then have to keep in step.
+ */
+export interface WidgetEventBus {
+	/** Subscribe to one kind, or `"*"` for all. Returns an unsubscribe. */
+	on(kind: WidgetEvent["kind"], cb: (e: WidgetEvent) => void): () => void
+	emit(e: WidgetEvent): void
+}
+
+/** Anything a widget host can hang its bus off — the session-level fan-out. */
+export interface WidgetEventSource {
+	/** Subscribe to every session-level event. Returns an unsubscribe. */
+	subscribe(cb: (e: WidgetEvent) => void): () => void
+}
+
+export function createWidgetEventBus(): WidgetEventBus {
+	const byKind = new Map<string, Set<(e: WidgetEvent) => void>>()
+	return {
+		on(kind, cb) {
+			const set = byKind.get(kind) ?? new Set()
+			byKind.set(kind, set)
+			set.add(cb)
+			// Idempotent by construction: a second call removes an already-absent
+			// member, and a re-subscribed identical callback is a different
+			// closure. Unsubscribing yours can never take someone else's off.
+			return () => set.delete(cb)
+		},
+		emit(e) {
+			// Copied before iterating: a subscriber that unsubscribes (or
+			// subscribes) inside its own callback must not perturb THIS delivery
+			// — a widget tearing itself down on the first event it sees is
+			// ordinary, and it must not swallow its neighbour's.
+			for (const set of [byKind.get(e.kind), byKind.get("*")]) {
+				if (!set) continue
+				for (const cb of [...set]) {
+					try {
+						cb(e)
+					} catch (err) {
+						// One widget's bad listener is not the host's problem, and
+						// certainly not the next widget's. Loud, but contained.
+						console.error("widget event listener threw", e.kind, err)
+					}
+				}
+			}
+		}
+	}
+}
+
+/** A stored message → its `message:created` event, or null if it has no id. */
+export function messageCreatedEvent(
+	m: SurfaceMessage
+): Extract<WidgetEvent, { kind: "message:created" }> | null {
+	const messageId = (m as { id?: unknown }).id
+	if (typeof messageId !== "number") return null
+	const ref = parseChannel(m.channel)
+	return {
+		kind: "message:created",
+		// Canonical, so lane 1 is the bare slug — the same string the column
+		// holds, whatever spelling arrived.
+		channel: formatChannel(ref),
+		slug: ref.slug,
+		lane: ref.lane,
+		messageId
+	}
+}
+
+/**
+ * Turns a widget's (already channel-scoped) message list into `message:created`
+ * events — the diff that says which of them are NEW.
+ *
+ * Stateful but not reactive: the host drives it from wherever its message list
+ * changes, native or frame, and both lanes get the same events from the same
+ * code. Two properties it exists to guarantee:
+ *
+ *  - the FIRST list seeds silently. A widget mounted onto a session with a
+ *    thousand messages has not just witnessed a thousand arrivals; a backlog is
+ *    history, and announcing it would make `message:created` useless for the
+ *    one thing it is for.
+ *  - an id is announced once. The page re-projects the whole list on every
+ *    change (an edit, a stream delta, a re-sort), so identity — not position,
+ *    not length — is what "new" means here.
+ */
+export class WidgetMessageFeed {
+	#seen = new Set<number>()
+	#seeded = false
+
+	take(messages: SurfaceMessage[]): WidgetEvent[] {
+		const out: WidgetEvent[] = []
+		for (const m of messages) {
+			const id = (m as { id?: unknown }).id
+			if (typeof id !== "number" || this.#seen.has(id)) continue
+			this.#seen.add(id)
+			if (!this.#seeded) continue
+			const e = messageCreatedEvent(m)
+			if (e) out.push(e)
+		}
+		this.#seeded = true
+		return out
+	}
+}
+
+/**
+ * The measured placement → the `layout.v1` section. A detached deep copy, so a
+ * host that keeps mutating its geometry object cannot reach into a projection
+ * it already handed out (or into a message already posted to a frame).
+ *
+ * Exported because the frame lane needs exactly this and nothing else: its
+ * `{ t: "layout" }` push is this function's output, so native `ctx.layout.v1`
+ * and the frame's layout are one projection with two deliveries rather than two
+ * implementations that agree until they don't.
+ */
+export function projectLayout(p: PlacementInput): LayoutV1 {
+	return {
+		zone: { ...p.zone },
+		box: { cols: p.box.cols, rows: p.box.rows, edges: { ...p.box.edges } },
+		tier: p.tier,
+		pinned: p.pinned,
+		collapsed: p.collapsed,
+		drawered: p.drawered,
+		chrome: deriveChrome(p)
+	}
 }
 
 /**
@@ -191,20 +391,9 @@ export function scopeMessages(
  */
 export function projectWidgetData(input: ProjectInput): WidgetData {
 	const grants = new Set(input.grants ?? [])
-	const p = input.placement
 
 	const data: WidgetData = {
-		layout: {
-			v1: {
-				zone: { ...p.zone },
-				box: { cols: p.box.cols, rows: p.box.rows, edges: { ...p.box.edges } },
-				tier: p.tier,
-				pinned: p.pinned,
-				collapsed: p.collapsed,
-				drawered: p.drawered,
-				chrome: deriveChrome(p)
-			}
-		},
+		layout: { v1: projectLayout(input.placement) },
 		session: {
 			v1: { id: input.session.id, name: input.session.name ?? null }
 		},

@@ -22,6 +22,7 @@
 	import ImportConflictModal from "../modals/ImportConflictModal.svelte"
 	import CharacterExportModal from "../modals/CharacterExportModal.svelte"
 	import { downloadBlob } from "$lib/client/utils/downloadBlob"
+	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -383,168 +384,201 @@
 		importingLorebookCharacter = null
 	}
 
+	// Named so `off` can name them too. A bare `socket.off("characters:list")`
+	// removes EVERY listener for that event — including any other open
+	// characters UI, not just this sidebar's.
+	function handleCharactersList(
+		msg: SocketEventMap["characters:list"]["response"]
+	) {
+		characterList = msg.characterList
+		isLoading = false
+	}
+
+	// The generic **:error listener in Layout.svelte already toasts this —
+	// this just stops the spinner from spinning forever if the initial
+	// fetch fails, so it settles into the (accurate enough) empty state.
+	function handleCharactersListError() {
+		isLoading = false
+	}
+
+	function handleCharactersImportCard(
+		msg: Sockets.Characters.ImportCard.Response
+	) {
+		if (msg.status === "conflict" && msg.conflict) {
+			characterImportConflict = msg.conflict
+			showCharacterImportConflictModal = true
+			return
+		}
+		if (msg.status === "unchanged") {
+			toaster.success({
+				title: "Character Already Imported",
+				description: `"${msg.character?.nickname || msg.character?.name}" is unchanged — using the existing character.`
+			})
+			return
+		}
+		importingLorebook = msg.book || null
+		// A warning means the character DID import, but part of the
+		// card (usually an over-sized image) had to be skipped. It is
+		// deliberately not an error toast — this flow used to report a
+		// failure for a character that was in fact imported.
+		if (msg.warnings?.length) {
+			toaster.warning({
+				title: `Character Imported With Warnings`,
+				description: `${msg.character!.nickname || msg.character!.name} was imported. ${msg.warnings.join(" ")}`
+			})
+		} else {
+			toaster.success({
+				title: `Character Imported`,
+				description: `Character ${msg.character!.nickname || msg.character!.name} imported successfully.`
+			})
+		}
+		if (!!importingLorebook) {
+			importingLorebookCharacter = msg.character || null
+			showLorebookImportConfirmationModal = true
+		}
+	}
+
+	function handleCharactersImportResolve(
+		msg: Sockets.Characters.ImportResolve.Response
+	) {
+		importingLorebook = msg.book || null
+		if (msg.warnings?.length) {
+			toaster.warning({
+				title: `Character Imported With Warnings`,
+				description: `${msg.character.nickname || msg.character.name} was imported. ${msg.warnings.join(" ")}`
+			})
+		} else {
+			toaster.success({
+				title: `Character Imported`,
+				description: `Character ${msg.character.nickname || msg.character.name} imported successfully.`
+			})
+		}
+		if (!!importingLorebook) {
+			importingLorebookCharacter = msg.character || null
+			showLorebookImportConfirmationModal = true
+		}
+	}
+
+	function handleCharactersImportResolveError(msg: Sockets.ErrorResponse) {
+		toaster.error({
+			title: msg.error || "Failed to resolve character import"
+		})
+	}
+
+	function handleCharactersExportCard(
+		msg: SocketEventMap["characters:exportCard"]["response"]
+	) {
+		downloadBlob(msg)
+		toaster.success({
+			title: "Character Exported",
+			description: `Character card exported as ${msg.filename}`
+		})
+	}
+
+	function handleCharactersExportCardError(msg: Sockets.ErrorResponse) {
+		toaster.error({
+			title: msg.error || "Failed to export character"
+		})
+	}
+
+	function handleLorebooksImport(msg: Sockets.Lorebooks.Import.Response) {
+		if (msg.status === "conflict" && msg.conflict) {
+			lorebookImportConflict = msg.conflict
+			showLorebookImportConflictModal = true
+			return
+		}
+		if (msg.status === "unchanged") {
+			toaster.success({
+				title: "Lorebook Already Imported",
+				description: `"${msg.lorebook?.name}" is unchanged — using the existing lorebook.`
+			})
+			return
+		}
+		toaster.success({
+			title: `Lorebook Imported`,
+			description: `Lorebook imported successfully.`
+		})
+	}
+
+	function handleLorebooksImportError(msg: Sockets.ErrorResponse) {
+		toaster.error({ title: msg.error || "Failed to import lorebook" })
+	}
+
+	function handleLorebooksImportResolve(
+		msg: Sockets.Lorebooks.ImportResolve.Response
+	) {
+		toaster.success({
+			title: `Lorebook Imported`,
+			description: `Lorebook imported successfully.`
+		})
+	}
+
+	function handleLorebooksImportResolveError(msg: Sockets.ErrorResponse) {
+		toaster.error({
+			title: msg.error || "Failed to resolve lorebook import"
+		})
+	}
+
+	// The background vectorization queue updates a row's embeddingModel
+	// directly in the DB — without this, the list here only ever refreshes
+	// on the next explicit characters:list, leaving the embedding-status
+	// badge showing stale info until a manual refresh.
+	function handleVectorizationItemUpdated(
+		msg: Sockets.Vectorization.ItemUpdated.Response
+	) {
+		if (msg.type !== "character") return
+		const target = characterList.find((c: any) => c.id === msg.id)
+		if (target) (target as any).embeddingModel = msg.embeddingModel
+	}
+
 	onMount(() => {
-		socket.on("characters:list", (msg) => {
-			characterList = msg.characterList
-			isLoading = false
-		})
-		// The generic **:error listener in Layout.svelte already toasts this —
-		// this just stops the spinner from spinning forever if the initial
-		// fetch fails, so it settles into the (accurate enough) empty state.
-		socket.on("characters:list:error", () => {
-			isLoading = false
-		})
-		socket.on(
-			"characters:importCard",
-			(msg: Sockets.Characters.ImportCard.Response) => {
-				if (msg.status === "conflict" && msg.conflict) {
-					characterImportConflict = msg.conflict
-					showCharacterImportConflictModal = true
-					return
-				}
-				if (msg.status === "unchanged") {
-					toaster.success({
-						title: "Character Already Imported",
-						description: `"${msg.character?.nickname || msg.character?.name}" is unchanged — using the existing character.`
-					})
-					return
-				}
-				importingLorebook = msg.book || null
-				// A warning means the character DID import, but part of the
-				// card (usually an over-sized image) had to be skipped. It is
-				// deliberately not an error toast — this flow used to report a
-				// failure for a character that was in fact imported.
-				if (msg.warnings?.length) {
-					toaster.warning({
-						title: `Character Imported With Warnings`,
-						description: `${msg.character!.nickname || msg.character!.name} was imported. ${msg.warnings.join(" ")}`
-					})
-				} else {
-					toaster.success({
-						title: `Character Imported`,
-						description: `Character ${msg.character!.nickname || msg.character!.name} imported successfully.`
-					})
-				}
-				if (!!importingLorebook) {
-					importingLorebookCharacter = msg.character || null
-					showLorebookImportConfirmationModal = true
-				}
-			}
-		)
-		socket.on(
-			"characters:importResolve",
-			(msg: Sockets.Characters.ImportResolve.Response) => {
-				importingLorebook = msg.book || null
-				if (msg.warnings?.length) {
-					toaster.warning({
-						title: `Character Imported With Warnings`,
-						description: `${msg.character.nickname || msg.character.name} was imported. ${msg.warnings.join(" ")}`
-					})
-				} else {
-					toaster.success({
-						title: `Character Imported`,
-						description: `Character ${msg.character.nickname || msg.character.name} imported successfully.`
-					})
-				}
-				if (!!importingLorebook) {
-					importingLorebookCharacter = msg.character || null
-					showLorebookImportConfirmationModal = true
-				}
-			}
-		)
+		socket.on("characters:list", handleCharactersList)
+		socket.on("characters:list:error", handleCharactersListError)
+		socket.on("characters:importCard", handleCharactersImportCard)
+		socket.on("characters:importResolve", handleCharactersImportResolve)
 		socket.on(
 			"characters:importResolve:error",
-			(msg: Sockets.ErrorResponse) => {
-				toaster.error({
-					title: msg.error || "Failed to resolve character import"
-				})
-			}
+			handleCharactersImportResolveError
 		)
-		socket.on("characters:exportCard", (msg) => {
-			downloadBlob(msg)
-			toaster.success({
-				title: "Character Exported",
-				description: `Character card exported as ${msg.filename}`
-			})
-		})
+		socket.on("characters:exportCard", handleCharactersExportCard)
 		socket.on(
 			"characters:exportCard:error",
-			(msg: Sockets.ErrorResponse) => {
-				toaster.error({
-					title: msg.error || "Failed to export character"
-				})
-			}
+			handleCharactersExportCardError
 		)
-		socket.on(
-			"lorebooks:import",
-			(msg: Sockets.Lorebooks.Import.Response) => {
-				if (msg.status === "conflict" && msg.conflict) {
-					lorebookImportConflict = msg.conflict
-					showLorebookImportConflictModal = true
-					return
-				}
-				if (msg.status === "unchanged") {
-					toaster.success({
-						title: "Lorebook Already Imported",
-						description: `"${msg.lorebook?.name}" is unchanged — using the existing lorebook.`
-					})
-					return
-				}
-				toaster.success({
-					title: `Lorebook Imported`,
-					description: `Lorebook imported successfully.`
-				})
-			}
-		)
-		socket.on("lorebooks:import:error", (msg: Sockets.ErrorResponse) => {
-			toaster.error({ title: msg.error || "Failed to import lorebook" })
-		})
-		socket.on(
-			"lorebooks:importResolve",
-			(msg: Sockets.Lorebooks.ImportResolve.Response) => {
-				toaster.success({
-					title: `Lorebook Imported`,
-					description: `Lorebook imported successfully.`
-				})
-			}
-		)
+		socket.on("lorebooks:import", handleLorebooksImport)
+		socket.on("lorebooks:import:error", handleLorebooksImportError)
+		socket.on("lorebooks:importResolve", handleLorebooksImportResolve)
 		socket.on(
 			"lorebooks:importResolve:error",
-			(msg: Sockets.ErrorResponse) => {
-				toaster.error({
-					title: msg.error || "Failed to resolve lorebook import"
-				})
-			}
+			handleLorebooksImportResolveError
 		)
-		// The background vectorization queue updates a row's embeddingModel
-		// directly in the DB — without this, the list here only ever refreshes
-		// on the next explicit characters:list, leaving the embedding-status
-		// badge showing stale info until a manual refresh.
-		socket.on(
-			"vectorization:itemUpdated",
-			(msg: Sockets.Vectorization.ItemUpdated.Response) => {
-				if (msg.type !== "character") return
-				const target = characterList.find((c: any) => c.id === msg.id)
-				if (target) (target as any).embeddingModel = msg.embeddingModel
-			}
-		)
+		socket.on("vectorization:itemUpdated", handleVectorizationItemUpdated)
 		socket.emit("characters:list", {})
 		onclose = handleOnClose
 	})
 
 	onDestroy(() => {
-		socket.off("characters:list")
-		socket.off("characters:list:error")
-		socket.off("vectorization:itemUpdated")
-		socket.off("characters:importCard")
-		socket.off("characters:importResolve")
-		socket.off("characters:importResolve:error")
-		socket.off("characters:exportCard")
-		socket.off("characters:exportCard:error")
-		socket.off("lorebooks:import")
-		socket.off("lorebooks:import:error")
-		socket.off("lorebooks:importResolve")
-		socket.off("lorebooks:importResolve:error")
+		socket.off("characters:list", handleCharactersList)
+		socket.off("characters:list:error", handleCharactersListError)
+		socket.off("vectorization:itemUpdated", handleVectorizationItemUpdated)
+		socket.off("characters:importCard", handleCharactersImportCard)
+		socket.off("characters:importResolve", handleCharactersImportResolve)
+		socket.off(
+			"characters:importResolve:error",
+			handleCharactersImportResolveError
+		)
+		socket.off("characters:exportCard", handleCharactersExportCard)
+		socket.off(
+			"characters:exportCard:error",
+			handleCharactersExportCardError
+		)
+		socket.off("lorebooks:import", handleLorebooksImport)
+		socket.off("lorebooks:import:error", handleLorebooksImportError)
+		socket.off("lorebooks:importResolve", handleLorebooksImportResolve)
+		socket.off(
+			"lorebooks:importResolve:error",
+			handleLorebooksImportResolveError
+		)
 		onclose = undefined
 	})
 </script>

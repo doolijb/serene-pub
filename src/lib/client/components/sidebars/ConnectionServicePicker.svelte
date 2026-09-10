@@ -19,7 +19,7 @@
 	let { selectedItem = $bindable(), label, initialModality }: Props = $props()
 
 	// Static for the app's lifetime (built from CONNECTION_TYPES +
-	// OPENAI_CHAT_PRESETS, neither of which change at runtime) — computed
+	// OPENAI_COMPATIBLE_PRESETS, neither of which change at runtime) — computed
 	// once rather than on every keystroke.
 	const ALL_ITEMS = buildConnectionServiceItems()
 

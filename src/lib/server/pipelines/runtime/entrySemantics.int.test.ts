@@ -44,7 +44,7 @@ const node = {
 }
 
 const readAs = async (currentCharacterId: number | null) => {
-	const host = createHost(db as any, { sessionId, userId })
+	const host = createHost(db, { sessionId, userId })
 	return (await host.read!(
 		"lorebook_entries",
 		{ sessionId, currentCharacterId },

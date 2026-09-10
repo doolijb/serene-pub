@@ -12,7 +12,7 @@ import {
 	CardSourceUnavailableError
 } from "./types"
 import { TtlCache } from "./cache"
-import { getOrFetchCardBytes } from "./diskCache"
+import { getOrFetchImportedCardBytes } from "./importCache"
 
 const REPO_BASE =
 	"https://raw.githubusercontent.com/doolijb/serene-pub-chara-list/main"
@@ -264,13 +264,19 @@ export const githubYamlCardSource: CardSource = {
 			hasMore: false
 		}
 	},
-	async getCardBytes(ref: unknown, _ctx: CardSourceContext): Promise<Buffer> {
+	async getCardBytes(ref: unknown, ctx: CardSourceContext): Promise<Buffer> {
 		const { file } = (ref ?? {}) as { file?: unknown }
 		if (!isSafeGithubFileRef(file)) {
 			throw new CardSourceInvalidRefError("Invalid GitHub card reference")
 		}
-		return getOrFetchCardBytes(`github-serenepub:${file}`, () =>
-			fetchGithubCardBytes(file)
+		// The import cache, not the browse one: these bytes become the
+		// character's avatar, so they belong under the importing user's data
+		// directory (ruling 2026-09-09). This source has no browse-side byte
+		// fetch at all — its search results carry everything.
+		return getOrFetchImportedCardBytes(
+			ctx.userId,
+			`github-serenepub:${file}`,
+			() => fetchGithubCardBytes(file)
 		)
 	}
 }

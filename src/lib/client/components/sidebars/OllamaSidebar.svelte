@@ -126,63 +126,63 @@
 		baseUrlField = ollamaSettingsCtx.settings?.ollamaManagerBaseUrl ?? ""
 	})
 
+	// Named so `off` can name them too. A bare `socket.off("ollama:modelsList")`
+	// removes EVERY listener for that event — including the tabs that read the
+	// same list once they render.
+	function handleModelsList(message: Sockets.Ollama.ModelsList.Response) {
+		installedCount = message.models?.length ?? 0
+	}
+
+	function handleVersion(message: Sockets.Ollama.Version.Response) {
+		// We only want to set isConnected if it hasn't been set yet
+		// We don't want to display the initial setup screen if the user
+		// is working in the settings tab, etc.
+		if (!isConnected) {
+			isConnected = !!message.version
+		}
+	}
+
+	function handleVersionError(message: { error?: string }) {
+		toaster.error({
+			title: "Connection test failed",
+			description: message.error || "Could not reach Ollama at that URL."
+		})
+	}
+
+	function handleSetBaseUrl(message: Sockets.Ollama.SetBaseUrl.Response) {
+		isSavingBaseUrl = false
+		if (message.success) {
+			toaster.success({
+				title: "Ollama URL updated successfully"
+			})
+			// Try to reconnect after URL change
+			checkConnection()
+		} else {
+			toaster.error({ title: "Failed to update Ollama URL" })
+		}
+	}
+
 	onMount(() => {
 		// Only the tabs fetch the model list, and only once they're rendered —
 		// which is exactly backwards for deciding which tab to open. Ask here
 		// too, but only during the wizard hand-off, so the normal path keeps
 		// its current single request.
-		socket.on(
-			"ollama:modelsList",
-			(message: Sockets.Ollama.ModelsList.Response) => {
-				installedCount = message.models?.length ?? 0
-			}
-		)
+		socket.on("ollama:modelsList", handleModelsList)
 		if (panelsCtx?.digest?.tutorial) socket.emit("ollama:modelsList", {})
 
-		socket.on(
-			"ollama:version",
-			(message: Sockets.Ollama.Version.Response) => {
-				// We only want to set isConnected if it hasn't been set yet
-				// We don't want to display the initial setup screen if the user
-				// is working in the settings tab, etc.
-				if (!isConnected) {
-					isConnected = !!message.version
-				}
-			}
-		)
-
-		socket.on("ollama:version:error", (message: { error?: string }) => {
-			toaster.error({
-				title: "Connection test failed",
-				description:
-					message.error || "Could not reach Ollama at that URL."
-			})
-		})
-
-		socket.on(
-			"ollama:setBaseUrl",
-			(message: Sockets.Ollama.SetBaseUrl.Response) => {
-				isSavingBaseUrl = false
-				if (message.success) {
-					toaster.success({
-						title: "Ollama URL updated successfully"
-					})
-					// Try to reconnect after URL change
-					checkConnection()
-				} else {
-					toaster.error({ title: "Failed to update Ollama URL" })
-				}
-			}
-		)
+		socket.on("ollama:version", handleVersion)
+		socket.on("ollama:version:error", handleVersionError)
+		socket.on("ollama:setBaseUrl", handleSetBaseUrl)
 
 		// Check initial connection
 		checkConnection()
 	})
 
 	onDestroy(() => {
-		socket.off("ollama:version")
-		socket.off("ollama:version:error")
-		socket.off("ollama:setBaseUrl")
+		socket.off("ollama:modelsList", handleModelsList)
+		socket.off("ollama:version", handleVersion)
+		socket.off("ollama:version:error", handleVersionError)
+		socket.off("ollama:setBaseUrl", handleSetBaseUrl)
 	})
 
 	function handleUnsavedChangesModalOnOpenChange(e: OpenChangeDetails) {

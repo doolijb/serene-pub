@@ -116,107 +116,126 @@
 		socket.emit("koboldcpp:getLoadedConfig", {})
 	}
 
-	onMount(() => {
-		socket.on(
-			"koboldcpp:perf",
-			(message: Sockets.KoboldCPP.Perf.Response) => {
-				isLoadingPerf = false
-				perf = message
-			}
-		)
-		socket.on("koboldcpp:perf:error", (message: Sockets.ErrorResponse) => {
-			isLoadingPerf = false
-			toaster.error({
-				title: "Failed to fetch performance stats",
-				description: message.error
-			})
+	// Named so `off` can name them too. A bare `socket.off("koboldcpp:subprocessStatus")`
+	// removes EVERY listener for that event — including KoboldCppManagedStatusTab's
+	// and KoboldCppSidebar's, which listen for the same events and would stop
+	// updating for the rest of the session.
+	function handlePerf(message: Sockets.KoboldCPP.Perf.Response) {
+		isLoadingPerf = false
+		perf = message
+	}
+
+	function handlePerfError(message: Sockets.ErrorResponse) {
+		isLoadingPerf = false
+		toaster.error({
+			title: "Failed to fetch performance stats",
+			description: message.error
 		})
+	}
+
+	function handleGetLoadedConfig(
+		msg: Sockets.KoboldCPP.GetLoadedConfig.Response
+	) {
+		loadedConfig = msg.config
+	}
+
+	function handleSubprocessStatus(msg: Status) {
+		subStatus = msg
+		starting = false
+		stopping = false
+		if (msg.status === "running") refreshModel()
+	}
+
+	function handleGetSubprocessStatus(
+		msg: Sockets.KoboldCPP.GetSubprocessStatus.Response
+	) {
+		subStatus = msg.status
+		starting = false
+		stopping = false
+		if (msg.status.status === "running") refreshModel()
+	}
+
+	function handleStartSubprocess() {
+		starting = false
+		toaster.success({ title: "KoboldCPP starting…" })
+	}
+
+	function handleStartSubprocessError(msg: Sockets.ErrorResponse) {
+		starting = false
+		toaster.error({
+			title: "Failed to start",
+			description: msg?.error
+		})
+	}
+
+	function handleStopSubprocess(
+		msg: Sockets.KoboldCPP.StopSubprocess.Response
+	) {
+		stopping = false
+		if (msg.success) {
+			toaster.success({ title: "KoboldCPP stopped" })
+		} else {
+			toaster.error({
+				title: "Couldn't stop KoboldCPP",
+				description: msg.error
+			})
+		}
+	}
+
+	function handleUnloadModel(msg: Sockets.KoboldCPP.UnloadModel.Response) {
+		unloading = false
+		if (msg.success) {
+			currentModel = null
+			currentContext = null
+			loadedConfig = null
+			toaster.success({ title: "Model unloaded" })
+		} else {
+			toaster.error({
+				title: "Unload not supported by this build"
+			})
+		}
+	}
+
+	onMount(() => {
+		socket.on("koboldcpp:perf", handlePerf)
+		socket.on("koboldcpp:perf:error", handlePerfError)
 
 		if (isManaged) {
 			socket.emit("koboldcpp:getSubprocessStatus", {})
 
-			socket.on(
-				"koboldcpp:getLoadedConfig",
-				(msg: Sockets.KoboldCPP.GetLoadedConfig.Response) => {
-					loadedConfig = msg.config
-				}
-			)
-			socket.on("koboldcpp:subprocessStatus", (msg: Status) => {
-				subStatus = msg
-				starting = false
-				stopping = false
-				if (msg.status === "running") refreshModel()
-			})
+			socket.on("koboldcpp:getLoadedConfig", handleGetLoadedConfig)
+			socket.on("koboldcpp:subprocessStatus", handleSubprocessStatus)
 			socket.on(
 				"koboldcpp:getSubprocessStatus",
-				(msg: Sockets.KoboldCPP.GetSubprocessStatus.Response) => {
-					subStatus = msg.status
-					starting = false
-					stopping = false
-					if (msg.status.status === "running") refreshModel()
-				}
+				handleGetSubprocessStatus
 			)
-			socket.on("koboldcpp:startSubprocess", () => {
-				starting = false
-				toaster.success({ title: "KoboldCPP starting…" })
-			})
+			socket.on("koboldcpp:startSubprocess", handleStartSubprocess)
 			socket.on(
 				"koboldcpp:startSubprocess:error",
-				(msg: Sockets.ErrorResponse) => {
-					starting = false
-					toaster.error({
-						title: "Failed to start",
-						description: msg?.error
-					})
-				}
+				handleStartSubprocessError
 			)
-			socket.on(
-				"koboldcpp:stopSubprocess",
-				(msg: Sockets.KoboldCPP.StopSubprocess.Response) => {
-					stopping = false
-					if (msg.success) {
-						toaster.success({ title: "KoboldCPP stopped" })
-					} else {
-						toaster.error({
-							title: "Couldn't stop KoboldCPP",
-							description: msg.error
-						})
-					}
-				}
-			)
-			socket.on(
-				"koboldcpp:unloadModel",
-				(msg: Sockets.KoboldCPP.UnloadModel.Response) => {
-					unloading = false
-					if (msg.success) {
-						currentModel = null
-						currentContext = null
-						loadedConfig = null
-						toaster.success({ title: "Model unloaded" })
-					} else {
-						toaster.error({
-							title: "Unload not supported by this build"
-						})
-					}
-				}
-			)
+			socket.on("koboldcpp:stopSubprocess", handleStopSubprocess)
+			socket.on("koboldcpp:unloadModel", handleUnloadModel)
 		}
 
 		refreshPerf()
 	})
 
 	onDestroy(() => {
-		socket.off("koboldcpp:perf")
-		socket.off("koboldcpp:perf:error")
-		if (isManaged) {
-			socket.off("koboldcpp:getLoadedConfig")
-			socket.off("koboldcpp:subprocessStatus")
-			socket.off("koboldcpp:getSubprocessStatus")
-			socket.off("koboldcpp:startSubprocess")
-			socket.off("koboldcpp:startSubprocess:error")
-			socket.off("koboldcpp:stopSubprocess")
-			socket.off("koboldcpp:unloadModel")
-		}
+		socket.off("koboldcpp:perf", handlePerf)
+		socket.off("koboldcpp:perf:error", handlePerfError)
+		// Unconditional: `isManaged` may have flipped since mount, and `off` on
+		// a handler that was never registered (or already removed) is a no-op.
+		socket.off("koboldcpp:getLoadedConfig", handleGetLoadedConfig)
+		socket.off("koboldcpp:subprocessStatus", handleSubprocessStatus)
+		socket.off("koboldcpp:getSubprocessStatus", handleGetSubprocessStatus)
+		socket.off("koboldcpp:startSubprocess", handleStartSubprocess)
+		socket.off(
+			"koboldcpp:startSubprocess:error",
+			handleStartSubprocessError
+		)
+		socket.off("koboldcpp:stopSubprocess", handleStopSubprocess)
+		socket.off("koboldcpp:unloadModel", handleUnloadModel)
 	})
 </script>
 

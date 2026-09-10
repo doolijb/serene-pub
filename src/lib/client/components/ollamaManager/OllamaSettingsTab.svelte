@@ -104,47 +104,56 @@
 		return new Date(dateString).toLocaleDateString()
 	}
 
+	// Named so `off` can name them too. A bare `socket.off("ollama:setBaseUrl")`
+	// removes EVERY listener for that event — including other components
+	// listening for the same event — which then stops updating for the rest
+	// of the session.
+	function handleOllamaSetBaseUrl(
+		message: Sockets.Ollama.SetBaseUrl.Response
+	) {
+		isSavingBaseUrl = false
+		if (message.success) {
+			toaster.success({
+				title: "Ollama URL updated successfully"
+			})
+		} else {
+			toaster.error({ title: "Failed to update Ollama URL" })
+		}
+	}
+
+	function handleOllamaVersion(message: Sockets.Ollama.Version.Response) {
+		currentVersion = message.version || "Unknown"
+	}
+
+	function handleOllamaIsUpdateAvailable(
+		message: Sockets.Ollama.IsUpdateAvailable.Response
+	) {
+		isCheckingUpdates = false
+		updateAvailable = message.isUpdateAvailable
+		latestVersion = message.latestVersion || ""
+	}
+
+	function handleOllamaIsUpdateAvailableError(
+		message: Sockets.ErrorResponse
+	) {
+		isCheckingUpdates = false
+		toaster.error({
+			title: "Failed to check for updates",
+			description: message.error
+		})
+	}
+
 	onMount(() => {
 		// Socket event listeners
-		socket.on(
-			"ollama:setBaseUrl",
-			(message: Sockets.Ollama.SetBaseUrl.Response) => {
-				isSavingBaseUrl = false
-				if (message.success) {
-					toaster.success({
-						title: "Ollama URL updated successfully"
-					})
-				} else {
-					toaster.error({ title: "Failed to update Ollama URL" })
-				}
-			}
-		)
+		socket.on("ollama:setBaseUrl", handleOllamaSetBaseUrl)
 
-		socket.on(
-			"ollama:version",
-			(message: Sockets.Ollama.Version.Response) => {
-				currentVersion = message.version || "Unknown"
-			}
-		)
+		socket.on("ollama:version", handleOllamaVersion)
 
-		socket.on(
-			"ollama:isUpdateAvailable",
-			(message: Sockets.Ollama.IsUpdateAvailable.Response) => {
-				isCheckingUpdates = false
-				updateAvailable = message.isUpdateAvailable
-				latestVersion = message.latestVersion || ""
-			}
-		)
+		socket.on("ollama:isUpdateAvailable", handleOllamaIsUpdateAvailable)
 
 		socket.on(
 			"ollama:isUpdateAvailable:error",
-			(message: Sockets.ErrorResponse) => {
-				isCheckingUpdates = false
-				toaster.error({
-					title: "Failed to check for updates",
-					description: message.error
-				})
-			}
+			handleOllamaIsUpdateAvailableError
 		)
 
 		// Load version info when component mounts
@@ -153,10 +162,13 @@
 	})
 
 	onDestroy(() => {
-		socket.off("ollama:setBaseUrl")
-		socket.off("ollama:version")
-		socket.off("ollama:isUpdateAvailable")
-		socket.off("ollama:isUpdateAvailable:error")
+		socket.off("ollama:setBaseUrl", handleOllamaSetBaseUrl)
+		socket.off("ollama:version", handleOllamaVersion)
+		socket.off("ollama:isUpdateAvailable", handleOllamaIsUpdateAvailable)
+		socket.off(
+			"ollama:isUpdateAvailable:error",
+			handleOllamaIsUpdateAvailableError
+		)
 	})
 </script>
 

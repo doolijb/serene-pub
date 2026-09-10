@@ -58,7 +58,7 @@ let narrateVersionId: number
 
 beforeAll(async () => {
 	db = await createTestDb()
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [spec] = await db
 		.select()
@@ -71,7 +71,7 @@ beforeAll(async () => {
 	// thing under test; a hardcoded type id would keep passing on the day the
 	// wiring stopped producing one.
 	const { declarations } = await import("$lib/server/pipelines/config/panel")
-	const decl = (await declarations(db as any, specVersionId)).find(
+	const decl = (await declarations(db, specVersionId)).find(
 		(d) => d.nodeKey === "context" && d.control === "prompts-ref"
 	)!
 	pool = { nodeTypeId: decl.nodeTypeId!, slot: decl.slot }
@@ -82,7 +82,7 @@ beforeAll(async () => {
 		.from(schema.pipelineSpecs)
 		.where(eq(schema.pipelineSpecs.slug, NARRATE_SPEC_ID))
 	narrateVersionId = narrate.activeVersionId!
-	const nDecl = (await declarations(db as any, narrateVersionId)).find(
+	const nDecl = (await declarations(db, narrateVersionId)).find(
 		(d) => d.control === "prompts-ref"
 	)!
 	narratorPool = { nodeTypeId: nDecl.nodeTypeId!, slot: nDecl.slot }
@@ -93,7 +93,7 @@ describe("what a node declares", () => {
 		// The property that makes a plugin's node work: the field set comes from
 		// the registry row, so core needs to know nothing about it in advance.
 		const fields = await declaredFields(
-			db as any,
+			db,
 			specVersionId,
 			"context",
 			"prompts"
@@ -109,13 +109,13 @@ describe("what a node declares", () => {
 		// controls. Every reply prompt carried an empty `narratorName`. Two
 		// surfaces is two types; this is the assertion that says so.
 		const reply = await declaredFields(
-			db as any,
+			db,
 			specVersionId,
 			"context",
 			"prompts"
 		)
 		const narrator = await declaredFields(
-			db as any,
+			db,
 			narrateVersionId,
 			"context",
 			"prompts"
@@ -136,7 +136,7 @@ describe("what a node declares", () => {
 		const { declarations } = await import(
 			"$lib/server/pipelines/config/panel"
 		)
-		const layouts = (await declarations(db as any, narrateVersionId))
+		const layouts = (await declarations(db, narrateVersionId))
 			.filter((d) => d.nodeKey === "context" && d.slot === "variables")
 			.map((d) => d.path)
 		expect(layouts.length).toBeGreaterThan(0)
@@ -154,7 +154,7 @@ describe("what a node declares", () => {
 		const { declarations } = await import(
 			"$lib/server/pipelines/config/panel"
 		)
-		for (const d of await declarations(db as any, specVersionId))
+		for (const d of await declarations(db, specVersionId))
 			if (d.control === "prompts-ref") {
 				expect(d.nodeTypeId, `${d.nodeKey}.${d.slot} has no pool`).toBeTruthy()
 				// Unversioned — a type bump must not strand the prompts a
@@ -169,7 +169,7 @@ describe("selecting a prompt", () => {
 	let good: number
 
 	beforeAll(async () => {
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...pool,
 			createdForSpecId: specId,
 			name: "Complete",
@@ -183,7 +183,7 @@ describe("selecting a prompt", () => {
 
 	it("accepts one that covers every declared field", async () => {
 		const res = await assertSelectable(
-			db as any,
+			db,
 			specVersionId,
 			"context",
 			"prompts",
@@ -195,7 +195,7 @@ describe("selecting a prompt", () => {
 	it("accepts one that has more than the slot asks for", async () => {
 		// Extra keys are inert. Refusing them would make a prompt written for a
 		// richer node unusable on a simpler one, for no gain.
-		const extra = await createPrompt(db as any, {
+		const extra = await createPrompt(db, {
 			...pool,
 			name: "Generous",
 			fields: {
@@ -206,7 +206,7 @@ describe("selecting a prompt", () => {
 		})
 		await expect(
 			assertSelectable(
-				db as any,
+				db,
 				specVersionId,
 				"context",
 				"prompts",
@@ -218,14 +218,14 @@ describe("selecting a prompt", () => {
 	it("refuses one missing a field the step needs, and names the field", async () => {
 		// Falling short is not inert: the node renders a blank where it expects
 		// text, which reads as the model ignoring an instruction.
-		const short = await createPrompt(db as any, {
+		const short = await createPrompt(db, {
 			...pool,
 			name: "Half written",
 			fields: { systemPrompt: "be helpful" }
 		})
 		await expect(
 			assertSelectable(
-				db as any,
+				db,
 				specVersionId,
 				"context",
 				"prompts",
@@ -238,7 +238,7 @@ describe("selecting a prompt", () => {
 		// The narrator's context node is a different type, so its prompts are a
 		// different pool — which is how a reply's wording is kept out of a
 		// summarizer's picker now that nothing is namespaced to a spec.
-		const foreign = await createPrompt(db as any, {
+		const foreign = await createPrompt(db, {
 			...narratorPool,
 			name: "From another kind of step",
 			fields: {
@@ -249,7 +249,7 @@ describe("selecting a prompt", () => {
 		})
 		await expect(
 			assertSelectable(
-				db as any,
+				db,
 				specVersionId,
 				"context",
 				"prompts",
@@ -261,7 +261,7 @@ describe("selecting a prompt", () => {
 		// setting that does not exist.
 		await expect(
 			assertSelectable(
-				db as any,
+				db,
 				specVersionId,
 				"context",
 				"prompts",
@@ -272,7 +272,7 @@ describe("selecting a prompt", () => {
 
 	it("keeps one pool's rows out of another's list", async () => {
 		const mine = await listPrompts(
-			db as any,
+			db,
 			pool.nodeTypeId,
 			pool.slot,
 			specId
@@ -298,7 +298,7 @@ describe("a prompt follows its node", () => {
 		// picker narrows by is the pool, so a row created against the pool is
 		// visible to *any* caller asking about that pool — which is exactly what
 		// a reusing pipeline's declaration produces.
-		const mine = await createPrompt(db as any, {
+		const mine = await createPrompt(db, {
 			...pool,
 			createdForSpecId: specId,
 			name: "Written while configuring replies",
@@ -310,7 +310,7 @@ describe("a prompt follows its node", () => {
 
 		// Asked as some *other* pipeline would ask: same pool, different spec.
 		const elsewhere = await listPrompts(
-			db as any,
+			db,
 			pool.nodeTypeId,
 			pool.slot,
 			specId + 10_000
@@ -328,7 +328,7 @@ describe("a prompt follows its node", () => {
 
 	it("sorts the pipeline's own first, then shipped, then everything else", async () => {
 		const rows = await listPrompts(
-			db as any,
+			db,
 			pool.nodeTypeId,
 			pool.slot,
 			specId
@@ -340,7 +340,7 @@ describe("a prompt follows its node", () => {
 
 	it("offers nothing to a pool nobody has written for", async () => {
 		const rows = await listPrompts(
-			db as any,
+			db,
 			"plugin:task/nothing-here",
 			"prompts",
 			specId
@@ -351,12 +351,12 @@ describe("a prompt follows its node", () => {
 
 describe("editing", () => {
 	it("dereferences to the text a run uses", async () => {
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...pool,
 			name: "Dereference me",
 			fields: { systemPrompt: "the words themselves" }
 		})
-		expect(await resolvePromptFields(db as any, p.id)).toEqual({
+		expect(await resolvePromptFields(db, p.id)).toEqual({
 			systemPrompt: "the words themselves"
 		})
 	})
@@ -364,14 +364,14 @@ describe("editing", () => {
 	it("refuses to edit a shipped prompt, and says what to do instead", async () => {
 		// Same rule as the shipped config: the thing a copy was derived from has
 		// to keep meaning what it meant.
-		const shipped = await createPrompt(db as any, {
+		const shipped = await createPrompt(db, {
 			...pool,
 			name: "Shipped",
 			isImmutable: true,
 			fields: { systemPrompt: "core's wording" }
 		})
 		await expect(
-			updatePrompt(db as any, shipped.id, { name: "mine now" })
+			updatePrompt(db, shipped.id, { name: "mine now" })
 		).rejects.toThrow(/[Dd]uplicate/)
 	})
 
@@ -381,7 +381,7 @@ describe("editing", () => {
 			.from(schema.pipelinePrompts)
 			.where(eq(schema.pipelinePrompts.name, "Shipped"))
 
-		const copy = await duplicatePrompt(db as any, shipped.id, "My version")
+		const copy = await duplicatePrompt(db, shipped.id, "My version")
 		expect(copy.fields).toEqual(shipped.fields)
 		expect(copy.isImmutable).toBe(false)
 		// Into the same pool, or the copy would be unselectable at the very
@@ -389,10 +389,10 @@ describe("editing", () => {
 		expect(copy.nodeTypeId).toBe(shipped.nodeTypeId)
 		expect(copy.slot).toBe(shipped.slot)
 
-		await updatePrompt(db as any, copy.id, {
+		await updatePrompt(db, copy.id, {
 			fields: { systemPrompt: "my wording" }
 		})
-		expect(await resolvePromptFields(db as any, shipped.id)).toEqual({
+		expect(await resolvePromptFields(db, shipped.id)).toEqual({
 			systemPrompt: "core's wording"
 		})
 	})
@@ -401,13 +401,13 @@ describe("editing", () => {
 		// The ruling's own words: recover or archive the text "so the user can
 		// reference/copy it to a different pipeline/node later". A duplicate
 		// that dropped the archive would make that impossible from any screen.
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...pool,
 			name: "Has an archive",
 			fields: { systemPrompt: "live" },
 			archivedFields: { narratorName: "an afternoon's work" }
 		})
-		const copy = await duplicatePrompt(db as any, p.id, "Archive carrier")
+		const copy = await duplicatePrompt(db, p.id, "Archive carrier")
 		expect(copy.archivedFields).toEqual({
 			narratorName: "an afternoon's work"
 		})
@@ -419,13 +419,13 @@ describe("editing", () => {
 		// is the one column whose purpose is to hold text the panel does NOT
 		// render. A caller able to write it could destroy the only copy of a
 		// field the slot no longer declares.
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...pool,
 			name: "Archive is not writable",
 			fields: { systemPrompt: "live" },
 			archivedFields: { narratorName: "keep me" }
 		})
-		await updatePrompt(db as any, p.id, {
+		await updatePrompt(db, p.id, {
 			name: "renamed",
 			archivedFields: { narratorName: "clobbered" }
 		} as any)
@@ -440,12 +440,12 @@ describe("editing", () => {
 
 describe("deleting", () => {
 	it("deletes an unreferenced copy", async () => {
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...pool,
 			name: "Disposable",
 			fields: { systemPrompt: "gone soon" }
 		})
-		await deletePrompt(db as any, p.id)
+		await deletePrompt(db, p.id)
 		const rows = await db
 			.select()
 			.from(schema.pipelinePrompts)
@@ -458,7 +458,7 @@ describe("deleting", () => {
 			.select()
 			.from(schema.pipelinePrompts)
 			.where(eq(schema.pipelinePrompts.name, "Shipped"))
-		await expect(deletePrompt(db as any, shipped.id)).rejects.toThrow(
+		await expect(deletePrompt(db, shipped.id)).rejects.toThrow(
 			PromptNotUsableError
 		)
 	})
@@ -467,7 +467,7 @@ describe("deleting", () => {
 		// A config value holding the id of a deleted row is a selection that
 		// stores cleanly and does nothing — the exact failure this file's
 		// header promises to refuse.
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...pool,
 			name: "Held by a config",
 			fields: { systemPrompt: "held" }
@@ -483,13 +483,13 @@ describe("deleting", () => {
 			path: "",
 			value: p.id
 		})
-		await expect(deletePrompt(db as any, p.id)).rejects.toThrow(
+		await expect(deletePrompt(db, p.id)).rejects.toThrow(
 			/still selected/
 		)
 	})
 
 	it("refuses one an override still points at, then allows after the reference moves", async () => {
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...pool,
 			name: "Held by an override",
 			fields: { systemPrompt: "held" }
@@ -504,7 +504,7 @@ describe("deleting", () => {
 			value: p.id,
 			updatedBy: 1
 		})
-		await expect(deletePrompt(db as any, p.id)).rejects.toThrow(
+		await expect(deletePrompt(db, p.id)).rejects.toThrow(
 			/still selected/
 		)
 
@@ -512,11 +512,11 @@ describe("deleting", () => {
 		await db
 			.delete(schema.pipelineNodeOverrides)
 			.where(eq(schema.pipelineNodeOverrides.specId, specId))
-		await deletePrompt(db as any, p.id)
+		await deletePrompt(db, p.id)
 	})
 
 	it("says so when the prompt is already gone", async () => {
-		await expect(deletePrompt(db as any, 999_999)).rejects.toThrow(
+		await expect(deletePrompt(db, 999_999)).rejects.toThrow(
 			PromptNotFoundError
 		)
 	})
@@ -535,7 +535,7 @@ describe("what the picker is sent", () => {
 			"$lib/server/pipelines/config/panel"
 		)
 		const view = await namespaceView(
-			db as any,
+			db,
 			"prompt-picker-test-secret",
 			RESPOND_SPEC_ID,
 			{ userId: 1, isAdmin: true }
@@ -569,7 +569,7 @@ describe("what the picker is sent", () => {
 		).map((k: any) => k.nodeKey)
 
 		const view = await namespaceView(
-			db as any,
+			db,
 			"prompt-picker-test-secret",
 			RESPOND_SPEC_ID,
 			{ userId: 1, isAdmin: true }
@@ -600,7 +600,7 @@ describe("what the picker is sent", () => {
  */
 describe("deleting what you have selected", () => {
 	it("ignores the caller's own rows without releasing them first", async () => {
-		const p = await createPrompt(db as any, {
+		const p = await createPrompt(db, {
 			...pool,
 			name: "Selected then deleted",
 			fields: { systemPrompt: "mine" }
@@ -632,7 +632,7 @@ describe("deleting what you have selected", () => {
 		const ignore = { ignoreOverrideIds: new Set([mine.id]) }
 
 		// Still refused — the other user's selection holds it alive.
-		await expect(deletePrompt(db as any, p.id, ignore)).rejects.toThrow(
+		await expect(deletePrompt(db, p.id, ignore)).rejects.toThrow(
 			/still selected/
 		)
 
@@ -649,7 +649,7 @@ describe("deleting what you have selected", () => {
 			.delete(schema.pipelineNodeOverrides)
 			.where(eq(schema.pipelineNodeOverrides.scopeId, 2))
 		await expect(
-			deletePrompt(db as any, p.id, ignore)
+			deletePrompt(db, p.id, ignore)
 		).resolves.toBeUndefined()
 	})
 })

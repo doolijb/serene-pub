@@ -351,6 +351,38 @@
 		showRaw = false
 	}
 
+	// Hoisted to component scope (out of apply()) so this reference is stable
+	// across calls and `off` in onDestroy can name it — a bare
+	// `socket.off("narrativeGraph:applyProposal")` removes EVERY listener for
+	// that event, including other components' listeners for the same event.
+	function cleanupApplyProposal() {
+		socket.off("narrativeGraph:applyProposal", handleApplied)
+		socket.off("narrativeGraph:applyProposal:error", handleApplyError)
+	}
+	function handleApplied() {
+		cleanupApplyProposal()
+		toaster.success({
+			title: "Graph applied",
+			description: `${activeNodes.length} nodes, ${activeNodeUpdates.length} updates and ${activeRels.length} relationships saved.`
+		})
+		graphBuildsCtx?.clearBuild()
+		isApplying = false
+		onApplied?.()
+		onOpenChange({ open: false })
+	}
+	// Without this the Apply button spins forever on any rejection —
+	// isApplying was only ever cleared on success. Stay on the review step
+	// so the proposal isn't lost; Layout's catch-all toasts the message.
+	function handleApplyError(
+		msg: Sockets.NarrativeGraph.ApplyProposal.ErrorResponse
+	) {
+		// emitToUser is user-scoped — don't un-stick another tab's modal.
+		if (msg.lorebookId !== undefined && msg.lorebookId !== lorebookId)
+			return
+		cleanupApplyProposal()
+		isApplying = false
+	}
+
 	function apply() {
 		isApplying = true
 
@@ -370,40 +402,17 @@
 			mode
 		} satisfies Sockets.NarrativeGraph.ApplyProposal.Params)
 
-		const cleanup = () => {
-			socket.off("narrativeGraph:applyProposal", handleApplied)
-			socket.off("narrativeGraph:applyProposal:error", handleApplyError)
-		}
-		const handleApplied = () => {
-			cleanup()
-			toaster.success({
-				title: "Graph applied",
-				description: `${activeNodes.length} nodes, ${activeNodeUpdates.length} updates and ${activeRels.length} relationships saved.`
-			})
-			graphBuildsCtx?.clearBuild()
-			isApplying = false
-			onApplied?.()
-			onOpenChange({ open: false })
-		}
-		// Without this the Apply button spins forever on any rejection —
-		// isApplying was only ever cleared on success. Stay on the review step
-		// so the proposal isn't lost; Layout's catch-all toasts the message.
-		const handleApplyError = (
-			msg: Sockets.NarrativeGraph.ApplyProposal.ErrorResponse
-		) => {
-			// emitToUser is user-scoped — don't un-stick another tab's modal.
-			if (msg.lorebookId !== undefined && msg.lorebookId !== lorebookId)
-				return
-			cleanup()
-			isApplying = false
-		}
+		// Now that the handlers are one stable reference rather than a fresh
+		// closure per call, registering twice would leave a duplicate that a
+		// single `off` cannot clear. Drop any stale pair first.
+		cleanupApplyProposal()
 		socket.on("narrativeGraph:applyProposal", handleApplied)
 		socket.on("narrativeGraph:applyProposal:error", handleApplyError)
 	}
 
 	onDestroy(() => {
-		socket.off("narrativeGraph:applyProposal")
-		socket.off("narrativeGraph:applyProposal:error")
+		socket.off("narrativeGraph:applyProposal", handleApplied)
+		socket.off("narrativeGraph:applyProposal:error", handleApplyError)
 		socket.off("narrativeGraph:build:error", handleBuildError)
 	})
 

@@ -85,8 +85,55 @@ export const handle: Handle = async ({ event, resolve }) => {
 	// load them before bootstrapEnv's console patching has run, losing the
 	// formatting on their own startup logs. Resolved after the first request,
 	// so this costs a microtask thereafter.
-	const { appReady } = await import("$lib/server/startup")
+	const { appReady, getDatabaseState } = await import("$lib/server/startup")
 	await appReady
+
+	// The database exists and would not open — a force-quit or an OOM kill can
+	// leave the PGlite directory in that state. There is nothing this request
+	// can be served from, and the app used to answer with `RuntimeError:
+	// Aborted()` (or, from a desktop shortcut, with nothing visible at all), so
+	// every route answers here instead of reaching an app that cannot run.
+	//
+	// Two answers, split on where the request came from (PLAN-pglite-recovery
+	// ruling 2). A peer on this machine or the local network gets the
+	// explanation and a way into `/recovery`, which can move a backup into
+	// place. Everyone else gets a bare 503 that names no path, no backup and no
+	// action — those actions are unauthenticated by necessity (there is no
+	// database to hold an account in), so their existence is not advertised to
+	// an address that could not use them anyway.
+	const databaseState = getDatabaseState()
+	if (!databaseState.ok) {
+		const { isRecoveryRequestAllowed } = await import(
+			"$lib/server/db/recoveryAccess"
+		)
+		const { renderDatabaseUnopenablePage, renderUnavailablePage } =
+			await import("$lib/server/db/unopenablePage")
+
+		let response: Response
+		if (!isRecoveryRequestAllowed(event)) {
+			response = renderUnavailablePage()
+		} else if (
+			event.url.pathname === "/recovery" ||
+			event.url.pathname.startsWith("/recovery/")
+		) {
+			// The recovery routes are the one thing that still works in this
+			// state, so they are the one thing not replaced by this page. They
+			// are plain `+server.ts` endpoints, so no layout load runs and
+			// nothing they touch needs the database — and each one re-checks
+			// both this address rule and the database state for itself.
+			response = await resolve(event)
+		} else {
+			response = renderDatabaseUnopenablePage(databaseState.error, {
+				recoveryHref: "/recovery"
+			})
+		}
+		// Returning here skips the header pass at the bottom of this function,
+		// so the same baseline is applied to this response too.
+		for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+			response.headers.set(name, value)
+		}
+		return response
+	}
 
 	if (!dev && typeof appVersion === "string") {
 		// Fire-and-forget: don't let a slow/unreachable network delay this

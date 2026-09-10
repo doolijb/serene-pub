@@ -18,7 +18,19 @@ import {
 	type ReadMediaResult
 } from "$lib/server/media"
 
-type Db = any
+/*
+ * The handle is the global `Db` (`db/types.d.ts`) — a **parameter, never an
+ * import**, and no longer the driver's own type.
+ *
+ * It used to be `typeof import("$lib/server/db").db`, a PGlite handle rather
+ * than any `PgDatabase`, because `server/media` next door named the driver and
+ * a driver-agnostic parameter was rejected at the `createMedia` call
+ * (*"`PgQueryResultHKT` is not assignable to `PgliteQueryResultHKT`"*). That
+ * note said widening media's type was a decision for that module; the decision
+ * has since been made there — media touches nothing driver-specific — so this
+ * seam is agnostic on both sides now and the callers above it no longer have to
+ * cast to cross it.
+ */
 
 export interface CreateAssetInput {
 	sessionId: number
@@ -57,7 +69,7 @@ export async function createSessionAsset(
 
 async function sessionOwner(db: Db, sessionId: number): Promise<number> {
 	const row = await db.query.sessions.findFirst({
-		where: (s: any, { eq }: any) => eq(s.id, sessionId),
+		where: (s, { eq }) => eq(s.id, sessionId),
 		columns: { userId: true }
 	})
 	if (!row) throw new Error(`Session ${sessionId} not found`)

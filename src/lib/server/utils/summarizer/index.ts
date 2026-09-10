@@ -13,8 +13,10 @@
  */
 
 import { getConnectionAdapter } from "../getConnectionAdapter"
+import { composeStopsFor } from "$lib/server/connections/stops"
 import { extractJson } from "../extractJson"
 import { resolveSampling } from "../resolveSampling"
+import { resolveBatchBudget } from "./batchBudget"
 import { TokenCounters } from "../TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { runQueuedLLMCall } from "../runQueuedLLMCall"
@@ -96,12 +98,32 @@ function estimateTokens(text: string): number {
 	return Math.ceil(text.length / 3.5)
 }
 
+/**
+ * ⚠ **This is the legacy path and nothing in the app reaches it.** The live
+ * summarizer is the pipeline — `sockets/summarize.ts` runs the four
+ * `core:spec/summarize-*` specs, whose `core:task/batch-messages@1` binding does
+ * the cutting. `generateSummary` is imported by tests only; `scenes.ts` reaches
+ * `compileScenesForEntry` (which batches nothing) and `graphBuilder.ts` reaches
+ * `extractCharactersFromContent`.
+ *
+ * It shares `resolveBatchBudget` with that binding anyway, rather than keeping
+ * its own copy of `Math.max(tokenLimit - 1500, 500)`. Two copies of one piece of
+ * arithmetic is exactly how the pipeline's declared "tokens of chat per batch"
+ * came to mean 548 when an admin asked for 2048 — and a dead copy carrying the
+ * old bug is a live bug the day somebody revives it.
+ */
 function batchMessages(
 	messages: { senderName: string; content: string }[],
-	tokenLimit: number
+	sampling: SelectSamplingConfig
 ): { senderName: string; content: string }[][] {
-	// Reserve headroom for prompt template + draft output
-	const budget = Math.max(tokenLimit - 1500, 500)
+	// Clamped to this phase's own sampling window, not to a literal. The
+	// argument was `tokenLimit`, a hardcoded 4096 that had never been anything
+	// else, so every batch was cut at 2596 tokens regardless of the model — too
+	// small for a large context window, and on a 2k local model the batch plus
+	// the reserve overflowed the window outright.
+	const resolved = resolveBatchBudget({ sampling: resolveSampling(sampling) })
+	if (!resolved.fits) throw new Error(`Cannot summarize: ${resolved.reason}`)
+	const budget = resolved.tokens
 	const batches: { senderName: string; content: string }[][] = []
 	let current: { senderName: string; content: string }[] = []
 	let currentTokens = 0
@@ -208,6 +230,16 @@ async function runGeneration(
 		contextThresholdPercent: 0.9
 	})
 
+	// The stop sequences, composed once and handed over (ruling 2026-09-10). An
+	// adapter builds none of its own, so a construction site that skips this
+	// sends a request with NO stops — and a summary that runs on past its answer
+	// reads as a bad model rather than a missing line here.
+	//
+	// The fake session carries no cast, so nothing composes a speaker label; what
+	// reaches the wire is the connection's own completion template, which is what
+	// this path always had.
+	adapter.withStops(composeStopsFor(opts.connection, fakeSession))
+
 	const result = await runQueuedLLMCall({
 		adapter,
 		taskType: opts.taskType,
@@ -272,12 +304,21 @@ export async function extractCharactersFromContent(params: {
 		signal
 	} = params
 	const tokenCounter = new TokenCounters(
-		(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
+		connection.tokenCounter || TokenCounterOptions.ESTIMATE
 	)
-	const tokenLimit: number =
-		(connection as any).tokenLimit ??
-		(connection as any).contextSize ??
-		4096
+	// ⚠ 4096 outright, not a fallback. This read
+	// `(connection as any).tokenLimit ?? (connection as any).contextSize`
+	// first, but `connections` has never had either column — both were
+	// `undefined` on every row that has ever been loaded, so the expression
+	// always fell through to this literal. The casts were what let the dead
+	// reads typecheck; removing them changes nothing at runtime.
+	//
+	// ⚠ Deliberately NOT widened to the sampling config's `contextTokens`,
+	// which is where `dispatchStep.ts` lands after the same removal. This path
+	// never read it, so borrowing it here would be a real change to the prompt
+	// budget — a decision for the summarizer's own contract, not a side effect
+	// of deleting dead code.
+	const tokenLimit: number = 4096
 
 	try {
 		const extractionPrompt = buildCharacterExtractionPrompt(
@@ -400,12 +441,10 @@ export async function compileScenesForEntry(
 	// Honor the connection's own configured tokenizer — see the identical
 	// fix/comment in generateResponse.ts.
 	const tokenCounter = new TokenCounters(
-		(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
+		connection.tokenCounter || TokenCounterOptions.ESTIMATE
 	)
-	const tokenLimit: number =
-		(connection as any).tokenLimit ??
-		(connection as any).contextSize ??
-		4096
+	// 4096 outright — see the note in extractCharactersFromContent above.
+	const tokenLimit: number = 4096
 	const genOpts = {
 		connection,
 		sampling,
@@ -516,20 +555,21 @@ export async function generateSummary(
 	// configured tokenizer, rather than one shared "estimate" instance that
 	// ignored all three — see the identical fix/comment in generateResponse.ts.
 	const batchTokenCounter = new TokenCounters(
-		(batchConn as any).tokenCounter || TokenCounterOptions.ESTIMATE
+		batchConn.tokenCounter || TokenCounterOptions.ESTIMATE
 	)
 	const synthTokenCounter = new TokenCounters(
-		(synthConn as any).tokenCounter || TokenCounterOptions.ESTIMATE
+		synthConn.tokenCounter || TokenCounterOptions.ESTIMATE
 	)
 	const nameTokenCounter = new TokenCounters(
-		(nameConn as any).tokenCounter || TokenCounterOptions.ESTIMATE
+		nameConn.tokenCounter || TokenCounterOptions.ESTIMATE
 	)
 	const characterExtractionTokenCounter = new TokenCounters(
-		(characterExtractionConn as any).tokenCounter ||
-			TokenCounterOptions.ESTIMATE
+		characterExtractionConn.tokenCounter || TokenCounterOptions.ESTIMATE
 	)
-	const tokenLimit: number =
-		(batchConn as any).tokenLimit ?? (batchConn as any).contextSize ?? 4096
+	// 4096 outright — see the note in extractCharactersFromContent above. The
+	// per-phase budgets below carried the same dead pair against their own
+	// connections, so the four phases only ever LOOKED like they could differ.
+	const tokenLimit: number = 4096
 	const batchOpts = {
 		connection: batchConn,
 		sampling: batchSamp,
@@ -545,10 +585,7 @@ export async function generateSummary(
 		contextConfig,
 		promptConfig,
 		tokenCounter: synthTokenCounter,
-		tokenLimit:
-			(synthConn as any).tokenLimit ??
-			(synthConn as any).contextSize ??
-			4096,
+		tokenLimit: 4096,
 		signal
 	}
 	const nameOpts = {
@@ -557,10 +594,7 @@ export async function generateSummary(
 		contextConfig,
 		promptConfig,
 		tokenCounter: nameTokenCounter,
-		tokenLimit:
-			(nameConn as any).tokenLimit ??
-			(nameConn as any).contextSize ??
-			4096,
+		tokenLimit: 4096,
 		signal
 	}
 	const extractionOpts = {
@@ -569,14 +603,11 @@ export async function generateSummary(
 		contextConfig,
 		promptConfig,
 		tokenCounter: characterExtractionTokenCounter,
-		tokenLimit:
-			(characterExtractionConn as any).tokenLimit ??
-			(characterExtractionConn as any).contextSize ??
-			4096,
+		tokenLimit: 4096,
 		signal
 	}
 
-	const batches = batchMessages(messages, tokenLimit)
+	const batches = batchMessages(messages, batchSamp)
 	const totalBatches = batches.length
 
 	// ── Phase 1: Draft each batch independently ──────────────────────────────

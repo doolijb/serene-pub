@@ -27,8 +27,6 @@ import {
 	resolveFunctionSpec
 } from "$lib/server/pipelines/entities/sessionGenres"
 
-type Db = { select: any; insert: any; update: any; delete: any }
-
 /**
  * The two scopes left (ruled 2026-08-24): the session's own row, else the
  * instance's. The user layer is gone from bindings and rebinds alike.
@@ -85,11 +83,11 @@ export async function bindFunction(
 			error: `'${specSlug}' does not serve '${functionKey}' for this mode.`
 		}
 
-	const existing = (await db
+	const existing = await db
 		.select()
 		.from(schema.pipelineFunctionBindings)
 		.where(where)
-		.limit(1)) as any[]
+		.limit(1)
 	if (existing.length) {
 		await db
 			.update(schema.pipelineFunctionBindings)
@@ -132,19 +130,15 @@ export async function functionCandidates(
 			.from(schema.pipelineSpecVersions)
 			.where(eq(schema.pipelineSpecVersions.status, "published"))
 		const out: string[] = []
-		for (const s of specs as any[]) {
+		for (const s of specs) {
 			if (s.activeVersionId == null) continue
-			const v = (versions as any[]).find(
-				(x) => x.id === s.activeVersionId
-			)
+			const v = versions.find((x) => x.id === s.activeVersionId)
 			if (!v) continue
 			const nodes = await db
 				.select()
 				.from(schema.pipelineNodes)
 				.where(eq(schema.pipelineNodes.specVersionId, v.id))
-			const entry = (nodes as any[]).sort(
-				(a, b) => a.position - b.position
-			)[0]
+			const entry = nodes.sort((a, b) => a.position - b.position)[0]
 			if (
 				entry &&
 				entry.typeId === bareType &&
@@ -212,7 +206,7 @@ export async function setNodeRebind(
 		.select()
 		.from(schema.pipelineNodes)
 		.where(eq(schema.pipelineNodes.specVersionId, spec.activeVersionId))
-	const node = (nodes as any[]).find((n) => n.nodeKey === nodeKey)
+	const node = nodes.find((n) => n.nodeKey === nodeKey)
 	if (!node) return { error: `'${specSlug}' has no node named '${nodeKey}'.` }
 
 	const pinnedId = `${node.typeId}@${node.typeVersion}`
@@ -222,11 +216,11 @@ export async function setNodeRebind(
 			error: `'${typeId}' does not publish the same shape as '${pinnedId}' — the swap would mis-wire everything downstream.`
 		}
 
-	const existing = (await db
+	const existing = await db
 		.select()
 		.from(schema.pipelineNodeRebinds)
 		.where(where)
-		.limit(1)) as any[]
+		.limit(1)
 	if (existing.length) {
 		await db
 			.update(schema.pipelineNodeRebinds)
@@ -257,7 +251,7 @@ async function shapeCompatible(
 			.select()
 			.from(schema.pipelineTypeRegistry)
 			.where(eq(schema.pipelineTypeRegistry.typeId, bare!))
-		return (rows as any[]).find(
+		return rows.find(
 			(r) => String(r.version) === version && r.status === "live"
 		)
 	}
@@ -291,10 +285,10 @@ export async function applyNodeRebinds(
 			.where(eq(schema.pipelineSpecs.slug, opts.specSlug))
 			.limit(1)
 		if (!spec) return doc
-		const rows = (await db
+		const rows = await db
 			.select()
 			.from(schema.pipelineNodeRebinds)
-			.where(eq(schema.pipelineNodeRebinds.specId, spec.id))) as any[]
+			.where(eq(schema.pipelineNodeRebinds.specId, spec.id))
 		if (!rows.length) return doc
 
 		const addresses: ScopeAddress[] = [
@@ -358,7 +352,7 @@ export async function setSessionSpeakerStrategy(
 		.limit(1)
 	if (!session) return { error: "That session no longer exists." }
 	const specSlug = await resolveFunctionSpec(
-		db as any,
+		db,
 		session.genreId ?? "core:genre/chat",
 		"respond",
 		{ sessionId: opts.sessionId }
@@ -373,7 +367,7 @@ export async function setSessionSpeakerStrategy(
 		}
 
 	if (opts.typeId != null) {
-		const strategies = await listSpeakerStrategies(db as any)
+		const strategies = await listSpeakerStrategies(db)
 		if (!strategies.some((s) => s.typeId === opts.typeId))
 			return {
 				error: `'${opts.typeId}' is not a next-speaker strategy this build registers.`
@@ -402,7 +396,7 @@ export async function getSessionSpeakerStrategy(
 			.limit(1)
 		if (!session) return null
 		const specSlug = await resolveFunctionSpec(
-			db as any,
+			db,
 			session.genreId ?? "core:genre/chat",
 			"respond",
 			{ sessionId }
@@ -448,12 +442,12 @@ async function speakerNodeKey(
 		.select()
 		.from(schema.pipelineNodes)
 		.where(eq(schema.pipelineNodes.specVersionId, spec.activeVersionId))
-	for (const n of nodes as any[]) {
+	for (const n of nodes) {
 		const rows = await db
 			.select()
 			.from(schema.pipelineTypeRegistry)
 			.where(eq(schema.pipelineTypeRegistry.typeId, n.typeId))
-		const row = (rows as any[]).find(
+		const row = rows.find(
 			(r) => String(r.version) === String(n.typeVersion)
 		)
 		if (row?.ports?.out?.main === "core:shape/speaker-selection@1")

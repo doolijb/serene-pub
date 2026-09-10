@@ -160,96 +160,104 @@
 		}
 	})
 
+	// Named so `off` can name them too. A bare `socket.off("koboldcpp:listModels")`
+	// removes EVERY listener for that event — including KoboldCppModelsTab's,
+	// which reads the same list once it renders. `koboldcpp:subprocessStatus` has
+	// the same problem: KoboldCppManagedStatusTab and KoboldCppPerfTab both
+	// listen for it too.
+	function handleListModels(message: Sockets.KoboldCPP.ListModels.Response) {
+		// TEXT-kind rows only. The glow this feeds exists to say "the
+		// Models tab is a dead end, go download something" — counting
+		// image models too would silently drop the cue for the one user
+		// who most needs it: the one whose only model is an SD
+		// checkpoint, which cannot answer a single chat message.
+		installedCount = countTextModels(message.availableModels ?? [])
+	}
+
+	function handleVersion(message: Sockets.KoboldCPP.Version.Response) {
+		isTesting = false
+		isLocal = message.isLocal
+		if (!isConnected) {
+			isConnected = !!message.version
+			if (message.version) {
+				toaster.success({
+					title: "Connected to KoboldCPP",
+					description: `Version ${message.version}`
+				})
+			}
+		}
+	}
+
+	function handleVersionError(message: { error?: string }) {
+		isTesting = false
+		toaster.error({
+			title: "Connection test failed",
+			description:
+				message.error || "Could not reach KoboldCPP at that URL."
+		})
+	}
+
+	function handleSetBaseUrl(message: Sockets.KoboldCPP.SetBaseUrl.Response) {
+		isSavingBaseUrl = false
+		if (message.success) {
+			toaster.success({ title: "URL updated" })
+			checkConnection()
+		} else {
+			toaster.error({ title: "Failed to update URL" })
+		}
+	}
+
+	function handleSetManagedMode() {
+		// Mode change is reflected via systemSettingsCtx push
+	}
+
+	function handleSubprocessStatus(
+		msg: Sockets.KoboldCPP.SubprocessStatus.Response
+	) {
+		if (msg.status === "running" && !isConnected) {
+			isConnected = true
+		}
+		// The binary can go missing without any in-app action (eg. the host lost
+		// the volume between restarts) — without this, the failure only ever
+		// shows as a small error line buried in the Perf tab, which the sidebar
+		// doesn't default to, so a crash on auto-start can go unnoticed.
+		const isMissingBinary =
+			msg.status === "crashed" &&
+			!!msg.lastError &&
+			(msg.lastError.includes("Binary not found") ||
+				msg.lastError.includes("Binary not configured"))
+		missingBinaryError = isMissingBinary ? msg.lastError : null
+		if (isMissingBinary && msg.lastError !== lastToastedError) {
+			lastToastedError = msg.lastError
+			toaster.error({
+				title: "KoboldCPP binary is missing",
+				description:
+					"It may have been lost from storage between restarts. Re-download it below."
+			})
+		}
+	}
+
 	onMount(() => {
 		// Only KoboldCppModelsTab fetches this, and only once it has rendered —
 		// backwards for deciding which tab to render. Ask here too, but only
 		// during the wizard hand-off so the normal path is unchanged.
-		socket.on(
-			"koboldcpp:listModels",
-			(message: Sockets.KoboldCPP.ListModels.Response) => {
-				// TEXT-kind rows only. The glow this feeds exists to say "the
-				// Models tab is a dead end, go download something" — counting
-				// image models too would silently drop the cue for the one user
-				// who most needs it: the one whose only model is an SD
-				// checkpoint, which cannot answer a single chat message.
-				installedCount = countTextModels(message.availableModels ?? [])
-			}
-		)
+		socket.on("koboldcpp:listModels", handleListModels)
 		if (panelsCtx?.digest?.tutorial) socket.emit("koboldcpp:listModels", {})
 
-		socket.on(
-			"koboldcpp:version",
-			(message: Sockets.KoboldCPP.Version.Response) => {
-				isTesting = false
-				isLocal = message.isLocal
-				if (!isConnected) {
-					isConnected = !!message.version
-					if (message.version) {
-						toaster.success({
-							title: "Connected to KoboldCPP",
-							description: `Version ${message.version}`
-						})
-					}
-				}
-			}
-		)
-		socket.on("koboldcpp:version:error", (message: { error?: string }) => {
-			isTesting = false
-			toaster.error({
-				title: "Connection test failed",
-				description:
-					message.error || "Could not reach KoboldCPP at that URL."
-			})
-		})
-		socket.on(
-			"koboldcpp:setBaseUrl",
-			(message: Sockets.KoboldCPP.SetBaseUrl.Response) => {
-				isSavingBaseUrl = false
-				if (message.success) {
-					toaster.success({ title: "URL updated" })
-					checkConnection()
-				} else {
-					toaster.error({ title: "Failed to update URL" })
-				}
-			}
-		)
-		socket.on("koboldcpp:setManagedMode", () => {
-			// Mode change is reflected via systemSettingsCtx push
-		})
-		socket.on(
-			"koboldcpp:subprocessStatus",
-			(msg: Sockets.KoboldCPP.SubprocessStatus.Response) => {
-				if (msg.status === "running" && !isConnected) {
-					isConnected = true
-				}
-				// The binary can go missing without any in-app action (eg. the host lost
-				// the volume between restarts) — without this, the failure only ever
-				// shows as a small error line buried in the Perf tab, which the sidebar
-				// doesn't default to, so a crash on auto-start can go unnoticed.
-				const isMissingBinary =
-					msg.status === "crashed" &&
-					!!msg.lastError &&
-					(msg.lastError.includes("Binary not found") ||
-						msg.lastError.includes("Binary not configured"))
-				missingBinaryError = isMissingBinary ? msg.lastError : null
-				if (isMissingBinary && msg.lastError !== lastToastedError) {
-					lastToastedError = msg.lastError
-					toaster.error({
-						title: "KoboldCPP binary is missing",
-						description:
-							"It may have been lost from storage between restarts. Re-download it below."
-					})
-				}
-			}
-		)
+		socket.on("koboldcpp:version", handleVersion)
+		socket.on("koboldcpp:version:error", handleVersionError)
+		socket.on("koboldcpp:setBaseUrl", handleSetBaseUrl)
+		socket.on("koboldcpp:setManagedMode", handleSetManagedMode)
+		socket.on("koboldcpp:subprocessStatus", handleSubprocessStatus)
 	})
 
 	onDestroy(() => {
-		socket.off("koboldcpp:version")
-		socket.off("koboldcpp:version:error")
-		socket.off("koboldcpp:setBaseUrl")
-		socket.off("koboldcpp:setManagedMode")
-		socket.off("koboldcpp:subprocessStatus")
+		socket.off("koboldcpp:listModels", handleListModels)
+		socket.off("koboldcpp:version", handleVersion)
+		socket.off("koboldcpp:version:error", handleVersionError)
+		socket.off("koboldcpp:setBaseUrl", handleSetBaseUrl)
+		socket.off("koboldcpp:setManagedMode", handleSetManagedMode)
+		socket.off("koboldcpp:subprocessStatus", handleSubprocessStatus)
 	})
 
 	function handleUnsavedChangesModalOnOpenChange(e: OpenChangeDetails) {

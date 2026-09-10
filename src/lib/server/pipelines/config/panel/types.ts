@@ -14,14 +14,6 @@
  * exist"* — and only the first is true.
  */
 
-/** Loose on purpose — callers pass the app db and the test db interchangeably. */
-export type Db = {
-	select: any
-	insert: any
-	update: any
-	delete: any
-}
-
 /** Who is asking, and from where. `sessionId` is set only for a session they own. */
 export interface Viewer {
 	userId: number

@@ -63,6 +63,24 @@
 	onMount(() => {
 		socket.on("pipelines:run", onRunDetail)
 		socket.on("pipelines:run:error", onRunDetail)
+		/**
+		 * `?run=<runId>` — the receipt somebody was sent to, opened.
+		 *
+		 * Read here rather than by the route because the receipt is fetched by
+		 * run id: the run does not have to be in `runs` for the link to land,
+		 * so a media gallery can hand over a run from a spec whose list this
+		 * panel is not currently showing. Applied once, on mount, and left in
+		 * the URL — the route's own mirror rewrites `tab`, `step` and `config`
+		 * and preserves everything else, so the link stays shareable.
+		 */
+		const wanted =
+			typeof window !== "undefined"
+				? new URLSearchParams(window.location.search).get("run")
+				: null
+		if (wanted) {
+			openRunLoading = true
+			socket.emit("pipelines:run", { runId: wanted })
+		}
 	})
 	onDestroy(() => {
 		socket.off("pipelines:run", onRunDetail)
@@ -101,6 +119,17 @@
 			key: "tokensSpent",
 			label: "Tokens",
 			value: (r) => r.tokensSpent,
+			class: "text-right"
+		},
+		{
+			// What the run left behind. A count rather than a list: the row is
+			// a summary and the receipt below it is where the detail belongs —
+			// but "produced nothing" and "produced four things" are the fact
+			// this column exists to separate, and the old single message id
+			// showed neither.
+			key: "artifacts",
+			label: "Made",
+			value: (r) => r.artifacts.length,
 			class: "text-right"
 		}
 	]
@@ -165,6 +194,8 @@
 			<span class="whitespace-nowrap">{r.elapsedMs} ms</span>
 		{:else if col.key === "tokensSpent"}
 			{r.tokensSpent || "—"}
+		{:else if col.key === "artifacts"}
+			{r.artifacts.length || "—"}
 		{/if}
 	{/snippet}
 </AdminList>

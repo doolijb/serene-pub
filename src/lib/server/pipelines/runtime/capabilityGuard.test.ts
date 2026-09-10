@@ -7,7 +7,7 @@
  * from `ADAPTER_MANIFEST` stops resolution from ever GRANTING it again — and
  * does nothing whatever about the rows that were granted it before.
  *
- * That is not hypothetical. OPENAI_CHAT declared `text->image` as `probed` and
+ * That is not hypothetical. OPENAI declared `text->image` as `probed` and
  * the `openai-official` preset asserted it `true`, so every OpenAI connection
  * anyone tested resolved `text->image: 1` and wrote it to the row. Both
  * declarations are now gone — nothing implements `generateImage` for that type,
@@ -48,7 +48,7 @@ describe("a withdrawn capability cannot be revived by a stale cache", () => {
 		// The exact live bug, in the state a real upgraded install is in: the row
 		// was tested under the old declaration and the column still carries the
 		// key at full grade.
-		const stale = row(CONNECTION_TYPE.OPENAI_CHAT, {
+		const stale = row(CONNECTION_TYPE.OPENAI, {
 			"text->text": 1,
 			"text->image": 1
 		})
@@ -64,7 +64,7 @@ describe("a withdrawn capability cannot be revived by a stale cache", () => {
 		// Somebody who switched "Image generation" off has no way to connect
 		// `text->image` back to the toggle they touched.
 		const message = capabilityRefusal(
-			row(CONNECTION_TYPE.OPENAI_CHAT, { "text->image": 1 }),
+			row(CONNECTION_TYPE.OPENAI, { "text->image": 1 }),
 			"text->image"
 		)
 		expect(message).toContain("Image generation")
@@ -189,7 +189,7 @@ describe("the refusal names the capability and never the connection", () => {
 		id: 7,
 		name: "Studio",
 		model: "sd-1.5",
-		type: CONNECTION_TYPE.OPENAI_CHAT,
+		type: CONNECTION_TYPE.OPENAI,
 		capabilities: { resolved: { "text->image": 1 } }
 	}
 
@@ -237,5 +237,38 @@ describe("the refusal names the capability and never the connection", () => {
 		const seenByUser = redactConnections(payload, { isAdmin: false })
 		expect(seenByUser).not.toHaveProperty("connection")
 		expect(seenByUser.error).toBe(payload.error)
+	})
+})
+
+describe("⚠ the panel's live fill stops at the display", () => {
+	/**
+	 * The other direction of the same staleness, and the boundary is deliberate.
+	 *
+	 * A cache written by an older build cannot name a capability that build had
+	 * never heard of — `continue_reply` is exactly that — so the capability
+	 * panel's row model resolves a DECLARED key its cache does not name through
+	 * the four layers rather than reading silence as off
+	 * (`shared/connectionAdapters/capabilityRows.ts`, `effectiveCapabilities`).
+	 * This guard deliberately does not, and "make them agree" is the obvious next
+	 * edit, so:
+	 *
+	 *   - it is handed `{type, capabilities}` and NO PRESET, so it cannot resolve
+	 *     those four layers at all. Whatever it filled would be a poorer answer
+	 *     wearing the same name, which is worse than the gap;
+	 *   - it GRANTS where the panel displays. Filling here changes which
+	 *     connections may run, and on a never-resolved row it would also take the
+	 *     emptiness fallback above out of play — refusing setups that work today,
+	 *     on upgrade, which is the thing that fallback exists to prevent.
+	 *
+	 * The cure for the gap is a WRITE path rewriting the column — `persistCapabilities`
+	 * is its only writer — not a second, weaker live read here.
+	 */
+	test("a declared key the cache does not name is still absent here", () => {
+		// `tools` is in KOBOLDCPP's defaults, so the layers would resolve it on
+		// and the panel shows it on. This cache predates it and this reads the
+		// cache.
+		const predates = row(CONNECTION_TYPE.KOBOLDCPP, { "text->text": 1 })
+		expect(storedCapabilities(predates)).toEqual({ "text->text": 1 })
+		expect(capabilityRefusal(predates, "tools")).toMatch(/cannot do/i)
 	})
 })

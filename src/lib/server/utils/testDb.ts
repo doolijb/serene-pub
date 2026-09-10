@@ -84,7 +84,7 @@ export async function createTestDb(opts?: {
 		)
 		const { allEntryTypes } = await import("@serene-pub/sdk")
 		await import("@serene-pub/core-catalog")
-		await syncTypeRegistry(db as any, allEntryTypes(), { release: "test" })
+		await syncTypeRegistry(db, allEntryTypes(), { release: "test" })
 	}
 
 	return db

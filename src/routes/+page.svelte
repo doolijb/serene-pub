@@ -12,6 +12,7 @@
 	import { goto } from "$app/navigation"
 	import { fade } from "svelte/transition"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { createViewMode } from "$lib/client/utils/viewMode.svelte"
@@ -172,6 +173,26 @@
 				id
 			})
 		}
+	}
+	// By NAMED reference — CharacterCreatorModal/PersonaCreatorModal instances
+	// elsewhere (e.g. the session form) register their own `characters:create`/
+	// `personas:create` listeners, and a bare `socket.off(event)` would tear
+	// those down too.
+	function handleCharacterCreated(res: Sockets.Characters.Create.Response) {
+		if (
+			res.character &&
+			!allStepsComplete &&
+			currentWizardStep?.id === "character"
+		)
+			nextWizardStep()
+	}
+	function handlePersonaCreated(res: Sockets.Personas.Create.Response) {
+		if (
+			res.persona &&
+			!allStepsComplete &&
+			currentWizardStep?.id === "persona"
+		)
+			nextWizardStep()
 	}
 	let activeConnectionName = $derived(
 		connections.find((c) => c.id === chatConnectionId)?.name ?? null
@@ -459,219 +480,288 @@
 		reader.readAsDataURL(file)
 	}
 
-	onMount(() => {
-		socket.on("characters:list", (msg) => {
-			characters = msg.characterList || []
-			_charsLoaded = true
-			if (
-				!allStepsComplete &&
-				currentWizardStep?.id === "character" &&
-				characters.length > 0
-			)
-				nextWizardStep()
-		})
-		socket.on("personas:list", (msg) => {
-			personas = msg.personaList || []
-			_personasLoaded = true
-			if (
-				!allStepsComplete &&
-				currentWizardStep?.id === "persona" &&
-				personas.length > 0
-			)
-				nextWizardStep()
-		})
-		socket.on("sessions:list", (msg) => {
-			sessions = msg.sessionList || []
-			_sessionsLoaded = true
-		})
-		socket.on("connections:list", (msg) => {
-			connections = msg.connectionsList || []
-			_connectionsLoaded = true
-		})
-		socket.on("setup:get", (msg) => {
-			setupData = msg.setup
-			_setupLoaded = true
-		})
-		socket.on("setup:markComplete", (msg) => {
-			if (msg.setup) setupData = msg.setup
-		})
+	// Every listener below is named so `off` can name it too. A bare
+	// `socket.off("characters:list")` removes EVERY listener for that event —
+	// including the sidebars' and the session form's — which then stop updating
+	// for the rest of the session.
+	function handleCharactersList(
+		msg: SocketEventMap["characters:list"]["response"]
+	) {
+		characters = msg.characterList || []
+		_charsLoaded = true
+		if (
+			!allStepsComplete &&
+			currentWizardStep?.id === "character" &&
+			characters.length > 0
+		)
+			nextWizardStep()
+	}
 
-		socket.on("ollama:version", (message) => {
-			isOllamaConnected = !!message.version
-			if (isOllamaConnected && !allStepsComplete) refreshOllamaModels()
-		})
-		socket.on("ollama:modelsList", (message) => {
-			installedModels = message.models || []
-		})
-		socket.on("ollama:connectModel", (message) => {
-			if (message.success) nextWizardStep()
-			else
-				toaster.error({
-					title: "Connection Failed",
-					description: "Failed to connect to the Ollama model"
-				})
-		})
+	function handlePersonasList(
+		msg: SocketEventMap["personas:list"]["response"]
+	) {
+		personas = msg.personaList || []
+		_personasLoaded = true
+		if (
+			!allStepsComplete &&
+			currentWizardStep?.id === "persona" &&
+			personas.length > 0
+		)
+			nextWizardStep()
+	}
 
-		// KoboldCPP listeners
-		;(socket as any).on("koboldcpp:version", (message: any) => {
-			isCheckingKoboldCPP = false
-			isKoboldCppConnected = !!message.version
+	function handleSessionsList(
+		msg: SocketEventMap["sessions:list"]["response"]
+	) {
+		sessions = msg.sessionList || []
+		_sessionsLoaded = true
+	}
+
+	function handleConnectionsList(
+		msg: SocketEventMap["connections:list"]["response"]
+	) {
+		connections = msg.connectionsList || []
+		_connectionsLoaded = true
+	}
+
+	function handleSetupGet(msg: SocketEventMap["setup:get"]["response"]) {
+		setupData = msg.setup
+		_setupLoaded = true
+	}
+
+	function handleSetupMarkComplete(
+		msg: SocketEventMap["setup:markComplete"]["response"]
+	) {
+		if (msg.setup) setupData = msg.setup
+	}
+
+	function handleOllamaVersion(
+		message: SocketEventMap["ollama:version"]["response"]
+	) {
+		isOllamaConnected = !!message.version
+		if (isOllamaConnected && !allStepsComplete) refreshOllamaModels()
+	}
+
+	function handleOllamaModelsList(
+		message: SocketEventMap["ollama:modelsList"]["response"]
+	) {
+		installedModels = message.models || []
+	}
+
+	function handleOllamaConnectModel(
+		message: SocketEventMap["ollama:connectModel"]["response"]
+	) {
+		if (message.success) nextWizardStep()
+		else
+			toaster.error({
+				title: "Connection Failed",
+				description: "Failed to connect to the Ollama model"
+			})
+	}
+
+	// KoboldCPP listeners
+	function handleKoboldcppVersion(message: any) {
+		isCheckingKoboldCPP = false
+		isKoboldCppConnected = !!message.version
+		if (
+			isKoboldCppConnected &&
+			!allStepsComplete &&
+			connectionChoice === "koboldcpp"
+		) {
+			socket.emit("koboldcpp:listModels", {})
+		}
+	}
+
+	function handleKoboldcppVersionError() {
+		isCheckingKoboldCPP = false
+		isKoboldCppConnected = false
+	}
+
+	function handleKoboldcppListModels(message: any) {
+		koboldcppLoadedModels =
+			message.models?.map((m: any) => m.filename ?? m.id ?? m) ?? []
+		if (koboldcppLoadedModels.length > 0 && !selectedKoboldCppModel) {
+			selectedKoboldCppModel = koboldcppLoadedModels[0]
+		}
+	}
+
+	function handleKoboldcppConnectModel(message: any) {
+		if (
+			message.success &&
+			!allStepsComplete &&
+			currentWizardStep?.id === "connection-setup"
+		) {
+			nextWizardStep()
+		}
+	}
+
+	function handleKoboldcppConnectModelError(message: any) {
+		toaster.error({
+			title: "KoboldCPP Connection Failed",
+			description: message.error ?? "Could not connect to the model"
+		})
+	}
+
+	function handleConnectionsCreate(
+		res: SocketEventMap["connections:create"]["response"]
+	) {
+		if (res.connection) {
+			// The wizard registers defaults EXPLICITLY — it does not rely on
+			// anything picking this connection up. It used to emit
+			// `connections:setUserActive`, which starred one row as "the
+			// default" and said nothing about which of the five things a
+			// KoboldCPP connection does was meant; and the server used to
+			// auto-star the first connection created, which is the implicit
+			// pickup the whole change deletes.
+			//
+			// Explicit is not the same as implicit-with-extra-steps. This
+			// fires for any connection created while the home screen is
+			// mounted — the wizard's connection step, or the Connections
+			// sidebar opened from it — and it only ever FILLS EMPTY slots,
+			// never re-points one somebody already chose. See the handler:
+			// that gate is what keeps "the second backend you add" from
+			// quietly taking over chat.
+			pendingDefaultConnectionId = res.connection.id!
+			socket.emit("connectionDefaults:list", {})
+			toaster.success({
+				title: "Connection Created",
+				description: `Connected to ${res.connection.name}`
+			})
 			if (
-				isKoboldCppConnected &&
-				!allStepsComplete &&
-				connectionChoice === "koboldcpp"
-			) {
-				socket.emit("koboldcpp:listModels", {})
-			}
-		})
-		;(socket as any).on("koboldcpp:version:error", () => {
-			isCheckingKoboldCPP = false
-			isKoboldCppConnected = false
-		})
-		;(socket as any).on("koboldcpp:listModels", (message: any) => {
-			koboldcppLoadedModels =
-				message.models?.map((m: any) => m.filename ?? m.id ?? m) ?? []
-			if (koboldcppLoadedModels.length > 0 && !selectedKoboldCppModel) {
-				selectedKoboldCppModel = koboldcppLoadedModels[0]
-			}
-		})
-		;(socket as any).on("koboldcpp:connectModel", (message: any) => {
-			if (
-				message.success &&
 				!allStepsComplete &&
 				currentWizardStep?.id === "connection-setup"
-			) {
+			)
+				nextWizardStep()
+		}
+	}
+
+	function handleSessionsCreate(
+		res: SocketEventMap["sessions:create"]["response"]
+	) {
+		if (res.session) {
+			goto(`/sessions/${res.session.id}`)
+		}
+	}
+
+	// Summarization enable response — also marks summarization step complete
+	function handleSystemSettingsUpdateSummarizationEnabled(msg: any) {
+		wizardSummarizationLoading = false
+		if (msg.enabled && currentWizardStep?.id === "summarization") {
+			markSetupComplete("summarization")
+			nextWizardStep()
+		}
+	}
+
+	// Vectorization status — actual configuration happens in the
+	// Connections sidebar's Embedding category (opened via the footer
+	// button); this just tracks whether it's enabled/ready so the footer
+	// can react.
+	function handleVectorizationListModels(msg: any) {
+		vectorizationEnabled = msg.vectorizationEnabled ?? false
+		vectorizationModelReady = msg.modelReady ?? false
+	}
+
+	function handleVectorizationDisable(msg: any) {
+		disablingVectorization = false
+		if (msg.success) {
+			vectorizationEnabled = false
+			if (currentWizardStep?.id === "vectorization") {
+				markSetupComplete("rag")
 				nextWizardStep()
 			}
-		})
-		;(socket as any).on("koboldcpp:connectModel:error", (message: any) => {
-			toaster.error({
-				title: "KoboldCPP Connection Failed",
-				description: message.error ?? "Could not connect to the model"
+		}
+	}
+
+	// Card imports from wizard
+	function handleCharactersImportCard(msg: any) {
+		wizardImportingCharacterCard = false
+		if (msg.character) {
+			toaster.success({
+				title: `Imported ${msg.character.nickname || msg.character.name}!`
 			})
+			if (!allStepsComplete && currentWizardStep?.id === "character")
+				nextWizardStep()
+		}
+	}
+
+	function handleCharactersImportCardError(msg: any) {
+		wizardImportingCharacterCard = false
+		toaster.error({
+			title: "Import Failed",
+			description: msg.error ?? "Could not import character card"
 		})
+	}
+
+	function handlePersonasImportCard(msg: any) {
+		wizardImportingPersonaCard = false
+		if (msg.persona) {
+			toaster.success({ title: `Imported ${msg.persona.name}!` })
+			if (!allStepsComplete && currentWizardStep?.id === "persona")
+				nextWizardStep()
+		}
+	}
+
+	function handlePersonasImportCardError(msg: any) {
+		wizardImportingPersonaCard = false
+		toaster.error({
+			title: "Import Failed",
+			description: msg.error ?? "Could not import persona card"
+		})
+	}
+
+	// Binding linker modal
+	function handleBindingCheckResult(
+		data: SocketEventMap["bindingCheck:result"]["response"]
+	) {
+		if (data.orphanedBindings.length > 0) {
+			bindingLinkerData = data
+			bindingLinkerOpen = true
+		}
+	}
+
+	onMount(() => {
+		socket.on("characters:list", handleCharactersList)
+		socket.on("personas:list", handlePersonasList)
+		socket.on("sessions:list", handleSessionsList)
+		socket.on("connections:list", handleConnectionsList)
+		socket.on("setup:get", handleSetupGet)
+		socket.on("setup:markComplete", handleSetupMarkComplete)
+		socket.on("ollama:version", handleOllamaVersion)
+		socket.on("ollama:modelsList", handleOllamaModelsList)
+		socket.on("ollama:connectModel", handleOllamaConnectModel)
+		;(socket as any).on("koboldcpp:version", handleKoboldcppVersion)
+		;(socket as any).on(
+			"koboldcpp:version:error",
+			handleKoboldcppVersionError
+		)
+		;(socket as any).on("koboldcpp:listModels", handleKoboldcppListModels)
+		;(socket as any).on(
+			"koboldcpp:connectModel",
+			handleKoboldcppConnectModel
+		)
+		;(socket as any).on(
+			"koboldcpp:connectModel:error",
+			handleKoboldcppConnectModelError
+		)
 		socket.on("connectionDefaults:list", handleDefaultsForNewConnection)
-		socket.on("connections:create", (res) => {
-			if (res.connection) {
-				// The wizard registers defaults EXPLICITLY — it does not rely on
-				// anything picking this connection up. It used to emit
-				// `connections:setUserActive`, which starred one row as "the
-				// default" and said nothing about which of the five things a
-				// KoboldCPP connection does was meant; and the server used to
-				// auto-star the first connection created, which is the implicit
-				// pickup the whole change deletes.
-				//
-				// Explicit is not the same as implicit-with-extra-steps. This
-				// fires for any connection created while the home screen is
-				// mounted — the wizard's connection step, or the Connections
-				// sidebar opened from it — and it only ever FILLS EMPTY slots,
-				// never re-points one somebody already chose. See the handler:
-				// that gate is what keeps "the second backend you add" from
-				// quietly taking over chat.
-				pendingDefaultConnectionId = res.connection.id!
-				socket.emit("connectionDefaults:list", {})
-				toaster.success({
-					title: "Connection Created",
-					description: `Connected to ${res.connection.name}`
-				})
-				if (
-					!allStepsComplete &&
-					currentWizardStep?.id === "connection-setup"
-				)
-					nextWizardStep()
-			}
-		})
-		socket.on("characters:create", (res) => {
-			if (
-				res.character &&
-				!allStepsComplete &&
-				currentWizardStep?.id === "character"
-			)
-				nextWizardStep()
-		})
-		socket.on("personas:create", (res) => {
-			if (
-				res.persona &&
-				!allStepsComplete &&
-				currentWizardStep?.id === "persona"
-			)
-				nextWizardStep()
-		})
-		socket.on("sessions:create", (res) => {
-			if (res.session) {
-				goto(`/sessions/${res.session.id}`)
-			}
-		})
-
-		// Summarization enable response — also marks summarization step complete
-		socket.on("systemSettings:updateSummarizationEnabled", (msg: any) => {
-			wizardSummarizationLoading = false
-			if (msg.enabled && currentWizardStep?.id === "summarization") {
-				markSetupComplete("summarization")
-				nextWizardStep()
-			}
-		})
-
-		// Vectorization status — actual configuration happens in the
-		// Connections sidebar's Embedding category (opened via the footer
-		// button); this just tracks whether it's enabled/ready so the footer
-		// can react.
-		socket.on("vectorization:listModels", (msg: any) => {
-			vectorizationEnabled = msg.vectorizationEnabled ?? false
-			vectorizationModelReady = msg.modelReady ?? false
-		})
-		socket.on("vectorization:disable", (msg: any) => {
-			disablingVectorization = false
-			if (msg.success) {
-				vectorizationEnabled = false
-				if (currentWizardStep?.id === "vectorization") {
-					markSetupComplete("rag")
-					nextWizardStep()
-				}
-			}
-		})
-
-		// Card imports from wizard
-		socket.on("characters:importCard", (msg: any) => {
-			wizardImportingCharacterCard = false
-			if (msg.character) {
-				toaster.success({
-					title: `Imported ${msg.character.nickname || msg.character.name}!`
-				})
-				if (!allStepsComplete && currentWizardStep?.id === "character")
-					nextWizardStep()
-			}
-		})
-		;(socket as any).on("characters:importCard:error", (msg: any) => {
-			wizardImportingCharacterCard = false
-			toaster.error({
-				title: "Import Failed",
-				description: msg.error ?? "Could not import character card"
-			})
-		})
-		socket.on("personas:importCard", (msg: any) => {
-			wizardImportingPersonaCard = false
-			if (msg.persona) {
-				toaster.success({ title: `Imported ${msg.persona.name}!` })
-				if (!allStepsComplete && currentWizardStep?.id === "persona")
-					nextWizardStep()
-			}
-		})
-		socket.on("personas:importCard:error", (msg: any) => {
-			wizardImportingPersonaCard = false
-			toaster.error({
-				title: "Import Failed",
-				description: msg.error ?? "Could not import persona card"
-			})
-		})
-
-		// Binding linker modal
-		socket.on("bindingCheck:result", (data) => {
-			if (data.orphanedBindings.length > 0) {
-				bindingLinkerData = data
-				bindingLinkerOpen = true
-			}
-		})
+		socket.on("connections:create", handleConnectionsCreate)
+		socket.on("characters:create", handleCharacterCreated)
+		socket.on("personas:create", handlePersonaCreated)
+		socket.on("sessions:create", handleSessionsCreate)
+		socket.on(
+			"systemSettings:updateSummarizationEnabled",
+			handleSystemSettingsUpdateSummarizationEnabled
+		)
+		socket.on("vectorization:listModels", handleVectorizationListModels)
+		socket.on("vectorization:disable", handleVectorizationDisable)
+		socket.on("characters:importCard", handleCharactersImportCard)
+		;(socket as any).on(
+			"characters:importCard:error",
+			handleCharactersImportCardError
+		)
+		socket.on("personas:importCard", handlePersonasImportCard)
+		socket.on("personas:importCard:error", handlePersonasImportCardError)
+		socket.on("bindingCheck:result", handleBindingCheckResult)
 
 		socket.emit("characters:list", {})
 		socket.emit("personas:list", {})
@@ -686,36 +776,51 @@
 	})
 
 	onDestroy(() => {
-		socket.off("bindingCheck:result")
-		socket.off("characters:list")
-		socket.off("personas:list")
-		socket.off("sessions:list")
-		socket.off("connections:list")
-		socket.off("connections:create")
+		socket.off("bindingCheck:result", handleBindingCheckResult)
+		socket.off("characters:list", handleCharactersList)
+		socket.off("personas:list", handlePersonasList)
+		socket.off("sessions:list", handleSessionsList)
+		socket.off("connections:list", handleConnectionsList)
+		socket.off("connections:create", handleConnectionsCreate)
 		// By NAMED reference — this page is not the only listener on
 		// `connectionDefaults:list` (Admin → Defaults renders from it), and a
 		// bare `socket.off(event)` would tear that one down too.
 		socket.off("connectionDefaults:list", handleDefaultsForNewConnection)
-		socket.off("characters:create")
-		socket.off("personas:create")
-		socket.off("sessions:create")
-		socket.off("ollama:version")
-		socket.off("ollama:modelsList")
-		socket.off("ollama:connectModel")
-		;(socket as any).off("koboldcpp:version")
-		;(socket as any).off("koboldcpp:version:error")
-		;(socket as any).off("koboldcpp:listModels")
-		;(socket as any).off("koboldcpp:connectModel")
-		;(socket as any).off("koboldcpp:connectModel:error")
-		socket.off("systemSettings:updateSummarizationEnabled")
-		socket.off("vectorization:listModels")
-		socket.off("vectorization:disable")
-		socket.off("characters:importCard")
-		;(socket as any).off("characters:importCard:error")
-		socket.off("personas:importCard")
-		socket.off("personas:importCard:error")
-		socket.off("setup:get")
-		socket.off("setup:markComplete")
+		socket.off("characters:create", handleCharacterCreated)
+		socket.off("personas:create", handlePersonaCreated)
+		socket.off("sessions:create", handleSessionsCreate)
+		socket.off("ollama:version", handleOllamaVersion)
+		socket.off("ollama:modelsList", handleOllamaModelsList)
+		socket.off("ollama:connectModel", handleOllamaConnectModel)
+		;(socket as any).off("koboldcpp:version", handleKoboldcppVersion)
+		;(socket as any).off(
+			"koboldcpp:version:error",
+			handleKoboldcppVersionError
+		)
+		;(socket as any).off("koboldcpp:listModels", handleKoboldcppListModels)
+		;(socket as any).off(
+			"koboldcpp:connectModel",
+			handleKoboldcppConnectModel
+		)
+		;(socket as any).off(
+			"koboldcpp:connectModel:error",
+			handleKoboldcppConnectModelError
+		)
+		socket.off(
+			"systemSettings:updateSummarizationEnabled",
+			handleSystemSettingsUpdateSummarizationEnabled
+		)
+		socket.off("vectorization:listModels", handleVectorizationListModels)
+		socket.off("vectorization:disable", handleVectorizationDisable)
+		socket.off("characters:importCard", handleCharactersImportCard)
+		;(socket as any).off(
+			"characters:importCard:error",
+			handleCharactersImportCardError
+		)
+		socket.off("personas:importCard", handlePersonasImportCard)
+		socket.off("personas:importCard:error", handlePersonasImportCardError)
+		socket.off("setup:get", handleSetupGet)
+		socket.off("setup:markComplete", handleSetupMarkComplete)
 	})
 </script>
 

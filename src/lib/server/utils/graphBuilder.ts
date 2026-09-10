@@ -21,6 +21,7 @@
 
 import { ComposedError } from "$lib/server/connections/visibility"
 import { getConnectionAdapter } from "./getConnectionAdapter"
+import { composeStopsFor } from "$lib/server/connections/stops"
 import { resolveSampling } from "./resolveSampling"
 import { TokenCounters } from "./TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
@@ -319,12 +320,20 @@ async function runLLM(
 	// Honor the connection's own configured tokenizer — see the identical
 	// fix/comment in generateResponse.ts.
 	const tokenCounter = new TokenCounters(
-		(opts.connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
+		opts.connection.tokenCounter || TokenCounterOptions.ESTIMATE
 	)
-	const tokenLimit: number =
-		(opts.connection as any).tokenLimit ??
-		(opts.connection as any).contextSize ??
-		4096
+	// ⚠ 4096 outright, not a fallback. This read `(opts.connection as
+	// any).tokenLimit ?? (opts.connection as any).contextSize` first, but
+	// `connections` has never had either column — both were `undefined` on
+	// every row that has ever been loaded, so the expression always fell
+	// through to this literal. The casts were what let the dead reads
+	// typecheck; removing them changes nothing at runtime.
+	//
+	// ⚠ Deliberately NOT widened to the sampling config's `contextTokens`,
+	// which is where `dispatchStep.ts` lands after the same removal. This path
+	// never read it, so borrowing it here would be a real change to the prompt
+	// budget rather than a deletion of dead code.
+	const tokenLimit: number = 4096
 
 	const fakeSession = buildMinimalSession(userPrompt)
 
@@ -341,6 +350,11 @@ async function runLLM(
 		tokenLimit,
 		contextThresholdPercent: 0.9
 	})
+
+	// Composed once and handed over — an adapter builds none of its own (ruling
+	// 2026-09-10). The minimal session has no cast, so this is the connection's
+	// completion template alone, exactly what this path always sent.
+	adapter.withStops(composeStopsFor(opts.connection, fakeSession))
 
 	// Every call this builder makes must come back as a JSON object. Each
 	// adapter translates this into whatever its service supports; ones that
@@ -1170,8 +1184,20 @@ export async function buildGraphFromScenes(
 		// by what the row actually holds, not by a legacy-data branch.
 		const storedParticipants = scene.participantCharacters ?? []
 		const storedMentioned = scene.mentionedCharacters ?? []
-		const nothingStored =
-			storedParticipants.length === 0 && storedMentioned.length === 0
+		/**
+		 * ⚠ **Participants alone decide this**, and the `mentionedCharacters`
+		 * half was removed deliberately (plan §1).
+		 *
+		 * `mentioned` is DERIVED now — annotations × vocabulary, computed by the
+		 * caller — so it is an observation about the text, not a record that
+		 * anybody resolved this scene's cast. Leaving it in the condition made a
+		 * never-processed scene whose messages happen to name somebody look
+		 * *resolved*: extraction would be skipped, no participant would be
+		 * admitted, and Pass 2 would then discard the scene for having no
+		 * present character. `participant` is the decision; it is the only thing
+		 * that can answer "was this cast ever resolved".
+		 */
+		const nothingStored = storedParticipants.length === 0
 
 		if (nothingStored) {
 			// No cast was ever recorded for this scene. Derive it from the
@@ -1205,22 +1231,30 @@ export async function buildGraphFromScenes(
 			signal?.throwIfAborted()
 			resolveNameRefs(extracted.participantCharacters, true)
 			resolveNameRefs(extracted.mentionedCharacters, false)
-		} else {
-			// Present first — present wins if a character is in both lists.
-			const numeric = (xs: (number | string)[]) =>
-				xs.filter((x): x is number => typeof x === "number")
-			const named = (xs: (number | string)[]) =>
-				xs
-					.filter((x): x is string => typeof x === "string")
-					.map((name) => ({ name }) as ExtractedCastRef)
+		}
 
+		const numeric = (xs: (number | string)[]) =>
+			xs.filter((x): x is number => typeof x === "number")
+		const named = (xs: (number | string)[]) =>
+			xs
+				.filter((x): x is string => typeof x === "string")
+				.map((name) => ({ name }) as ExtractedCastRef)
+
+		if (!nothingStored) {
+			// Present first — present wins if a character is in both lists.
 			for (const id of numeric(storedParticipants))
 				resolveStoredId(id, true)
 			resolveNameRefs(named(storedParticipants), true)
-			for (const id of numeric(storedMentioned))
-				resolveStoredId(id, false)
-			resolveNameRefs(named(storedMentioned), false)
 		}
+
+		// Derived mentions are admitted in EITHER case, and after the
+		// participants of both, because they do not compete with extraction:
+		// they are an observation over the scene's text (annotations ×
+		// vocabulary), not a stored decision the extract branch stands in for.
+		// `admit` already lets present beat mentioned, so a character the text
+		// also names stays a participant.
+		for (const id of numeric(storedMentioned)) resolveStoredId(id, false)
+		resolveNameRefs(named(storedMentioned), false)
 
 		if (
 			presentTempIdsThisScene.size > 0 ||
@@ -1231,10 +1265,13 @@ export async function buildGraphFromScenes(
 
 		// Report scenes whose cast we had to derive, so apply can persist it.
 		// Scenes that already held usable ids are skipped — nothing to write.
+		//
+		// `storedMentioned` is not consulted: it arrives derived, so it is never
+		// a legacy name string and it is never written back. Only `participant`
+		// reaches `scene_characters` now.
 		const derivedCast =
 			nothingStored ||
-			storedParticipants.some((x) => typeof x === "string") ||
-			storedMentioned.some((x) => typeof x === "string")
+			storedParticipants.some((x) => typeof x === "string")
 		if (derivedCast) {
 			resolvedSceneCast.push({
 				sceneId: isDirectEntry ? null : scene.id,

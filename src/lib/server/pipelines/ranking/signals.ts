@@ -964,11 +964,27 @@ export function lastRefRecencySignal(
 	return Math.exp(-0.01 * (totalMessages - lastIndex))
 }
 
-/** Position in the ordered list, 0 for oldest and 1 for newest. */
-export const positionRecencySignal = (index: number, length: number): number =>
-	length <= 1 ? 1 : index / (length - 1)
+/**
+ * ⚠ **`positionRecencySignal` was here and is gone with the weight it fed.**
+ *
+ * `index / (length - 1)` over an ordered list — a *message* measure, for the
+ * `messages` band the shipped pipeline never populates. It had no caller, the
+ * `recency` weight it would have produced had no producer, and
+ * `core:task/rank-hybrid@1` declared `signalRecency` over both. Three halves of
+ * one feature, none of them joined up. See `SignalWeights` in `weights.ts` for
+ * why the answer was removal rather than wiring, and
+ * `runtime/signalWiring.test.ts` for the guard that keeps the three ends tied.
+ */
 
-/** Length relative to the average, capped at 1. */
+/**
+ * Length relative to the average, capped at 1.
+ *
+ * The cap is the design and not a guard: this discriminates *below* the mean
+ * and saturates above it, so a pool of evenly sized entries scores a flat 1 and
+ * orders nothing, while a pool that mixes stubs with articles pushes the stubs
+ * down. Called by `keywordQuery`'s `scoreSignals` on every candidate — which it
+ * was not, for as long as `SignalWeights.density` had nothing to weigh.
+ */
 export const densitySignal = (length: number, averageLength: number): number =>
 	Math.min(1, length / Math.max(averageLength, 1))
 

@@ -860,7 +860,172 @@ const KEYLESS_COMPETITOR: CorpusWorld = {
 	]
 }
 
+/**
+ * A conversation written the way roleplay is actually written.
+ *
+ * ⚠ **The corpus was blind to the extractor.** Every world above states its
+ * conversation in flat third-person narration — no dialogue, no contractions —
+ * so `extractEntities` had nothing to get wrong in any of them, and a change to
+ * *what gets extracted* moved 0 of 227 prose passages in this directory.
+ * Measured, on the two defects this world exists for: quote-then-tag merged the
+ * quote with the speaker into one unmatchable key (`Emberfall," Cade`), and
+ * `I'm` was an entity. Both are invisible here without a world that speaks.
+ *
+ * Held equal by construction, so what moves is the extractor and not something
+ * else:
+ *
+ *   · **the entry that has to be admitted has no keys at all** and a title the
+ *     conversation never says, so `keyword` and `nameMatch` are both 0 and only
+ *     evidence can let it in — the same construction `KEYLESS_COMPETITOR` uses;
+ *   · **`Emberfall` is in that entry's body and in no other**, so the entity
+ *     term is what discriminates rather than shared vocabulary;
+ *   · **`Cade` is in no entry at all**, so the speaker the fix recovers cannot
+ *     flatter the result — it is there to be observed in the diagnostics, not
+ *     to score.
+ */
+const SPOKEN_ALOUD: CorpusWorld = {
+	about: "a conversation in dialogue, whose names live in the tags",
+	cast: [{ name: "Vell", ref: { kind: "character", id: 7 } }],
+	messages: [
+		{ id: 1, content: '"They have taken Emberfall," Cade said.' },
+		{ id: 2, content: '"They told me I\'m not welcome," Vell answered.' },
+		{ id: 3, content: '"Emberfall!" Cade shouted. "Nobody is going back."' },
+		{ id: 4, content: '"I\'ll go by the ford, then," Cade said.' },
+		{ id: 5, content: '"I\'m sorry," Vell said. "Emberfall is gone."' }
+	],
+	entries: [
+		{
+			id: 1,
+			name: "The Ford",
+			keys: "ford",
+			content: BODY("A shallow crossing, passable except after rain.")
+		},
+		{
+			id: 2,
+			name: "The Siege",
+			keys: "",
+			content: BODY(
+				"The wall at Emberfall fell in a night and nobody has held it since."
+			)
+		},
+		{
+			id: 3,
+			name: "Saltmarsh Road",
+			keys: "road",
+			content: BODY("The old trade route south, abandoned since the bridge fell.")
+		}
+	]
+}
+
 // ─── The fixtures ───────────────────────────────────────────────────────────
+
+/**
+ * A stub and an article, alike in every scored signal but length.
+ *
+ * **The world that can see `density`**, which nothing could until the scan
+ * started producing it. `densitySignal` had lived in `ranking/signals.ts` with
+ * no caller for as long as `SignalWeights.density` had lived in `weights.ts`
+ * with nothing to weigh and `signalDensity` had been declared, stored and
+ * resolved on `core:task/rank-hybrid@1` — a helper, a weight and a control, all
+ * three real, none of them joined to the other two.
+ *
+ * Everything else is held equal *by construction*, which is what makes the
+ * fixture a measurement rather than a demonstration:
+ *
+ *   · **the same single key**, matched, so `keyword` is 1 for both and
+ *     `proximity` is 0 for both (`keywordMatch` needs two exact hits);
+ *   · **one-word titles the conversation never says**, so `nameMatch` is 0 and
+ *     neither title contributes to `tfidf` — the shared key is then the whole
+ *     scored document, identical twice over;
+ *   · **lower case throughout and no cast**, so the entity profile is empty and
+ *     `entityCooccurrence` is 0 for both — the same precaution
+ *     `semanticCorpus.int.test.ts` takes and for the same reason;
+ *   · **the same key**, so both were last referenced in the same message and
+ *     `lastRefRecency` is equal too.
+ *
+ * They therefore tie *exactly* under the shipped weights and fall through to
+ * authored position. The only thing that can separate them is that one of them
+ * is ten times longer than the other.
+ *
+ * ⚠ **Density and cost are the same underlying quantity**, and the second
+ * assertion is where that bites: a longer entry is a better-scoring entry
+ * *and* a more expensive one, so weighting density is a decision to spend more
+ * of a fixed window on fewer entries. That is a real property of the control
+ * rather than a flaw in the fixture, and it is why the weight ships at 0.
+ */
+const STUB_AND_ARTICLE: CorpusWorld = {
+	about: "two entries on one key, one a one-line stub and one a real article",
+	messages: [
+		{ id: 1, content: "we came down out of the pass before dark, all four of us" },
+		{ id: 2, content: "there was a lantern burning where the wall meets the water" },
+		{ id: 3, content: "the lantern kept going out and somebody kept relighting it" }
+	],
+	entries: [
+		{
+			id: 1,
+			name: "stub",
+			keys: "lantern",
+			content: "a lamp on a post."
+		},
+		{
+			id: 2,
+			name: "article",
+			keys: "lantern",
+			content:
+				"a lamp on a post, lit at dusk by whoever draws the short straw, " +
+				"kept in oil out of the harbour fund, and put out again at the " +
+				"turn of the tide unless the boats are still out, in which case " +
+				"it burns until the last of them is tied up and counted."
+		}
+	]
+}
+
+/**
+ * Two entries whose keys are said the same number of times overall, and a
+ * different number of times *recently*.
+ *
+ * **The world that can see `guaranteedMessages`**, which was engine-read and
+ * declared nowhere: `keywordQuery` has always taken it off `RetrievalParams`,
+ * where the only value it could hold was a hardcoded 10. It is the window
+ * `tfidf` counts term frequencies over and the window
+ * `speakerCooccurrenceSignal` asks "did this character speak" over — two live
+ * signals tuned by a constant no panel could reach.
+ *
+ * Held equal by construction so that the window is the only thing that can
+ * separate the two entries:
+ *
+ *   · **one key each, both matched**, so `keyword` is 1 for both and
+ *     `proximity` 0 for both;
+ *   · **both keys said once in the final message**, so both were last
+ *     referenced in the same place and `lastRefRecency` is identical — without
+ *     that line the recent entry wins the baseline and the fixture measures
+ *     nothing;
+ *   · **each key in exactly one earlier message**, so `buildIdf` — which reads
+ *     every message and not the guaranteed window — gives them the same weight;
+ *   · **identical content lengths**, so `density` is 1 for both;
+ *   · **one-word titles the conversation never says, lower case throughout, no
+ *     cast**, so `nameMatch` and `entityCooccurrence` are 0 for both.
+ *
+ * *ember* is said three times early and once at the end; *warden* three times
+ * late and once at the end. Over the whole conversation that is four apiece —
+ * a tie, which falls through to authored order — and over the last two messages
+ * it is one against four.
+ */
+const RECENT_VOCABULARY: CorpusWorld = {
+	about: "two keys said equally often overall and unequally often just now",
+	messages: [
+		{ id: 1, content: "the ember and the ember and the ember over the sluice" },
+		{ id: 2, content: "we came down out of the pass before dark, all four of us" },
+		{ id: 3, content: "the road was bad and the mule threw a shoe on the way" },
+		{ id: 4, content: "so we made camp and waited for the morning to come round" },
+		{ id: 5, content: "the warden and the warden and the warden at the gate" },
+		{ id: 6, content: "there was an ember by the warden when we left" }
+	],
+	entries: [
+		{ id: 1, name: "one", keys: "ember", content: "aaaa bbbb cccc dddd eeee." },
+		{ id: 2, name: "two", keys: "warden", content: "aaaa bbbb cccc dddd eeee." }
+	]
+}
 
 describe("the corpus can see lore ranking at all", () => {
 	/**
@@ -1056,6 +1221,122 @@ describe("the corpus can see lore ranking at all", () => {
 		// banked: the entry a raised weight favours was in the prompt either
 		// way. `field weighting` below is the world built so it can move.
 		expect(titled.order).toEqual(shipped.order)
+	})
+})
+
+describe("the guaranteed window — how much conversation counts as now", () => {
+	/**
+	 * ⚠ **The control this corpus was blind to for the opposite reason.** Every
+	 * other dead control found in this area was declared and unread;
+	 * `guaranteedMessages` was **read and undeclared**, permanently 10, so there
+	 * was nothing to move and no fixture could have noticed. It is declared on
+	 * the three lore lanes and on `lorebook-triggers` now, defaulting to the 10
+	 * it has always silently run at, and `runtime/loreScanDepth.int.test.ts`
+	 * carries the row-to-scan half.
+	 */
+	it("is inert at the shipped 10, which is what makes declaring it safe", () => {
+		// Six messages, so a window of 10 and a window of 6 are the same window.
+		// Both entries then tie to the last bit and fall through to authored
+		// order — the baseline the assertions below move away from.
+		const shipped = runWorld(RECENT_VOCABULARY)
+		const whole = runWorld(RECENT_VOCABULARY, {
+			retrieval: { guaranteedMessages: 6 }
+		})
+		expect(shipped.order).toEqual([1, 2])
+		expect(shipped.scoreOf(1)).toBe(shipped.scoreOf(2))
+		expect(whole.order).toEqual(shipped.order)
+		expect(whole.scoreOf(1)).toBe(shipped.scoreOf(1))
+	})
+
+	it("reorders the prompt when the window narrows to what is being said now", () => {
+		const narrow = runWorld(RECENT_VOCABULARY, {
+			retrieval: { guaranteedMessages: 2 }
+		})
+		// One `ember` against four `warden`s in the last two messages: the
+		// entry the scene is *currently* about overtakes the one it was about
+		// four messages ago, on the same keyword evidence.
+		expect(narrow.order).toEqual([2, 1])
+		expect(narrow.signalsOf(2).tfidf).toBeGreaterThan(
+			narrow.signalsOf(1).tfidf!
+		)
+	})
+
+	it("moves nothing else — the scan window is a separate control", () => {
+		// The pair exists because a session of long posts wants a deep scan and
+		// a short guarantee. Narrowing one must not narrow the other, or the
+		// split is the old shared constant under two names.
+		const narrow = runWorld(RECENT_VOCABULARY, {
+			retrieval: { guaranteedMessages: 2 }
+		})
+		expect(narrow.diagnostics.scanDepth).toBe(10)
+		expect(narrow.admitted).toEqual([1, 2])
+	})
+})
+
+describe("density — how long an entry is against its pool", () => {
+	/**
+	 * ⚠ The finding, and it is the same shape as `proximity`'s: the fixture's
+	 * *existence* is half the point. Until the scan wrote this number, the
+	 * signal was not merely inert — it was unobservable, because no candidate
+	 * anywhere carried the field at all.
+	 */
+	it("is a real spread here, which it was nowhere before", () => {
+		const run = runWorld(STUB_AND_ARTICLE)
+		const stub = run.signalsOf(1).density ?? 0
+		const article = run.signalsOf(2).density ?? 0
+
+		// Length against the pool's mean, capped at 1: the article is above
+		// average and saturates, the stub is well under it.
+		expect(article).toBe(1)
+		expect(stub).toBeLessThan(0.2)
+		expect(stub).toBeGreaterThan(0)
+	})
+
+	it("is inert at the shipped weight, which is why wiring it was safe", () => {
+		// The two tie to the last bit and fall through to authored order. This
+		// is what "producing the signal changes no score" means, asserted rather
+		// than assumed.
+		const shipped = runWorld(STUB_AND_ARTICLE)
+		expect(shipped.order).toEqual([1, 2])
+		expect(shipped.scoreOf(1)).toBe(shipped.scoreOf(2))
+	})
+
+	it("reorders the prompt once it is weighted", () => {
+		const weighted = runWorld(STUB_AND_ARTICLE, {
+			signals: { worldLore: { density: 0.3 } }
+		})
+		expect(weighted.order).toEqual([2, 1])
+	})
+
+	/**
+	 * ⚠ The control half, and the honest limit of the signal — `tf-idf`'s
+	 * `cannot be seen at all in a pool whose entries do not differ`, one signal
+	 * over.
+	 *
+	 * `THE CONTENDED WORLD`'s eight entries are built through `BODY`, which pads
+	 * every one of them to about the same length. Measured: their densities are
+	 * 0.97, 0.98 and 1.00 — the cap swallows six of the eight outright — so the
+	 * weight has almost nothing to multiply and moving it from 0.1 to 1 changes
+	 * neither the order nor which five fit.
+	 *
+	 * That is the control's real shape rather than a defect in the fixture:
+	 * `densitySignal` discriminates *below* the pool mean and saturates above
+	 * it, so it is a slider for a book that mixes stubs with articles and a
+	 * no-op for a book of even entries. Stated here so that a reader who turns
+	 * it up and sees nothing has somewhere to find out why.
+	 */
+	it("cannot be seen at all in a pool whose entries are evenly sized", () => {
+		const even = runWorld(CONTENDED)
+		const densities = even.candidates.map((c) => c.signals.density ?? 0)
+		expect(Math.min(...densities)).toBeGreaterThan(0.95)
+
+		const shipped = runWorld(CONTENDED, { budget: FITS_FIVE })
+		const weighted = runWorld(CONTENDED, {
+			budget: FITS_FIVE,
+			signals: { worldLore: { density: 1 } }
+		})
+		expect(weighted.order).toEqual(shipped.order)
+		expect(weighted.admitted).toEqual(shipped.admitted)
 	})
 })
 
@@ -1483,6 +1764,57 @@ describe("the match mode an entry declares", () => {
 		const run = runWorld(strict)
 		expect(run.order).toEqual([2])
 		expect(missed(run)).toContain(1)
+	})
+})
+
+describe("what the extractor pulls out of dialogue", () => {
+	/**
+	 * ⚠ **This fixture fails on the extractor that shipped before
+	 * `core:extract/entities-heuristic@2`**, which is the only reason it is
+	 * here: everything else in this directory passes on both, so nothing in
+	 * `measure/` could observe a change to what gets extracted.
+	 *
+	 * The baseline half is the ordinary corpus shape — at the shipped threshold
+	 * the keyless entry cannot get in — and the perturbation is the admission
+	 * gate, exactly as `the admission gate, under a budget` moves it. What is
+	 * new is *why* the gate can now see anything: the window has to yield
+	 * `Emberfall` as an entity of its own, and under the old run builder it
+	 * yielded `Emberfall," Cade`, a key with a quote and a comma in it that
+	 * matches no entry text ever written.
+	 */
+	it("names the speaker and the place separately, so evidence can match", () => {
+		const shipped = runWorld(SPOKEN_ALOUD)
+		expect(shipped.order).toEqual([1])
+		expect(missed(shipped)).toContain(2)
+
+		const open = runWorld(SPOKEN_ALOUD, {
+			retrieval: { admitThreshold: 0.3 }
+		})
+		expect(open.admitted).toEqual([1, 2])
+		expect(open.diagnostics.admittedByEvidence).toBe(1)
+		// The two halves of the dialogue tag, as two entities.
+		expect(open.diagnostics.entities).toContain("Emberfall")
+		expect(open.diagnostics.entities).toContain("Cade")
+		expect(open.diagnostics.entities).not.toContain('Emberfall," Cade')
+	})
+
+	it("does not spend the window's entity budget on contractions", () => {
+		/**
+		 * The other defect, measured where it costs something rather than in a
+		 * unit assertion.
+		 *
+		 * ⚠ The `I'm` that matters is the one in **message 2**, mid-sentence
+		 * after "told me" — a sentence-*opening* contraction was already
+		 * dropped by rule 1, which is what made this defect look rarer than it
+		 * is. One mid-sentence occurrence puts the token in `corroborated`, and
+		 * from then on every sentence-opening `I'm` in the window comes in with
+		 * it: two entities here, resolving to nothing, diluting every entity
+		 * rarity in `buildEvidenceProfile` and taking slots in `MAX_ENTITIES`
+		 * from names that mean something.
+		 */
+		const run = runWorld(SPOKEN_ALOUD, { retrieval: { admitThreshold: 0.3 } })
+		for (const junk of ["I'm", "I'll", "I'd", "I've"])
+			expect(run.diagnostics.entities).not.toContain(junk)
 	})
 })
 

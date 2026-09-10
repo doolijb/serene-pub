@@ -16,6 +16,16 @@ import type { AdapterIo } from "$lib/shared/connectionAdapters/io"
 import { SessionTypes } from "$lib/shared/constants/SessionTypes"
 import { PromptBlockFormatter } from "$lib/shared/utils/PromptBlockFormatter"
 import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
+import {
+	completionTemplateOf,
+	type CompletionTemplate
+} from "$lib/shared/constants/completionTemplates"
+import {
+	wireModeFor,
+	type WireMode
+} from "$lib/shared/connectionAdapters/wireMode"
+import { continueWireRefusal } from "$lib/shared/connectionAdapters/continueReply"
+import type { ComposedStops } from "$lib/server/connections/stops"
 
 export interface BasePromptSession extends SelectSession {
 	sessionCharacters?: (SelectSessionCharacter & {
@@ -68,9 +78,43 @@ export interface BasePromptSession extends SelectSession {
  */
 export type ResponseFormat = "text" | "json"
 
+/**
+ * HOW this adapter will resume a partial reply — or that it will not.
+ *
+ * One entry point rather than a rule each adapter reimplements, because
+ * "continue" is only a continuation when the model is handed the text so far
+ * inside an OPEN assistant turn and writes the next characters of it. There are
+ * exactly two ways to arrange that and one honest way to decline:
+ *
+ *   - `openBlock` — completion wire. The assembled prompt already ends with the
+ *     seed block left open (`contextHandlebarsHelpers`,
+ *     `includeClose: messageId !== -2`), and the adapter sends that string, so
+ *     nothing further is required of it. Named anyway: "already correct" and
+ *     "nobody checked" look identical from outside.
+ *   - `prefill` — a chat protocol that takes a trailing assistant turn as one.
+ *     Anthropic's Messages API is the only one this build speaks.
+ *   - `none` — everything else, carrying the sentence saying why. An
+ *     OpenAI-compatible endpoint in chat wire is the case that matters: a
+ *     trailing `{role:"assistant"}` message goes to the chat template, and
+ *     whether the model carries that turn on or opens a fresh one is the
+ *     template's decision. Sending it anyway LOOKS like a continuation, produces
+ *     a second beginning that `joinContinuation` glues onto the first, and
+ *     reports nothing — which is exactly what naming this route removes.
+ */
+export type ContinuationRoute =
+	| { kind: "openBlock" }
+	| { kind: "prefill" }
+	| { kind: "none"; reason: string }
+
 // Generic interface for constructor parameters
 export interface BaseConnectionAdapterParams {
-	connection: SelectConnection
+	/**
+	 * The row with its completion template dereferenced, where a resolver
+	 * loaded it (`AdapterConnection`) — a plain `SelectConnection` is still
+	 * accepted, and resolves against the built-ins exactly as the renderer
+	 * does for the same input.
+	 */
+	connection: AdapterConnection
 	sampling: ResolvedSampling
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
@@ -91,7 +135,7 @@ export type TestConnectionFn = (
 ) => Promise<{ ok: boolean; error?: string }>
 
 export abstract class BaseConnectionAdapter implements AdapterActions {
-	connection: SelectConnection
+	connection: AdapterConnection
 	sampling: ResolvedSampling
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
@@ -245,6 +289,15 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * The legacy fallthrough this replaced ran `PromptBuilder`, which is
 	 * deleted. Summarizer mode still assembles its own payload below because it
 	 * is a different shape, not a different prompt path.
+	 *
+	 * ⚠ **`args` is empty and must stay empty.** It used to carry
+	 * `useSessionFormat`, set by six one-line `compilePrompt` overrides from each
+	 * adapter's own `extraJson` flag — and the pipeline never reached any of
+	 * them, because `withCompiledPrompt` returns above before the argument is
+	 * read. That is the defect wire mode replaced: a per-call answer to a
+	 * question the connection has to answer once, for the render and the send
+	 * together. Anything put back here would be invisible on the path that
+	 * matters, exactly as that flag was.
 	 */
 	async compilePrompt(args: {}): Promise<PromptBuilderCompiledPrompt> {
 		if (this.injectedPrompt) return this.injectedPrompt
@@ -252,7 +305,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 		this.tokenLimit = await this.getContextTokenLimit()
 
 		if (this.isSummarizerMode) {
-			return await this.compileSummarizerPrompt(args)
+			return await this.compileSummarizerPrompt()
 		}
 
 		throw new Error(
@@ -388,6 +441,71 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 		return this.suppliedAttachments
 	}
 
+	// ── Stop sequences (not an action either) ───────────────────────────────
+
+	/**
+	 * The stop sequences this request will send, already composed and already
+	 * filtered by the wire rule.
+	 *
+	 * ⚠ **An adapter never builds these.** Four of them used to carry the same
+	 * `StopStrings.get` + `Handlebars.compile` block and a fifth a ternary of its
+	 * own, and the five disagreed about the one thing that matters — whether a
+	 * completion template's delimiters belong on a chat request. They do not, and
+	 * Ollama sent them anyway. The composition is `connections/stops.ts` now
+	 * (ruling 2026-09-10), called at the two places an adapter is constructed
+	 * (`pipelines/runtime/dispatch.ts` and `utils/generateResponse.ts`), and an
+	 * adapter's whole remaining job is to put `this.stops` in whatever its
+	 * service calls the field.
+	 *
+	 * Set through a `withX` seam rather than a constructor param, deliberately:
+	 * every subclass declares its own inline destructured param list, so a field
+	 * added to `BaseConnectionAdapterParams` reaches none of them and TypeScript
+	 * says nothing — the same hazard `responseFormat` documents above, avoided
+	 * the same way.
+	 */
+	private suppliedStops?: ComposedStops
+
+	/**
+	 * Hand over the composed list. Returns the adapter so a construction site
+	 * reads as one expression, like `withCompiledPrompt` and `withAttachments`.
+	 */
+	withStops(stops: ComposedStops): this {
+		this.suppliedStops = stops
+		return this
+	}
+
+	/**
+	 * What goes on the wire, as the flat list every service's field wants.
+	 *
+	 * Empty when nothing was handed over, and that is the honest answer rather
+	 * than a fallback composition: a caller that skipped `withStops` has a wiring
+	 * bug, and an adapter quietly composing its own list is exactly what put a
+	 * chat request's native stop tokens at risk for a release.
+	 */
+	protected get stops(): string[] {
+		return (this.suppliedStops?.sent ?? []).map((s) => s.value)
+	}
+
+	/** The tagged list, kinds and all — for a caller recording the receipt. */
+	get composedStops(): ComposedStops | undefined {
+		return this.suppliedStops
+	}
+
+	/**
+	 * Which stop sequence the service says it actually matched, when it says.
+	 *
+	 * Set by the adapter after a generation, read by the dispatch afterwards —
+	 * a property rather than a field on `TextGenResult` because a streaming
+	 * adapter only learns this while the caller is draining the stream, which is
+	 * after `generateText()` has already returned.
+	 *
+	 * Only llama.cpp reports the WORD (`stopping_word`). Ollama and KoboldCPP
+	 * report a reason (`done_reason`, `finish_reason`) and LM Studio a stop-reason
+	 * enum — none of which names the sequence — so this stays undefined there
+	 * rather than being filled with something that is not a stop sequence.
+	 */
+	stopHit?: string
+
 	/**
 	 * Does THIS CLASS have code that puts attachments on the wire?
 	 *
@@ -430,6 +548,131 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 		return prepareAttachments(this.io, inputs, opts)
 	}
 
+	/**
+	 * The completion template this connection renders in and stops on.
+	 *
+	 * ## One resolution, read by both halves
+	 *
+	 * A format's delimiters and its stop strings are the same fact, and the
+	 * failure mode when they disagree has no error attached to it: the prompt
+	 * goes out wrapped in one set of markers, the model is told to stop on
+	 * another, and it simply never stops. That reads as a bad model. So the
+	 * markers `buildTextPromptFromMessages` wraps a block in and the stop
+	 * strings every adapter sends both come from THIS expression — not from two
+	 * spellings that have to be kept in step. (`OllamaAdapter` alone used to
+	 * carry two of them, `|| "chatml"` and `|| "vicuna"`, in one file.)
+	 *
+	 * ## Why a row and not a key
+	 *
+	 * `completionTemplateOf` resolves a bare key against the BUILT-INS, so a
+	 * key is only ever enough for the eight shipped formats: a template an admin
+	 * authored named none of them and resolved to the default, which is the
+	 * whole defect this accessor exists to close. The row is dereferenced from
+	 * `completion_templates` where the connection is LOADED
+	 * (`withCompletionTemplate`) and arrives here on `this.connection` — no
+	 * database enters an adapter and nothing here becomes async.
+	 *
+	 * ## The absent case
+	 *
+	 * A connection that never went through a resolver — a unit test's literal,
+	 * `connections:test` on unsaved form state — carries no template, and this
+	 * falls back to `completionTemplateOf(promptFormatOf(key))`. That is the
+	 * SAME expression `renderers.ts` falls back to for the same input, which is
+	 * what makes a render/stop disagreement unreachable rather than unlikely:
+	 * all three absent states (never set, cleared to `""`, and a key whose row
+	 * is gone) answer with the default on both sides.
+	 */
+	/**
+	 * Which METHOD this connection wants to be called by: `chat` (role-tagged
+	 * messages) or `completion` (one flat prompt string).
+	 *
+	 * ## What this replaced, and why it must never go back
+	 *
+	 * Every adapter used to answer this from a flag of its own —
+	 * `extraJson.useSession` on KoboldCPP, Ollama and LM Studio,
+	 * `extraJson.prerenderPrompt` on OpenAI, an unconditional `true` on Anthropic
+	 * — and read it inside `compilePrompt(args)`. The pipeline hands its payload
+	 * over through `withCompiledPrompt`, which returns before `compilePrompt`
+	 * ever looks at its argument, so on a pipeline run the flag was never set and
+	 * the adapter branched on a default that disagreed with the payload it had.
+	 * Anthropic sent the literal word "Hello" off its empty-messages floor;
+	 * KoboldCPP posted `/v1/chat/completions` with no `messages` key at all.
+	 *
+	 * It is a connection CAPABILITY now, resolved through the same four layers as
+	 * every other one — adapter declaration, preset, probe, hand-set override,
+	 * with the override winning. The provider node stays blind: it asks for
+	 * `text->text` and the connection answers how it wants to be called.
+	 *
+	 * ## Synchronous, and no database
+	 *
+	 * The same shape as `completionTemplate` above and for the same reasons. The
+	 * resolution happens in `withWireMode()` where the connection is LOADED
+	 * (`connections/capabilityTarget.ts`, `pipelines/config/stepConfig.ts`) and
+	 * arrives here on `this.connection` — no adapter gains a `db`, no
+	 * construction site gains a parameter, and nothing here becomes async.
+	 *
+	 * ## The absent case
+	 *
+	 * A connection that never went through a resolver — a unit test's literal,
+	 * `connections:test` on unsaved form state — carries no mode, and
+	 * `wireModeFor` answers from the row's own cached set and then from what its
+	 * TYPE declares. That fallback is exact rather than approximate, which is the
+	 * one way this differs from `completionTemplate`: the delimiters genuinely
+	 * live in a table an adapter cannot read, while everything wire mode is
+	 * resolved from is already on the row.
+	 */
+	protected get wireMode(): WireMode {
+		return (
+			this.connection?.wireMode ??
+			wireModeFor(
+				this.connection?.type,
+				(this.connection?.capabilities as { resolved?: any } | null)
+					?.resolved
+			)
+		)
+	}
+
+	/** Role-tagged messages go on the wire, rather than one flat prompt string. */
+	protected get isChatWire(): boolean {
+		return this.wireMode === "chat"
+	}
+
+	/**
+	 * How this adapter continues a partial reply — resolved once, here.
+	 *
+	 * ## Derived from data, not overridden per class
+	 *
+	 * The obvious shape for "Anthropic can prefill and the others cannot" is a
+	 * hook each adapter overrides, and it is the wrong one: the same fact is
+	 * needed by the capability panel and by the verb that refuses the button, and
+	 * neither may load an adapter module (`@lmstudio/sdk` cannot be PARSED on
+	 * Android). So the fact lives in the static manifest — `continuesIn`, per
+	 * type — and this reads it, which is the same arrangement `wireMode` uses and
+	 * for the same reason. A subclass that needed to differ would override this
+	 * getter, and the conformance test would then be the thing that noticed.
+	 *
+	 * ## What it does NOT answer
+	 *
+	 * Whether this connection MAY be continued. That is the `continue_reply`
+	 * capability, resolved through the four layers, and it is asked once —
+	 * server-side, before the turn starts, by `continueVerbRefusal`. Asking it
+	 * again here would mean reading `capabilities.resolved`, which is a CACHE an
+	 * older build wrote and which an adapter has no way to refresh; the two
+	 * readings would then disagree exactly on upgrading installs.
+	 */
+	protected get continuationRoute(): ContinuationRoute {
+		const reason = continueWireRefusal(this.connection?.type, this.wireMode)
+		if (reason) return { kind: "none", reason }
+		return this.isChatWire ? { kind: "prefill" } : { kind: "openBlock" }
+	}
+
+	protected get completionTemplate(): CompletionTemplate {
+		return completionTemplateOf(
+			this.connection?.completionTemplate ??
+				promptFormatOf(this.connection?.promptFormat)
+		)
+	}
+
 	async getContextTokenLimit(): Promise<number> {
 		// No `contextTokensEnabled` test: `sampling` arrives already resolved
 		// (resolveSampling.ts), so a key being present IS the switch being on.
@@ -453,10 +696,13 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * rather than that same delegation.
 	 */
 	private buildTextPromptFromMessages(messages: any[]): string {
-		// `promptFormatOf`, so a connection whose `prompt_format` column was
-		// cleared rather than unset still gets Vicuna. `?? ` here would hand
-		// `makeBlock` an empty string, whose `default:` arm is ChatML.
-		const format = promptFormatOf(this.connection?.promptFormat)
+		// The resolved ROW, and the SAME one the stop strings come from — see
+		// `completionTemplate`. This read the key alone, which resolves against
+		// the built-ins: an admin authored delimiters, the summarizer wrapped
+		// its blocks in the DEFAULT's markers instead, and the stop strings
+		// (also from the key) agreed with each other and with nothing the model
+		// was actually sent.
+		const format = this.completionTemplate
 		const blocks = messages.map((msg) =>
 			PromptBlockFormatter.makeBlock({
 				format,
@@ -530,9 +776,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * Compile summarizer prompt — passes promptConfig.systemPrompt directly to the LLM
 	 * with no roleplay or assistant framing. Used for lore summarization.
 	 */
-	protected async compileSummarizerPrompt(
-		args: any = {}
-	): Promise<PromptBuilderCompiledPrompt> {
+	protected async compileSummarizerPrompt(): Promise<PromptBuilderCompiledPrompt> {
 		const messages: any[] = [
 			{
 				role: "system",
@@ -548,20 +792,30 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 			})
 		}
 
-		const useSessionFormat = !!args?.useSessionFormat
-		const promptString = useSessionFormat
+		/**
+		 * The connection's own wire mode, not a caller's argument.
+		 *
+		 * This read `args.useSessionFormat`, which each adapter set from a local
+		 * `extraJson` flag in its own `compilePrompt` override — six overrides
+		 * whose entire body was that one line, and which the pipeline path never
+		 * reached at all. The accessor is the same fact resolved once, so a
+		 * summarize step and a session turn on one connection can no longer
+		 * disagree about which shape that connection takes.
+		 */
+		const chatWire = this.isChatWire
+		const promptString = chatWire
 			? undefined
 			: this.buildTextPromptFromMessages(messages)
 
 		const totalTokens = await this.tokenCounter.countTokens(
-			useSessionFormat ? JSON.stringify(messages) : promptString!
+			chatWire ? JSON.stringify(messages) : promptString!
 		)
 
 		return {
 			prompt: promptString,
 			messages,
 			meta: {
-				promptFormat: useSessionFormat ? "session" : "text",
+				promptFormat: chatWire ? "session" : "text",
 				templateName: "summarizer",
 				timestamp: new Date().toISOString(),
 				truncationReason: null,

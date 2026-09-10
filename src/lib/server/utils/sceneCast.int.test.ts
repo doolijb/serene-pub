@@ -127,6 +127,44 @@ describe("sceneCast — round-trip and ordering", () => {
 	})
 })
 
+describe("sceneCast — a write names the roles it means", () => {
+	test("an absent role key leaves that role's rows alone", async () => {
+		// ⚠ The semantics `mentioned` being iced depends on (plan §1). The graph
+		// build writes participants and has no opinion about mentions any more;
+		// if a missing key still meant "empty it", every apply would destroy the
+		// pre-icing rows a revert would want back, silently and for good.
+		const { readSceneCast, writeSceneCast } = await import("./sceneCast")
+		const { scene, bindings } = await setup("cast-partial-write")
+		const [a, b, c] = bindings
+
+		await writeSceneCast(scene.id, {
+			participantCharacters: [a.id],
+			mentionedCharacters: [b.id]
+		})
+		await writeSceneCast(scene.id, { participantCharacters: [c.id] })
+
+		const cast = await readSceneCast(scene.id)
+		expect(cast.participantCharacters).toEqual([c.id])
+		expect(cast.mentionedCharacters).toEqual([b.id])
+	})
+
+	test("an empty array still means empty it — that is how a caller clears a role", async () => {
+		const { readSceneCast, writeSceneCast } = await import("./sceneCast")
+		const { scene, bindings } = await setup("cast-partial-clear")
+		const [a, b] = bindings
+
+		await writeSceneCast(scene.id, {
+			participantCharacters: [a.id],
+			mentionedCharacters: [b.id]
+		})
+		await writeSceneCast(scene.id, { mentionedCharacters: [] })
+
+		const cast = await readSceneCast(scene.id)
+		expect(cast.participantCharacters).toEqual([a.id])
+		expect(cast.mentionedCharacters).toEqual([])
+	})
+})
+
 describe("sceneCast — referential integrity (what the FK buys)", () => {
 	test("deleting a binding removes its appearances and leaves others intact", async () => {
 		const { readSceneCast, writeSceneCast } = await import("./sceneCast")

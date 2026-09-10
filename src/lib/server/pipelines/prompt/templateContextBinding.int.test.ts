@@ -93,7 +93,7 @@ const bindings = coreBindings()
 
 const queryCtx = (scopeSessionId = sessionId) => ({
 	read: (table: string, q: unknown) =>
-		createHost(db as any, { sessionId: scopeSessionId, userId }).read!(
+		createHost(db, { sessionId: scopeSessionId, userId }).read!(
 			table,
 			q,
 			{

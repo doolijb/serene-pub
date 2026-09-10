@@ -88,75 +88,91 @@
 		}
 	}
 
+	// Named so `off` can name them too. A bare `socket.off("koboldcpp:subprocessStatus")`
+	// removes EVERY listener for that event — including KoboldCppPerfTab's and
+	// KoboldCppSidebar's, which listen for the same events and would stop updating
+	// for the rest of the session.
+	function handleSubprocessStatus(msg: Status) {
+		subStatus = msg
+		starting = false
+		stopping = false
+		if (msg.status === "running") refreshModel()
+	}
+
+	function handleGetSubprocessStatus(
+		msg: Sockets.KoboldCPP.GetSubprocessStatus.Response
+	) {
+		subStatus = msg.status
+		starting = false
+		stopping = false
+		if (msg.status.status === "running") refreshModel()
+	}
+
+	function handleStartSubprocess() {
+		starting = false
+		toaster.success({ title: "KoboldCPP starting…" })
+	}
+
+	function handleStartSubprocessError(msg: Sockets.ErrorResponse) {
+		starting = false
+		toaster.error({
+			title: "Failed to start",
+			description: msg?.error
+		})
+	}
+
+	function handleStopSubprocess() {
+		stopping = false
+		toaster.success({ title: "KoboldCPP stopped" })
+	}
+
+	function handleUnloadModel(msg: Sockets.KoboldCPP.UnloadModel.Response) {
+		unloading = false
+		if (msg.success) {
+			currentModel = null
+			toaster.success({ title: "Model unloaded" })
+		} else {
+			toaster.error({
+				title: "Unload not supported by this build"
+			})
+		}
+	}
+
+	function handleSetModelTtl() {
+		savingTtl = false
+		toaster.success({ title: "TTL updated" })
+	}
+
+	function handleSetManagedPort() {
+		savingPort = false
+		toaster.success({ title: "Port updated — restart required" })
+	}
+
 	onMount(() => {
 		socket.emit("koboldcpp:getSubprocessStatus", {})
 
-		socket.on("koboldcpp:subprocessStatus", (msg: Status) => {
-			subStatus = msg
-			starting = false
-			stopping = false
-			if (msg.status === "running") refreshModel()
-		})
-		socket.on(
-			"koboldcpp:getSubprocessStatus",
-			(msg: Sockets.KoboldCPP.GetSubprocessStatus.Response) => {
-				subStatus = msg.status
-				starting = false
-				stopping = false
-				if (msg.status.status === "running") refreshModel()
-			}
-		)
-		socket.on("koboldcpp:startSubprocess", () => {
-			starting = false
-			toaster.success({ title: "KoboldCPP starting…" })
-		})
-		socket.on(
-			"koboldcpp:startSubprocess:error",
-			(msg: Sockets.ErrorResponse) => {
-				starting = false
-				toaster.error({
-					title: "Failed to start",
-					description: msg?.error
-				})
-			}
-		)
-		socket.on("koboldcpp:stopSubprocess", () => {
-			stopping = false
-			toaster.success({ title: "KoboldCPP stopped" })
-		})
-		socket.on(
-			"koboldcpp:unloadModel",
-			(msg: Sockets.KoboldCPP.UnloadModel.Response) => {
-				unloading = false
-				if (msg.success) {
-					currentModel = null
-					toaster.success({ title: "Model unloaded" })
-				} else {
-					toaster.error({
-						title: "Unload not supported by this build"
-					})
-				}
-			}
-		)
-		socket.on("koboldcpp:setModelTtl", () => {
-			savingTtl = false
-			toaster.success({ title: "TTL updated" })
-		})
-		socket.on("koboldcpp:setManagedPort", () => {
-			savingPort = false
-			toaster.success({ title: "Port updated — restart required" })
-		})
+		socket.on("koboldcpp:subprocessStatus", handleSubprocessStatus)
+		socket.on("koboldcpp:getSubprocessStatus", handleGetSubprocessStatus)
+		socket.on("koboldcpp:startSubprocess", handleStartSubprocess)
+		socket.on("koboldcpp:startSubprocess:error", handleStartSubprocessError)
+		socket.on("koboldcpp:stopSubprocess", handleStopSubprocess)
+		socket.on("koboldcpp:unloadModel", handleUnloadModel)
+		socket.on("koboldcpp:setModelTtl", handleSetModelTtl)
+		socket.on("koboldcpp:setManagedPort", handleSetManagedPort)
 	})
 
 	onDestroy(() => {
-		socket.off("koboldcpp:subprocessStatus")
-		socket.off("koboldcpp:getSubprocessStatus")
-		socket.off("koboldcpp:startSubprocess")
-		socket.off("koboldcpp:startSubprocess:error")
-		socket.off("koboldcpp:stopSubprocess")
-		socket.off("koboldcpp:unloadModel")
-		socket.off("koboldcpp:setModelTtl")
-		socket.off("koboldcpp:setManagedPort")
+		socket.off("koboldcpp:subprocessStatus", handleSubprocessStatus)
+		socket.off("koboldcpp:getSubprocessStatus", handleGetSubprocessStatus)
+		socket.off("koboldcpp:startSubprocess", handleStartSubprocess)
+		socket.off(
+			"koboldcpp:startSubprocess:error",
+			handleStartSubprocessError
+		)
+		socket.off("koboldcpp:stopSubprocess", handleStopSubprocess)
+		socket.off("koboldcpp:unloadModel", handleUnloadModel)
+		socket.off("koboldcpp:setModelTtl", handleSetModelTtl)
+		socket.off("koboldcpp:setManagedPort", handleSetManagedPort)
 	})
 </script>
 

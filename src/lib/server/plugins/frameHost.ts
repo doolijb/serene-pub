@@ -34,8 +34,6 @@ import {
 	networkGrant
 } from "./permissions"
 
-type Db = { select: any; insert: any; delete: any }
-
 /* ── files ──────────────────────────────────────────────────────────────── */
 
 const SAFE_PATH = /^[a-zA-Z0-9_\-][a-zA-Z0-9._\-]*(\/[a-zA-Z0-9._\-]+)*$/

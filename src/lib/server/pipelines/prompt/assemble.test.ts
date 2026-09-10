@@ -26,6 +26,7 @@ import {
 	TemplateEngineError,
 	CORE_TEMPLATE_ENGINE
 } from "$lib/server/pipelines/prompt/renderers"
+import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 
 const decision = (over: Partial<Decision> = {}): Decision => ({
 	candidate: {
@@ -103,6 +104,159 @@ describe("rendering", () => {
 		messages: [{ id: 1, role: "user", content: "hello" }]
 	}
 
+	/**
+	 * Chat wire mode: the render produces MESSAGES, from the guarded path only.
+	 *
+	 * `split_session` is the one template with `renderMode: "role_array"`, and
+	 * `wireMode: "chat"` selects it whatever the connection's own format says —
+	 * a chat connection has no prompt format at all, so the delimiters it carries
+	 * have nothing to wrap.
+	 */
+	describe("chat wire mode", () => {
+		/** A template with role blocks in it — the only thing the parse can find. */
+		const BLOCKS =
+			"{{#systemBlock}}be terse{{/systemBlock}}" +
+			"{{#each sessionMessages}}{{#userBlock}}{{this.content}}{{/userBlock}}{{/each}}"
+
+		it("renders role-tagged messages instead of one flat string", async () => {
+			const r = await render({
+				...base,
+				wireMode: "chat",
+				template: BLOCKS
+			})
+			expect(r.rendered).toBeUndefined()
+			expect(r.messages).toEqual([
+				{ role: "system", content: "be terse" },
+				{ role: "user", content: "hello" }
+			])
+			// No marker survives the parse — the neutraliser and the parser are
+			// the guard, and a leaked `<@role:` would mean neither ran.
+			for (const m of r.messages!)
+				expect(m.content).not.toContain("<@role:")
+		})
+
+		it("ignores the connection's completion template entirely", async () => {
+			// The mutation that matters: passing a REAL template row here and
+			// getting none of its delimiters. Reading `input.completionTemplate`
+			// in chat mode would put Vicuna's `### System:` inside a message.
+			const r = await render({
+				...base,
+				wireMode: "chat",
+				promptFormat: "chatml",
+				template: BLOCKS
+			})
+			expect(JSON.stringify(r.messages)).not.toContain("<|im_start|>")
+			// And the receipt names what was USED, not what the row said.
+			expect(r.promptFormat).toBe("split_session")
+		})
+
+		it("degrades a block-less template to one user message, loudly", async () => {
+			// ⚠ The one way chat mode can still lose a prompt: the parse finds
+			// its messages by the markers the block helpers emit, so a template
+			// written without them renders good text and yields an EMPTY array.
+			// Sending THAT is a conversation with nothing in it.
+			//
+			// This used to throw. That broke the project's governing rule in one
+			// line — an unavailable mechanism SUBTRACTS A SIGNAL, it never
+			// disables a path — and it disabled the path for exactly the person
+			// least able to fix it: somebody upgrading, whose template worked
+			// yesterday, mid-conversation. The prompt survives now and the
+			// receipt carries the sentence the throw used to.
+			const r = await render({
+				...base,
+				wireMode: "chat",
+				template: "just some text, no blocks"
+			})
+			expect(r.messages).toEqual([
+				{ role: "user", content: "just some text, no blocks" }
+			])
+			// Every byte, and no wrapper invented around it.
+			expect(r.messages![0].content).toBe("just some text, no blocks")
+			expect(r.rendered).toBeUndefined()
+		})
+
+		it("names the template AND the fix on the receipt", async () => {
+			// The other half, and it is not decoration: keeping the bytes
+			// without reporting it would be the quiet structure-loss the throw
+			// rightly refused. The note has to say what was done and what to
+			// change — dropping either clause makes it noise.
+			const r = await render({
+				...base,
+				wireMode: "chat",
+				template: "just some text, no blocks"
+			})
+			expect(r.notes).toHaveLength(1)
+			const note = r.notes![0]
+			expect(note).toContain("sent as one user message")
+			expect(note).toContain("no role blocks")
+			expect(note).toContain("{{#systemBlock}}")
+			// The branch: a chat CONNECTION is fixed on the connection, a
+			// role-array TEMPLATE by picking a different one. Same wording the
+			// throw carried.
+			expect(note).toContain("this connection is chat wire mode")
+			expect(note).toContain("set this connection to completion wire mode")
+		})
+
+		it("names the OTHER fix when it is the template, not the connection", async () => {
+			// `wireMode` absent and a role-array completion template selected:
+			// the same degradation, and a different sentence, because telling
+			// this person to change their wire mode would send them nowhere.
+			const r = await render({
+				...base,
+				promptFormat: PromptFormats.SPLIT_CHAT,
+				template: "just some text, no blocks"
+			})
+			expect(r.messages).toEqual([
+				{ role: "user", content: "just some text, no blocks" }
+			])
+			expect(r.notes![0]).toContain(
+				"completion template renders role messages"
+			)
+			expect(r.notes![0]).toContain("pick a flat completion template")
+		})
+
+		it("says nothing at all on the ordinary path", async () => {
+			// ABSENT, not `[]`. A receipt that carries an empty notes array on
+			// every healthy turn teaches a reader to stop looking at the field,
+			// and it moves the payload every parity golden was taken against.
+			const r = await render({
+				...base,
+				wireMode: "chat",
+				template: BLOCKS
+			})
+			expect(r.notes).toBeUndefined()
+		})
+
+		it("leaves an EMPTY render alone rather than refusing it", async () => {
+			// The mutation on the guard's second half. Nothing was lost here —
+			// the template rendered nothing — and "this session is empty" is a
+			// different problem with a different owner. Dropping the
+			// `rendered.trim() !== ""` half would turn every empty render into
+			// this error.
+			const r = await render({
+				...base,
+				wireMode: "chat",
+				template: "   "
+			})
+			expect(r.messages).toEqual([])
+		})
+
+		it("is not entered for a completion connection", async () => {
+			// The other half of the guard: `wireMode` absent, or `completion`,
+			// renders exactly as it always has. Dropping the `=== "chat"` test
+			// would send every connection down the role-array branch.
+			for (const wireMode of [undefined, "completion" as const]) {
+				const r = await render({
+					...base,
+					wireMode,
+					template: BLOCKS
+				})
+				expect(typeof r.rendered).toBe("string")
+				expect(r.messages).toBeUndefined()
+			}
+		})
+	})
+
 	it("gives world lore to the template as name-keyed JSON", async () => {
 		// Not an array. The default story strings render `{{{worldLore}}}` and
 		// expect `{"<name>": "<content>"}` — this test used to assert an array
@@ -160,13 +314,21 @@ describe("rendering", () => {
 	it("a split-session format yields role-tagged messages rather than one string", async () => {
 		// Decided here rather than by the caller, so the preview and the send
 		// cannot disagree about which shape they are comparing.
+		//
+		// ⚠ The template emits BLOCKS. It used to be a hand-written ChatML
+		// string, which contains no role markers at all — so this passed on
+		// `Array.isArray([])`, an empty conversation, which is now refused by
+		// name. The template's own `renderMode` is still what selects this
+		// branch here (no `wireMode` is supplied), which is the case worth
+		// keeping: a connection may point at a `role_array` template
+		// independently of how it is called.
 		const r = await render({
 			...base,
 			promptFormat: "split_session",
-			template: "<|im_start|>system\nhi<|im_end|>"
+			template: "{{#systemBlock}}hi{{/systemBlock}}"
 		})
 		expect(r.rendered).toBeUndefined()
-		expect(Array.isArray(r.messages)).toBe(true)
+		expect(r.messages).toEqual([{ role: "system", content: "hi" }])
 	})
 
 	it("reports what the template referenced", async () => {

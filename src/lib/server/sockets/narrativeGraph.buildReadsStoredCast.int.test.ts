@@ -223,7 +223,13 @@ describe("the graph build reads cast from scene_characters", () => {
 			bindings[0].id,
 			bindings[1].id
 		])
-		expect(built!.mentionedCharacters).toEqual([bindings[2].id])
+		// ⚠ `mentioned` is DERIVED now (plan §1), so a stored row is
+		// deliberately not what arrives — this scene has no message span, and a
+		// span that names nobody names nobody. Keeping the stored row in the
+		// fixture is the point: it proves the read path stopped consulting it
+		// rather than that nobody wrote one. `sceneMentions.int.test.ts` owns
+		// what the derivation returns when there IS text.
+		expect(built!.mentionedCharacters).toEqual([])
 	})
 
 	test("a scene with no cast rows arrives empty, so the builder still derives it", async () => {

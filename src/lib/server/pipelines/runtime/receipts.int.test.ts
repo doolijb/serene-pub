@@ -10,7 +10,6 @@
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
-import { writtenMessageId } from "$lib/server/pipelines/runtime/runTurn"
 import * as schema from "$lib/server/db/schema"
 import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 
@@ -19,6 +18,12 @@ class FakeAdapter implements FakeTextAdapter {
 	injected: any
 	promptBuilder: any = {}
 	constructor(_p: any) {}
+	/** The composed stop list. Recorded so a test can assert what was handed over. */
+	stops: any
+	withStops(s: any) {
+		this.stops = s
+		return this
+	}
 	withCompiledPrompt(p: any) {
 		this.injected = p
 		return this
@@ -66,7 +71,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -92,14 +97,12 @@ beforeAll(async () => {
 		.values({ userId, isGroup: false })
 		.returning()
 	sessionId = session.id
-	await db
-		.insert(schema.sessionCharacters)
-		.values({
-			sessionId,
-			characterId,
-			isActive: true,
-			visibility: "visible"
-		})
+	await db.insert(schema.sessionCharacters).values({
+		sessionId,
+		characterId,
+		isActive: true,
+		visibility: "visible"
+	})
 	await db
 		.insert(schema.sessionPersonas)
 		.values({ sessionId, personaId: persona.id })
@@ -128,13 +131,38 @@ beforeAll(async () => {
 const turn = async (over: any = {}) => {
 	const { runTurn } = await import("$lib/server/pipelines/runtime/runTurn")
 	return await runTurn({
-		db: db as any,
+		db: db,
 		sessionId,
 		userId,
 		currentCharacterId: characterId,
 		text: "Have you seen the ashguard?",
 		...over
 	})
+}
+
+/**
+ * The row a run left, with what it made.
+ *
+ * The receipt's `runId` is the SDK's identity; `pipeline_run_artifacts.run_id`
+ * is the table's — so a test that wants the second has to go through the first.
+ */
+async function recordFor(receipt: { runId: string }) {
+	const { runArtifacts } = await import(
+		"$lib/server/pipelines/runtime/receipts"
+	)
+	const [run] = await db
+		.select()
+		.from(schema.pipelineRuns)
+		.where(eq(schema.pipelineRuns.runId, receipt.runId))
+	return { run, artifacts: await runArtifacts(db, run.id) }
+}
+
+/** The one message this turn's Consumer wrote. */
+async function messageWrittenBy(receipt: { runId: string }) {
+	const { artifacts } = await recordFor(receipt)
+	const message = artifacts.find((a: any) => a.kind === "message")
+	expect(message, "the run recorded no message artifact").toBeTruthy()
+	return message!.entityId as number
 }
 
 describe("recording what a run did", () => {
@@ -145,7 +173,7 @@ describe("recording what a run did", () => {
 		)
 		await turn({ seed: "receipt:1" })
 
-		const run = await lastRunFor(db as any, sessionId)
+		const run = await lastRunFor(db, sessionId)
 		expect(run).toBeTruthy()
 		expect(run.outcome).toBe("ok")
 		expect(run.specSlug).toBe("core:spec/respond")
@@ -159,9 +187,9 @@ describe("recording what a run did", () => {
 			"$lib/server/pipelines/runtime/receipts"
 		)
 		const receipt = await turn({ seed: "receipt:2" })
-		const messageId = writtenMessageId(receipt)!
+		const messageId = await messageWrittenBy(receipt)
 
-		const found = await runForMessage(db as any, messageId)
+		const found = await runForMessage(db, messageId)
 		expect(found).toBeTruthy()
 		expect(found!.nodes.map((n: any) => n.nodeKey)).toEqual([
 			"input",
@@ -248,7 +276,7 @@ describe("recording what a run did", () => {
 		const speakerRow = found!.nodes.find(
 			(n: any) => n.nodeKey === "speaker"
 		)
-		expect(speakerRow.typeId).toBe("core:task/turn-manual@1")
+		expect(speakerRow!.typeId).toBe("core:task/turn-manual@1")
 		const speaker = receipt.nodes.find((n: any) => n.nodeKey === "speaker")
 		expect(speaker!.output).toMatchObject({
 			characterId,
@@ -259,14 +287,79 @@ describe("recording what a run did", () => {
 
 	it("links the run to the message it produced", async () => {
 		// What makes "show me why *this* reply looks like that" a lookup rather
-		// than a search through a session's history.
+		// than a search through a session's history — a row in the artifact
+		// relation now, written by the Consumer that did the writing rather
+		// than reconstructed from the receipt afterwards.
 		const receipt = await turn({ seed: "receipt:3" })
-		const messageId = writtenMessageId(receipt)!
-		const [row] = await db
+		const { run, artifacts } = await recordFor(receipt)
+
+		expect(artifacts).toHaveLength(1)
+		expect(artifacts[0]).toMatchObject({
+			runId: run.id,
+			seq: 0,
+			kind: "message",
+			action: "created",
+			// Which node did it, which the old column could not say at all.
+			nodeKey: "save"
+		})
+		expect(typeof artifacts[0].entityId).toBe("number")
+
+		// And the artifact names a message that actually exists.
+		const [message] = await db
 			.select()
-			.from(schema.pipelineRuns)
-			.where(eq(schema.pipelineRuns.runId, receipt.runId))
-		expect(row.messageId).toBe(messageId)
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.id, artifacts[0].entityId))
+		expect(
+			message,
+			"the artifact names a message that is not there"
+		).toBeTruthy()
+	}, 30_000)
+
+	it("answers which runs produced a given row, newest first", async () => {
+		/**
+		 * The reverse lookup, and the reason a column could not have been kept.
+		 * A message is legitimately the artifact of more than one run — a
+		 * **continue** re-runs the whole pipeline against the row already on
+		 * screen, and a regenerate does the same — and `message_id` could only
+		 * ever remember the last writer.
+		 */
+		const { runsForArtifact, saveReceipt } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
+		const first = await turn({ seed: "receipt:3b" })
+		const messageId = await messageWrittenBy(first)
+
+		// A second run over the same row, recorded the way a continue records.
+		await saveReceipt(
+			db,
+			{
+				runId: "receipt:3b:continue",
+				specId: "core:spec/respond",
+				specVersion: "1.0.0",
+				outcome: "ok",
+				triggerSource: "event",
+				seed: "receipt:3b:continue",
+				startedAt: 0,
+				endedAt: 1,
+				nodes: []
+			} as any,
+			{
+				sessionId,
+				userId,
+				artifacts: [
+					{ kind: "message", entityId: messageId, action: "updated" }
+				]
+			}
+		)
+
+		const runs = await runsForArtifact(db, "message", messageId)
+		expect(runs.map((r: any) => r.runId)).toEqual([
+			"receipt:3b:continue",
+			first.runId
+		])
+
+		// And nothing is invented for a row no run ever touched.
+		expect(await runsForArtifact(db, "message", 999_999)).toEqual([])
 	}, 30_000)
 
 	it("keeps the whole receipt, not only the columns", async () => {
@@ -307,18 +400,82 @@ describe("recording what a run did", () => {
 		expect(after).toHaveLength(before.length)
 	}, 30_000)
 
+	/**
+	 * The stop sequences, on the receipt for the generate node (ruling
+	 * 2026-09-10).
+	 *
+	 * ⚠ **Written AFTER the row, and only on the reply path.** A reply halts at
+	 * the pre-call substrate — the pipeline compiles, the adapter sends — so the
+	 * receipt is already stored by the time anything composes a stop list. On
+	 * every other path the binding's own output carries it and no patch is
+	 * needed. Recorded rather than left off, because "why did my reply not stop
+	 * on that" and "why did nothing I typed reach the model" are the two
+	 * questions this whole area exists to answer, and a run that shows neither
+	 * answers neither.
+	 */
+	it("patches the composed stops onto the generate node afterwards", async () => {
+		const { recordGenerateStops } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
+		const receipt = await turn({ seed: "receipt:stops", preview: true })
+
+		await recordGenerateStops(db, receipt.runId, {
+			sent: [{ value: "<<END>>", kind: "explicit" }],
+			dropped: [{ value: "Bob:", kind: "speaker" }],
+			wire: "chat",
+			hit: "<<END>>"
+		})
+
+		const [row] = await db
+			.select()
+			.from(schema.pipelineRuns)
+			.where(eq(schema.pipelineRuns.runId, receipt.runId))
+		const generate = (row.receipt as any).nodes.find((n: any) =>
+			String(n.typeId).startsWith("core:provider/generate-text")
+		)
+		expect(
+			generate,
+			"the reply pipeline recorded no generate node to attach stops to"
+		).toBeTruthy()
+		expect(generate.output.stops).toEqual({
+			sent: [{ value: "<<END>>", kind: "explicit" }],
+			dropped: [{ value: "Bob:", kind: "speaker" }],
+			wire: "chat",
+			hit: "<<END>>"
+		})
+		// The node's own verdict is untouched — it really did halt before
+		// sending, and the patch must not rewrite that into a success.
+		expect(generate.result).toBe("halt")
+	}, 30_000)
+
+	it("a stops patch for a run that is not there is a quiet no-op", async () => {
+		// Same rule as `saveReceipt`: evidence about a turn never fails the
+		// turn. A run row that was skipped, pruned or never written must not
+		// turn into a thrown error in the middle of a reply.
+		const { recordGenerateStops } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
+		await expect(
+			recordGenerateStops(db, "no-such-run", {
+				sent: [],
+				dropped: [],
+				wire: "completion"
+			})
+		).resolves.toBeUndefined()
+	}, 30_000)
+
 	it("records a preview as a preview, when it does record one", async () => {
 		const { runsForSession } = await import(
 			"$lib/server/pipelines/runtime/receipts"
 		)
 		await turn({ seed: "receipt:7", preview: true })
-		const runs = await runsForSession(db as any, sessionId)
+		const runs = await runsForSession(db, sessionId)
 		expect(runs.some((r: any) => r.isPreview)).toBe(true)
 		// And a preview is never what `lastRunFor` reports, because it sent
 		// nothing — it is not evidence that a reply came from the pipeline.
 		const { lastRunFor } = await import(
 			"$lib/server/pipelines/runtime/receipts"
 		)
-		expect((await lastRunFor(db as any, sessionId)).isPreview).toBe(false)
+		expect((await lastRunFor(db, sessionId)).isPreview).toBe(false)
 	}, 30_000)
 })

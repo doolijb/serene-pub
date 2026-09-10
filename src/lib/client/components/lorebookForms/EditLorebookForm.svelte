@@ -4,6 +4,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { z } from "zod"
+	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 
 	// Zod validation schema
 	const lorebookSchema = z.object({
@@ -140,39 +141,45 @@
 		mode = "view"
 	}
 
+	// Named so `off` can name them too. A bare `socket.off("lorebooks:get")`
+	// removes EVERY listener for that event — including other components
+	// listening for the same event — which then stops updating for the rest
+	// of the session.
+	async function handleLorebooksGet(msg: Sockets.Lorebooks.Get.Response) {
+		if (msg.lorebook && msg.lorebook.id === lorebookId) {
+			editLorebook = { ...msg.lorebook }
+			originalLorebook = { ...msg.lorebook }
+			isLoading = false
+			loadError = ""
+		} else {
+			loadError = "Lorebook not found"
+			isLoading = false
+		}
+		await tick() // Force state to update
+	}
+
+	async function handleLorebooksUpdate(
+		msg: Sockets.Lorebooks.Update.Response
+	) {
+		if (msg.lorebook && msg.lorebook.id === lorebookId) {
+			editLorebook = { ...msg.lorebook }
+			originalLorebook = { ...msg.lorebook }
+			mode = "view"
+			toaster.success({
+				title: "Lorebook Updated",
+				description: `Lorebook "${msg.lorebook.name}" updated successfully.`
+			})
+		}
+	}
+
+	function handleTagsList(msg: SocketEventMap["tags:list"]["response"]) {
+		tagsList = msg.tagsList || []
+	}
+
 	onMount(() => {
-		socket.on(
-			"lorebooks:get",
-			async (msg: Sockets.Lorebooks.Get.Response) => {
-				if (msg.lorebook && msg.lorebook.id === lorebookId) {
-					editLorebook = { ...msg.lorebook }
-					originalLorebook = { ...msg.lorebook }
-					isLoading = false
-					loadError = ""
-				} else {
-					loadError = "Lorebook not found"
-					isLoading = false
-				}
-				await tick() // Force state to update
-			}
-		)
-		socket.on(
-			"lorebooks:update",
-			async (msg: Sockets.Lorebooks.Update.Response) => {
-				if (msg.lorebook && msg.lorebook.id === lorebookId) {
-					editLorebook = { ...msg.lorebook }
-					originalLorebook = { ...msg.lorebook }
-					mode = "view"
-					toaster.success({
-						title: "Lorebook Updated",
-						description: `Lorebook "${msg.lorebook.name}" updated successfully.`
-					})
-				}
-			}
-		)
-		socket.on("tags:list", (msg) => {
-			tagsList = msg.tagsList || []
-		})
+		socket.on("lorebooks:get", handleLorebooksGet)
+		socket.on("lorebooks:update", handleLorebooksUpdate)
+		socket.on("tags:list", handleTagsList)
 
 		// Load tags list
 		socket.emit("tags:list", {})
@@ -183,9 +190,9 @@
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
-		socket.off("lorebooks:get")
-		socket.off("lorebooks:update")
-		socket.off("tags:list")
+		socket.off("lorebooks:get", handleLorebooksGet)
+		socket.off("lorebooks:update", handleLorebooksUpdate)
+		socket.off("tags:list", handleTagsList)
 	})
 </script>
 

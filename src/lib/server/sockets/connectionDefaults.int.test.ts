@@ -141,7 +141,7 @@ describe("connectionDefaults:list", () => {
 		const admin = await makeAdmin("conn-defaults-untested-user")
 		const untested = await makeConnection(
 			"Nobody has pressed Test",
-			CONNECTION_TYPE.OPENAI_CHAT,
+			CONNECTION_TYPE.OPENAI,
 			{}
 		)
 
@@ -199,7 +199,7 @@ describe("connectionDefaults:set", () => {
 		const admin = await makeAdmin("conn-defaults-set-user")
 		const conn = await makeConnection(
 			"Set-half chat",
-			CONNECTION_TYPE.OPENAI_CHAT,
+			CONNECTION_TYPE.OPENAI,
 			{ "text->text": 1 }
 		)
 		const [sampling] = await testDb

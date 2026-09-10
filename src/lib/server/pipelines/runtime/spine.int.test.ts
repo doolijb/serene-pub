@@ -47,6 +47,12 @@ class FakeAdapter implements FakeTextAdapter {
 	injected: any
 	promptBuilder: any = {}
 	constructor(_params: any) {}
+	/** The composed stop list. Recorded so a test can assert what was handed over. */
+	stops: any
+	withStops(s: any) {
+		this.stops = s
+		return this
+	}
 	withCompiledPrompt(p: any) {
 		this.injected = p
 		lastPrompt = p
@@ -257,11 +263,11 @@ const SPINE_TEMPLATE =
 	"{{instructions}}\n{{characters}}\n{{#each sessionMessages}}{{this.content}}\n{{/each}}"
 
 const execute = async (input: any = {}) => {
-	const saved = await saveDocument(db as any, promptPipeline(), {
+	const saved = await saveDocument(db, promptPipeline(), {
 		publish: true
 	})
-	const doc = await loadDocument(db as any, saved.specVersionId)
-	const world = await buildWorld(db as any, { sessionId })
+	const doc = await loadDocument(db, saved.specVersionId)
+	const world = await buildWorld(db, { sessionId })
 	// At `defaults`, under anything a fixture might override — and as a PAIR,
 	// which is the rule `world.ts`'s `pushTemplate` enforces on the real path.
 	// A source with no engine now halts rather than being rendered as
@@ -292,7 +298,7 @@ const execute = async (input: any = {}) => {
 		seed: "seed:spine",
 		triggerSource: "event",
 		bindings: coreBindings(),
-		host: createHost(db as any, { sessionId, userId })
+		host: createHost(db, { sessionId, userId })
 	})
 }
 

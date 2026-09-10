@@ -437,6 +437,67 @@ export const systemSettingsUpdateAutoTranslate: Handler<
 }
 
 // Registration function for all system settings handlers
+/**
+ * The two backup settings (ruled 2026-09-10: daily on, user files off).
+ *
+ * One handler for both, and a partial update: a field left out is left alone,
+ * so the two switches in the UI can each send only what they changed without
+ * either one silently reasserting the other's value.
+ *
+ * Nothing is scheduled from here. The daily check reads the row every hour
+ * (`services/dailyBackup.ts`), so turning it off takes effect at the next
+ * check rather than needing a timer to be cancelled from a socket handler.
+ */
+export const systemSettingsUpdateBackupSettings: Handler<
+	Sockets.SystemSettings.UpdateBackupSettings.Params,
+	Sockets.SystemSettings.UpdateBackupSettings.Response
+> = {
+	event: "systemSettings:updateBackupSettings",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		try {
+			const patch: {
+				backupDaily?: boolean
+				backupIncludeUserFiles?: boolean
+			} = {}
+			if (typeof params.backupDaily === "boolean") {
+				patch.backupDaily = params.backupDaily
+			}
+			if (typeof params.backupIncludeUserFiles === "boolean") {
+				patch.backupIncludeUserFiles = params.backupIncludeUserFiles
+			}
+			if (Object.keys(patch).length) {
+				await db
+					.update(schema.systemSettings)
+					.set(patch)
+					.where(eq(schema.systemSettings.id, 1))
+			}
+
+			const row = await db.query.systemSettings.findFirst({
+				where: eq(schema.systemSettings.id, 1),
+				columns: {
+					backupDaily: true,
+					backupIncludeUserFiles: true
+				}
+			})
+			const res: Sockets.SystemSettings.UpdateBackupSettings.Response = {
+				success: true,
+				backupDaily: row?.backupDaily ?? true,
+				backupIncludeUserFiles: row?.backupIncludeUserFiles ?? false
+			}
+			emitToUser("systemSettings:updateBackupSettings", res)
+			await systemSettingsGet.handler(socket, {}, emitToUser)
+			return res
+		} catch (error: any) {
+			console.error("Update backup settings error:", error)
+			emitToUser("systemSettings:updateBackupSettings:error", {
+				error: "Failed to update backup settings"
+			})
+			throw error
+		}
+	}
+}
+
 export function registerSystemSettingsHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -455,6 +516,7 @@ export function registerSystemSettingsHandlers(
 	register(socket, systemSettingsUpdateRequireTwoFactor, emitToUser)
 	register(socket, systemSettingsUpdateDefaultLanguage, emitToUser)
 	register(socket, systemSettingsUpdateAutoTranslate, emitToUser)
+	register(socket, systemSettingsUpdateBackupSettings, emitToUser)
 }
 
 /**

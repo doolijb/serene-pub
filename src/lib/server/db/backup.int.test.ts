@@ -21,7 +21,7 @@ import {
 let dataDir: string
 let folder: string
 let client: PGlite
-let db: any
+let db: MigrationDb
 
 beforeEach(async () => {
 	dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sp-backup-data-"))

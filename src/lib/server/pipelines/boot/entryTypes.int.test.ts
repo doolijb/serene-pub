@@ -53,7 +53,7 @@ const rowFor = async (typeId: string) => {
 
 describe("core's entry types reach the registry", () => {
 	it("projects all three as rows of kind 'entry'", async () => {
-		const r = await syncTypeRegistry(db as any, allEntryTypes(), {
+		const r = await syncTypeRegistry(db, allEntryTypes(), {
 			release: "0.6.0"
 		})
 		expect(r.inserted.sort()).toEqual([...PINS].sort())
@@ -64,7 +64,7 @@ describe("core's entry types reach the registry", () => {
 	})
 
 	it("is idempotent, so it rides the same unconditional boot step", async () => {
-		const again = await syncTypeRegistry(db as any, allEntryTypes(), {
+		const again = await syncTypeRegistry(db, allEntryTypes(), {
 			release: "0.6.0"
 		})
 		expect(again.inserted).toEqual([])
@@ -111,7 +111,7 @@ describe("core's entry types reach the registry", () => {
 		// *hashed* field that means the same row hashes differently depending
 		// on which direction it was travelling.
 		const readBack = new Map(
-			(await readTypeRegistry(db as any)).map((e) => [
+			(await readTypeRegistry(db)).map((e) => [
 				`${e.id}@${e.version}`,
 				e
 			])
@@ -153,7 +153,7 @@ describe("core's entry types reach the registry", () => {
 			}
 		} as any
 
-		const r = await syncTypeRegistry(db as any, [reworded], {
+		const r = await syncTypeRegistry(db, [reworded], {
 			release: "0.6.0"
 		})
 		expect(r.updated).toEqual(["core:entry/world-lore@1"])
@@ -162,7 +162,7 @@ describe("core's entry types reach the registry", () => {
 
 		// Put the build's own wording back, so nothing after this reads a
 		// doctored row.
-		const restored = await syncTypeRegistry(db as any, [base], {
+		const restored = await syncTypeRegistry(db, [base], {
 			release: "0.6.0"
 		})
 		expect(restored.updated).toEqual(["core:entry/world-lore@1"])

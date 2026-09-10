@@ -266,8 +266,10 @@ const UNCONSUMED_OUT_SHAPES: Deliberate[] = [
 			"wants ids must declare this shape and handle both cases in its " +
 			"hook. There is no branch node to check `status` with, so the " +
 			"obligation belongs to the type. See `write-result` in the SDK's " +
-			"shapes.ts, and `writtenMessageId` in runTurn.ts for a reader that " +
-			"checks the discriminant off the receipt rather than through a port."
+			"shapes.ts. Nothing reads the ids back off the receipt any more " +
+			"either: `HostScope.artifacts` in runtime/host.ts is the collector " +
+			"the commit itself pushes to, which is the only place the " +
+			"discriminant is not a guess."
 	},
 	{
 		subject: shapeSubject(
@@ -411,8 +413,9 @@ const UNFILLED_IN_PORTS: Deliberate[] = [
 		subject: "core:query/session-history@1.budget",
 		reason:
 			"Read by nothing on either end: no spec fills it and the binding " +
-			"reads `limit`/`params.channel` and never `budget`. Declared ahead " +
-			"of history being budgeted at retrieval rather than after ranking."
+			"reads `params.limit`/`params.channel` and never `budget`. Declared " +
+			"ahead of history being budgeted at retrieval rather than after " +
+			"ranking."
 	},
 	{
 		subject: "core:query/world-lore@1.text",
@@ -447,6 +450,29 @@ const UNFILLED_IN_PORTS: Deliberate[] = [
 			"type exists beside `build-template-context@1` — they share one " +
 			"binding. The port comes with the shared shape; narrate correctly " +
 			"leaves it empty."
+	},
+	{
+		subject: "core:task/build-template-context@1.speakerName",
+		reason:
+			"⚠ **Filled by a sibling BINDING rather than by a document**, which " +
+			"is a supplier this check cannot see and the reason the port was " +
+			"undeclared until D-I. `core:task/build-side-character-context@1` " +
+			"is not a second implementation: its binding unwraps its own " +
+			"`speaker` in-port and calls THIS type's handler with the name and " +
+			"the card spread onto the input, because `resolveContextInput` owns " +
+			"the card rules and a side character's card and a cast member's must " +
+			"compile through one function. So the value arrives on every " +
+			"side-character turn and no spec wires it — the exact combination " +
+			"that made it a phantom read for a release. Declaring it is what " +
+			"puts the fact somewhere; this entry is what stops the declaration " +
+			"reading as a port nothing fills."
+	},
+	{
+		subject: "core:task/build-template-context@1.speakerCharacter",
+		reason:
+			"The card half of the pair above — `null` for a free-form name, " +
+			"which is a normal turn rather than a degraded one. Same supplier, " +
+			"same terms."
 	}
 ]
 
@@ -558,7 +584,7 @@ describe("§2 preset capabilities — every keyed slug is one a preset offers", 
 		expectExactlyExcused(unoffered, UNOFFERED_PRESET_SLUGS, {
 			list: "UNOFFERED_PRESET_SLUGS",
 			unwired:
-				"PRESET_CAPABILITIES key(s) that no OPENAI_CHAT_PRESETS entry " +
+				"PRESET_CAPABILITIES key(s) that no OPENAI_COMPATIBLE_PRESETS entry " +
 				"offers, so nothing can ever store the slug they are keyed to",
 			fix: "Add the preset that offers the slug"
 		})
@@ -751,9 +777,9 @@ const RUN_OPTIONS: Record<string, true | string> = {
 
 	triggerRef:
 		"Recorded on the receipt only. The app links a run to its cause " +
-		"through its own rows — `saveReceipt` writes sessionId, userId and " +
-		"the written messageId — so the receipt's free-text ref has no reader " +
-		"here.",
+		"through its own rows — `saveReceipt` writes sessionId, userId and a " +
+		"`pipeline_run_artifacts` row per thing the run made — so the " +
+		"receipt's free-text ref has no reader here.",
 	actorUserId:
 		"Same: who ran it is a column on the app's run row, written by " +
 		"`saveReceipt` from `request.userId`, not a field it reads back off " +

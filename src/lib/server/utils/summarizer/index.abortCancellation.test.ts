@@ -25,6 +25,12 @@ vi.mock("../getConnectionAdapter", () => ({
 		// compile if it ever drifts from the real `text->text` action — see
 		// fakeTextAdapter.ts for why `implements AdapterActions` would not.
 		Adapter: class implements FakeTextAdapter {
+			/** The composed stop list, handed over at construction. */
+			stops: any
+			withStops(s: any) {
+				this.stops = s
+				return this
+			}
 			constructor(_args: any) {}
 			async preflight() {}
 			async generateText() {

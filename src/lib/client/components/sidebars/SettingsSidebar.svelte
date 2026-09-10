@@ -12,6 +12,7 @@
 	import PanelSectionTitle from "$lib/client/components/panels/PanelSectionTitle.svelte"
 	import { page } from "$app/state"
 	import UserSettingsTab from "../settingsTabs/UserSettingsTab.svelte"
+	import DataSettingsTab from "../settingsTabs/DataSettingsTab.svelte"
 	import MediaManagerTab from "../media/MediaManagerTab.svelte"
 	import CustomThemeManager from "../CustomThemeManager.svelte"
 	import SettingsUnsavedChangesModal from "../modals/SettingsUnsavedChangesModal.svelte"
@@ -28,13 +29,16 @@
 	// component this used to — so nothing moved, the duplicate entry point
 	// just went away. This panel is now entirely per-user: your settings, your
 	// media, your theme.
-	let activeTab = $state<"user" | "media" | "themes" | "about">("user")
+	let activeTab = $state<"user" | "media" | "data" | "themes" | "about">(
+		"user"
+	)
 
 	// Section names. The tab triggers are icon-only (see PanelTab), so
 	// PanelSectionTitle is where the active section's full name is shown.
 	const SECTION_LABELS: Record<string, string> = {
 		user: "User",
 		media: "Media",
+		data: "Data",
 		themes: "Themes",
 		about: "About"
 	}
@@ -48,13 +52,14 @@
 	// shared flag rather than folded into UserSettingsTab because the guard is
 	// on tab *switching* — same pattern as LorebooksSidebar.
 	let tabHasUnsavedChanges = $state(false)
-	let nextTab: "user" | "media" | "themes" | "about" | undefined = $state()
+	let nextTab: "user" | "media" | "data" | "themes" | "about" | undefined =
+		$state()
 	let showUnsavedChangesModal = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 
 	// Handle tab switching
 	function handleTabChange(e: ValueChangeDetails): void {
-		const target = e.value as "user" | "media" | "themes" | "about"
+		const target = e.value as "user" | "media" | "data" | "themes" | "about"
 		if (!tabHasUnsavedChanges) {
 			activeTab = target
 		} else {
@@ -137,6 +142,7 @@
 			<PanelTabList>
 				<PanelTab value="user" label="User" icon={Icons.UserCog} />
 				<PanelTab value="media" label="Media" icon={Icons.Images} />
+				<PanelTab value="data" label="Data" icon={Icons.Database} />
 				<PanelTab value="themes" label="Themes" icon={Icons.Palette} />
 				<PanelTab value="about" label="About" icon={Icons.Info} />
 			</PanelTabList>
@@ -151,6 +157,11 @@
 			<Tabs.Content value="media">
 				{#if activeTab === "media"}
 					<MediaManagerTab />
+				{/if}
+			</Tabs.Content>
+			<Tabs.Content value="data">
+				{#if activeTab === "data"}
+					<DataSettingsTab />
 				{/if}
 			</Tabs.Content>
 			<Tabs.Content value="themes">

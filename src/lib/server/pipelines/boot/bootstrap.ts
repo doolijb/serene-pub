@@ -109,7 +109,7 @@ export interface BootstrapReport {
  * opted into yet would be the wrong trade. The conflict travels in the report so
  * the diagnostics screen can say what is wrong and the caller can decide.
  */
-export async function bootstrapPipelines(db: any): Promise<BootstrapReport> {
+export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 	const report: BootstrapReport = {
 		types: { inserted: 0, unchanged: 0 },
 		events: { inserted: 0, updated: 0, unchanged: 0 },
@@ -264,7 +264,7 @@ export async function bootstrapPipelines(db: any): Promise<BootstrapReport> {
  * version has to restart the process for it to take effect — which is the kind
  * of thing that gets discovered in production.
  */
-export async function loadPublished(db: any, specId: string) {
+export async function loadPublished(db: Db, specId: string) {
 	const [row] = await db
 		.select({ id: schema.pipelineSpecVersions.id })
 		.from(schema.pipelineSpecVersions)

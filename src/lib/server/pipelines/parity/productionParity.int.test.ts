@@ -72,7 +72,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -172,7 +172,7 @@ describe("the shipped spec renders what the floor renders", () => {
 			"$lib/server/pipelines/runtime/runTurn"
 		)
 		const receipt: any = await runTurn({
-			db: db as any,
+			db: db,
 			sessionId,
 			userId,
 			currentCharacterId: characterId,
@@ -200,7 +200,7 @@ describe("the shipped spec renders what the floor renders", () => {
 			"$lib/server/pipelines/config/world"
 		)
 		const { resolveConfig } = await import("@serene-pub/sdk")
-		const world = await buildWorld(db as any, {
+		const world = await buildWorld(db, {
 			sessionId,
 			specId: RESPOND_SPEC_ID
 		})
@@ -281,7 +281,7 @@ describe("core's rows are brought back in line on boot", () => {
 		const { seedVariableTemplates } = await import(
 			"$lib/server/pipelines/boot/seedVariableTemplates"
 		)
-		const res = await seedVariableTemplates(db as any)
+		const res = await seedVariableTemplates(db)
 
 		expect(res.refreshed).toContain(key)
 		expect(await sourceOf(key)).toBe(t.source)
@@ -294,7 +294,7 @@ describe("core's rows are brought back in line on boot", () => {
 		const { createVariableTemplate } = await import(
 			"$lib/server/pipelines/entities/variableTemplates"
 		)
-		const mine = await createVariableTemplate(db as any, {
+		const mine = await createVariableTemplate(db, {
 			variableId: "core:var/characters@1",
 			name: "Mine, untouched",
 			source: "{{#each characters}}{{this.name}}{{/each}}"
@@ -303,7 +303,7 @@ describe("core's rows are brought back in line on boot", () => {
 		const { seedVariableTemplates } = await import(
 			"$lib/server/pipelines/boot/seedVariableTemplates"
 		)
-		await seedVariableTemplates(db as any)
+		await seedVariableTemplates(db)
 
 		const [after] = await db
 			.select()
@@ -318,8 +318,8 @@ describe("core's rows are brought back in line on boot", () => {
 		const { seedVariableTemplates } = await import(
 			"$lib/server/pipelines/boot/seedVariableTemplates"
 		)
-		await seedVariableTemplates(db as any)
-		const res = await seedVariableTemplates(db as any)
+		await seedVariableTemplates(db)
+		const res = await seedVariableTemplates(db)
 		expect(res.refreshed).toEqual([])
 		expect(res.created).toEqual([])
 	})
@@ -342,7 +342,7 @@ describe("core's rows are brought back in line on boot", () => {
 		const { seedContextTemplates } = await import(
 			"$lib/server/pipelines/boot/seedContextTemplates"
 		)
-		const res = await seedContextTemplates(db as any)
+		const res = await seedContextTemplates(db)
 		expect(res.refreshed).toContain(CONTEXT_TEMPLATE_SEED_KEY)
 
 		const [row] = await db

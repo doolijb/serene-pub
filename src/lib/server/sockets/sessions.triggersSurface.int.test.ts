@@ -86,6 +86,19 @@ describe("sessions:triggers", () => {
 			})
 		)
 
+		/**
+		 * The narrator split's other half (ruling 2026-09-07). Its own
+		 * function key, because `resolveFunctionSpec` keys on exactly this
+		 * string and two specs answering `narrate` would be a coin toss.
+		 */
+		expect(res.triggers).toContainEqual(
+			expect.objectContaining({
+				function: "narrate-character",
+				kind: "button",
+				specSlug: "core:spec/narrate-character"
+			})
+		)
+
 		// A non-participant gets nothing — the list describes what a person
 		// in the session can press.
 		const stranger = await makeUser("triggers-stranger")
@@ -109,7 +122,28 @@ describe("sessions:triggerFunction", () => {
 			.values({ userId: user.id, isGroup: false })
 			.returning()
 
-		for (const fn of ["respond", "narrate"]) {
+		// ⚠ Three, not two. `narrate-character` needs the same bespoke
+		// lifecycle `narrate` does — a modal whose first step is *who speaks*,
+		// and the streaming message row that answer creates — so this route
+		// running it would produce a turn spoken by nobody in particular,
+		// silently. It refuses by name instead.
+		//
+		// ⚠ **Four, since `continue` became a function key** (ruling
+		// 2026-09-08, D-2). It is a message verb rather than a trigger button —
+		// nothing contributes it, so it never appears in `sessions:triggers`
+		// above — but `resolveFunctionSpec` now answers it, so a genre may bind
+		// it to a spec of its own. This route cannot serve that: a continue is
+		// the text already on one row, and this route can neither flip that row
+		// to generating nor supply the prefill. `sessionMessages:continue` is
+		// its lifecycle, and the refusal here is what says so out loud rather
+		// than leaving it to the "nothing serves it" fallback that only held
+		// while nothing did.
+		for (const fn of [
+			"respond",
+			"narrate",
+			"narrate-character",
+			"continue"
+		]) {
 			const res = await sessionsTriggerFunctionHandler.handler(
 				fakeSocket(user.id),
 				{ sessionId: session.id, function: fn },
@@ -117,6 +151,34 @@ describe("sessions:triggerFunction", () => {
 			)
 			expect(res.error).toContain("its own trigger event")
 		}
+	})
+
+	test("narrate-character routes to its own spec", async () => {
+		/**
+		 * The refusal above proves this route declines it; this proves the
+		 * function is nevertheless *served* — the two together are what make
+		 * "it has its own event" a redirection rather than a dead button.
+		 * `generateResponse` resolves the same way for a turn whose row
+		 * carries a speaker.
+		 */
+		const { resolveFunctionSpec, STANDARD_GENRE_ID } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
+		)
+		expect(
+			await resolveFunctionSpec(
+				testDb as any,
+				STANDARD_GENRE_ID,
+				"narrate-character"
+			)
+		).toBe("core:spec/narrate-character")
+		// And the world narrator still answers its own, unmoved by the split.
+		expect(
+			await resolveFunctionSpec(
+				testDb as any,
+				STANDARD_GENRE_ID,
+				"narrate"
+			)
+		).toBe("core:spec/narrate")
 	})
 
 	test("a function nothing serves refuses with the reason", async () => {

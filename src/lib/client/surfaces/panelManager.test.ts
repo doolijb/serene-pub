@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
+import type { WidgetEvent } from "$lib/shared/widgets/context"
 import { SurfaceManager } from "./panelManager.svelte"
 
 type ModePanel = Sockets.Sessions.View.ModePanel
@@ -58,6 +59,24 @@ describe("SurfaceManager — channel-driven autopopulation (21 §9)", () => {
 		m.activateForChannel("tasks")
 		m.activateForChannel("tasks") // no throw, stays active
 		expect(m.instances.find((p) => p.id === "tasks")!.active).toBe(true)
+	})
+
+	/**
+	 * Lanes (ruling 2026-09-09): the panel is a view onto the **channel**, so
+	 * the second conversation opening in it is the same panel flowing in. A
+	 * panel that only matched the bare slug would sit closed while its own
+	 * channel filled up.
+	 */
+	it("matches on the channel, whichever lane the message landed on", () => {
+		const m = make()
+		m.activateForChannel("tasks:4")
+		expect(m.instances.find((p) => p.id === "tasks")!.active).toBe(true)
+	})
+
+	it("still ignores main, whichever lane of it", () => {
+		const m = make()
+		m.activateForChannel("main:3")
+		expect(m.instances.find((p) => p.id === "tasks")!.active).toBe(false)
 	})
 })
 
@@ -171,5 +190,67 @@ describe("SurfaceManager — tier + columns", () => {
 		const before = [...m.columns]
 		m.resizeColumn(0, -10)
 		expect(m.columns).toEqual(before)
+	})
+})
+
+/**
+ * The manager is the SESSION-level event source every widget bus fans out from
+ * (PLAN 25). It is the one thing that already sees channel activity — the page
+ * calls `activateForChannel` for every message that lands — so it is where
+ * `channel:activated` is born rather than a second subscription of its own.
+ */
+describe("SurfaceManager — the widget event source", () => {
+	it("announces a channel when a panel viewing it is surfaced", () => {
+		const m = make()
+		const seen: WidgetEvent[] = []
+		m.subscribe((e) => seen.push(e))
+		m.activateForChannel("tasks")
+		expect(seen).toEqual([
+			{ kind: "channel:activated", channel: "tasks", slug: "tasks", lane: 1 }
+		])
+	})
+
+	it("carries the lane, canonically (lane 1 is the bare slug)", () => {
+		const m = make()
+		const seen: WidgetEvent[] = []
+		m.subscribe((e) => seen.push(e))
+		m.activateForChannel("tasks:4")
+		expect(seen[0]).toMatchObject({
+			channel: "tasks:4",
+			slug: "tasks",
+			lane: 4
+		})
+	})
+
+	it("says nothing when nothing was surfaced — main, unknown, already open", () => {
+		const m = make()
+		const seen: WidgetEvent[] = []
+		m.subscribe((e) => seen.push(e))
+		m.activateForChannel("main") // the anchored log never autopopulates
+		m.activateForChannel("nope") // no panel views it
+		m.activateForChannel(null)
+		m.activateForChannel("tasks") // → one event
+		m.activateForChannel("tasks") // already open: not a new arrival on screen
+		expect(seen).toHaveLength(1)
+	})
+
+	it("unsubscribe stops delivery", () => {
+		const m = make()
+		const seen: WidgetEvent[] = []
+		const off = m.subscribe((e) => seen.push(e))
+		off()
+		m.activateForChannel("tasks")
+		expect(seen).toEqual([])
+	})
+
+	it("one subscriber throwing cannot rob the next of its event", () => {
+		const m = make()
+		const seen: WidgetEvent[] = []
+		m.subscribe(() => {
+			throw new Error("widget blew up")
+		})
+		m.subscribe((e) => seen.push(e))
+		expect(() => m.activateForChannel("tasks")).not.toThrow()
+		expect(seen).toHaveLength(1)
 	})
 })

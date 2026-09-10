@@ -6,6 +6,7 @@
 	import { goto } from "$app/navigation"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import {
 		accessibilityModeStore,
 		enableAccessibility,
@@ -30,145 +31,233 @@
 	const socket = useTypedSocket()
 	const panelsCtx: PanelsCtx = getContext("panelsCtx")
 
-	onMount(() => {
-		socket.on("userSettings:updateShowAllCharacterFields", (message) => {
-			if (message.success) {
-				toaster.success({
-					title: `Character fields display ${message.enabled ? "expanded" : "simplified"}`
-				})
-			} else {
-				toaster.error({
-					title: "Failed to update character fields setting"
-				})
-			}
-		})
-
-		socket.on("userSettings:updateEasyCharacterCreation", (message) => {
-			if (message.success) {
-				toaster.success({
-					title: `Easy character creation ${message.enabled ? "enabled" : "disabled"}`
-				})
-			} else {
-				toaster.error({
-					title: "Failed to update easy character creation setting"
-				})
-			}
-		})
-
-		socket.on("userSettings:updateEasyPersonaCreation", (message) => {
-			if (message.success) {
-				toaster.success({
-					title: `Easy persona creation ${message.enabled ? "enabled" : "disabled"}`
-				})
-			} else {
-				toaster.error({
-					title: "Failed to update easy persona creation setting"
-				})
-			}
-		})
-
-		socket.on("userSettings:updateLanguage", (message) => {
-			if (message.success) {
-				// Names the language that will actually be used, which for the
-				// inherit option is the server's, not "default".
-				toaster.success({
-					title: `Language set to ${languageDefinition(message.effectiveLanguage).name}`
-				})
-			}
-		})
-
-		socket.on("userSettings:updateShowHomePageBanner", (message) => {
-			if (message.success) {
-				toaster.success({
-					title: `Home page banner ${message.enabled ? "shown" : "hidden"}`
-				})
-			} else {
-				toaster.error({
-					title: "Failed to update home page banner setting"
-				})
-			}
-		})
-
-		// Profile socket listeners
-		socket.on("users:current:updateDisplayName", (message) => {
-			isUpdatingDisplayName = false
-			if (message.success) {
-				toaster.success({
-					title: "Display name updated",
-					description: `Updated to "${message.displayName}"`
-				})
-				displayNameError = ""
-			} else {
-				toaster.error({ title: "Failed to update display name" })
-			}
-		})
-
-		socket.on("users:current:changePassphrase", (message) => {
-			isChangingPassword = false
-			if (message.success) {
-				toaster.success({
-					title: "Passphrase changed successfully",
-					description:
-						message.message || "Your passphrase has been updated"
-				})
-				closeChangePasswordModal()
-			} else {
-				toaster.error({ title: "Failed to change passphrase" })
-			}
-		})
-
-		socket.on("users:current:logout", (message) => {
-			if (message.success) {
-				toaster.success({
-					title: "Logged out successfully"
-				})
-			} else {
-				isLoggingOut = false
-				toaster.error({ title: "Logout failed" })
-			}
-		})
-
-		// Error events
-		socket.on("users:current:updateDisplayName:error", (message) => {
-			isUpdatingDisplayName = false
-			displayNameError = message.error || "Failed to update display name"
-			toaster.error({
-				title: "Display Name Error",
-				description: message.error || "Failed to update display name"
+	// Named so `off` can name it too. A bare `socket.off(event)` removes
+	// EVERY listener for that event across the app, not just this tab's.
+	function handleUserSettingsUpdateShowAllCharacterFields(
+		message: SocketEventMap["userSettings:updateShowAllCharacterFields"]["response"]
+	) {
+		if (message.success) {
+			toaster.success({
+				title: `Character fields display ${message.enabled ? "expanded" : "simplified"}`
 			})
-		})
-
-		socket.on("users:current:changePassphrase:error", (message) => {
-			isChangingPassword = false
-			passwordError = message.error || "Failed to change passphrase"
+		} else {
 			toaster.error({
-				title: "Passphrase Error",
-				description: message.error || "Failed to change passphrase"
+				title: "Failed to update character fields setting"
 			})
-		})
+		}
+	}
 
-		socket.on("users:current:logout:error", (message) => {
+	function handleUserSettingsUpdateEasyCharacterCreation(
+		message: SocketEventMap["userSettings:updateEasyCharacterCreation"]["response"]
+	) {
+		if (message.success) {
+			toaster.success({
+				title: `Easy character creation ${message.enabled ? "enabled" : "disabled"}`
+			})
+		} else {
+			toaster.error({
+				title: "Failed to update easy character creation setting"
+			})
+		}
+	}
+
+	function handleUserSettingsUpdateEasyPersonaCreation(
+		message: SocketEventMap["userSettings:updateEasyPersonaCreation"]["response"]
+	) {
+		if (message.success) {
+			toaster.success({
+				title: `Easy persona creation ${message.enabled ? "enabled" : "disabled"}`
+			})
+		} else {
+			toaster.error({
+				title: "Failed to update easy persona creation setting"
+			})
+		}
+	}
+
+	function handleUserSettingsUpdateLanguage(
+		message: SocketEventMap["userSettings:updateLanguage"]["response"]
+	) {
+		if (message.success) {
+			// Names the language that will actually be used, which for the
+			// inherit option is the server's, not "default".
+			toaster.success({
+				title: `Language set to ${languageDefinition(message.effectiveLanguage).name}`
+			})
+		}
+	}
+
+	function handleUserSettingsUpdateShowHomePageBanner(
+		message: SocketEventMap["userSettings:updateShowHomePageBanner"]["response"]
+	) {
+		if (message.success) {
+			toaster.success({
+				title: `Home page banner ${message.enabled ? "shown" : "hidden"}`
+			})
+		} else {
+			toaster.error({
+				title: "Failed to update home page banner setting"
+			})
+		}
+	}
+
+	function handleUsersCurrentUpdateDisplayName(
+		message: SocketEventMap["users:current:updateDisplayName"]["response"]
+	) {
+		isUpdatingDisplayName = false
+		if (message.success) {
+			toaster.success({
+				title: "Display name updated",
+				description: `Updated to "${message.displayName}"`
+			})
+			displayNameError = ""
+		} else {
+			toaster.error({ title: "Failed to update display name" })
+		}
+	}
+
+	function handleUsersCurrentChangePassphrase(
+		message: SocketEventMap["users:current:changePassphrase"]["response"]
+	) {
+		isChangingPassword = false
+		if (message.success) {
+			toaster.success({
+				title: "Passphrase changed successfully",
+				description:
+					message.message || "Your passphrase has been updated"
+			})
+			closeChangePasswordModal()
+		} else {
+			toaster.error({ title: "Failed to change passphrase" })
+		}
+	}
+
+	function handleUsersCurrentLogout(
+		message: SocketEventMap["users:current:logout"]["response"]
+	) {
+		if (message.success) {
+			toaster.success({
+				title: "Logged out successfully"
+			})
+		} else {
 			isLoggingOut = false
-			toaster.error({
-				title: "Logout Error",
-				description: message.error || "Failed to logout"
-			})
+			toaster.error({ title: "Logout failed" })
+		}
+	}
+
+	function handleUsersCurrentUpdateDisplayNameError(
+		message: SocketEventMap["users:current:updateDisplayName:error"]["response"]
+	) {
+		isUpdatingDisplayName = false
+		displayNameError = message.error || "Failed to update display name"
+		toaster.error({
+			title: "Display Name Error",
+			description: message.error || "Failed to update display name"
 		})
+	}
+
+	function handleUsersCurrentChangePassphraseError(
+		message: SocketEventMap["users:current:changePassphrase:error"]["response"]
+	) {
+		isChangingPassword = false
+		passwordError = message.error || "Failed to change passphrase"
+		toaster.error({
+			title: "Passphrase Error",
+			description: message.error || "Failed to change passphrase"
+		})
+	}
+
+	function handleUsersCurrentLogoutError(
+		message: SocketEventMap["users:current:logout:error"]["response"]
+	) {
+		isLoggingOut = false
+		toaster.error({
+			title: "Logout Error",
+			description: message.error || "Failed to logout"
+		})
+	}
+
+	onMount(() => {
+		socket.on(
+			"userSettings:updateShowAllCharacterFields",
+			handleUserSettingsUpdateShowAllCharacterFields
+		)
+		socket.on(
+			"userSettings:updateEasyCharacterCreation",
+			handleUserSettingsUpdateEasyCharacterCreation
+		)
+		socket.on(
+			"userSettings:updateEasyPersonaCreation",
+			handleUserSettingsUpdateEasyPersonaCreation
+		)
+		socket.on(
+			"userSettings:updateLanguage",
+			handleUserSettingsUpdateLanguage
+		)
+		socket.on(
+			"userSettings:updateShowHomePageBanner",
+			handleUserSettingsUpdateShowHomePageBanner
+		)
+		socket.on(
+			"users:current:updateDisplayName",
+			handleUsersCurrentUpdateDisplayName
+		)
+		socket.on(
+			"users:current:changePassphrase",
+			handleUsersCurrentChangePassphrase
+		)
+		socket.on("users:current:logout", handleUsersCurrentLogout)
+		socket.on(
+			"users:current:updateDisplayName:error",
+			handleUsersCurrentUpdateDisplayNameError
+		)
+		socket.on(
+			"users:current:changePassphrase:error",
+			handleUsersCurrentChangePassphraseError
+		)
+		socket.on("users:current:logout:error", handleUsersCurrentLogoutError)
 	})
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
-		socket?.off("userSettings:updateShowAllCharacterFields")
-		socket?.off("userSettings:updateEasyCharacterCreation")
-		socket?.off("userSettings:updateEasyPersonaCreation")
-		socket?.off("userSettings:updateShowHomePageBanner")
-		socket?.off("userSettings:updateLanguage")
-		socket?.off("users:current:updateDisplayName")
-		socket?.off("users:current:changePassphrase")
-		socket?.off("users:current:logout")
-		socket?.off("users:current:updateDisplayName:error")
-		socket?.off("users:current:changePassphrase:error")
-		socket?.off("users:current:logout:error")
+		socket?.off(
+			"userSettings:updateShowAllCharacterFields",
+			handleUserSettingsUpdateShowAllCharacterFields
+		)
+		socket?.off(
+			"userSettings:updateEasyCharacterCreation",
+			handleUserSettingsUpdateEasyCharacterCreation
+		)
+		socket?.off(
+			"userSettings:updateEasyPersonaCreation",
+			handleUserSettingsUpdateEasyPersonaCreation
+		)
+		socket?.off(
+			"userSettings:updateLanguage",
+			handleUserSettingsUpdateLanguage
+		)
+		socket?.off(
+			"userSettings:updateShowHomePageBanner",
+			handleUserSettingsUpdateShowHomePageBanner
+		)
+		socket?.off(
+			"users:current:updateDisplayName",
+			handleUsersCurrentUpdateDisplayName
+		)
+		socket?.off(
+			"users:current:changePassphrase",
+			handleUsersCurrentChangePassphrase
+		)
+		socket?.off("users:current:logout", handleUsersCurrentLogout)
+		socket?.off(
+			"users:current:updateDisplayName:error",
+			handleUsersCurrentUpdateDisplayNameError
+		)
+		socket?.off(
+			"users:current:changePassphrase:error",
+			handleUsersCurrentChangePassphraseError
+		)
+		socket?.off("users:current:logout:error", handleUsersCurrentLogoutError)
 	})
 
 	// Passphrase validation schema

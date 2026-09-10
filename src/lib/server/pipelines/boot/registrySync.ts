@@ -24,12 +24,12 @@ import { eq, and } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	snapshotRegistry,
+	declarationMaterial,
+	DESCRIPTOR_DISPLAY_KEYS,
 	type RegistryEntry,
 	type Descriptor,
 	type ScriptTypeDecl
 } from "@serene-pub/sdk"
-
-type Db = { insert: any; select: any; update: any }
 
 export class TypeRegistryConflictError extends Error {}
 
@@ -63,20 +63,38 @@ export interface SyncResult {
  * at the type level, and it has to be stripped *recursively* — a param label sits
  * two levels down, and hashing it would make translating "Top K" into German a
  * type version bump.
+ *
+ * ## ⚠ That last paragraph was a promise this file did not keep
+ *
+ * It stripped `i18n` and `description` and nothing else, while a parameter's
+ * display text is not spelled `i18n` at all: `settings.ts` calls **`label`** the
+ * canonical key for a field or a member band and `i18n` its deprecated alias. So
+ * translating "Top K" into German *was* a type version bump — the exact edit the
+ * comment above says is free — and on an upgrading install it is not a warning
+ * but a stop: `syncTypeRegistry` raises `TypeRegistryConflictError`,
+ * `bootstrapPipelines` catches it and returns early, and pipelines silently
+ * stop.
+ *
+ * The SDK's own registries had already answered this. `refuseUnlessIdentical`
+ * takes a `DisplayKeys` set, and the descriptor registry passes
+ * `DESCRIPTOR_DISPLAY_KEYS` — `['label']` — so re-declaring a descriptor with a
+ * renamed parameter is a no-op *there* while being a frozen-type conflict
+ * *here*. Two answers to one question, from two functions, disagreeing on the
+ * most common edit there is.
+ *
+ * So the strip is now the SDK's, called with the SDK's own list rather than a
+ * copy of it. `declarationMaterial` differs from what stood here in one further
+ * way, deliberately kept: a function value canonicalizes to its source text
+ * instead of being dropped by `JSON.stringify`. No node type reaches it — a
+ * `SlotDecl`, an `EntryShape` and a `SettingsSchema` are data — but if one ever
+ * carries a predicate, hashing it is the correct answer and silently ignoring it
+ * is not.
+ *
+ * Widening a display list re-hashes every type that carries the word, which is
+ * why this lands with migration 0113 and not on its own.
  */
-const stripI18n = (v: unknown): unknown => {
-	if (Array.isArray(v)) return v.map(stripI18n)
-	if (v && typeof v === "object")
-		return Object.fromEntries(
-			Object.entries(v as Record<string, unknown>)
-				// `description` is display text exactly like `i18n`: copyediting
-				// an explanation is not a contract change, so neither may bump a
-				// type's version.
-				.filter(([k]) => k !== "i18n" && k !== "description")
-				.map(([k, val]) => [k, stripI18n(val)])
-		)
-	return v
-}
+const stripDisplay = (v: unknown): unknown =>
+	declarationMaterial(v, DESCRIPTOR_DISPLAY_KEYS)
 
 const sortDeep = (v: unknown): unknown => {
 	if (Array.isArray(v)) return v.map(sortDeep)
@@ -93,7 +111,7 @@ export function typeContentHash(entry: RegistryEntry): string {
 	const material = {
 		kind: entry.kind,
 		ports: entry.ports,
-		slots: stripI18n(entry.slots),
+		slots: stripDisplay(entry.slots),
 		effects: entry.effects,
 		causesEvent: entry.causesEvent,
 		public: entry.public,
@@ -156,7 +174,7 @@ export function typeContentHash(entry: RegistryEntry): string {
 		 * change; `undefined` on every non-entry type, so nothing else
 		 * re-hashes.
 		 */
-		entryShape: stripI18n(entry.entryShape),
+		entryShape: stripDisplay(entry.entryShape),
 		/**
 		 * The declared schema of an entry's type-specific half.
 		 *
@@ -170,7 +188,7 @@ export function typeContentHash(entry: RegistryEntry): string {
 		 * `undefined` for every type that declares nothing, so no existing hash
 		 * moves by this being here.
 		 */
-		configSchema: stripI18n(entry.configSchema)
+		configSchema: stripDisplay(entry.configSchema)
 	}
 	// Stable key order, recursively. An earlier version passed a sorted key
 	// array as JSON.stringify's replacer, which filters keys at *every* level —

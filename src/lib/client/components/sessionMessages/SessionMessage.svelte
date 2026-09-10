@@ -9,6 +9,7 @@
 	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 	import { animateHeight } from "$lib/client/utils/motion"
+	import { useWidgetContext } from "$lib/shared/widgets/context"
 
 	interface Props {
 		msg: SelectSessionMessage
@@ -17,7 +18,6 @@
 			sessionMessages: SelectSessionMessage[]
 		}
 		isLastMessage: boolean
-		messagesLength: number
 		// Functions
 		getMessageCharacter: (
 			msg: SelectSessionMessage
@@ -74,9 +74,6 @@
 		editSessionMessage: SelectSessionMessage | undefined
 		canRegenerateLastMessage: boolean
 		hasGeneratingMessage: boolean
-		isGuest: boolean
-		// Additional needed props
-		lastPersonaMessage: SelectSessionMessage | undefined
 		// Summarization mode
 		isSummarizationMode?: boolean
 		isSelected?: boolean
@@ -89,6 +86,11 @@
 			icon?: string
 			specSlug: string
 		}>
+		// ⚠ Both of the two below are now FALLBACKS, not the primary route: when
+		// a `WidgetHost` provides a ctx these fire through `ctx.action` instead
+		// (see `fireTrigger`/`fireBlockAction`). They stay for mounts with no
+		// host, and are the first two of the ~16 callbacks the PLAN 25 migration
+		// collapses onto the envelope.
 		onFireTrigger?: (fn: string, msg: SelectSessionMessage) => void
 		// Declared block actions inside a parts-native body (20 §6).
 		onBlockAction?: (
@@ -106,7 +108,6 @@
 		index,
 		session,
 		isLastMessage,
-		messagesLength,
 		getMessageCharacter,
 		canControlMessage,
 		showSwipeControls,
@@ -129,8 +130,6 @@
 		editSessionMessage,
 		canRegenerateLastMessage,
 		hasGeneratingMessage,
-		isGuest,
-		lastPersonaMessage,
 		isSummarizationMode = false,
 		isSelected = false,
 		onStartSummarization,
@@ -140,6 +139,75 @@
 		GeneratingAnimationComponent,
 		messageControls
 	}: Props = $props()
+
+	/**
+	 * The unified widget envelope (PLAN 25, ruled 2026-08-30). Present at the
+	 * one real site — SessionLayout renders the `messages` widget's snippet
+	 * inside a `WidgetHost`, and Svelte resolves context where a snippet RENDERS
+	 * rather than where it was declared, so the host's ctx reaches down here.
+	 * Undefined anywhere else (a standalone mount, a test), which is why every
+	 * read below keeps its prop as the fallback.
+	 */
+	const widget = useWidgetContext()
+	const ctx = $derived(widget?.current)
+
+	/**
+	 * The first two of this component's ~16 `onXxx` callbacks to move onto the
+	 * envelope, because they are the two that were already action-shaped — a
+	 * verb plus this message as its subject, which is exactly `ctx.action`'s
+	 * signature.
+	 *
+	 * The two routes are the SAME call, not two spellings of a similar one:
+	 * `ctx.action` reaches `WidgetHost`'s `onAction`, which SessionLayout wires
+	 * to +page's `handleFrameAction`, which emits `sessions:triggerFunction`
+	 * with `{ sessionId, function, messageId, payload? }` — field for field what
+	 * `fireMenuTrigger`/`fireBlockAction` emit, so the same server handler and
+	 * the same permission check either way.
+	 */
+	/** A contributed `kind: 'menu'` trigger fired from the options menu (19 §4). */
+	function fireTrigger(fn: string, m: SelectSessionMessage) {
+		if (ctx) ctx.action(fn, m.id)
+		else onFireTrigger?.(fn, m)
+	}
+
+	/** A declared block action inside a parts-native body (20 §6). */
+	function fireBlockAction(
+		fn: string,
+		m: SelectSessionMessage,
+		payload?: Record<string, unknown>
+	) {
+		if (ctx) ctx.action(fn, m.id, payload)
+		else onBlockAction?.(fn, m, payload)
+	}
+
+	// Whether a menu trigger has a route at all: the gate MessageControls has
+	// always applied to the contributed section, restated here now that either
+	// source can supply one. Unchanged in practice — the real mount passes the
+	// prop AND sits inside a host.
+	const canFireTrigger = $derived(!!ctx || !!onFireTrigger)
+
+	/**
+	 * The one value this component reads off a prop that the envelope already
+	 * carries: `session` is touched for exactly one thing — the message count in
+	 * the aria-label below — and at the messages widget's host `ctx.messages.v1`
+	 * IS `session.sessionMessages`, the same array by reference (the host passes
+	 * it verbatim, declares no `channels`, and `scopeMessages` returns its input
+	 * untouched when none are declared). Byte-identical, so this is a swap and
+	 * not a re-definition.
+	 *
+	 * ⚠ It stops being identical the day a host mounts this list WITH declared
+	 * channels: ctx would then hold the scoped subset while SessionContainer
+	 * still renders `session.sessionMessages`, and this count has to describe
+	 * what is rendered. Revisit here, not at the host, if that arrives.
+	 *
+	 * `session.name`/`session.id` (the rest of `session.v1`) are read nowhere in
+	 * this component, and the scoped `persona`/`characters` sections are not
+	 * projected at this host at all — no grants are passed — so nothing else
+	 * here has a ctx counterpart yet.
+	 */
+	const messageCount = $derived(
+		ctx?.messages.v1.length ?? session.sessionMessages.length
+	)
 
 	// Derived values
 	const character = $derived(getMessageCharacter(msg))
@@ -277,8 +345,8 @@
 			: "normal"}
 	tabindex="-1"
 	role="article"
-	aria-label="Message {index + 1} of {session.sessionMessages
-		.length} from {msg.isNarratorResponse
+	aria-label="Message {index +
+		1} of {messageCount} from {msg.isNarratorResponse
 		? narratorDisplayName
 		: resolveCharacterName(character, 'Unknown')}: {msg.content.slice(
 		0,
@@ -432,7 +500,7 @@
 						{onBranchMessage}
 						{onStartSummarization}
 						{menuTriggers}
-						{onFireTrigger}
+						onFireTrigger={canFireTrigger ? fireTrigger : undefined}
 						open={openMsgControlsMenu === msg.id}
 						onOpenChange={(isOpen) =>
 							(openMsgControlsMenu = isOpen ? msg.id : undefined)}
@@ -740,7 +808,7 @@
 							activeRevisions={msg.activeRevisions ?? { "0": 0 }}
 							onContentClick={handleContentClick}
 							onAction={(fn, payload) =>
-								onBlockAction?.(fn, msg, payload)}
+								fireBlockAction(fn, msg, payload)}
 						/>
 					</div>
 				{:else}

@@ -31,7 +31,7 @@ beforeAll(async () => {
 	)
 	db = (await import("$lib/server/db")).db as unknown as TestDb
 	await (await import("$lib/server/db/defaults")).sync()
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	narrateSpecRow = (
 		await db
@@ -51,7 +51,7 @@ describe("the narrator's lore node after the change", () => {
 		// `maxRecursionDepth`; this node declared `recursionDepth`, so the
 		// number it stored was handed to nothing and the narrator scanned on
 		// `DEFAULT_RETRIEVAL` whatever anybody typed.
-		const decls = await declarations(db as any, narrateSpecRow.activeVersionId)
+		const decls = await declarations(db, narrateSpecRow.activeVersionId)
 		const paths = decls
 			.filter((d) => d.nodeKey === LORE && d.slot === "params")
 			.map((d) => d.path)
@@ -66,7 +66,7 @@ describe("the narrator's lore node after the change", () => {
 	})
 
 	it("declares none of the four controls nothing read", async () => {
-		const decls = await declarations(db as any, narrateSpecRow.activeVersionId)
+		const decls = await declarations(db, narrateSpecRow.activeVersionId)
 		const paths = new Set(
 			decls
 				.filter((d) => d.nodeKey === LORE && d.slot === "params")
@@ -87,6 +87,13 @@ describe("the narrator's lore node after the change", () => {
 		// proves each one changes what a run retrieves.
 		expect([...paths].sort()).toEqual([
 			"admitThreshold",
+			// Added by 0099, and it is the same argument arriving from the
+			// other side: this one was READ before it was declared — the
+			// narrator's lore runs through `keywordQuery` too, where
+			// `guaranteedMessages` set two live signals' windows while holding
+			// a constant no panel could reach. `runtime/loreScanDepth.int.test.ts`
+			// is what proves a stored value reaches this lane.
+			"guaranteedMessages",
 			"lexicalScoring",
 			"maxRecursionDepth",
 			"scanDepth",

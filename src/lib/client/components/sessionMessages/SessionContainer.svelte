@@ -113,7 +113,6 @@
 						sessionMessages: SelectSessionMessage[]
 					}
 					isLastMessage: boolean
-					messagesLength: number
 					getMessageCharacter: (
 						msg: SelectSessionMessage
 					) => SelectCharacter | SelectPersona | undefined
@@ -159,7 +158,6 @@
 					editSessionMessage: SelectSessionMessage | undefined
 					canRegenerateLastMessage: boolean
 					hasGeneratingMessage: boolean
-					isGuest: boolean
 				}
 			]
 		>
@@ -541,8 +539,6 @@
 									index,
 									session,
 									isLastMessage,
-									messagesLength:
-										session.sessionMessages.length,
 									getMessageCharacter,
 									canControlMessage,
 									showSwipeControls,
@@ -558,8 +554,7 @@
 									onBranchMessage,
 									editSessionMessage,
 									canRegenerateLastMessage,
-									hasGeneratingMessage,
-									isGuest
+									hasGeneratingMessage
 								})}
 								{#if isLastMessage && NextCharacterComponent}
 									{@render NextCharacterComponent()}

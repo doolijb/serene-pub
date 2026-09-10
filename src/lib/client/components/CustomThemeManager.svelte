@@ -7,6 +7,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import BackgroundPicker from "$lib/client/components/backgrounds/BackgroundPicker.svelte"
 	import CustomThemeEditor from "./CustomThemeEditor.svelte"
+	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 
 	const socket = useTypedSocket()
 	const userCtx: { user: SelectUser } = getContext("userCtx")
@@ -64,47 +65,66 @@
 		socket.emit("customThemes:list", {})
 	}
 
+	// Named so `off` can name them too. A bare `socket.off("customThemes:list")`
+	// removes EVERY listener for that event — including other components
+	// listening for the same event — which then stops updating for the rest
+	// of the session.
+	function handleCustomThemesList(msg: Sockets.CustomThemes.List.Response) {
+		isLoading = false
+		myThemes = msg.myThemes
+		instanceThemes = msg.instanceThemes
+	}
+
+	function handleCustomThemesListError() {
+		isLoading = false
+		toaster.error({ title: "Failed to load themes" })
+	}
+
+	function handleUserSettingsUpdateDarkMode(
+		message: SocketEventMap["userSettings:updateDarkMode"]["response"]
+	) {
+		if (message.success) {
+			toaster.success({
+				title: `${message.enabled ? "Dark" : "Light"} mode enabled`
+			})
+		} else {
+			toaster.error({ title: "Failed to update dark mode setting" })
+		}
+	}
+
+	function handleUserSettingsUpdateTheme(
+		message: SocketEventMap["userSettings:updateTheme"]["response"]
+	) {
+		if (message.success) {
+			toaster.success({
+				title: "Theme updated successfully"
+			})
+		} else {
+			toaster.error({ title: "Failed to update theme" })
+		}
+	}
+
 	onMount(() => {
-		socket.on(
-			"customThemes:list",
-			(msg: Sockets.CustomThemes.List.Response) => {
-				isLoading = false
-				myThemes = msg.myThemes
-				instanceThemes = msg.instanceThemes
-			}
-		)
-		socket.on("customThemes:list:error", () => {
-			isLoading = false
-			toaster.error({ title: "Failed to load themes" })
-		})
+		socket.on("customThemes:list", handleCustomThemesList)
+		socket.on("customThemes:list:error", handleCustomThemesListError)
 		loadList()
 
-		socket.on("userSettings:updateDarkMode", (message) => {
-			if (message.success) {
-				toaster.success({
-					title: `${message.enabled ? "Dark" : "Light"} mode enabled`
-				})
-			} else {
-				toaster.error({ title: "Failed to update dark mode setting" })
-			}
-		})
+		socket.on(
+			"userSettings:updateDarkMode",
+			handleUserSettingsUpdateDarkMode
+		)
 
-		socket.on("userSettings:updateTheme", (message) => {
-			if (message.success) {
-				toaster.success({
-					title: "Theme updated successfully"
-				})
-			} else {
-				toaster.error({ title: "Failed to update theme" })
-			}
-		})
+		socket.on("userSettings:updateTheme", handleUserSettingsUpdateTheme)
 	})
 
 	onDestroy(() => {
-		socket.off("customThemes:list")
-		socket.off("customThemes:list:error")
-		socket.off("userSettings:updateDarkMode")
-		socket.off("userSettings:updateTheme")
+		socket.off("customThemes:list", handleCustomThemesList)
+		socket.off("customThemes:list:error", handleCustomThemesListError)
+		socket.off(
+			"userSettings:updateDarkMode",
+			handleUserSettingsUpdateDarkMode
+		)
+		socket.off("userSettings:updateTheme", handleUserSettingsUpdateTheme)
 	})
 
 	function onSaved(theme: ThemeMeta) {

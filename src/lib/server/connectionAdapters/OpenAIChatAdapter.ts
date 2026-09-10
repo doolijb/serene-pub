@@ -8,8 +8,6 @@ import type { TextGenResult } from "$lib/server/adapters/actions"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { TokenCounters } from "../utils/TokenCounterManager"
 import { OpenAI } from "openai"
-import { StopStrings } from "../utils/StopStrings"
-import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import type {
 	ChatCompletionCreateParamsBase,
 	ChatCompletionMessageParam
@@ -19,6 +17,55 @@ import { openAISamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
+
+/**
+ * The native reasoning text on an OpenAI-compatible `delta` or `message`.
+ *
+ * ⚠ This adapter is "OpenAI" in wire shape only. It is what people point at
+ * DeepSeek's API, OpenRouter, vLLM, SGLang, TabbyAPI and Together — which is
+ * where most of the reasoning models actually in use live — so the field names
+ * that matter here are theirs, not OpenAI's.
+ *
+ * Two names, each naming a real backend rather than covering a guess:
+ *
+ *   `reasoning_content` — DeepSeek's own API field, and the de-facto
+ *     OpenAI-compatible spelling that followed it: SGLang, TabbyAPI, llama.cpp's
+ *     `/v1/chat/completions` under `--reasoning-format deepseek`, KoboldCPP
+ *     (see `KoboldCppAdapter`, which reads exactly this), and vLLM before
+ *     vllm-project/vllm#27752.
+ *   `reasoning` — vLLM since that PR, which moved to `reasoning` to follow
+ *     OpenAI's gpt-oss guidance while keeping the old key for compatibility,
+ *     and OpenRouter, whose documented field this is.
+ *
+ * FIRST MATCH WINS, and that is the point of reading rather than summing:
+ * OpenRouter documents `reasoning_content` as an alias that "functions
+ * identically to `reasoning`", so a response carrying both is carrying one
+ * thought twice. Concatenating would print the model's scratchpad doubled.
+ *
+ * Deliberately NOT read:
+ *   - OpenAI's own o-series reasoning summaries. Those are a Responses API
+ *     (`/v1/responses`) item type; on `/v1/chat/completions` — the only route
+ *     this adapter speaks — OpenAI returns no reasoning text at all, only a
+ *     `usage.completion_tokens_details.reasoning_tokens` count. There is no key
+ *     here to read, so none is invented.
+ *   - OpenRouter's `reasoning_details[]`. It is a structured array of typed
+ *     objects (`reasoning.text`, `reasoning.summary`, `reasoning.encrypted`),
+ *     one of which carries no readable text at all, and it is one gateway's
+ *     shape rather than a compatible-API convention. Worth adding deliberately
+ *     if OpenRouter streaming turns out not to also carry plain `reasoning`;
+ *     not worth guessing at here.
+ */
+function reasoningTextFrom(source: any): string | undefined {
+	if (!source) return undefined
+	if (
+		typeof source.reasoning_content === "string" &&
+		source.reasoning_content
+	)
+		return source.reasoning_content
+	if (typeof source.reasoning === "string" && source.reasoning)
+		return source.reasoning
+	return undefined
+}
 
 export class OpenAIChatAdapter extends BaseConnectionAdapter {
 	private abortController?: AbortController
@@ -68,32 +115,58 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		})
 	}
 
-	compilePrompt(args: {}) {
-		let useSessionFormat = true
-		if (this.connection.extraJson?.prerenderPrompt) {
-			useSessionFormat = false
-		}
-		return super.compilePrompt({ useSessionFormat, ...args })
-	}
-
 	async generateText(): Promise<TextGenResult> {
 		const apiKey = decryptApiKeyField(this.connection.extraJson?.apiKey)
 		const baseURL =
 			normalizeBaseUrl(this.connection.baseUrl) ||
 			normalizeBaseUrl(
-				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT].baseUrl
+				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI].baseUrl
 			)
 		const model = this.connection.model || "gpt-3.5-turbo"
 		const stream = this.connection.extraJson?.stream || false
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
 
-		// Configure messages
+		/**
+		 * The turns that go on the wire, decided by the connection's WIRE MODE.
+		 *
+		 * ⚠ Both branches POST `/v1/chat/completions`; this adapter speaks no
+		 * other route. What the mode selects is what the MODEL receives —
+		 * role-tagged turns, or one prompt rendered flat through the connection's
+		 * completion template and carried in a single user turn because the
+		 * envelope has nowhere else to put it. That second arm is what
+		 * `extraJson.prerenderPrompt` used to name.
+		 *
+		 * It replaced a test on the PAYLOAD (`if (compiledPrompt.prompt) … else
+		 * if (compiledPrompt.messages)`), which followed whatever shape arrived —
+		 * and on the pipeline path what arrived was one flat string on every run,
+		 * whatever the connection wanted. So a chat connection quietly sent its
+		 * whole assembled prompt as a single user message: not the outright loss
+		 * Anthropic and KoboldCPP suffered, but the roles were gone and nothing
+		 * said so.
+		 *
+		 * Each branch refuses the shape it cannot send rather than reaching for
+		 * the other. Recovering here would put an adapter-local wire mode back,
+		 * and the disagreement it papers over is the thing worth reporting.
+		 */
 		let messages: Array<ChatCompletionMessageParam> = []
-		const prompt = compiledPrompt.prompt || ""
-		if (compiledPrompt.prompt) {
-			messages = [{ role: "user", content: prompt }]
-		} else if (compiledPrompt.messages) {
+		if (this.isChatWire) {
+			if (!Array.isArray(compiledPrompt.messages))
+				throw new Error(
+					"this OpenAI connection is chat wire mode, but the prompt it was " +
+						"handed carries no messages. The render and the send are reading " +
+						"different wire modes — check that the assemble node's connection " +
+						"slot is wired to the sending Provider (slot.connectionOf)."
+				)
 			messages = compiledPrompt.messages
+		} else {
+			// `promptTextFor` rather than `compiledPrompt.prompt!`: a payload
+			// that arrived as messages is rebuilt into the connection's own
+			// completion template, which is the same construction the summarizer
+			// has always used. Faithful rather than guessed, and it raises a
+			// named error for a payload carrying neither shape.
+			messages = [
+				{ role: "user", content: this.promptTextFor(compiledPrompt) }
+			]
 		}
 
 		const params: ChatCompletionCreateParamsBase = {
@@ -130,27 +203,17 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 				: {})
 		}
 
-		const promptFormat = this.connection?.extraJson?.prerenderPrompt
-			? this.connection.promptFormat || "chatml"
-			: PromptFormats.OPENAI
-
-		// In native session completion mode (no pre-rendered template), don't send role-label
-		// stop strings — they override the model's native stop tokens (e.g. <|im_end|> for
-		// ChatML models like Qwen) in servers such as Ollama's OpenAI compatibility layer.
-		// Only apply stop strings when pre-rendering, where role labels are plain text.
-		params["stop"] = this.connection?.extraJson?.prerenderPrompt
-			? StopStrings.get({
-					format: promptFormat,
-					characters:
-						this.session.sessionCharacters?.map(
-							(cc) => cc.character
-						) || [],
-					personas:
-						this.session.sessionPersonas?.map((cp) => cp.persona) ||
-						[],
-					currentCharacterId: this.currentCharacterId ?? undefined
-				}) || []
-			: []
+		// The composed list, already filtered by the wire rule — the ternary
+		// that stood here is `connections/stops.ts`'s job now (ruling
+		// 2026-09-10). Its reasoning is unchanged and lives there: in chat wire
+		// mode the roles carry the structure, so role-label stops have nothing
+		// to bite on and override the model's native stop tokens (`<|im_end|>`
+		// on a ChatML model) in servers such as Ollama's OpenAI compatibility
+		// layer. What the ternary could not express is the difference this
+		// replaces it for: the author's OWN stop sequences are their choice
+		// rather than the template's, so they ride either wire — and the old
+		// shape sent an empty array on chat, which discarded them.
+		params["stop"] = this.stops
 
 		const openaiClient = new OpenAI({
 			apiKey,
@@ -167,7 +230,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 				return {
 					completionResult: async (
 						contentCb: (chunk: string) => void,
-						_thinkingCb?: (chunk: string) => void
+						thinkingCb?: (chunk: string) => void
 					) => {
 						const streamResp =
 							await openaiClient.chat.completions.create(
@@ -176,13 +239,15 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 							)
 						for await (const part of streamResp as any) {
 							if (this.isAborting) break
-							if (
-								part.choices &&
-								part.choices[0] &&
-								part.choices[0].delta &&
-								part.choices[0].delta.content
-							) {
-								contentCb(part.choices[0].delta.content)
+							const delta = part.choices?.[0]?.delta
+							if (!delta) continue
+							// Native reasoning, off the same delta as the text.
+							// See `reasoningTextFrom` for which backend each
+							// name serves and why only one is read.
+							const reasoning = reasoningTextFrom(delta)
+							if (reasoning) thinkingCb?.(reasoning)
+							if (delta.content) {
+								contentCb(delta.content)
 							}
 						}
 					},
@@ -195,17 +260,23 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 					{ signal: this.abortController?.signal }
 				)
 				let content = ""
+				let thinkingContent: string | undefined
 				if (
 					response.choices &&
 					response.choices[0] &&
 					response.choices[0].message
 				) {
-					content = response.choices[0].message.content || ""
+					const message = response.choices[0].message
+					content = message.content || ""
+					// The same two names the streaming branch reads, on the
+					// assembled message rather than a delta.
+					thinkingContent = reasoningTextFrom(message) || undefined
 				}
 				return {
 					completionResult: content,
 					compiledPrompt,
-					isAborted: this.isAborting
+					isAborted: this.isAborting,
+					thinkingContent
 				}
 			}
 		} catch (err: any) {
@@ -259,7 +330,7 @@ async function listModels(
 		const baseURL =
 			normalizeBaseUrl(connection.baseUrl) ||
 			normalizeBaseUrl(
-				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT].baseUrl
+				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI].baseUrl
 			)
 		const openai = new OpenAI({
 			apiKey,
@@ -291,7 +362,7 @@ async function testConnection(
 		const baseURL =
 			normalizeBaseUrl(connection.baseUrl) ||
 			normalizeBaseUrl(
-				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT].baseUrl
+				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI].baseUrl
 			)
 		const openai = new OpenAI({
 			apiKey,
@@ -325,7 +396,7 @@ const exports: AdapterExports = {
 	Adapter: OpenAIChatAdapter,
 	listModels,
 	testConnection,
-	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT],
+	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI],
 	samplingKeyMap: openAISamplingKeyMap
 }
 

@@ -308,7 +308,7 @@ describe("a keyless book retrieves sensibly", () => {
 		expect(r.diagnostics.entities).toContain("Emberfall")
 		expect(r.diagnostics.entities).toContain("Commander Vell")
 		expect(r.diagnostics.extractorVersion).toBe(
-			"core:extract/entities-heuristic@1"
+			"core:extract/entities-heuristic@2"
 		)
 	})
 

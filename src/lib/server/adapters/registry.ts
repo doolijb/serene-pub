@@ -51,7 +51,7 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 			(await import("../connectionAdapters/OllamaAdapter")).default
 	},
 
-	[CONNECTION_TYPE.OPENAI_CHAT]: {
+	[CONNECTION_TYPE.OPENAI]: {
 		text: async () =>
 			(await import("../connectionAdapters/OpenAIChatAdapter")).default
 		// No `image`, and the manifest no longer claims `text->image` for this
@@ -63,9 +63,14 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 		// registry now makes unmergeable.
 	},
 
-	[CONNECTION_TYPE.LLAMACPP_COMPLETION]: {
+	[CONNECTION_TYPE.LLAMACPP]: {
 		text: async () =>
 			(await import("../connectionAdapters/LlamaCppAdapter")).default
+		// One module, BOTH wires. `LlamaCppAdapter` branches on `isChatWire`
+		// between llama-server's native `/completion` and its OpenAI-compatible
+		// `/v1/chat/completions`, which is why this stayed one type when the id
+		// lost its `_completion` suffix: the service is the type, the wire is a
+		// capability.
 	},
 
 	[CONNECTION_TYPE.KOBOLDCPP]: {

@@ -29,7 +29,10 @@ import {
 	loadPublished,
 	RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
-import { saveReceipt } from "$lib/server/pipelines/runtime/receipts"
+import {
+	saveReceipt,
+	type RunArtifact
+} from "$lib/server/pipelines/runtime/receipts"
 import {
 	connectionStopsFor,
 	makeScriptApplier,
@@ -50,16 +53,52 @@ import { v4 as uuidv4 } from "uuid"
 
 export class PipelineUnavailableError extends Error {}
 
+// db is the global Db — see db/types.d.ts
+
 export interface TurnRequest {
-	db: any
+	db: Db
 	sessionId: number
 	userId: number
 	/** Whose turn it is. Null in narrator mode. */
 	currentCharacterId: number | null
+	/**
+	 * The side character speaking this turn, when one was named (ruling
+	 * 2026-09-07) — see `SpecRunRequest.speaker`.
+	 */
+	speaker?: SpecRunRequest["speaker"]
 	/** A message being composed but not stored — see `HostScope.draftMessage`. */
 	draftMessage?: { content: string; personaId?: number | null }
 	/** The message that triggered this turn. */
 	text: string
+	/**
+	 * Text an in-progress reply has already produced — a **continue** (ruling
+	 * 2026-09-08, D-2).
+	 *
+	 * Absent on every other turn. It travels to the input node's
+	 * `continuationPrefill` port and from there, on `core:spec/respond`, to
+	 * `core:task/process-messages@1`, which puts it in the seed line the model
+	 * writes from. Nothing else reads it.
+	 *
+	 * ⚠ It is **not** `text`, and the two must not be conflated. A continue
+	 * re-retrieves as a full run: the triggering text is whatever an ordinary
+	 * turn's would be, the row carrying this partial is excluded from every
+	 * message read while it generates, and only the prompt sees it — where it
+	 * counts against the budget like anything else in the prompt.
+	 */
+	continuationPrefill?: string
+	/**
+	 * Rows this turn is producing that the caller already knows about.
+	 *
+	 * ⚠ The reply path's message row is created by the **trigger**, before the
+	 * run: the pipeline compiles the prompt and the adapter fills the row in, so
+	 * no Consumer ever commits and the host records nothing. Seeding the
+	 * collector here is what gives a real reply an artifact — and, through that,
+	 * what stops the run being recorded as a preview. See `saveReceipt`.
+	 *
+	 * Everything the run writes *itself* is appended by the host as it goes;
+	 * this is only the head start.
+	 */
+	artifacts?: RunArtifact[]
 	/** Which spec to run. Defaults to core's. */
 	specId?: string
 	/**
@@ -111,7 +150,7 @@ export interface TurnRequest {
  * pipelines wearing one name.
  */
 export interface SpecRunRequest {
-	db: any
+	db: Db
 	sessionId: number
 	userId: number
 	/** Which spec to run. */
@@ -126,8 +165,37 @@ export interface SpecRunRequest {
 	currentCharacterId?: number | null
 	/** A message being composed but not stored — see `HostScope.draftMessage`. */
 	draftMessage?: { content: string; personaId?: number | null }
+	/**
+	 * Who is speaking this turn when they are **not a cast member** — the
+	 * side-character trigger's first step (ruling 2026-09-07).
+	 *
+	 * ⚠ **participant ≠ character.** This is a fact about one turn, not a
+	 * membership: nothing anywhere writes a `session_characters` row from it,
+	 * and the round-robin never sees it — the rotation reads stored messages
+	 * and drops narration rows before matching a character id, so exclusion is
+	 * a property of the row this turn writes rather than a rule stated here.
+	 *
+	 * `characterId` is null for a free-form name, which is the whole point of
+	 * the free-form case: a full participant for that turn with no row behind
+	 * them. `known` is the new-name fact — whether the session's lorebook has
+	 * heard of them — resolved once, before the run, and handed to the script
+	 * hook as a declared extra rather than recomputed per link.
+	 */
+	speaker?: {
+		name: string
+		characterId: number | null
+		known: boolean
+		/** The card, when the pick was a real character. */
+		character?: Record<string, unknown> | null
+	} | null
 	/** The input node's value, shaped by the caller for the spec it names. */
 	input: unknown
+	/**
+	 * Rows this run is producing that the caller already knows about — see
+	 * `TurnRequest.artifacts`. A run whose Consumer writes its own rows leaves
+	 * this unset; the host records those as they are written.
+	 */
+	artifacts?: RunArtifact[]
 	seed?: string
 	runId?: string
 	sink?: HostScope["sink"]
@@ -257,6 +325,20 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 	// script applier, and the rendering bindings — must name the same person.
 	const user = request.userId != null ? String(request.userId) : undefined
 
+	/**
+	 * What this run leaves behind, collected as it happens.
+	 *
+	 * Seeded with whatever the caller already owns (the reply path's message
+	 * row), then appended to by every host commit that writes — and by
+	 * `dispatchImage`, which is the only place a rendered file's row id exists.
+	 * `saveReceipt` turns it into `pipeline_run_artifacts` rows and derives
+	 * `is_preview` from whether it stayed empty.
+	 *
+	 * A fresh array rather than the caller's, so a caller reusing a request
+	 * object across runs does not accumulate the previous run's output.
+	 */
+	const artifacts: RunArtifact[] = [...(request.artifacts ?? [])]
+
 	const scope: HostScope = {
 		// Everything the host does outside the graph is attributed to this run:
 		// the progress an image render reports back to the person watching, and
@@ -268,6 +350,7 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 		userId: request.userId,
 		currentCharacterId: request.currentCharacterId,
 		draftMessage: request.draftMessage,
+		artifacts,
 		sink: request.sink,
 		signal: request.signal
 	}
@@ -344,7 +427,15 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 					applyScripts: makeScriptApplier(request.db, {
 						seed,
 						nowMs: Date.now(),
-						extras: await scriptExtras(request.db, scope),
+						// The speaker rides in beside the cast names: the
+						// side-character hook declares `speakerName`,
+						// `speakerCharacterId` and `speakerIsKnown` as extras,
+						// and a declared extra a host never supplies is a
+						// control with no effect wearing a contract.
+						extras: await scriptExtras(request.db, {
+							...scope,
+							speaker: request.speaker ?? null
+						}),
 						// The connection's own stop guards ride along (18 §4b):
 						// resolved by the same rule dispatch uses — the instance
 						// default — so every spec running against that endpoint
@@ -386,7 +477,16 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 		await saveReceipt(request.db, receipt, {
 			sessionId: request.sessionId,
 			userId: request.userId,
-			messageId: writtenMessageId(receipt) ?? undefined
+			/**
+			 * What the caller named, then everything the run actually wrote,
+			 * in the order it wrote it.
+			 *
+			 * One list rather than a precedence rule between two sources: a run
+			 * can legitimately do both — write into a row the trigger created
+			 * *and* create rows of its own — and the old "the Consumer's id
+			 * wins, else the caller's" could only ever record one of them.
+			 */
+			artifacts
 		})
 
 	return receipt
@@ -408,8 +508,23 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 		specId: request.specId ?? RESPOND_SPEC_ID,
 		currentCharacterId: request.currentCharacterId,
 		draftMessage: request.draftMessage,
+		speaker: request.speaker ?? null,
+		artifacts: request.artifacts,
 		input: {
 			text: request.text,
+			/**
+			 * The continue verb's one value (ruling 2026-09-08, D-2). Empty on
+			 * every other turn — the port resolves, the seed line renders
+			 * empty, and the model starts the reply as it always did. Specs
+			 * whose input type declares no such port never resolve it.
+			 */
+			continuationPrefill: request.continuationPrefill ?? "",
+			// The side-character trigger's first step, on the input node's own
+			// port — so the receipt answers "why did this turn sound like
+			// Vell" afterwards rather than only the trigger knowing. Null on
+			// every other pipeline, whose input types declare no such port and
+			// therefore never resolve it.
+			speaker: request.speaker ?? null,
 			// Both as ports and bundled. A query that wants the pair takes the
 			// scope; a node that wants only the speaker takes the id, instead
 			// of accepting the whole scope and reaching into it.
@@ -437,38 +552,12 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 	})
 }
 
-/**
- * The row a Consumer wrote, read back off the receipt.
- *
- * Linking the run to its message is what turns "why does this reply say that"
- * into a lookup. The id is not known when the run starts — the Consumer creates
- * the row mid-run — so it is read from the write result afterwards.
- *
- * **The discriminant is checked, not assumed.** A Consumer publishes
- * `write-result@1`: `{status: "committed", ids}` or `{status: "pending",
- * proposalId}`, because under async review a write is a *proposal* a reviewer
- * may still reject. The first version of this reached straight for an id and
- * would have linked a run to a row that does not exist yet — which is precisely
- * the failure the shape is discriminated to prevent, and the reason it is
- * deliberately not assignable to `row-ids@1`.
- */
-export function writtenMessageId(receipt: Receipt): number | null {
-	for (const node of receipt.nodes) {
-		if (node.kind !== "consumer") continue
-		const out = node.output as any
-		if (out?.status !== "committed") continue
-		const id = out?.ids?.id
-		if (typeof id === "number") return id
-	}
-	return null
-}
-
 /** The text a completed turn produced, or null if it did not produce one. */
 export function generatedText(receipt: Receipt): string | null {
 	const node = receipt.nodes.find(
 		(n) => n.typeId === "core:provider/generate-text@1"
 	)
-	const text = (node?.output as any)?.text
+	const text = (node?.output as { text?: unknown } | null | undefined)?.text
 	return typeof text === "string" && text.length > 0 ? text : null
 }
 

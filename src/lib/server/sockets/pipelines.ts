@@ -19,7 +19,7 @@
 
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, asc, desc, eq, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import {
 	clearOption,
@@ -43,6 +43,17 @@ import { redactConnections } from "$lib/server/connections/visibility"
 // on top of it, so access to the session never becomes access to somebody
 // else's receipts.
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
+// The two things a preview turn needs that this file has never needed before:
+// who is due to speak, and which lane counts as the conversation. Imported
+// rather than re-derived — `getNextCharacterTurn` is the rotation rule, and a
+// second copy of it here would answer a different question from the one the
+// send answers.
+import { getNextCharacterTurn } from "$lib/server/utils/getNextCharacterTurn"
+import {
+	DEFAULT_CHANNEL,
+	channelWhere
+} from "$lib/server/messages/channels"
+import { MAX_CHAT_MESSAGE_LENGTH } from "$lib/shared/constants/MessageLimits"
 // The budget band a declared entry type's rows compete in — the declaration's
 // own answer, not a fourth table of source names. It is what keys the entry
 // index the retrieval explanation looks rows up in.
@@ -104,7 +115,7 @@ async function emitView(
 ) {
 	const viewer = await viewerFor(socket, sessionId)
 	const pipeline = await namespaceView(
-		db as any,
+		db,
 		await instanceSecret(),
 		slug,
 		viewer
@@ -142,7 +153,7 @@ export const pipelinesList: Handler<
 			.from(schema.systemSettings)
 			.limit(1)
 		const res: Sockets.Pipelines.List.Response = {
-			pipelinesList: (await listNamespaces(db as any)) as any,
+			pipelinesList: (await listNamespaces(db)) as any,
 			// Whether the old Prompt Configs sidebar is offered at all — the one
 			// toggle that survives the changeover. Configuration moves here, but
 			// a year of somebody's tuning has to stay *readable* until the
@@ -179,7 +190,7 @@ export const pipelinesSetOption: Handler<
 	handler: async (socket, params, emitToUser) => {
 		try {
 			await writeOption(
-				db as any,
+				db,
 				await instanceSecret(),
 				params.slug,
 				await viewerFor(socket, params.sessionId),
@@ -210,7 +221,7 @@ export const pipelinesClearOption: Handler<
 	handler: async (socket, params, emitToUser) => {
 		try {
 			await clearOption(
-				db as any,
+				db,
 				await instanceSecret(),
 				params.slug,
 				await viewerFor(socket, params.sessionId),
@@ -252,7 +263,7 @@ export const pipelinesSetOptions: Handler<
 		try {
 			for (const entry of params.set ?? []) {
 				await writeOption(
-					db as any,
+					db,
 					secret,
 					params.slug,
 					viewer,
@@ -264,7 +275,7 @@ export const pipelinesSetOptions: Handler<
 			}
 			for (const optionId of params.clear ?? []) {
 				await clearOption(
-					db as any,
+					db,
 					secret,
 					params.slug,
 					viewer,
@@ -356,7 +367,7 @@ async function ownInstanceConfigValues(
 	const { resolveSelectedConfig } = await import(
 		"$lib/server/pipelines/config/named"
 	)
-	const selected = await resolveSelectedConfig(db as any, spec.id, slug, {})
+	const selected = await resolveSelectedConfig(db, spec.id, slug, {})
 	if (!selected) return []
 	const [cfg] = await db
 		.select()
@@ -444,7 +455,7 @@ export const pipelinesSetPresetActions: Handler<
 			const { setPresetActions } = await import(
 				"$lib/server/pipelines/entities/sessionGenres"
 			)
-			const r = await setPresetActions(db as any, config.id, {
+			const r = await setPresetActions(db, config.id, {
 				...(params.includedActions !== undefined
 					? { includedActions: params.includedActions }
 					: {}),
@@ -489,7 +500,7 @@ export const pipelinesCreateConfig: Handler<
 			const made =
 				params.fromConfigId != null
 					? await duplicateConfig(
-							db as any,
+							db,
 							(
 								await configInSpec(
 									params.slug,
@@ -498,7 +509,7 @@ export const pipelinesCreateConfig: Handler<
 							).id,
 							params.name
 						)
-					: await createConfig(db as any, spec.id, params.name)
+					: await createConfig(db, spec.id, params.name)
 			configId = made.id
 		} catch (err) {
 			const res = { error: await configRefusal(err) }
@@ -535,7 +546,7 @@ export const pipelinesRenameConfig: Handler<
 				"$lib/server/pipelines/config/named"
 			)
 			const row = await configInSpec(params.slug, params.configId)
-			await renameConfig(db as any, row.id, params.name)
+			await renameConfig(db, row.id, params.name)
 		} catch (err) {
 			const res = { error: await configRefusal(err) }
 			emitToUser("pipelines:renameConfig:error", res)
@@ -564,7 +575,7 @@ export const pipelinesDeleteConfig: Handler<
 				"$lib/server/pipelines/config/named"
 			)
 			const row = await configInSpec(params.slug, params.configId)
-			await deleteConfig(db as any, row.id)
+			await deleteConfig(db, row.id)
 		} catch (err) {
 			const res = { error: await configRefusal(err) }
 			emitToUser("pipelines:deleteConfig:error", res)
@@ -588,7 +599,7 @@ export const pipelinesSelectConfig: Handler<
 	handler: async (socket, params, emitToUser) => {
 		try {
 			await selectNamedConfig(
-				db as any,
+				db,
 				params.slug,
 				await viewerFor(socket, params.sessionId),
 				params.configId,
@@ -627,7 +638,7 @@ async function noticesFor(
 	const { pendingNotices } = await import(
 		"$lib/server/pipelines/config/named"
 	)
-	return ((await pendingNotices(db as any, configId)) as any[]).map((n) => ({
+	return ((await pendingNotices(db, configId)) as any[]).map((n) => ({
 		id: n.id,
 		kind: n.kind,
 		// A row written before the reconciler learned to label its culls has
@@ -690,7 +701,7 @@ export const pipelinesAcknowledgeConfigNotices: Handler<
 			const { acknowledgeNotices } = await import(
 				"$lib/server/pipelines/config/named"
 			)
-			await acknowledgeNotices(db as any, config.id, params.noticeId)
+			await acknowledgeNotices(db, config.id, params.noticeId)
 			const res = {
 				configId: config.id,
 				notices: await noticesFor(config.id)
@@ -747,7 +758,7 @@ async function promptForOption(
 	const viewer = await viewerFor(socket, params.sessionId)
 	const { nodeTypeId, slot, nodeKey, specId, specVersionId } =
 		await promptOptionGate(
-			db as any,
+			db,
 			await instanceSecret(),
 			params.slug,
 			viewer,
@@ -758,7 +769,7 @@ async function promptForOption(
 	// including the fields check, which catches a row that fits the pool but
 	// not this version of the slot.
 	const row = await assertSelectable(
-		db as any,
+		db,
 		specVersionId,
 		nodeKey,
 		slot,
@@ -860,7 +871,7 @@ export const pipelinesCreatePrompt: Handler<
 			)
 			const viewer = await viewerFor(socket, params.sessionId)
 			const { nodeTypeId, slot, specId } = await promptOptionGate(
-				db as any,
+				db,
 				await instanceSecret(),
 				params.slug,
 				viewer,
@@ -869,7 +880,7 @@ export const pipelinesCreatePrompt: Handler<
 			const { createPrompt } = await import(
 				"$lib/server/pipelines/entities/prompts"
 			)
-			const made = await createPrompt(db as any, {
+			const made = await createPrompt(db, {
 				nodeTypeId,
 				slot,
 				// Through the same uniquifier a clone uses: the pool's unique
@@ -924,7 +935,7 @@ export const pipelinesClonePrompt: Handler<
 				"$lib/server/pipelines/entities/prompts"
 			)
 			const copy = await duplicatePrompt(
-				db as any,
+				db,
 				row.id,
 				params.name?.trim() ||
 					(await copyName(nodeTypeId, slot, row.name)),
@@ -968,7 +979,7 @@ export const pipelinesUpdatePrompt: Handler<
 			const { updatePrompt } = await import(
 				"$lib/server/pipelines/entities/prompts"
 			)
-			await updatePrompt(db as any, row.id, {
+			await updatePrompt(db, row.id, {
 				...(params.name !== undefined ? { name: params.name } : {}),
 				...(params.fields !== undefined
 					? { fields: params.fields }
@@ -1055,7 +1066,7 @@ export const pipelinesDeletePrompt: Handler<
 					"$lib/server/pipelines/config/named"
 				)
 				const selected = await resolveSelectedConfig(
-					db as any,
+					db,
 					specId,
 					params.slug,
 					{}
@@ -1088,7 +1099,7 @@ export const pipelinesDeletePrompt: Handler<
 			const { deletePrompt } = await import(
 				"$lib/server/pipelines/entities/prompts"
 			)
-			await deletePrompt(db as any, row.id, {
+			await deletePrompt(db, row.id, {
 				ignoreOverrideIds: new Set(mine.map((o) => o.id)),
 				ignoreConfigValueIds: new Set(mineValues.map((v) => v.id))
 			})
@@ -1155,13 +1166,13 @@ async function layoutForOption(
 	)
 	const viewer = await viewerFor(socket, params.sessionId)
 	const { variableId } = await variableOptionGate(
-		db as any,
+		db,
 		await instanceSecret(),
 		params.slug,
 		viewer,
 		params.optionId
 	)
-	const row = await assertSelectable(db as any, variableId, params.templateId)
+	const row = await assertSelectable(db, variableId, params.templateId)
 	return { viewer, variableId, row }
 }
 
@@ -1210,7 +1221,7 @@ export const pipelinesCloneVariableTemplate: Handler<
 				"$lib/server/pipelines/entities/variableTemplates"
 			)
 			const copy = await duplicateVariableTemplate(
-				db as any,
+				db,
 				row.id,
 				params.name?.trim() ||
 					(await layoutCopyName(variableId, row.name))
@@ -1250,7 +1261,7 @@ export const pipelinesUpdateVariableTemplate: Handler<
 			const { updateVariableTemplate } = await import(
 				"$lib/server/pipelines/entities/variableTemplates"
 			)
-			await updateVariableTemplate(db as any, row.id, {
+			await updateVariableTemplate(db, row.id, {
 				...(params.name !== undefined ? { name: params.name } : {}),
 				...(params.source !== undefined
 					? { source: params.source }
@@ -1299,9 +1310,9 @@ export const pipelinesDeleteVariableTemplate: Handler<
 			const own = await ownInstanceConfigValues(
 				params.slug,
 				row.id,
-				await variableSlotNames(db as any)
+				await variableSlotNames(db)
 			)
-			await deleteVariableTemplate(db as any, row.id, {
+			await deleteVariableTemplate(db, row.id, {
 				ignoreConfigValueIds: new Set(own.map((v) => v.id))
 			})
 			for (const v of own)
@@ -1348,14 +1359,14 @@ async function contextTemplateForOption(
 	)
 	const viewer = await viewerFor(socket, params.sessionId)
 	const { nodeTypeId, engine, specId } = await contextTemplateOptionGate(
-		db as any,
+		db,
 		await instanceSecret(),
 		params.slug,
 		viewer,
 		params.optionId
 	)
 	const row = await assertSelectable(
-		db as any,
+		db,
 		nodeTypeId,
 		params.templateId,
 		engine
@@ -1417,7 +1428,7 @@ export const pipelinesCreateContextTemplate: Handler<
 			)
 			const viewer = await viewerFor(socket, params.sessionId)
 			const { nodeTypeId, specId } = await contextTemplateOptionGate(
-				db as any,
+				db,
 				await instanceSecret(),
 				params.slug,
 				viewer,
@@ -1426,7 +1437,7 @@ export const pipelinesCreateContextTemplate: Handler<
 			const { createContextTemplate } = await import(
 				"$lib/server/pipelines/entities/contextTemplates"
 			)
-			const created = await createContextTemplate(db as any, {
+			const created = await createContextTemplate(db, {
 				nodeTypeId,
 				name: await contextTemplateCopyName(
 					nodeTypeId,
@@ -1476,7 +1487,7 @@ export const pipelinesCloneContextTemplate: Handler<
 				"$lib/server/pipelines/entities/contextTemplates"
 			)
 			const copy = await duplicateContextTemplate(
-				db as any,
+				db,
 				row.id,
 				params.name?.trim() ||
 					(await contextTemplateCopyName(nodeTypeId, row.name)),
@@ -1517,7 +1528,7 @@ export const pipelinesUpdateContextTemplate: Handler<
 			const { updateContextTemplate } = await import(
 				"$lib/server/pipelines/entities/contextTemplates"
 			)
-			await updateContextTemplate(db as any, row.id, {
+			await updateContextTemplate(db, row.id, {
 				...(params.name !== undefined ? { name: params.name } : {}),
 				...(params.source !== undefined
 					? { source: params.source }
@@ -1558,9 +1569,9 @@ export const pipelinesDeleteContextTemplate: Handler<
 			const own = await ownInstanceConfigValues(
 				params.slug,
 				row.id,
-				await contextTemplateSlotNames(db as any)
+				await contextTemplateSlotNames(db)
 			)
-			await deleteContextTemplate(db as any, row.id, {
+			await deleteContextTemplate(db, row.id, {
 				ignoreConfigValueIds: new Set(own.map((v) => v.id))
 			})
 			for (const v of own)
@@ -1669,7 +1680,7 @@ export const pipelinesLibrary: Handler<
 			"$lib/server/pipelines/config/library"
 		)
 		const res = (await libraryView(
-			db as any
+			db
 		)) as Sockets.Pipelines.Library.Response
 		emitToUser("pipelines:library", res)
 		return res
@@ -1716,7 +1727,7 @@ async function libraryAnswer(
 ): Promise<{ library: Sockets.Pipelines.Library.Response }> {
 	const { libraryView } = await import("$lib/server/pipelines/config/library")
 	const library = (await libraryView(
-		db as any
+		db
 	)) as Sockets.Pipelines.Library.Response
 	const res = { library }
 	emitToUser(event, res)
@@ -1799,7 +1810,7 @@ export const pipelinesLibraryCreateTemplate: Handler<
 				const { createContextTemplate } = await import(
 					"$lib/server/pipelines/entities/contextTemplates"
 				)
-				await createContextTemplate(db as any, {
+				await createContextTemplate(db, {
 					nodeTypeId: params.poolId,
 					name,
 					source: params.source ?? "",
@@ -1809,7 +1820,7 @@ export const pipelinesLibraryCreateTemplate: Handler<
 				const { createVariableTemplate } = await import(
 					"$lib/server/pipelines/entities/variableTemplates"
 				)
-				await createVariableTemplate(db as any, {
+				await createVariableTemplate(db, {
 					variableId: params.poolId,
 					name,
 					source: params.source ?? "",
@@ -1851,7 +1862,7 @@ export const pipelinesLibraryCloneTemplate: Handler<
 					"$lib/server/pipelines/entities/contextTemplates"
 				)
 				await duplicateContextTemplate(
-					db as any,
+					db,
 					params.id,
 					await libraryCopyName(
 						"context",
@@ -1874,7 +1885,7 @@ export const pipelinesLibraryCloneTemplate: Handler<
 					"$lib/server/pipelines/entities/variableTemplates"
 				)
 				await duplicateVariableTemplate(
-					db as any,
+					db,
 					params.id,
 					await libraryCopyName(
 						"variable",
@@ -1917,12 +1928,12 @@ export const pipelinesLibraryUpdateTemplate: Handler<
 				const { updateContextTemplate } = await import(
 					"$lib/server/pipelines/entities/contextTemplates"
 				)
-				await updateContextTemplate(db as any, params.id, patch)
+				await updateContextTemplate(db, params.id, patch)
 			} else {
 				const { updateVariableTemplate } = await import(
 					"$lib/server/pipelines/entities/variableTemplates"
 				)
-				await updateVariableTemplate(db as any, params.id, patch)
+				await updateVariableTemplate(db, params.id, patch)
 			}
 		} catch (err) {
 			const res = { error: await libraryRefusal(err) }
@@ -1957,12 +1968,12 @@ export const pipelinesLibraryDeleteTemplate: Handler<
 				const { deleteContextTemplate } = await import(
 					"$lib/server/pipelines/entities/contextTemplates"
 				)
-				await deleteContextTemplate(db as any, params.id)
+				await deleteContextTemplate(db, params.id)
 			} else {
 				const { deleteVariableTemplate } = await import(
 					"$lib/server/pipelines/entities/variableTemplates"
 				)
-				await deleteVariableTemplate(db as any, params.id)
+				await deleteVariableTemplate(db, params.id)
 			}
 		} catch (err) {
 			const res = { error: await libraryRefusal(err) }
@@ -1998,7 +2009,7 @@ export const pipelinesLibraryClonePrompt: Handler<
 				"$lib/server/pipelines/entities/prompts"
 			)
 			await duplicatePrompt(
-				db as any,
+				db,
 				params.id,
 				await promptCopyName(
 					row.nodeTypeId,
@@ -2030,7 +2041,7 @@ export const pipelinesLibraryUpdatePrompt: Handler<
 			const { updatePrompt } = await import(
 				"$lib/server/pipelines/entities/prompts"
 			)
-			await updatePrompt(db as any, params.id, {
+			await updatePrompt(db, params.id, {
 				...(params.name !== undefined ? { name: params.name } : {}),
 				...(params.fields !== undefined
 					? { fields: params.fields }
@@ -2060,7 +2071,7 @@ export const pipelinesLibraryDeletePrompt: Handler<
 			const { deletePrompt } = await import(
 				"$lib/server/pipelines/entities/prompts"
 			)
-			await deletePrompt(db as any, params.id)
+			await deletePrompt(db, params.id)
 		} catch (err) {
 			const res = { error: await libraryRefusal(err) }
 			emitToUser("pipelines:libraryDeletePrompt:error", res)
@@ -2103,7 +2114,7 @@ async function scriptsAnswer(
 		"$lib/server/pipelines/entities/scripts"
 	)
 	const scripts = (await scriptsView(
-		db as any
+		db
 	)) as Sockets.Pipelines.Scripts.Response
 	const res = { scripts }
 	emitToUser(event, res)
@@ -2125,7 +2136,7 @@ export const pipelinesScripts: Handler<
 			"$lib/server/pipelines/entities/scripts"
 		)
 		const res = (await scriptsView(
-			db as any
+			db
 		)) as Sockets.Pipelines.Scripts.Response
 		emitToUser("pipelines:scripts", res)
 		return res
@@ -2147,7 +2158,7 @@ export const pipelinesCreateScript: Handler<
 			const { createScript } = await import(
 				"$lib/server/pipelines/entities/scripts"
 			)
-			await createScript(db as any, {
+			await createScript(db, {
 				typeId: params.typeId,
 				...(params.name ? { name: params.name } : {})
 			})
@@ -2175,7 +2186,7 @@ export const pipelinesCloneScript: Handler<
 			const { duplicateScript } = await import(
 				"$lib/server/pipelines/entities/scripts"
 			)
-			await duplicateScript(db as any, params.id, params.name)
+			await duplicateScript(db, params.id, params.name)
 		} catch (err) {
 			const res = { error: await scriptsRefusal(err) }
 			emitToUser("pipelines:cloneScript:error", res)
@@ -2200,7 +2211,7 @@ export const pipelinesUpdateScript: Handler<
 			const { updateScript } = await import(
 				"$lib/server/pipelines/entities/scripts"
 			)
-			await updateScript(db as any, params.id, {
+			await updateScript(db, params.id, {
 				...(params.name !== undefined ? { name: params.name } : {}),
 				...(params.source !== undefined
 					? { source: params.source }
@@ -2239,7 +2250,7 @@ export const pipelinesDeleteScript: Handler<
 			const { deleteScript } = await import(
 				"$lib/server/pipelines/entities/scripts"
 			)
-			await deleteScript(db as any, params.id)
+			await deleteScript(db, params.id)
 		} catch (err) {
 			const res = { error: await scriptsRefusal(err) }
 			emitToUser("pipelines:deleteScript:error", res)
@@ -2264,7 +2275,7 @@ export const pipelinesExportScripts: Handler<
 			const { exportScriptArtifact } = await import(
 				"$lib/server/pipelines/entities/scripts"
 			)
-			const artifact = await exportScriptArtifact(db as any, params.ids)
+			const artifact = await exportScriptArtifact(db, params.ids)
 			// One script keeps its own name on the file; a pack is a pack.
 			const base =
 				artifact.scripts.length === 1
@@ -2303,12 +2314,12 @@ export const pipelinesImportScripts: Handler<
 				await import("$lib/server/pipelines/entities/scripts")
 			const artifact = parseScriptArtifact(params.artifact)
 			const report = await importScriptArtifact(
-				db as any,
+				db,
 				artifact,
 				params.accept
 			)
 			const scripts = (await scriptsView(
-				db as any
+				db
 			)) as Sockets.Pipelines.Scripts.Response
 			const res = { report, scripts }
 			emitToUser("pipelines:importScripts", res)
@@ -2444,7 +2455,7 @@ export const pipelinesDetail: Handler<
 			// declarations rather than a second copy of its indexing: steps are
 			// `s${i}` over configurable nodes in position order, so re-deriving
 			// that here would be a rule in two places waiting to disagree.
-			const decls = await declarations(db as any, spec.activeVersionId)
+			const decls = await declarations(db, spec.activeVersionId)
 			const configurable: string[] = []
 			for (const d of decls)
 				if (!configurable.includes(d.nodeKey))
@@ -2551,11 +2562,50 @@ export const pipelinesDetail: Handler<
 }
 
 /**
+ * What each of these runs left behind, keyed by run.
+ *
+ * Projected as `{kind, entityId, action}` and nothing more. `node_key` is a
+ * pipeline-internal name and `seq` is already the array order, so neither
+ * earns a place in a payload a session panel reads.
+ */
+async function artifactsByRun(
+	runIds: number[]
+): Promise<
+	Map<number, Sockets.Pipelines.Runs.Response["runs"][number]["artifacts"]>
+> {
+	const byRun = new Map<
+		number,
+		Sockets.Pipelines.Runs.Response["runs"][number]["artifacts"]
+	>()
+	if (!runIds.length) return byRun
+
+	const rows = await db
+		.select()
+		.from(schema.pipelineRunArtifacts)
+		.where(inArray(schema.pipelineRunArtifacts.runId, runIds))
+		.orderBy(
+			asc(schema.pipelineRunArtifacts.runId),
+			asc(schema.pipelineRunArtifacts.seq)
+		)
+	for (const row of rows as any[]) {
+		const list = byRun.get(row.runId) ?? []
+		list.push({
+			kind: row.kind,
+			entityId: row.entityId,
+			action: row.action
+		})
+		byRun.set(row.runId, list)
+	}
+	return byRun
+}
+
+/**
  * Recent runs — the honest answer to "did that use the new path".
  *
- * Scoped to sessions the asker owns, and to their own runs otherwise. A run receipt
- * records what a pipeline decided about somebody's conversation; it is not
- * instance trivia an admin browses by default.
+ * Scoped to sessions the asker can reach — owner **or** guest, via
+ * `checkSessionAccess` — and, on top of that and independently of it, to their
+ * own runs. A run receipt records what a pipeline decided about somebody's
+ * conversation; it is not instance trivia an admin browses by default.
  */
 export const pipelinesRuns: Handler<
 	Sockets.Pipelines.Runs.Params,
@@ -2568,12 +2618,12 @@ export const pipelinesRuns: Handler<
 
 		let where = eq(schema.pipelineRuns.userId, userId)
 		if (params.sessionId != null) {
-			const [session] = await db
-				.select({ userId: schema.sessions.userId })
-				.from(schema.sessions)
-				.where(eq(schema.sessions.id, params.sessionId))
-				.limit(1)
-			if (session?.userId !== userId) {
+			// Reaching the session is owner-OR-guest, decided in the one place
+			// that decides it. The `user_id` clause below is the separate gate
+			// and the one that keeps this honest: a guest passes the first and
+			// still reads only their own receipts, never the owner's.
+			const access = await checkSessionAccess(params.sessionId, userId)
+			if (!access.hasAccess) {
 				const res = { runs: [] }
 				emitToUser("pipelines:runs", res)
 				return res
@@ -2591,6 +2641,10 @@ export const pipelinesRuns: Handler<
 			.orderBy(desc(schema.pipelineRuns.id))
 			.limit(limit)
 
+		// One query for the whole page rather than one per row: a run's output
+		// is a handful of rows, and `limit` is capped at 100 above.
+		const artifacts = await artifactsByRun(rows.map((r: any) => r.id))
+
 		const res: Sockets.Pipelines.Runs.Response = {
 			runs: rows.map((r: any) => ({
 				id: r.id,
@@ -2602,7 +2656,7 @@ export const pipelinesRuns: Handler<
 				elapsedMs: r.elapsedMs,
 				tokensSpent: r.tokensSpent,
 				isPreview: r.isPreview,
-				messageId: r.messageId,
+				artifacts: artifacts.get(r.id) ?? [],
 				sessionId: r.sessionId,
 				startedAt: new Date(r.startedAt).toISOString()
 			}))
@@ -2652,7 +2706,10 @@ export const pipelinesRun: Handler<
 				elapsedMs: (r as any).elapsedMs,
 				tokensSpent: (r as any).tokensSpent,
 				isPreview: (r as any).isPreview,
-				messageId: (r as any).messageId,
+				artifacts:
+					(await artifactsByRun([(r as any).id])).get(
+						(r as any).id
+					) ?? [],
 				// So the panel reading this receipt can ask what has fired
 				// across the whole session, not just this turn.
 				sessionId: (r as any).sessionId ?? null,
@@ -2814,8 +2871,10 @@ const RETRIEVAL_CRITERION_ORDER = [
 	"semantic",
 	"tfidf",
 	"lastRefRecency",
-	"recency",
-	"sceneAffinity",
+	// ⚠ `recency` and `sceneAffinity` were between these two and are gone with
+	// the weights they explained — neither had a producer, so neither could
+	// ever have rendered a line here. `density` stays and now can: the scan
+	// writes it on every candidate.
 	"density"
 ] as const
 
@@ -2963,22 +3022,14 @@ function retrievalCriterion(
 				detail: "came up recently in the conversation",
 				value
 			}
-		case "recency":
-			return {
-				label: "How recent it is",
-				detail: `near the end of the timeline (${value.toFixed(2)})`,
-				value
-			}
-		case "sceneAffinity":
-			return {
-				label: "Fit with the current scene",
-				detail: value.toFixed(2),
-				value
-			}
 		case "density":
 			return {
-				label: "How much it says per token",
-				detail: value.toFixed(2),
+				label: "Longer than most entries",
+				// Not "how much it says per token", which is what this said
+				// while nothing produced it: the number is length against the
+				// pool's mean, capped at 1, so a full mark means "at or above
+				// average length" and not "dense".
+				detail: `${value.toFixed(2)} of the average entry length`,
 				value
 			}
 		default:
@@ -3336,6 +3387,10 @@ export function explainRetrieval(
 	const limit = opts.limit ?? 250
 	const entriesRead = opts.entriesRead ?? false
 	const nodes: any[] = Array.isArray(receipt?.nodes) ? receipt.nodes : []
+	// Read up front, and off the generate node rather than out of the retrieval
+	// walk below: a stop sequence is a property of the SEND, and the loop that
+	// follows is about what went into the prompt.
+	const stops = stopsFromReceipt(nodes)
 	const rows: Sockets.Pipelines.RetrievalRow[] = []
 	const notes: string[] = []
 	const warnings: string[] = []
@@ -3371,6 +3426,48 @@ export function explainRetrieval(
 	const warn = (line: string) => {
 		if (line && !warnings.includes(line)) warnings.push(line)
 	}
+	/**
+	 * The bands that had nothing in scope, folded into one sentence at the end.
+	 *
+	 * ⚠ **A mechanism that had nothing to scan is not news**, and it is the
+	 * same rule the rest of this projection serves — content first — turned on
+	 * the notes themselves. A session with one lorebook of two entries produced
+	 * nine lines and six of them said nothing: an empty band's "0 of 0 entries
+	 * matched, scanning the last 10 messages" is a sentence about the
+	 * *mechanism's settings* on a turn where the mechanism had no subject, and
+	 * two of them buried the one line that named what actually matched.
+	 *
+	 * Folded rather than dropped, because "character lore was looked at and had
+	 * nothing in it" is still an answer to "why is my character lore not here"
+	 * — it is just not worth a line each. The lines that say *why something did
+	 * not happen* (`vectorSearch`, `entityLink`, `indexing`) are emitted below
+	 * regardless of scope: those are the honesty that an unavailable mechanism
+	 * subtracts a signal, and they are the reason this half of the panel exists.
+	 */
+	const barren = new Set<string>()
+	/**
+	 * The scene's entity list, named once.
+	 *
+	 * Every gather branch records the same extraction over the same window, so
+	 * a per-band line said one fact three times under three headings. It is a
+	 * fact about the *window*, not about whoever was scanning it, so it is
+	 * stated without a band's name in front of it — and unioned rather than
+	 * taken from the first band, so a branch that scoped its own extraction
+	 * still contributes what it saw.
+	 */
+	const sceneEntities: string[] = []
+	for (const n of nodes) {
+		const list = n?.output?.diagnostics?.entities
+		if (!Array.isArray(list)) continue
+		for (const e of list) {
+			const name = String(e)
+			if (name && !sceneEntities.includes(name)) sceneEntities.push(name)
+		}
+	}
+	const sceneLine = sceneEntities.length
+		? `The scene named ${sceneEntities.slice(0, 8).join(", ")}` +
+			`${sceneEntities.length > 8 ? ", …" : ""}.`
+		: ""
 
 	for (const n of nodes) {
 		/**
@@ -3402,16 +3499,29 @@ export function explainRetrieval(
 			: retrievalNodeLabel(n.nodeKey)
 		const considered = num(d.considered)
 		const matched = num(d.matched)
-		if (num(d.scanDepth) !== undefined)
-			note(
-				`${who}: ${matched ?? 0} of ${considered ?? 0} entries matched, ` +
-					`scanning the last ${d.scanDepth} messages` +
-					(num(d.recursionDepth)
-						? `, ${d.recursionDepth} level(s) of triggered entries deep`
-						: "") +
-					"."
-			)
-		if (num(d.admitThreshold)) {
+		/**
+		 * Nothing was in this band's scope, so none of the numbers below are
+		 * about anything.
+		 *
+		 * `matched` is read as well as `considered` because a band that somehow
+		 * matched something out of an empty pool is a receipt disagreeing with
+		 * itself, and the fold is the wrong way to report that: it would hide
+		 * the contradiction under a sentence saying there was nothing to see.
+		 */
+		const nothingInScope = considered === 0 && (matched ?? 0) === 0
+		if (num(d.scanDepth) !== undefined) {
+			if (nothingInScope) barren.add(who)
+			else
+				note(
+					`${who}: ${matched ?? 0} of ${considered ?? 0} entries matched, ` +
+						`scanning the last ${d.scanDepth} messages` +
+						(num(d.recursionDepth)
+							? `, ${d.recursionDepth} level(s) of triggered entries deep`
+							: "") +
+						"."
+				)
+		}
+		if (num(d.admitThreshold) && !nothingInScope) {
 			// The keyless-admission gate's own line. Nothing else says an entry
 			// got in without a key, which is exactly the case somebody asks
 			// about (design §12.4 holds whether it wants its own reason).
@@ -3420,16 +3530,18 @@ export function explainRetrieval(
 					`alone, at a threshold of ${Number(d.admitThreshold).toFixed(2)}.`
 			)
 		}
-		if (Array.isArray(d.entities) && d.entities.length)
-			note(
-				`${who}: the scene named ${d.entities.slice(0, 8).join(", ")}` +
-					`${d.entities.length > 8 ? ", …" : ""}.`
-			)
-		if (num(d.queries) !== undefined)
-			note(
-				`${who}: ${matched ?? 0} of ${considered ?? 0} indexed rows kept ` +
-					`across ${d.queries} quer${d.queries === 1 ? "y" : "ies"}.`
-			)
+		// Said once, in the flow, at the first band that saw anything — the
+		// union was gathered above, and `note` makes every later band's call a
+		// no-op rather than a repetition.
+		if (Array.isArray(d.entities) && d.entities.length) note(sceneLine)
+		if (num(d.queries) !== undefined) {
+			if (nothingInScope) barren.add(who)
+			else
+				note(
+					`${who}: ${matched ?? 0} of ${considered ?? 0} indexed rows kept ` +
+						`across ${d.queries} quer${d.queries === 1 ? "y" : "ies"}.`
+				)
+		}
 		if (typeof d.vectorSearch === "string")
 			note(`Vector search: ${d.vectorSearch}.`)
 		/**
@@ -3497,6 +3609,23 @@ export function explainRetrieval(
 					`scanned.`
 			)
 		if (d.disjoint && typeof d.warning === "string") warn(d.warning)
+	}
+
+	// Last, because it is the least news on the list: everything above either
+	// found something or names a reason something could not be found, and this
+	// only says where there was nothing to look at.
+	if (barren.size) {
+		const [first, ...rest] = [...barren]
+		// Lowercased after the first, because this is one sentence about
+		// several bands rather than several headings run together.
+		const tail = rest.map((label) => label.toLowerCase())
+		const who =
+			tail.length === 0
+				? first
+				: tail.length === 1
+					? `${first} and ${tail[0]}`
+					: `${first}, ${tail.slice(0, -1).join(", ")} and ${tail.at(-1)}`
+		note(`${who}: nothing to scan.`)
 	}
 
 	// ── The decisions ────────────────────────────────────────────────
@@ -3816,7 +3945,57 @@ export function explainRetrieval(
 		warnings,
 		ranked,
 		omitted,
-		...(budget ? { budget } : {})
+		...(budget ? { budget } : {}),
+		...(stops ? { stops } : {})
+	}
+}
+
+/**
+ * The stop sequences a run recorded, read off its generate node.
+ *
+ * ⚠ **Absent and empty are different answers, and this returns the first.** A
+ * run from before stops were recorded, or one that halted upstream of the
+ * provider, has not told the reader that nothing was sent — it has told them
+ * nothing, and a Stops row reading "none" over that would be a fabrication.
+ *
+ * The blob is JSON a previous build wrote and could in principle be anything, so
+ * every field is checked rather than cast: a shape the panel cannot render is
+ * dropped here, where the answer is silence, rather than in a component, where
+ * the answer is a broken report.
+ *
+ * Nothing here is connection identity — three kinds, some strings the user
+ * themselves typed, and the wire mode — so `withoutConnectionIdentity` has
+ * nothing to remove and a non-admin reading their own receipt sees the whole of
+ * it, which is the point.
+ */
+function stopsFromReceipt(
+	nodes: any[]
+): Sockets.Pipelines.RetrievalStops | undefined {
+	const node = nodes.find((n) =>
+		String(n?.typeId ?? "").startsWith("core:provider/generate-text")
+	)
+	const raw = node?.output?.stops
+	if (!raw || typeof raw !== "object") return undefined
+	const list = (v: unknown): Sockets.Pipelines.StopSequence[] | null => {
+		if (!Array.isArray(v)) return null
+		const out: Sockets.Pipelines.StopSequence[] = []
+		for (const s of v) {
+			if (!s || typeof s.value !== "string") continue
+			if (s.kind !== "format" && s.kind !== "speaker" && s.kind !== "explicit")
+				continue
+			out.push({ value: s.value, kind: s.kind })
+		}
+		return out
+	}
+	const sent = list(raw.sent)
+	const dropped = list(raw.dropped)
+	if (!sent || !dropped) return undefined
+	if (raw.wire !== "chat" && raw.wire !== "completion") return undefined
+	return {
+		sent,
+		dropped,
+		wire: raw.wire,
+		...(typeof raw.hit === "string" && raw.hit ? { hit: raw.hit } : {})
 	}
 }
 
@@ -3848,7 +4027,7 @@ interface RetrievalEntryRead {
 	read: boolean
 }
 
-async function retrievalEntriesFor(
+export async function retrievalEntriesFor(
 	sessionId: number | null,
 	userId: number
 ): Promise<RetrievalEntryRead> {
@@ -3946,6 +4125,430 @@ export const pipelinesRunExplain: Handler<
 			})
 		}
 		emitToUser("pipelines:runExplain", res)
+		return res
+	}
+}
+
+/* ------------------------------------------------------------------ *
+ * The answer where the question is asked — ruling 2026-09-08 (4.4)
+ *
+ * The two handlers below put the *same* projection on the two surfaces where
+ * somebody actually asks about lore, neither of which is the admin workspace:
+ * the composer, before sending ("what would fire if I sent this?"), and a
+ * reply, after the fact ("why did it say that?"). Both answer with
+ * `explainRetrieval`, the one definition of what a retrieval decision is —
+ * a second projection shaped for the session page would be a second answer to
+ * the same question, free to drift from the first.
+ * ------------------------------------------------------------------ */
+
+/**
+ * The cast and the transcript a preview turn needs to pick a speaker.
+ *
+ * A lean re-read rather than an import: the recipe lives in `sessions.ts` as
+ * `getPromptSessionFromDb`, which is module-private and loads a great deal
+ * this never touches (bindings, removed participants, the lorebook's own row).
+ * The three filters that ARE load-bearing are copied deliberately and for the
+ * reasons stated there — hidden messages and side channels are not the
+ * conversation, and a removed participant must never get a turn. `channelWhere`
+ * for the same reason it is used there: a bare slug is the whole channel
+ * (ruling 2026-09-09), and a preview that scoped `main` differently from the
+ * turn it previews would be answering a question nobody asked.
+ */
+async function previewCastFor(sessionId: number) {
+	return await db.query.sessions.findFirst({
+		where: (s, { eq }) => eq(s.id, sessionId),
+		with: {
+			sessionMessages: {
+				where: (cm, { eq, and }) =>
+					and(
+						eq(cm.isHidden, false),
+						channelWhere(
+							schema.sessionMessages.channel,
+							DEFAULT_CHANNEL
+						)
+					),
+				orderBy: (cm, { asc }) => asc(cm.id)
+			},
+			sessionCharacters: {
+				where: (cc, { isNull }) => isNull(cc.removedAt),
+				with: { character: true },
+				orderBy: (cc, { asc }) => asc(cc.position)
+			},
+			sessionPersonas: {
+				where: (cp, { isNull }) => isNull(cp.removedAt),
+				with: { persona: true },
+				orderBy: (cp, { asc }) => asc(cp.position)
+			}
+		}
+	})
+}
+
+/**
+ * What would fire if you sent this — asked from the composer's Lore tab.
+ *
+ * A real turn, compiled and stopped: `preview: true` halts at the pre-call
+ * substrate with the payload the next send would actually use, and
+ * `skipReceipt` keeps a question somebody asks repeatedly from burying the run
+ * history — the same two flags, for the same two reasons, as
+ * `sessions:promptTokenCount` and `entries:testRetrieval`.
+ *
+ * ⚠ **The draft is spliced in.** Without it the preview answers about the
+ * conversation *without* the message being asked about, and — worse — nobody
+ * is due to speak the moment the last real message is a reply, so the answer
+ * degrades to "no character available" for exactly the person who is typing.
+ * `sessions:promptTokenCount` learned this; the synthetic row below is its
+ * recipe, id `-1` and all.
+ *
+ * Two gates, and the second is not decoration: the session must be reachable
+ * (owner **or** guest, the one rule `checkSessionAccess` owns) and it must
+ * have a lorebook, because retrieval reads the session's own book and a
+ * session without one has nothing that could fire. The lore titles come
+ * through `retrievalEntriesFor`, which is owner-scoped by its own rule — so a
+ * guest gets rows without levers, which is what `pipelines:runExplain`
+ * already gives them.
+ */
+export const pipelinesPreviewRetrieval: Handler<
+	Sockets.Pipelines.PreviewRetrieval.Params,
+	Sockets.Pipelines.PreviewRetrieval.Response
+> = {
+	event: "pipelines:previewRetrieval",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const sessionId = Number(params.sessionId)
+		const refuse = (error: string) => {
+			const res: Sockets.Pipelines.PreviewRetrieval.Response = { error }
+			emitToUser("pipelines:previewRetrieval:error", res)
+			return res
+		}
+
+		// Fail on oversized content before any database work, exactly as the
+		// draft-preview handler this borrows its recipe from does.
+		if (params.content && params.content.length > MAX_CHAT_MESSAGE_LENGTH)
+			return refuse(
+				`Message too long (max ${MAX_CHAT_MESSAGE_LENGTH.toLocaleString()} characters).`
+			)
+
+		// One sentence for "no such session" and "not yours", because telling
+		// the two apart is how a session id becomes worth guessing.
+		if (!Number.isInteger(sessionId)) return refuse("No such conversation.")
+		const access = await checkSessionAccess(sessionId, userId)
+		if (!access.hasAccess) return refuse("No such conversation.")
+
+		const session = await previewCastFor(sessionId)
+		if (!session) return refuse("No such conversation.")
+		// Answered here rather than by running the turn, for
+		// `entries:testRetrieval`'s reason: retrieval reads the session's own
+		// book, so this is not a "nothing fires" but a question that cannot be
+		// asked — and spending a whole turn to report an absence with no
+		// reason attached is the failure this surface exists to remove.
+		if (!session.lorebookId)
+			return refuse(
+				"This conversation has no lorebook attached, so there is no lore to fire."
+			)
+
+		const activeCharacters = session.sessionCharacters.filter(
+			(cc) => cc.character !== null && cc.isActive
+		)
+		if (!activeCharacters.length)
+			return refuse(
+				"This conversation has no active characters, so there is no reply to test lore against."
+			)
+
+		const draft = params.content?.trim() ? params.content : null
+		const messagesWithDraft = draft
+			? [
+					...session.sessionMessages,
+					{
+						id: -1,
+						sessionId,
+						userId,
+						characterId: null,
+						personaId: params.personaId ?? null,
+						role: "user",
+						isNarratorResponse: false,
+						content: draft,
+						createdAt: new Date().toISOString(),
+						updatedAt: new Date(),
+						isEdited: false,
+						metadata: {},
+						isGenerating: false,
+						generationStage: null,
+						error: null,
+						queueItemId: null,
+						isHidden: false,
+						debugMeta: null,
+						embedding: null,
+						embeddingModel: null,
+						vectorizedAt: null
+					} as unknown as SelectSessionMessage
+				]
+			: session.sessionMessages
+
+		/**
+		 * Whose turn it would be — and, when nobody is due, whoever the app
+		 * would pick for a plain reply.
+		 *
+		 * The fallback is `entries:testRetrieval`'s and is stated there: a
+		 * test has to pick somebody, and refusing because the rotation says
+		 * "your turn to type" would withhold the answer from precisely the
+		 * person standing in the composer asking for it. Only character lore
+		 * is scoped by the speaker, and the row below is the same one a send
+		 * from this position would reach.
+		 */
+		const currentCharacterId =
+			getNextCharacterTurn(
+				{
+					sessionMessages:
+						messagesWithDraft as SelectSessionMessage[],
+					sessionCharacters: activeCharacters.sort(
+						(a, b) => (a.position ?? 0) - (b.position ?? 0)
+					),
+					sessionPersonas: session.sessionPersonas.filter(
+						(cp) => cp.persona !== null
+					)
+				},
+				session.groupReplyStrategy
+			) ?? activeCharacters[0].characterId
+
+		const { runTurn } = await import(
+			"$lib/server/pipelines/runtime/runTurn"
+		)
+		let receipt: any
+		try {
+			receipt = await runTurn({
+				db,
+				sessionId,
+				userId,
+				currentCharacterId,
+				text: draft ?? "",
+				...(draft
+					? {
+							draftMessage: {
+								content: draft,
+								personaId: params.personaId ?? null
+							}
+						}
+					: {}),
+				preview: true,
+				skipReceipt: true
+			})
+		} catch (error) {
+			console.error("Error in pipelinesPreviewRetrieval:", error)
+			return refuse(
+				`The turn could not be run: ${
+					error instanceof Error ? error.message : String(error)
+				}`
+			)
+		}
+
+		// A preview *halts* by design, so the outcome cannot tell success from
+		// failure; the payload can. The sentence is the one the token count
+		// composes, naming the node that gave up rather than reporting a bare
+		// failure.
+		if (!receipt?.preview)
+			return refuse(
+				`The prompt could not be compiled: ${receipt?.outcome}` +
+					(receipt?.haltNodeKey
+						? ` at '${receipt.haltNodeKey}'`
+						: "") +
+					(receipt?.haltReason ? ` — ${receipt.haltReason}` : "")
+			)
+
+		const { entries, read } = await retrievalEntriesFor(sessionId, userId)
+		const res: Sockets.Pipelines.PreviewRetrieval.Response = {
+			sessionId,
+			explanation: explainRetrieval(receipt, entries, {
+				entriesRead: read
+			})
+		}
+		emitToUser("pipelines:previewRetrieval", res)
+		return res
+	}
+}
+
+/**
+ * Why *this reply* said what it said.
+ *
+ * `pipelines:runExplain` answers the same question addressed by run id, which
+ * is the workspace's vocabulary and not the reader's: somebody looking at a
+ * message has a message. This resolves the run from it, so the per-message
+ * report needs no run id of its own — a `pipeline_run_artifacts` row of kind
+ * `message` is the link, and that relation exists for exactly this lookup.
+ *
+ * ⚠ **Gated on the session, owner OR guest — deliberately wider than
+ * `runExplain`.** That handler scopes to the asker's own runs because it is
+ * reachable by run id from the admin workspace, where the only thing naming a
+ * run is a person browsing their own receipts. This is reachable only from a
+ * message in a conversation the asker is in, and a guest reading a reply
+ * addressed to them is reading their own evidence: an owner-only gate here
+ * would refuse a participant the account of a turn they took part in. The run
+ * is not filtered by `user_id` for the same reason — in a shared session the
+ * turn belongs to whoever triggered it, which is frequently not the reader.
+ *
+ * Ordered non-preview first: a message's run is whichever one recorded the
+ * send, and a preview linked to the same row (a re-generation that was stopped
+ * and looked at) is the weaker record of the two rather than the newer.
+ */
+export const pipelinesMessageExplain: Handler<
+	Sockets.Pipelines.MessageExplain.Params,
+	Sockets.Pipelines.MessageExplain.Response
+> = {
+	event: "pipelines:messageExplain",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const messageId = Number(params.messageId)
+		const refuse = (error: string) => {
+			const res: Sockets.Pipelines.MessageExplain.Response = {
+				messageId: Number.isInteger(messageId) ? messageId : undefined,
+				error
+			}
+			emitToUser("pipelines:messageExplain:error", res)
+			return res
+		}
+		if (!Number.isInteger(messageId)) return refuse("No such message.")
+
+		// The subject before the record: a reader who cannot reach the message
+		// must not learn from this whether a run exists for it.
+		const [message] = await db
+			.select({ sessionId: schema.sessionMessages.sessionId })
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.id, messageId))
+			.limit(1)
+		if (!message) return refuse("No such message.")
+		const access = await checkSessionAccess(message.sessionId, userId)
+		if (!access.hasAccess) return refuse("No such message.")
+
+		// Through the artifact relation: a message can be the artifact of more
+		// than one run (regenerated, continued), and the non-preview newest is
+		// the one that actually sent something.
+		//
+		// ⚠ Through `runsForArtifact` rather than a join written out here.
+		// That function is the relation's reader — it, this handler and
+		// `pipelines:artifactRuns` were three spellings of one query, and the
+		// index (`pipeline_run_artifacts_entity_idx`) exists for it by name.
+		// The *choice* stays here because it is this handler's, not the
+		// reader's: the list comes back newest-first and the first non-preview
+		// in it is the run that sent something, which is the same row
+		// `asc(isPreview), desc(id) LIMIT 1` used to return.
+		const { runsForArtifact } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
+		const produced = await runsForArtifact(db, "message", messageId)
+		const run =
+			produced.find((r: any) => !r.isPreview) ?? produced[0] ?? null
+		if (!run)
+			return refuse(
+				"This reply was generated before run tracking, so there is nothing recorded for it."
+			)
+
+		// Through the message's session rather than the run's `session_id`,
+		// which is a column somebody could have written — the same reason
+		// `runExplain` re-checks it. `retrievalEntriesFor` is owner-scoped on
+		// top of that, so a guest reads the names their receipts recorded
+		// rather than a live read of the owner's lorebook.
+		const { entries, read } = await retrievalEntriesFor(
+			message.sessionId,
+			userId
+		)
+		const res: Sockets.Pipelines.MessageExplain.Response = {
+			messageId,
+			runId: (run as any).runId,
+			explanation: explainRetrieval((run as any).receipt ?? {}, entries, {
+				entriesRead: read
+			})
+		}
+		emitToUser("pipelines:messageExplain", res)
+		return res
+	}
+}
+
+/**
+ * Which runs produced this row.
+ *
+ * `pipeline_run_artifacts` has recorded what every run made since the relation
+ * replaced the nullable column, and only one direction of it was ever readable
+ * from a client: a *message* could ask for its own run. An image could not, so
+ * a picture generated by a pipeline and a picture dragged in from the desktop
+ * looked identical in the gallery — the run that made it was written down and
+ * then unreachable from the one place a person looks at the thing it made.
+ *
+ * ⚠ **Gated on the artifact, never on the run.** The run row carries a
+ * `user_id`, and scoping to it would be the easy check and the wrong one: it
+ * would answer "did you make this run" when the question asked is "may you see
+ * this row". So each kind is gated by whoever already owns that kind's access —
+ * `getMedia` plus the owner comparison the `media:*` by-id handlers use, and
+ * `checkSessionAccess` for a message, the same gate `messageExplain` applies.
+ * A caller who cannot reach the artifact gets the sentence a missing one gets
+ * and learns nothing about whether a run exists for it.
+ *
+ * Every run, not the newest: a regenerated image legitimately has more than
+ * one, and which of them a reader wants is a question the caller is better
+ * placed to answer than this is. `isPreview` rides along for the same reason —
+ * a preview is a weaker record than a send, and hiding it here would be this
+ * handler deciding that on the caller's behalf.
+ */
+export const pipelinesArtifactRuns: Handler<
+	Sockets.Pipelines.ArtifactRuns.Params,
+	Sockets.Pipelines.ArtifactRuns.Response
+> = {
+	event: "pipelines:artifactRuns",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const kind = params.kind
+		const entityId = Number(params.entityId)
+		const refuse = (error: string) => {
+			const res: Sockets.Pipelines.ArtifactRuns.Response = {
+				kind,
+				entityId: Number.isInteger(entityId) ? entityId : undefined,
+				runs: [],
+				error
+			}
+			emitToUser("pipelines:artifactRuns:error", res)
+			return res
+		}
+		if (!Number.isInteger(entityId)) return refuse("No such row.")
+
+		// The subject before the record, kind by kind. Only the two kinds with
+		// a reader are answerable: `variant` and `lore_entry` are written by
+		// producers that have no surface asking this question yet, and a gate
+		// invented for a caller that does not exist is a gate nothing tests.
+		if (kind === "file") {
+			const { getMedia } = await import("$lib/server/media")
+			const file = await getMedia(db, entityId)
+			// The `media:*` by-id handlers' own check, and deliberately not the
+			// wider `canViewMedia`: this answers for the media manager, which
+			// lists nothing but the caller's own blobs.
+			if (!file || file.userId !== userId) return refuse("No such image.")
+		} else if (kind === "message") {
+			const [message] = await db
+				.select({ sessionId: schema.sessionMessages.sessionId })
+				.from(schema.sessionMessages)
+				.where(eq(schema.sessionMessages.id, entityId))
+				.limit(1)
+			if (!message) return refuse("No such message.")
+			const access = await checkSessionAccess(message.sessionId, userId)
+			if (!access.hasAccess) return refuse("No such message.")
+		} else return refuse("No such row.")
+
+		const { runsForArtifact } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
+		const rows = await runsForArtifact(db, kind, entityId)
+		const res: Sockets.Pipelines.ArtifactRuns.Response = {
+			kind,
+			entityId,
+			// Newest first, as the reader hands them over. Four fields, because
+			// naming a run and dating it is the whole job — a receipt is what
+			// `pipelines:run` is for, and repeating it here would put a run's
+			// full output behind a gate written for an image.
+			runs: rows.map((r: any) => ({
+				runId: r.runId,
+				specSlug: r.specSlug,
+				startedAt: r.startedAt,
+				isPreview: !!r.isPreview
+			}))
+		}
+		emitToUser("pipelines:artifactRuns", res)
 		return res
 	}
 }
@@ -4501,6 +5104,9 @@ export function registerPipelineHandlers(
 	register(socket, pipelinesSetOptions, emitToUser)
 	register(socket, pipelinesRun, emitToUser)
 	register(socket, pipelinesRunExplain, emitToUser)
+	register(socket, pipelinesPreviewRetrieval, emitToUser)
+	register(socket, pipelinesMessageExplain, emitToUser)
+	register(socket, pipelinesArtifactRuns, emitToUser)
 	register(socket, pipelinesSessionEntryUsage, emitToUser)
 	register(socket, pipelinesCancelRun, emitToUser)
 	register(socket, pipelinesSelectConfig, emitToUser)

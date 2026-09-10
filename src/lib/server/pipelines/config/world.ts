@@ -56,21 +56,13 @@ import {
 // divergence would not be a mismatch, it would be a capability nothing can ever
 // satisfy.
 import { TEXT_CAPABILITY } from "$lib/server/connections/capabilityTarget"
+import { completionTemplatesByKey } from "$lib/server/connections/completionTemplates"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { resolvePromptFields } from "$lib/server/pipelines/entities/prompts"
 import { declarations, type Decl } from "$lib/server/pipelines/config/panel"
 import { NARRATE_SPEC_ID, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 import { storedCapabilities } from "$lib/server/pipelines/runtime/capabilityGuard"
-
-/**
- * Reads only.
- *
- * Building a world never writes — it is a projection of what is configured, and
- * a write here would mean resolving somebody's config had a side effect on it.
- * The helpers it calls out to want a wider type, which is what the casts at
- * those call sites are for.
- */
-type Db = { select: any }
+import { resolveWireMode } from "$lib/server/connections/resolve"
 
 export interface WorldScope {
 	sessionId?: number
@@ -147,6 +139,18 @@ const LEGACY_PROMPT_SOURCES: Record<
 	}
 }
 
+/**
+ * **Reads only.** Building a world never writes — it is a projection of what is
+ * configured, and a write here would mean resolving somebody's config had a
+ * side effect on it.
+ *
+ * That invariant used to be spelled as a `type Db = { select: any }` alias,
+ * which bought it at a price that was not worth paying: `any` on `select` makes
+ * every ROW read through it an `any` too, so a column this schema does not have
+ * would have type-checked in all five of this file's readers. It is now a rule
+ * this file keeps rather than one the parameter type enforces — and the rows
+ * are checked.
+ */
 export async function buildWorld(
 	db: Db,
 	scope: WorldScope = {}
@@ -169,6 +173,15 @@ export async function buildWorld(
 
 	const connectionRows = await db.select().from(schema.connections)
 	const samplingRows = await db.select().from(schema.samplingConfigs)
+	/**
+	 * Every completion template, once, for the whole projection below.
+	 *
+	 * One query rather than one per connection, and no cache anywhere:
+	 * `buildWorld` runs per run, so an admin's edit is on the wire for the next
+	 * generation. See `connections/completionTemplates.ts` for why a cache here
+	 * would pin every render on the instance to whatever the first one used.
+	 */
+	const completionTemplateRows = await completionTemplatesByKey(db)
 	/**
 	 * No `specId` means the caller is not running a published pipeline — the
 	 * parity harness builds an ad-hoc spec standing in for 0.5's session path, and
@@ -396,6 +409,35 @@ export async function buildWorld(
 		if (id) activeConnection[shape] = id
 	}
 
+	/**
+	 * The same store's other half — the sampling config a step falls back to
+	 * when its own slot names nothing.
+	 *
+	 * ⚠ This was not published at all, and its absence was invisible because
+	 * `resolveCapabilityTarget` applies the same fallback at *dispatch*: the
+	 * call went out against this window while the executor resolved the slot to
+	 * `{}`. A node that only forwards its sampling could not tell the
+	 * difference; the summarize batch cutter, which has to fit a prompt into
+	 * that window, clamped against nothing on every install that had not picked
+	 * a sampling config per step.
+	 *
+	 * Keyed exactly like `activeConnection` — capability *and* shape, from the
+	 * same rows, through the same translator — because the executor looks it up
+	 * by the node type's shape and the store registers it by capability.
+	 */
+	const activeSampling: Record<string, string | null> = {}
+	const defaultSamplingFor = (capability: string) =>
+		idOrNull(defaultsByCapability[capability]?.samplingConfigId)
+	for (const capability of Object.keys(defaultsByCapability)) {
+		const id = defaultSamplingFor(capability)
+		if (id) activeSampling[capability] = id
+	}
+	for (const shape of [S.textGen, S.imageGen, S.tts]) {
+		const capability = capabilityForSamplingShape(shape)
+		const id = capability ? defaultSamplingFor(capability) : undefined
+		if (id) activeSampling[shape] = id
+	}
+
 	return {
 		overrides,
 		samplingConfigs: samplingRows.map((s: any) => ({
@@ -421,7 +463,51 @@ export async function buildWorld(
 			metadata: {
 				model: c.model ?? undefined,
 				tokenizer: c.tokenCounter ?? undefined,
-				promptFormat: c.promptFormat ?? undefined
+				/**
+				 * The KEY, which is the reference the row stores and the
+				 * receipt reports. A reader debugging a prompt can look it up.
+				 */
+				promptFormat: c.promptFormat ?? undefined,
+				/**
+				 * The template ITSELF, dereferenced — the same move this file
+				 * already makes for prompts ("a config stores the *id* of a
+				 * `pipeline_prompts` row, and a node needs the words").
+				 *
+				 * ⚠ Without this the key was the only thing that travelled, and
+				 * `completionTemplateOf` resolves a bare key **against the
+				 * built-ins** — so a template an admin wrote resolved to no
+				 * built-in and rendered as Vicuna. Delimiters authored, saved,
+				 * shown back, and never reaching a single prompt.
+				 *
+				 * `undefined` for a connection whose format names nothing, which
+				 * is the same absence `promptFormat` carries beside it; the
+				 * renderer answers all three absent states through
+				 * `completionTemplateOf` exactly as before.
+				 */
+				completionTemplate: c.promptFormat
+					? completionTemplateRows.get(c.promptFormat)
+					: undefined,
+				/**
+				 * Which METHOD this connection wants to be called by — and the
+				 * reason the two fields above may have nothing to do.
+				 *
+				 * In `chat` wire mode the roles carry the structure: the render
+				 * emits role-tagged messages and the delimiters never apply. The
+				 * assemble node reads this to decide which of the two shapes to
+				 * produce, and the SENDING adapter reads the same value off the
+				 * row it is handed (`withWireMode`) to decide which request to
+				 * build. One resolution, two readers — which is the whole of the
+				 * fix: the shape a prompt is BUILT in and the shape it is SENT in
+				 * used to be decided independently, by a spec that could not see
+				 * an adapter's `extraJson` flag and an adapter that never saw the
+				 * render.
+				 *
+				 * Resolved live from the row rather than read off the cached
+				 * capability set beside it — see `resolveWireMode`: the cache on
+				 * an existing row was written before these keys existed and names
+				 * neither mode.
+				 */
+				wireMode: resolveWireMode(c)
 			},
 			// Empty by construction. Material is resolved inside the dispatch
 			// path from the encrypted column and never travels with the world —
@@ -440,7 +526,8 @@ export async function buildWorld(
 			// connection can do.
 			capabilities: storedCapabilities(c)
 		})),
-		activeConnection
+		activeConnection,
+		activeSampling
 	}
 }
 
@@ -482,7 +569,7 @@ async function providerConnectionDecl(
 		.where(eq(schema.pipelineSpecs.slug, scope.specId))
 		.limit(1)
 	if (!spec?.activeVersionId) return undefined
-	const decls = await declarations(db as any, spec.activeVersionId)
+	const decls = await declarations(db, spec.activeVersionId)
 	return decls.find(
 		(d) => d.nodeKey === providerKey && d.control === "connection-ref"
 	)
@@ -544,7 +631,7 @@ async function applyPipelineLayer(
 	// hard-coded `'variables'` would leave a plugin's reference undereferenced —
 	// and the node would receive a row id where it expected a template.
 	const allDecls = spec.activeVersionId
-		? await declarations(db as any, spec.activeVersionId)
+		? await declarations(db, spec.activeVersionId)
 		: []
 	const varDecls = allDecls.filter(
 		(d) => d.control === "variable-template-ref"
@@ -589,7 +676,7 @@ async function applyPipelineLayer(
 		const { resolveVariableTemplate } = await import(
 			"$lib/server/pipelines/entities/variableTemplates"
 		)
-		return (await resolveVariableTemplate(db as any, value)) ?? undefined
+		return (await resolveVariableTemplate(db, value)) ?? undefined
 	}
 
 	/**
@@ -616,7 +703,7 @@ async function applyPipelineLayer(
 		const { resolveContextTemplate } = await import(
 			"$lib/server/pipelines/entities/contextTemplates"
 		)
-		return (await resolveContextTemplate(db as any, value)) ?? undefined
+		return (await resolveContextTemplate(db, value)) ?? undefined
 	}
 
 	/**
@@ -658,7 +745,7 @@ async function applyPipelineLayer(
 		"$lib/server/pipelines/config/named"
 	)
 	const selected = await resolveSelectedConfig(
-		db as any,
+		db,
 		spec.id,
 		spec.slug,
 		{
@@ -678,7 +765,7 @@ async function applyPipelineLayer(
 				// per-path resolution still works above it — someone overriding
 				// one field does not pin the rest of the prompt.
 				const fields = await resolvePromptFields(
-					db as any,
+					db,
 					Number(v.value)
 				)
 				for (const [field, text] of Object.entries(fields))
@@ -728,7 +815,7 @@ async function applyPipelineLayer(
 			// row — the same shape a config value stores, dereferenced the
 			// same way, because a node needs the words and not the number.
 			// Pushed per field so per-path resolution above it still works.
-			const fields = await resolvePromptFields(db as any, Number(o.value))
+			const fields = await resolvePromptFields(db, Number(o.value))
 			for (const [field, text] of Object.entries(fields))
 				push(scopeKind, scopeId, o.nodeKey, o.slot, field, text)
 			continue
@@ -819,7 +906,7 @@ async function applyPipelineLayer(
 				// row in this pool written here → the oldest immutable row in
 				// the pool → null.
 				const id = await defaultPromptFor(
-					db as any,
+					db,
 					d.nodeTypeId,
 					d.slot,
 					{
@@ -829,7 +916,7 @@ async function applyPipelineLayer(
 				)
 				byPool.set(
 					poolKey,
-					id == null ? null : await resolvePromptFields(db as any, id)
+					id == null ? null : await resolvePromptFields(db, id)
 				)
 			}
 			const fields = byPool.get(poolKey)
@@ -860,7 +947,7 @@ async function applyPipelineLayer(
 					d.variableId,
 					await derefLayout(
 						await defaultVariableTemplateFor(
-							db as any,
+							db,
 							d.variableId
 						)
 					)

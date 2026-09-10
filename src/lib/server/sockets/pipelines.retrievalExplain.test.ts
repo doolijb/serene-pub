@@ -157,6 +157,75 @@ const receipt = (over: Record<string, any> = {}) => ({
 	...over
 })
 
+/**
+ * The shape a real session with one lorebook of two entries produces: one band
+ * that scanned something, two that had nothing in scope, and three mechanisms
+ * that could not run. Named rather than folded into `receipt()` because the
+ * whole assertion is the *list*, in order, whole.
+ */
+const barrenSession = () => ({
+	nodes: [
+		{
+			nodeKey: "gather.worldLore.read",
+			seq: 1,
+			output: {
+				hits: [{ id: 1, source: "worldLore" }],
+				diagnostics: {
+					scanDepth: 10,
+					considered: 2,
+					matched: 1,
+					entities: ["ashguard"],
+					vectorSearch: "no embedding model is loaded and validated"
+				}
+			}
+		},
+		{
+			nodeKey: "gather.characterLore.read",
+			seq: 2,
+			output: {
+				diagnostics: {
+					scanDepth: 10,
+					considered: 0,
+					matched: 0,
+					entities: ["ashguard"]
+				}
+			}
+		},
+		{
+			nodeKey: "gather.historyEntries.read",
+			seq: 3,
+			output: {
+				diagnostics: {
+					scanDepth: 10,
+					considered: 0,
+					matched: 0,
+					entities: ["ashguard"]
+				}
+			}
+		},
+		{
+			nodeKey: "semantic.arm.search",
+			seq: 4,
+			output: {
+				diagnostics: {
+					vectorSearch: "off — no entries requested (maxEntries is 0)"
+				}
+			}
+		},
+		{
+			nodeKey: "names.arm.link",
+			seq: 5,
+			output: {
+				diagnostics: {
+					entityLink:
+						"nothing to link — no descriptions were found in the " +
+						"window, or the mention scan is switched off"
+				}
+			}
+		}
+	]
+})
+
 async function explain(
 	r: any,
 	entries = ENTRIES,
@@ -845,6 +914,60 @@ describe("explainRetrieval — the mechanism-level half no row can carry", () =>
 		)
 	})
 
+	/**
+	 * ⚠ **A mechanism that had nothing to scan is not news.**
+	 *
+	 * The same rule the notes exist to serve, turned on the notes themselves.
+	 * A session with one lorebook of two entries produced *nine* lines, and six
+	 * of them said nothing: two bands with an empty scope each got their own
+	 * "0 of 0 entries matched" and their own copy of the scene's entity list,
+	 * which is one fact about the window rather than one fact per band. The
+	 * lines a reader actually needed — what matched, what the scene named, and
+	 * the three mechanisms that could not run — were the minority of their own
+	 * report.
+	 *
+	 * So: content first. A band with nothing in scope contributes no line of
+	 * its own and is folded into one sentence at the end, the scene is named
+	 * once, and **every line that says why something did not happen stays** —
+	 * those are the "an unavailable mechanism subtracts a signal" honesty and
+	 * are the whole reason this half of the panel exists.
+	 */
+	it("folds the bands with nothing in scope into one sentence and names the scene once", async () => {
+		const out = await explain(barrenSession())
+		// Nine lines before this, six after, and the three that survive the
+		// fold are the three that name a reason something did not happen.
+		expect(out.notes).toEqual([
+			"World lore: 1 of 2 entries matched, scanning the last 10 messages.",
+			"The scene named ashguard.",
+			"Vector search: no embedding model is loaded and validated.",
+			"Vector search: off — no entries requested (maxEntries is 0).",
+			"Entity links: nothing to link — no descriptions were found in " +
+				"the window, or the mention scan is switched off.",
+			"Character lore and history entries: nothing to scan."
+		])
+	})
+
+	it("says one empty band in the singular", async () => {
+		const out = await explain(
+			receipt({
+				nodes: [
+					{
+						nodeKey: "gather.characterLore.read",
+						seq: 1,
+						output: {
+							diagnostics: {
+								scanDepth: 10,
+								considered: 0,
+								matched: 0
+							}
+						}
+					}
+				]
+			})
+		)
+		expect(out.notes).toEqual(["Character lore: nothing to scan."])
+	})
+
 	it("names an empty gather branch in English, not by its dotted node key", async () => {
 		// An empty scan's output has no `hits`/`main`/`skipped` entry for
 		// `nodeSource` to read a source from, so the note falls back to the
@@ -871,11 +994,11 @@ describe("explainRetrieval — the mechanism-level half no row can carry", () =>
 			})
 		)
 		const notes = out.notes.join("\n")
+		// Both branches are in scope of the fold above, so the assertion is
+		// that they are named in English *there* — the naming is what this
+		// test is about, and it survives the sentence they are named in.
 		expect(notes).toContain(
-			"Character lore: 0 of 0 entries matched, scanning the last 10 messages."
-		)
-		expect(notes).toContain(
-			"History entries: 0 of 0 entries matched, scanning the last 10 messages."
+			"Character lore and history entries: nothing to scan."
 		)
 		expect(notes).not.toMatch(/gather\./)
 	})
@@ -894,9 +1017,7 @@ describe("explainRetrieval — the mechanism-level half no row can carry", () =>
 				]
 			})
 		)
-		expect(out.notes.join("\n")).toContain(
-			"Something New: 0 of 0 entries matched, scanning the last 10 messages."
-		)
+		expect(out.notes.join("\n")).toContain("Something New: nothing to scan.")
 	})
 
 	it("says a run recorded no ranking instead of rendering an empty list", async () => {
@@ -1414,4 +1535,66 @@ describe("explainRetrieval — what the fingerprint cannot see, it does not clai
 		const row = out.rows.find((r) => r.outcome === "skipped")!
 		expect(row.provenance).toBe("unchanged")
 	})
+})
+
+/**
+ * The stop sequences, carried through to the panel (ruling 2026-09-10).
+ *
+ * The three questions this answers are ones the old flat `string[]` could not:
+ * WHAT went out, what was HELD BACK and by which rule, and which one actually
+ * ended the reply. "Why did my reply run on past its turn" and "why did the
+ * sequence I typed do nothing" are the two support questions this whole area
+ * exists to close, and neither is answerable from a payload nobody kept.
+ */
+describe("explainRetrieval — the stop sequences", () => {
+	const withStops = (stops: unknown) =>
+		receipt({
+			nodes: [
+				{
+					nodeKey: "generate",
+					seq: 9,
+					typeId: "core:provider/generate-text@1",
+					output: { text: "hi", stops }
+				}
+			]
+		})
+
+	it("carries the generate node's sent, dropped, wire and hit", async () => {
+		const out = await explain(
+			withStops({
+				sent: [
+					{ value: "<<END>>", kind: "explicit" },
+					{ value: "Vell:", kind: "speaker" }
+				],
+				dropped: [{ value: "@@stop@@", kind: "format" }],
+				wire: "completion",
+				hit: "<<END>>"
+			})
+		)
+		expect(out.stops).toEqual({
+			sent: [
+				{ value: "<<END>>", kind: "explicit" },
+				{ value: "Vell:", kind: "speaker" }
+			],
+			dropped: [{ value: "@@stop@@", kind: "format" }],
+			wire: "completion",
+			hit: "<<END>>"
+		})
+	})
+
+	it("says nothing when the run recorded nothing", async () => {
+		// Silence rather than an empty pair of lists: a run from before this was
+		// recorded, or one that halted before the provider, has not told us that
+		// no stop sequences were sent — it has told us nothing.
+		expect((await explain(receipt())).stops).toBeUndefined()
+	}, 30_000)
+
+	it("ignores a malformed record rather than rendering half a row", async () => {
+		// The receipt blob is JSON somebody could have written; a shape the
+		// panel cannot read is dropped, not passed through to throw in a
+		// component.
+		expect(
+			(await explain(withStops({ sent: "nope" }))).stops
+		).toBeUndefined()
+	}, 30_000)
 })

@@ -201,49 +201,51 @@
 		isLoading = false
 	}
 
+	function handleOllamaDeleteModel(
+		message: Sockets.Ollama.DeleteModel.Response
+	) {
+		if (message.success) {
+			refreshModels()
+			toaster.success({ title: "Model deleted successfully" })
+		} else {
+			toaster.error({ title: "Failed to delete model" })
+		}
+	}
+
+	function handleOllamaListRunningModels(
+		message: Sockets.Ollama.ListRunningModels.Response
+	) {
+		runningModels = message.runningModels ?? []
+	}
+
+	function handleOllamaConnectModel(
+		message: Sockets.Ollama.ConnectModel.Response
+	) {
+		if (message.success) {
+			toaster.success({ title: "Model connected successfully" })
+			refreshModels()
+		}
+	}
+
+	function handleConnectionsList(msg: Sockets.Connections.List.Response) {
+		connectionsList = msg.connectionsList ?? []
+	}
+
 	onMount(() => {
 		// Socket event listeners
 		socket.on("ollama:modelsList", handleModelsList)
 
-		socket.on(
-			"ollama:deleteModel",
-			(message: Sockets.Ollama.DeleteModel.Response) => {
-				if (message.success) {
-					refreshModels()
-					toaster.success({ title: "Model deleted successfully" })
-				} else {
-					toaster.error({ title: "Failed to delete model" })
-				}
-			}
-		)
+		socket.on("ollama:deleteModel", handleOllamaDeleteModel)
 
-		socket.on(
-			"ollama:listRunningModels",
-			(message: Sockets.Ollama.ListRunningModels.Response) => {
-				runningModels = message.runningModels ?? []
-			}
-		)
+		socket.on("ollama:listRunningModels", handleOllamaListRunningModels)
 
 		// Note: there is no "ollama:stopModel" server handler (see
 		// src/lib/server/sockets/ollama.ts) - it was never implemented, so a
 		// listener for it here was unreachable dead code and has been removed.
 
-		socket.on(
-			"ollama:connectModel",
-			(message: Sockets.Ollama.ConnectModel.Response) => {
-				if (message.success) {
-					toaster.success({ title: "Model connected successfully" })
-					refreshModels()
-				}
-			}
-		)
+		socket.on("ollama:connectModel", handleOllamaConnectModel)
 
-		socket.on(
-			"connections:list",
-			(msg: Sockets.Connections.List.Response) => {
-				connectionsList = msg.connectionsList ?? []
-			}
-		)
+		socket.on("connections:list", handleConnectionsList)
 
 		// Initial load
 		refreshModels()
@@ -251,10 +253,10 @@
 
 	onDestroy(() => {
 		socket.off("ollama:modelsList", handleModelsList)
-		socket.off("ollama:deleteModel")
-		socket.off("ollama:listRunningModels")
-		socket.off("ollama:connectModel")
-		socket.off("connections:list")
+		socket.off("ollama:deleteModel", handleOllamaDeleteModel)
+		socket.off("ollama:listRunningModels", handleOllamaListRunningModels)
+		socket.off("ollama:connectModel", handleOllamaConnectModel)
+		socket.off("connections:list", handleConnectionsList)
 	})
 </script>
 

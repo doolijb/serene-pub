@@ -102,7 +102,7 @@ async function install(opts: {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	return { db, userId: user.id, coreId: core.id, mineId: mine.id }
 }
@@ -269,7 +269,7 @@ describe("an install on a context config of its own", () => {
 
 	it("renders the value bare, which is the whole point", async () => {
 		const { db, userId } = await install({ instance: "mine" })
-		const world = await buildWorld(db as any, {
+		const world = await buildWorld(db, {
 			specId: RESPOND_SPEC_ID
 		})
 		const layouts = (resolveConfig(world, ["prompt"]).prompt?.variables ??
@@ -327,7 +327,7 @@ describe("it runs once", () => {
 		const { db } = await install({ instance: "mine" })
 		const before = await overrides(db)
 
-		const again = await migrateContextTemplates(db as any)
+		const again = await migrateContextTemplates(db)
 
 		expect(again.ran).toBe(false)
 		expect(again.copied).toBe(0)
@@ -345,7 +345,7 @@ describe("it runs once", () => {
 			.update(schema.systemSettings)
 			.set({ contextTemplatesMigrated: false })
 			.where(eq(schema.systemSettings.id, 1))
-		const again = await migrateContextTemplates(db as any)
+		const again = await migrateContextTemplates(db)
 
 		expect(again.copied).toBe(0)
 		expect(
@@ -376,7 +376,7 @@ describe("it runs once", () => {
 		const { createConfig, selectConfig } = await import(
 			"$lib/server/pipelines/config/named"
 		)
-		const own = await createConfig(db as any, spec.id, "Somebody's own")
+		const own = await createConfig(db, spec.id, "Somebody's own")
 		await db.insert(schema.pipelineConfigValues).values({
 			configId: own.id,
 			nodeKey: "context",
@@ -384,7 +384,7 @@ describe("it runs once", () => {
 			path: "characters",
 			value: row.id
 		})
-		await selectConfig(db as any, spec.id, "instance", 0, own.id)
+		await selectConfig(db, spec.id, "instance", 0, own.id)
 
 		// Rewind the ledger and move the instance onto a custom config, which
 		// is the only way to reach the branch that declines.
@@ -402,7 +402,7 @@ describe("it runs once", () => {
 			})
 			.where(eq(schema.systemSettings.id, 1))
 
-		await migrateContextTemplates(db as any)
+		await migrateContextTemplates(db)
 
 		const [kept] = await db
 			.select()

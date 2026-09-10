@@ -114,12 +114,14 @@ describe("score", () => {
 
 		it("leaves the structural signals and the priority bonus alone", () => {
 			// "Does this matter now" is not a way of finding something. An entry
-			// does not become less recent because a reader turned keyword
-			// matching down.
+			// does not stop being long, or stop having come up a moment ago,
+			// because a reader turned keyword matching down.
+			//
+			// ⚠ `recency` and `sceneAffinity` were in this object and are gone
+			// with the weights: nothing produced either, so the rule was being
+			// asserted against two numbers no run could carry.
 			const structural = {
-				recency: 1,
 				lastRefRecency: 1,
-				sceneAffinity: 1,
 				density: 1
 			}
 			expect(score(structural, w, 3, all(0))).toBeCloseTo(
@@ -375,19 +377,19 @@ describe("a pinned entry the window cannot hold", () => {
 					source: "messages",
 					pinned: true,
 					tokens: 5000,
-					signals: { recency: 1 }
+					signals: { density: 1 }
 				}),
 				lore({
 					id: "m1",
 					source: "messages",
 					tokens: 50,
-					signals: { recency: 1 }
+					signals: { density: 1 }
 				}),
 				lore({
 					id: "m2",
 					source: "messages",
 					tokens: 50,
-					signals: { recency: 0.9 }
+					signals: { density: 0.9 }
 				})
 			],
 			{
@@ -453,7 +455,7 @@ describe("a pinned entry whose source has a zero share", () => {
 					id: "m",
 					source: "messages",
 					tokens: 100,
-					signals: { recency: 1 }
+					signals: { density: 1 }
 				})
 			],
 			{ availableTokens: 5000, params: shareOff("worldLore") }
@@ -477,7 +479,7 @@ describe("a pinned entry whose source has a zero share", () => {
 					id: "m",
 					source: "messages",
 					tokens: 400,
-					signals: { recency: 1 }
+					signals: { density: 1 }
 				})
 			],
 			{ availableTokens: 1000, params: shareOff("worldLore") }
@@ -488,7 +490,7 @@ describe("a pinned entry whose source has a zero share", () => {
 					id: "m",
 					source: "messages",
 					tokens: 400,
-					signals: { recency: 1 }
+					signals: { density: 1 }
 				})
 			],
 			{ availableTokens: 1000, params: shareOff("worldLore") }
@@ -552,7 +554,7 @@ describe("group budgets", () => {
 				id: `m${i}`,
 				source: "messages",
 				tokens: 200,
-				signals: { recency: 1 }
+				signals: { density: 1 }
 			})
 		)
 	]
@@ -780,7 +782,7 @@ describe("a source with no budget group", () => {
 				id: "m",
 				source: "messages",
 				tokens: 100,
-				signals: { recency: 1 }
+				signals: { density: 1 }
 			})
 		]
 		const sel = select([...known, vectorHit({ id: "h", tokens: 100 })], {
@@ -891,13 +893,13 @@ describe("score-led allocation", () => {
 			id: "m_idle1",
 			source: "messages",
 			tokens: 250,
-			signals: { recency: 0.1 }
+			signals: { density: 0.1 }
 		}),
 		lore({
 			id: "m_idle2",
 			source: "messages",
 			tokens: 250,
-			signals: { recency: 0.05 }
+			signals: { density: 0.05 }
 		})
 	]
 
@@ -999,13 +1001,13 @@ describe("score-led allocation", () => {
 				id: "m1",
 				source: "messages",
 				tokens: 100,
-				signals: { recency: 0.1 }
+				signals: { density: 0.1 }
 			}),
 			lore({
 				id: "m2",
 				source: "messages",
 				tokens: 100,
-				signals: { recency: 0.05 }
+				signals: { density: 0.05 }
 			})
 		]
 
@@ -1071,7 +1073,7 @@ describe("score-led allocation", () => {
 							id: `m${i}`,
 							source: "messages",
 							tokens: 200,
-							signals: { recency: 1 }
+							signals: { density: 1 }
 						})
 					)
 				],
@@ -1123,7 +1125,7 @@ describe("score-led allocation", () => {
 						id: "m",
 						source: "messages",
 						tokens: 100,
-						signals: { recency: 1 }
+						signals: { density: 1 }
 					})
 				],
 				{
@@ -1205,7 +1207,7 @@ describe("score-led allocation", () => {
 					source: "messages",
 					tokens: 100,
 					position: i,
-					signals: { recency: 1 - i / 10 }
+					signals: { density: 1 - i / 10 }
 				})
 			),
 			...Array.from({ length: 4 }, (_, i) =>

@@ -12,8 +12,6 @@
 import { resolveStepConfigs } from "$lib/server/pipelines/config/stepConfig"
 import { GRAPH_BUILD_SPEC_ID } from "$lib/server/pipelines/specs"
 
-type Db = { select: any }
-
 /** The builder's step names, keyed to the spec's node keys inside the map. */
 const STEP_NODES = {
 	preFilter: "building.item.prefilter",
@@ -29,8 +27,8 @@ export interface ResolvedGraphStep {
 	/** The configured system prompt, or undefined to use the builder's fallback. */
 	systemPrompt?: string
 	/** Whole rows, because `graphBuilder.runLLM` constructs its own adapter. */
-	connection?: any
-	sampling?: any
+	connection?: AdapterConnection
+	sampling?: SelectSamplingConfig
 }
 
 export async function resolveGraphStepConfigs(

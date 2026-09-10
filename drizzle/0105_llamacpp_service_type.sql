@@ -1,0 +1,49 @@
+-- One connection type per SERVICE: `llamacpp_completion` becomes `llamacpp`.
+--
+-- `llamacpp_completion` was the only id in `CONNECTION_TYPE` that encoded a
+-- WIRE MODE. That question is a connection CAPABILITY since 0098 —
+-- `wire_chat` / `wire_completion`, graded through the same four layers as
+-- everything else — so the type spelling it too was the same fact in two
+-- places, and the place a person could not switch. Ruling 2026-09-08: one
+-- connection type per service, wire mode as a property; merge any type split on
+-- that seam. This is that merge, and llama.cpp is the only type it touched.
+--
+-- ── Why a rename and not a fold into `openai` ───────────────────────────────
+--
+-- `manifest.ts` used to say the intended future was folding this type into
+-- `openai` as a preset. That was written before the ruling and it reads the
+-- ruling backwards: llama-server is a SERVICE, and `openai` is a WIRE FORMAT.
+-- Its native `/completion` is not that format at a different URL —
+-- `id_slot`/`cache_prompt` (prompt-cache slot reuse), `n_probs`, `samplers`
+-- (explicit sampler ORDER), `t_max_predict_ms` and `dry_sequence_breakers` have
+-- no OpenAI field to be carried in, and `llamaCppSamplingKeyMap` names them.
+-- `testConnection` and `listModels` are `/health` and `/show`, not `/v1/models`.
+-- A preset would have dropped all of it silently, and would have needed a
+-- LOSSIER migration than this one rather than none.
+--
+-- `LlamaCppAdapter` gained the chat leg instead (`isChatWire`, the same
+-- `useSession` idiom Ollama and KoboldCPP use), so one row now reaches both of
+-- llama-server's endpoints. The manifest declares `wire_chat` as
+-- SUPPORTED-BUT-NOT-DEFAULTED, which is what keeps every row below on the
+-- completion leg it was already being called by: `resolveCapabilities` gives a
+-- declared-but-not-defaulted key a model grade of 0 until a preset, a probe or
+-- a person raises it.
+--
+-- ── Why this file is REQUIRED, not tidy-up ─────────────────────────────────
+--
+-- A row left on the old id does not merely look stale. `ADAPTER_REGISTRY` no
+-- longer has an entry for `llamacpp_completion`, so `getConnectionAdapter`
+-- throws for it; and `adapterCapabilities` returns undefined, so
+-- `declaredWireModes` is empty and `wireModeFor` falls through to its last
+-- resort — `chat`. An unmigrated row would therefore have flipped wire mode as
+-- well as losing its adapter. Both are on the send path.
+--
+-- ⚠ There is nothing else to rewrite. `connections.type` is the only column in
+-- the schema that stores a connection type id: no seed, default, pipeline
+-- config or spec document names one (`connections` are referenced BY ID from
+-- `sampling_configs`, `pipeline_configs` and the session tables, and an id does
+-- not change here). Verified by grep across `src/`, `drizzle/` and `docs/`
+-- before this was written.
+UPDATE "connections"
+SET "type" = 'llamacpp'
+WHERE "type" = 'llamacpp_completion';

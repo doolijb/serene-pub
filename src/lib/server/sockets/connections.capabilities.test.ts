@@ -321,7 +321,7 @@ describe("connections:capabilities — the read", () => {
 		const { connectionsCapabilities } = await import("./connections")
 		const conn = await makeConnection({
 			name: "read-me",
-			type: CONNECTION_TYPE.OPENAI_CHAT,
+			type: CONNECTION_TYPE.OPENAI,
 			preset: "openai-official",
 			capabilities: {
 				resolved: { "text->text": 1 },
@@ -338,7 +338,7 @@ describe("connections:capabilities — the read", () => {
 
 		expect(res).toMatchObject({
 			connectionId: conn.id,
-			type: CONNECTION_TYPE.OPENAI_CHAT,
+			type: CONNECTION_TYPE.OPENAI,
 			preset: "openai-official"
 		})
 		expect(res.capabilities?.overrides).toEqual({ "text->image": false })

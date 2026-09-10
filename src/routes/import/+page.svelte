@@ -2,9 +2,10 @@
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { goto } from "$app/navigation"
-	import { getContext } from "svelte"
+	import { getContext, onDestroy } from "svelte"
 	import {
 		resolvePickedFolder,
 		startImportSession,
@@ -323,7 +324,13 @@
 	}
 
 	// Socket listeners
-	socket.on("import:sillytavern:scan", (message) => {
+	// Named so `off` can name them too — and so there is anything to off at
+	// all: these had no teardown, so every visit to this page left another
+	// pair of listeners on the socket. A bare `socket.off(event)` is not the
+	// fix: it removes EVERY listener for that event across the app.
+	function handleImportSillytavernScan(
+		message: SocketEventMap["import:sillytavern:scan"]["response"]
+	) {
 		isScanning = false
 		if (scanTimeout) {
 			clearTimeout(scanTimeout)
@@ -356,9 +363,12 @@
 				description: message.error || "Failed to scan directory"
 			})
 		}
-	})
+	}
+	socket.on("import:sillytavern:scan", handleImportSillytavernScan)
 
-	socket.on("import:sillytavern:execute", (message) => {
+	function handleImportSillytavernExecute(
+		message: SocketEventMap["import:sillytavern:execute"]["response"]
+	) {
 		isImporting = false
 		if (importTimeout) {
 			clearTimeout(importTimeout)
@@ -385,6 +395,12 @@
 				description: message.error || "Failed to import data"
 			})
 		}
+	}
+	socket.on("import:sillytavern:execute", handleImportSillytavernExecute)
+
+	onDestroy(() => {
+		socket.off("import:sillytavern:scan", handleImportSillytavernScan)
+		socket.off("import:sillytavern:execute", handleImportSillytavernExecute)
 	})
 </script>
 

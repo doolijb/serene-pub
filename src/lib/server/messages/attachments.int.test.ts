@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeAll } from "vitest"
 import path from "node:path"
 import fs from "node:fs/promises"
-import { createTestDb, createTestUser, type TestDb } from "$lib/server/utils/testDb"
+import {
+	createTestDb,
+	createTestUser,
+	type TestDb
+} from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { getAppDataDir } from "$lib/server/db/drizzle.config"
 import { insertLegacy, getMessage, updateLegacy, messageText } from "./store"
@@ -80,7 +84,7 @@ describe("the attach-image consumer", () => {
 			role: "assistant",
 			content: "Behold the map."
 		})
-		const host = createHost(db as any, { sessionId })
+		const host = createHost(db, { sessionId })
 		const result: any = await host.commit!(
 			{
 				image: {
@@ -117,7 +121,7 @@ describe("the attach-image consumer", () => {
 			role: "assistant",
 			content: "elsewhere"
 		})
-		const host = createHost(db as any, { sessionId })
+		const host = createHost(db, { sessionId })
 		await expect(
 			host.commit!(
 				{

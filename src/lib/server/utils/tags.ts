@@ -5,15 +5,6 @@
 // lower(name)) in schema.ts.
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import type { ExtractTablesWithRelations } from "drizzle-orm"
-import type { PgliteDatabase, PgliteTransaction } from "drizzle-orm/pglite"
-
-type Executor =
-	| PgliteDatabase<typeof schema>
-	| PgliteTransaction<
-			typeof schema,
-			ExtractTablesWithRelations<typeof schema>
-	  >
 
 /**
  * Finds an existing tag for this user matching `rawName` (trimmed,
@@ -26,7 +17,7 @@ type Executor =
 export async function findOrCreateTagId(
 	userId: number,
 	rawName: string,
-	dbOrTx: Executor = db
+	dbOrTx: Db = db
 ): Promise<number | null> {
 	const name = rawName.trim()
 	if (!name) return null

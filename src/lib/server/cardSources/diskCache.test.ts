@@ -8,6 +8,11 @@
  * small fixed ceiling (FS_CONCURRENCY_LIMIT = 2). These tests intercept the
  * real fs.* calls with controllable gates so concurrency can be observed
  * precisely, rather than inferred from timing on a real (fast) filesystem.
+ *
+ * The limiter moved to fsLimit.ts when the cache split into browse and import
+ * halves (2026-09-09) — it is one ceiling for the whole subsystem, not one per
+ * cache. These tests still reach it through diskCache's exports, which is the
+ * shape a caller actually uses.
  */
 import fs from "fs/promises"
 import os from "os"
@@ -219,7 +224,7 @@ describe("diskCache — behavior preserved through the concurrency-limiter refac
 		await setCachedCardBytes(survivorKey, Buffer.from("survivor"))
 		await setCachedCardBytes(evictedKey, Buffer.from("evicted"))
 
-		const cacheDir = path.join(dataDir, "serene-pub-card-cache")
+		const cacheDir = path.join(dataDir, "serene-pub-browse-cache")
 		const files = await fs.readdir(cacheDir)
 		expect(files.length).toBe(2)
 

@@ -23,6 +23,12 @@
  * reason: a drizzle predicate is opaque from out here). A real PGlite instance
  * would cost 30 seconds to assert three string comparisons and a walk over a
  * constant.
+ *
+ * It is asserted to `Db` at the one place it is built. The resolver takes the
+ * real schema-typed handle now, and four chained builder calls returning canned
+ * arrays cannot structurally be one — but the assertion is a fixture's, made
+ * once, in a test file, and it does not travel: the module under test is
+ * checked against the real schema regardless of what this hands it.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -89,7 +95,7 @@ const db = {
 			})
 		})
 	})
-}
+} as unknown as Db
 
 /**
  * A saved, capable, entirely usable text connection.

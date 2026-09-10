@@ -35,7 +35,20 @@ import {
 	variantsFor
 } from "./variants"
 
-type Db = typeof db
+/*
+ * The database handle, and it is the schema-typed global `Db`
+ * (`db/types.d.ts`) rather than `typeof db` — a parameter wherever a caller has
+ * one (the sweeps below use the singleton, as `backfill.ts` does).
+ *
+ * The driver's own type was a decision this module had never actually taken:
+ * nothing here touches anything PGlite-specific (no `$client`, no raw
+ * `execute`), only `select`/`insert`/`update`/`delete`/`query` over this
+ * schema. Naming the driver anyway made media the narrowest link on its own
+ * seam — every caller holding a driver-agnostic handle was refused with
+ * *"`PgQueryResultHKT` is not assignable to `PgliteQueryResultHKT`"* and cast
+ * across it, which is `as any` on a database handle: it re-opens the row hole
+ * from the caller's side for the sake of a constraint media does not have.
+ */
 
 export type CullOutcome =
 	| {

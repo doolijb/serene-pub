@@ -18,7 +18,9 @@ Under the hood every session is a `roleplay`-type session with an `isGroup` flag
 
 ## Starting a New Session
 
-Click the **+** button at the top of the Sessions sidebar to open the new-session form. A session requires:
+Click the **+** button at the top of the Sessions sidebar to open the new-session form. Creating a session is three answers, stacked down one column, each appearing once the one above it is answered: first the **Genre** — what kind of session this is, which decides what systems exist for it (characters, personas, lorebooks, the composer) and stays with the session for its life; then the **Preset** — the bundle an administrator has enabled for that genre, which decides which pipelines answer its events and which actions come along; then the session's own **Settings**, pre-filled from whatever the preset supplies. A step with only one answer takes it silently rather than asking, so a stock install — one genre, one preset — shows you the settings form alone, exactly as it always has. If an administrator has enabled no preset for a genre, the form says so and **Create** is disabled: there is nothing to start the session from.
+
+The settings step requires:
 
 - **Session Name** — required, shown in the sidebar and browser tab.
 - **Characters** — at least one. Characters are listed in the order you add them; when there's more than one, you can drag them by the grip handle to reorder. This order is the round-robin turn order in group sessions.

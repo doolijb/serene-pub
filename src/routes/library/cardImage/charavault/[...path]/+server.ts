@@ -11,6 +11,7 @@
 // at all (it's a browser-enforced restriction), so proxying through this
 // route is the fix, mirroring why CharaVault's JSON/API calls are already
 // entirely server-side.
+import crypto from "node:crypto"
 import type { RequestHandler } from "@sveltejs/kit"
 import { authenticateRequest } from "$lib/server/auth/authenticateRequest"
 import { fetchCharaVaultCardResponse } from "$lib/server/cardSources/charaVault/charaVaultSource"
@@ -24,6 +25,44 @@ import {
 	getOrFetchCardBytes,
 	IMAGE_TTL_MS
 } from "$lib/server/cardSources/diskCache"
+
+/**
+ * Served to a logged-in user off an authenticated route, so `private`: a shared
+ * cache in front of the app (a reverse proxy, a corporate middlebox) must never
+ * hand one user's response to the next request for the same path. `public` said
+ * the opposite, on a route that already 401s without a session.
+ */
+const CACHE_CONTROL = "private, max-age=86400"
+
+/**
+ * A STRONG validator — the sha256 of exactly these bytes, so equality means
+ * byte equality and there is no case where the "weak" caveat would apply.
+ *
+ * Worth having even though the bytes are already in hand by the time it is
+ * computed: max-age expiry does not mean the image changed (a CharaVault ref is
+ * immutable once published), and without a validator every revalidation after
+ * the first day re-sends the whole PNG. Hashing a few hundred KB is nothing
+ * against that.
+ */
+function strongEtag(bytes: Buffer): string {
+	return `"${crypto.createHash("sha256").update(bytes).digest("hex")}"`
+}
+
+/**
+ * RFC 9110 §13.1.2. `*` matches anything the server has; otherwise the header
+ * is a comma-separated list and each member may arrive weakened (`W/"…"`),
+ * which a conditional GET compares with the weak function — so `W/"x"` and
+ * `"x"` both mean "I already have these bytes".
+ */
+function ifNoneMatches(header: string | null, etag: string): boolean {
+	if (!header) return false
+	const trimmed = header.trim()
+	if (trimmed === "*") return true
+	return trimmed
+		.split(",")
+		.map((candidate) => candidate.trim().replace(/^W\//, ""))
+		.includes(etag)
+}
 
 export const GET: RequestHandler = async (event) => {
 	const user = await authenticateRequest(event)
@@ -108,10 +147,25 @@ export const GET: RequestHandler = async (event) => {
 			IMAGE_TTL_MS
 		)
 
+		const etag = strongEtag(bytes)
+		if (ifNoneMatches(event.request.headers.get("If-None-Match"), etag)) {
+			// A 304 still carries the validator and the freshness directive —
+			// they are what the client stores against its own copy, and a 304
+			// without them leaves that copy no better off than before.
+			return new Response(null, {
+				status: 304,
+				headers: {
+					ETag: etag,
+					"Cache-Control": CACHE_CONTROL
+				}
+			})
+		}
+
 		return new Response(new Uint8Array(bytes), {
 			headers: {
 				"Content-Type": "image/png",
-				"Cache-Control": "public, max-age=86400"
+				"Cache-Control": CACHE_CONTROL,
+				ETag: etag
 			}
 		})
 	} catch (e) {

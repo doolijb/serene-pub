@@ -23,7 +23,13 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { allTypes, allScriptTypes, snapshotRegistry } from "@serene-pub/sdk"
+import {
+	allTypes,
+	allScriptTypes,
+	snapshotRegistry,
+	declarationHash,
+	DESCRIPTOR_DISPLAY_KEYS
+} from "@serene-pub/sdk"
 import { typeContentHash } from "$lib/server/pipelines/boot/registrySync"
 // Importing the contracts is what registers them — the same fact-about-the-code
 // route `bootstrapPipelines` takes, rather than a list maintained beside it.
@@ -99,8 +105,26 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:input/summarize-request@1": "118295257093fb",
 	// Gained the `greeting` field on its sessionShape (20, migration 0151) —
 	// the default greeting-on-creation behaviour stated, not changed.
-	"core:input/user-message@1": "1a716679673b88",
+	//
+	// Re-projected by **0106** (policy answer 3): a `continuationPrefill`
+	// out-port, so a caller can supply the text a **continue** is continuing
+	// (ruling 2026-09-08, D-2). Additive — `echo`, `generate-image`,
+	// `graph-build` and `narrate` share this input type and wire nothing to the
+	// new port, so a port nothing wires is never resolved and none of their
+	// documents move. Only `respond` reads it.
+	"core:input/user-message@1": "1a8550b1c61c38",
 	"core:input/session-created@1": "18daad12cc8870",
+	// The side-character turn (ruling 2026-09-07). A NEW type — no migration,
+	// just a line: it inserts a row and conflicts with nothing.
+	//
+	// Its own type rather than a flag on `user-message@1`, because that type
+	// carries the standard chat's `sessionShape` and therefore *is* the chat
+	// mode; a per-turn action must not restate a session's shape. It also
+	// carries a `speaker` port the chat input has no room for, and the
+	// new-name fact as declared `extras` on its scripts hook — which is what
+	// lets a script read "the lorebook has never heard of this name" through
+	// the one dispatch core scripts and extension hooks already share.
+	"core:input/side-character-turn@1": "aae12bf9be9a8",
 	"core:query/session-greetings@1": "5c57ecc64e730",
 	"core:consumer/seed-greetings@1": "1247e34e381a2f",
 	// Re-projected by **0201** (policy answer 3): the node is `optional`, which
@@ -135,10 +159,20 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// install — 0141's core wipe re-projects every row at boot).
 	"core:provider/mcp-tool@1": "2a4ceca243862",
 	"core:provider/mcp-resource@1": "9d9890414a3d8",
-	"core:provider/name-entry@1": "17558940ee8508",
+	// Re-projected by **0113** (policy answer 3), with the two summarize steps
+	// below: a `loreType` in-port (D-I). `summarizeSpec` writes it as a literal
+	// into the node's config, in the same map as `content` and `batch`, and
+	// `resolveInput` passes a non-ref config value through untouched — so the
+	// binding reads `input.loreType` exactly the way it reads a port, and a
+	// port is what it is. Declared rather than made a parameter, which would
+	// have put "which kind of entry this pipeline writes" in the panel as
+	// something a user could tune their scene summarizer into a world one with.
+	"core:provider/name-entry@1": "ae679fda6bf0",
 	"core:provider/speak@1": "e36fdde93956d",
-	"core:provider/summarize-batch@1": "1432666fe0b3dd",
-	"core:provider/summarize-synth@1": "eca4138224b4b",
+	// Re-projected by **0113** — `loreType`, on the same terms as `name-entry`
+	// above.
+	"core:provider/summarize-batch@1": "fcd1efb71d68",
+	"core:provider/summarize-synth@1": "17543b07afc2ac",
 	"core:query/session-cast@1": "142e94006413af",
 	// Re-projected by 0186 (policy answer 3), together with `history-entries`
 	// below — one hash, because the three lore gather branches share a slot declaration
@@ -189,11 +223,28 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// registry row needs re-projecting. That is worth stating rather than
 	// leaving as an absence: the way to tell a column change from a contract
 	// change is whether a pin here has to move, and this one does not.
-	"core:query/world-lore@1": "39d8ee8377bf2",
-	"core:query/character-lore@1": "39d8ee8377bf2",
+	//
+	// Re-projected again by **0099** (policy answer 3), with the third gather
+	// branch and `lorebook-triggers`: `guaranteedMessages` is **declared**. It
+	// was the audit's mirror-image finding — engine-read and declared nowhere,
+	// so the only value it could ever hold was `DEFAULT_RETRIEVAL`'s hardcoded
+	// 10, while it set the presence window for character-lore co-occurrence and
+	// the term-frequency window for tf-idf. Declared at 10, which is what every
+	// scan has silently run at, so it is behaviour-preserving by construction.
+	"core:query/world-lore@1": "e252379dcbac9",
+	"core:query/character-lore@1": "e252379dcbac9",
 	// Gained the `channel` param in 0.6-preview (migration 0149, 20 §7);
 	// default 'main' reproduces the legacy read byte-for-byte.
-	"core:query/session-history@1": "2272f3cfb8f4b",
+	//
+	// Re-projected by **0110** (policy answer 3): `limit`'s declared default
+	// moves 40 → 100 (ruling 2026-09-09, D-8's terms). The number is not a
+	// retune — the binding read `input.limit`, which nothing supplies, so every
+	// run since this node existed has taken its literal 100 while the panel
+	// showed 40. Declaring the effective value is what lets the control be
+	// wired without moving a single install's transcript window; changing the
+	// number is a separate decision against the measure corpus.
+	// (was "2272f3cfb8f4b")
+	"core:query/session-history@1": "24ce875b04648",
 	// ⚠ `core:query/graph-context@1` was here, and is gone rather than frozen.
 	// It split into the two below, because one node emitting both directions of
 	// the graph gave them one heading, one layout and one switch. Removing a
@@ -201,8 +252,43 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// is allowed here only because 0.6 has not shipped: every stored spec
 	// pinning it is a preview document, and `0124` deletes its registry rows
 	// along with the specs that named it.
-	"core:query/relationships-perspectives@1": "133fb1aab4e288",
-	"core:query/relationships-known@1": "1a709dd0599745",
+	//
+	// ⚠ **Both hashes MOVED — answer 3, paired with
+	// `drizzle/0111_reply_slots_and_relationship_cap.sql`**, which deletes both
+	// registry rows so boot re-projects them. Reading this file's own rule
+	// before editing these lines: a parameter's default is hashed, and this is
+	// the third response, not the first.
+	//
+	// What moved: `maxEntries` — "Most relationships" — **lost its default**.
+	// Neither spec named the `params` slot on either node, so `resolveInput`
+	// never resolved it and `bindings.ts` called
+	// `capRelationships(section, undefined)` on every run this node type has
+	// ever made, which that function reads as *no ceiling* and returns the
+	// section whole. `respond` wires `params: slot.params()` on both as of 0111,
+	// so the declaration becomes live, and under ruling D-8 the declared default
+	// must therefore BE the value every run has actually used.
+	//
+	// That value is "uncapped", and it is not expressible as a number here. `0`
+	// is taken and means the opposite (`capRelationships` returns `null`,
+	// dropping the section — the off-switch convention this package uses
+	// everywhere); a negative sentinel IS what `capRelationships` reads as no
+	// cap, but `min: 0` forbids one and no other parameter in the contracts uses
+	// a negative sentinel; and a large finite number is a different value that
+	// is merely usually indistinguishable. An absent default is the exact one:
+	// `resolveSlot`'s params branch copies a schema default only
+	// `if (v?.default !== undefined)` and `reconcileConfigs` back-fills a row
+	// only when a declaration carries one, so an untouched install resolves
+	// `undefined` and stays uncapped. 0111's third statement lifts the stored
+	// `12`s the old declaration had already back-filled — without it, wiring the
+	// slot would cap every upgraded install at 12.
+	//
+	// `min: 0`, `type: 'integer'` and the label are unchanged; the description
+	// gained "leave it empty for no ceiling", and display text is stripped
+	// before hashing, so the whole of the movement is the missing `default`.
+	// (was "133fb1aab4e288")
+	"core:query/relationships-perspectives@1": "1cb5dd5736dd89",
+	// (was "1a709dd0599745")
+	"core:query/relationships-known@1": "feb131426e5",
 	"core:query/graph-scenes@1": "93cf67e05eb1",
 	// The third gather branch, added in 0.6 after its absence was found: the
 	// split into world and character lore left `history` with no node, so those
@@ -210,7 +296,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// type needs no re-projection — nothing has published it before.
 	// Re-projected by 0186, again by 0192, again by 0199 and again by 0203 with
 	// the other two gather branches; see the note there.
-	"core:query/history-entries@1": "39d8ee8377bf2",
+	// Re-projected a fifth time by **0099** with its two siblings, for
+	// `guaranteedMessages`; see their note.
+	"core:query/history-entries@1": "e252379dcbac9",
 	"core:query/lorebook-probabilistic@1": "6ac9faa6efbb8",
 	// Re-projected by 0186: the same `scanDepth` correction, on this type's own
 	// duplicate declaration of the field. Deliberately still a separate schema
@@ -247,7 +335,20 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// the same three lexical-quality controls, on this type's own duplicate
 	// schema, for the reason 0192 gives — the narrator runs its lore through
 	// this type.
-	"core:query/lorebook-triggers@1": "1f435541958a17",
+	//
+	// Re-projected a fifth time by **0099**, again with the three lore gather
+	// branches: `guaranteedMessages`, for the reason 0192 gives — the narrator
+	// runs its lore through this type and reaches the same `keywordQuery` from
+	// the same seam, so a window that exists on the reply pipeline and not on
+	// the narrator is a difference no user could discover a reason for.
+	"core:query/lorebook-triggers@1": "74f456fa99d6a",
+	// A **new** type, so no migration and no bump — policy's own sentence,
+	// "adding a new type is safe and needs no migration". Nothing else in this
+	// table moved when it landed, which is the check that says the declaration
+	// really is additive: it declares its own ports and its own two parameters
+	// and spreads nothing from a sibling, so no existing content hash could
+	// follow it. See `ranking/keyProposal.ts` for what it binds to.
+	"core:query/entry-keys@1": "7b6c180485049",
 	"core:query/message-text@1": "13028fee53a4e1",
 	"core:query/persona-card@1": "a0b05bce48983",
 	"core:query/summarize-source@1": "172011b74d3c72",
@@ -267,7 +368,17 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// an undecided entry, so it had to leave both together — and it leaves them
 	// agreeing for a better reason, since each now reads the entry's own column
 	// and nothing else. See the lore gather branches' note above for the argument.
-	"core:query/vector-search@1": "872e4ebb8f739",
+	//
+	// Re-projected by **0099**, and this one is two contract changes at once.
+	// `topK`'s default moves 12 → 40 because the binding read it off an in-port
+	// name the node does not declare and ran on a literal `?? 40` — 40 is what
+	// every install has actually searched at, so wiring the control must not
+	// re-tune anybody. And `minScore: 0.35` is **culled** for
+	// `similarityFalloff`: a floor removes a row from the pool, where no other
+	// mechanism can reach it either, which is the one thing the governing rule
+	// forbids. The replacement shapes the contribution (`cos ** falloff`) and
+	// ships at 1 — the raw cosine, which is what ran while the floor sat unread.
+	"core:query/vector-search@1": "132b49d9fcceb4",
 	// The third retrieval mechanism (design §13.5), added 2026-09-06 — retrieval by
 	// the names a scene is using, over annotations written in the background. A
 	// **new** type id, so the registry inserts it and nothing conflicts: no
@@ -307,18 +418,58 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// (`slot.connectionOf("generate")`), which is a shared reference and
 	// therefore adds no option to the config panel — an untouched pipeline
 	// gains no setting and, on a `vicuna` connection, renders identical bytes.
-	"core:task/assemble@2": "17af4eb13b2c67",
+	//
+	// Re-projected by **0113** (policy answer 3): three in-ports — `decisions`,
+	// `messages` and `groups` (D-I, D-H). The first two were **supplied by every
+	// shipped spec and declared by nobody**, and one of them is the input the
+	// binding halts without; the third was published by
+	// `core:task/rank-hybrid@1` and wired by nobody, so `allocate` ran on its
+	// own `{}` while the ranker's per-band arithmetic sat one node upstream.
+	// Undeclared cost more than tidiness: `validate.ts` skips its shape check
+	// when either end of an edge is undeclared, so a plugin wiring the wrong
+	// shape into this node got no finding at all.
+	//
+	// Not a retune. `allocate` copies `groups` onto `AllocatedContext.groups`
+	// and reads it nowhere else, so every byte `render` walks is unchanged —
+	// the parity corpus is identical across the change. What fills in is the
+	// receipt's `sources`, empty on every run until now.
+	"core:task/assemble@2": "5b36779daf6e2",
 	// Tool calling's pure halves (20 §9), added 2026-08-26. New types — a
 	// row inserts and conflicts with nothing.
 	"core:task/advertise-tools@1": "b3b15a945f7e2",
 	"core:task/parse-tool-call@1": "213e18d434bbb",
-	"core:task/batch-messages@1": "1666e1b5864572",
+	// Re-projected by **0102** (policy answer 3): a `sampling` slot, so the cut
+	// can be clamped to the window the batch is actually sent against — the
+	// binding read no sampling config at all, and there is no truncation on
+	// this path to catch an overflow (`compilePrompt` returns early on an
+	// injected prompt). Same shape and same argument as
+	// `core:task/context-budget@1`. `batchTokens` also moves from 2048 to 2560
+	// — a default is content, and the old number meant 548 tokens of chat once
+	// the binding subtracted its reserve from it.
+	"core:task/batch-messages@1": "3936f5e8dc834",
 	// The narrator's half of the split (migration 0114). It shares this one's
 	// implementation and ports; what makes it a separate type is that it
 	// declares a different configurable surface — `narratorName`, and no
 	// example-dialogue or relationship layouts. Adding a type needs no
 	// re-projection: it inserts a row and conflicts with nothing.
 	"core:task/build-narrator-context@1": "131936fee7832b",
+	// The third context surface (ruling 2026-09-07), and a NEW type for the
+	// same reason the narrator's was one: it declares a different configurable
+	// surface. What separates it from the narrator's is a `speaker` IN-PORT —
+	// a side character's name is data the trigger carried, different every
+	// turn, where `narratorName` is a setting stored once. Putting it in a
+	// prompts slot would mean editing a prompt config to speak as somebody
+	// else, and every turn rendering with whichever name was stored last.
+	//
+	// ⚠ It also does NOT carry `currentCharacterId`, which the other two
+	// context builders inherit from the shared shape. Character-lore
+	// visibility is decided by the host read, which keys on the run's scope —
+	// so a speaker id arriving on this node's port could change whose voice
+	// the prompt is in without changing whose lore it was handed. `speaker`
+	// carries the name and the card; the id stays where the host can act on
+	// it. (Its absence is also what keeps it out of `UNFILLED_IN_PORTS` —
+	// there is no port to excuse.)
+	"core:task/build-side-character-context@1": "1587c3a0574d15",
 	// Gained the `variables` slot in 0.6-preview (migration 0107), a
 	// `speakerRelationships` layout when the graph query was wired in
 	// (migration 0111), and lost `narratorName` from its `prompts` slot when
@@ -328,7 +479,21 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Both context builders gained `currentCharacterId` with the provider
 	// above (migration 0134, shared `contextPorts`): the prompt's voice
 	// follows the same recorded speaker decision.
-	"core:task/build-template-context@1": "2ea90523e3006",
+	// Re-projected by **0113** (policy answer 3): four in-ports (D-I).
+	// `relationshipsPerspectives` and `relationshipsKnown` are wired by
+	// `respond` and named by this type's own `variables` renders, so every part
+	// of the round trip was written down except the ports. `speakerName` and
+	// `speakerCharacter` are supplied by `bindings.ts`'s side-character
+	// wrapper, which calls THIS type's handler with the name and the card
+	// spread on — a supplier that is a sibling binding rather than a document,
+	// which is exactly why the declaration is the only record that the input
+	// surface is wider than the edges.
+	//
+	// ⚠ `build-narrator-context@1` is **not** re-projected. The four are
+	// declared on this type rather than in the shared `contextPorts`: the
+	// narrator has no speaker's perspective to build graph context from, so
+	// widening the shared map would give it ports it must leave empty forever.
+	"core:task/build-template-context@1": "1abaa59a2046d6",
 	"core:task/chunk-text@1": "5cef916d3eef",
 	"core:task/context-budget@1": "efdd9a915c681",
 	"core:task/first-json@1": "13093e6bda129",
@@ -349,7 +514,15 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// same declaration. The same coincidence the three lore gather branches and the four
 	// turn strategies already have.
 	"core:task/concat-candidates@1": "1e44f4e71225d6",
-	"core:task/process-messages@1": "8d63ae74798bb",
+	// Re-projected by **0106** (policy answer 3). It gained a
+	// `continuationPrefill` IN-port — and the seam it feeds is older than the
+	// port: `prompt/messages.ts` has put `input.continuationPrefill` on the seed
+	// line (the `-2` placeholder the model continues from) since it was written,
+	// and `runtime/bindings.ts` has passed it through, with NOTHING able to
+	// supply a value because the declaration had no port for one. So a continue
+	// sent an empty seed, got a fresh reply, and the socket glued the partial on
+	// afterwards. The declaration is what was missing (ruling 2026-09-08, D-2).
+	"core:task/process-messages@1": "1078354c939461",
 	"core:task/query-windows@1": "184fdf6f3a0762",
 	// Re-projected by **0201**, and it is the one type in that migration nobody
 	// set out to touch. Ruling R6 removes per-source floors — *"lore competes on
@@ -418,7 +591,28 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// ⚠ `rank-by-recency` is **not** re-projected this time, unlike in 0201.
 	// `SIGNAL_WEIGHT_FIELDS` is spread onto this type alone; only `rankSlots`
 	// is shared, and it did not move.
-	"core:task/rank-hybrid@1": "7f9ce940b4c9e",
+	//
+	// Re-projected by **0099**: `signalRecency` and `signalSceneAffinity` are
+	// **culled**. Nothing has ever written `signals.recency` or
+	// `signals.sceneAffinity` on any path in any release, so both weights
+	// multiplied a permanent zero while being declared, transposed, scored,
+	// persisted and rendered. `signalDensity` survives the same audit because it
+	// now has a producer — the scan writes `density` on every candidate, as it
+	// already wrote `proximity`. `runtime/signalWiring.int.test.ts` is what
+	// makes that pair of facts a CI failure rather than a second audit.
+	//
+	// ⚠ `rank-by-recency` is again **not** re-projected: `SIGNAL_WEIGHT_FIELDS`
+	// is spread onto this type alone.
+	// Re-projected by **0113** (policy answer 3): a `groups` OUT-port (D-H).
+	// `select()` has always returned what each band was allotted, spent and
+	// filled, and the binding has always published it on this key — with
+	// nothing declared, nothing downstream could learn it existed.
+	//
+	// ⚠ `rank-by-recency` and the `rank-recall` example are again **not**
+	// re-projected: the port is spread onto this type alone, like
+	// `SIGNAL_WEIGHT_FIELDS` and the `scripts` hook. Neither computes per-band
+	// usage, and a port they cannot fill would be a promise neither keeps.
+	"core:task/rank-hybrid@1": "a4ba08bbc5618",
 	"core:task/rank-semantic@1": "d3849f48f8442",
 	"core:task/render-entries@1": "7541eb6256ba5",
 	// The four next-speaker strategies (19 §5, U-C4) — one implementation,
@@ -546,5 +740,80 @@ describe("published type content hashes", () => {
 			description: "and a different explanation"
 		} as any)
 		expect(after).toBe(before)
+	})
+
+	/**
+	 * The same promise, two levels down, and against the SDK's answer.
+	 *
+	 * ⚠ The test above injects display text at the TOP of the entry, which is
+	 * the only level `stripI18n` was ever exercised at — and that is how core
+	 * and the SDK came to disagree without anything failing. A parameter's
+	 * display text is **not** spelled `i18n`: settings.ts calls `label` the
+	 * canonical key for a field or a member band and `i18n` its deprecated
+	 * alias, and those sit inside `slots[].schema`. The SDK's descriptor
+	 * registry has stripped `label` since `refuseUnlessIdentical` was written
+	 * (`DESCRIPTOR_DISPLAY_KEYS`); core hashed it. So re-declaring a descriptor
+	 * with a renamed parameter was a no-op in the SDK and a
+	 * `TypeRegistryConflictError` here — which `bootstrapPipelines` catches by
+	 * returning early, silently stopping every pipeline on the install.
+	 *
+	 * ⚠ **No shipped type carries a `label` today**, which is why the
+	 * disagreement was latent and why closing it moved no recorded hash above.
+	 * That is also why this test injects one: without it, nothing in the suite
+	 * can tell the corrected strip from the old one, and a green suite would be
+	 * evidence of nothing.
+	 *
+	 * The control is the half that makes it a test rather than a tautology.
+	 * `max` is a range, and a range decides which stored values are still legal
+	 * — so both sides must call it material, or "strips display text" would only
+	 * mean "answers the same for everything".
+	 */
+	it("strips a parameter's display text at every level, and agrees with the SDK about which words those are", () => {
+		const withParams = allTypes().find(
+			(t: any) =>
+				t.slots?.params?.schema &&
+				Object.keys(t.slots.params.schema).length > 0
+		) as any
+		expect(
+			withParams,
+			"no shipped type declares a parameters schema, so there is nothing " +
+				"to inject a label into and this guard is testing nothing"
+		).toBeTruthy()
+
+		const field = Object.keys(withParams.slots.params.schema)[0]!
+		/** The descriptor with one extra key on one parameter, deep-copied. */
+		const withKey = (key: string, value: unknown) => {
+			const copy = JSON.parse(JSON.stringify(withParams))
+			copy.slots.params.schema[field][key] = value
+			return copy
+		}
+		const coreHash = (d: unknown) =>
+			typeContentHash(snapshotRegistry([d as any], { release: "test" })[0]!)
+		const sdkHash = (d: unknown) =>
+			declarationHash(d, DESCRIPTOR_DISPLAY_KEYS)
+
+		const base = withKey("__unused", undefined)
+		for (const word of [
+			"i18n",
+			"description",
+			...(DESCRIPTOR_DISPLAY_KEYS.display ?? [])
+		]) {
+			const renamed = withKey(word, { en: "Höchste K" })
+			expect(
+				coreHash(renamed),
+				`core hashed a parameter's \`${word}\`, so translating it is a ` +
+					`frozen-type conflict on every upgrading install`
+			).toBe(coreHash(base))
+			expect(
+				sdkHash(renamed),
+				`the SDK hashed a parameter's \`${word}\` — the two strips have ` +
+					`come apart again`
+			).toBe(sdkHash(base))
+		}
+
+		// The control: a range is contract on both sides.
+		const widened = withKey("max", 999_999)
+		expect(coreHash(widened)).not.toBe(coreHash(base))
+		expect(sdkHash(widened)).not.toBe(sdkHash(base))
 	})
 })

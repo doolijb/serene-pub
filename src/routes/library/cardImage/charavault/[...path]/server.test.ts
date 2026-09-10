@@ -9,6 +9,7 @@
  * getOrFetchCardBytes's own dedup/cache behavior is already covered by
  * diskCache.test.ts and isn't re-tested here.
  */
+import { createHash } from "node:crypto"
 import { afterEach, describe, expect, test, vi } from "vitest"
 import {
 	CardSourceInvalidRefError,
@@ -69,16 +70,22 @@ afterEach(() => {
 
 function fakeEvent(
 	path: string,
-	signal: AbortSignal = new AbortController().signal
+	signal: AbortSignal = new AbortController().signal,
+	headers: Record<string, string> = {}
 ) {
 	return {
 		params: { path },
-		request: { signal }
+		request: { signal, headers: new Headers(headers) }
 	} as any
 }
 
+/** sha256 of the bytes, quoted — the strong validator the route sends. */
+function etagFor(body: string): string {
+	return `"${createHash("sha256").update(Buffer.from(body)).digest("hex")}"`
+}
+
 describe("GET /library/cardImage/charavault/[...path]", () => {
-	test("success: returns the bytes with a long, public Cache-Control", async () => {
+	test("success: returns the bytes with a long, PRIVATE Cache-Control and a strong ETag", async () => {
 		authenticateRequestMock.mockResolvedValue({ id: 1, username: "a" })
 		getOrFetchCardBytesMock.mockResolvedValue(Buffer.from("png-bytes"))
 
@@ -86,10 +93,65 @@ describe("GET /library/cardImage/charavault/[...path]", () => {
 
 		expect(res.status).toBe(200)
 		expect(res.headers.get("Content-Type")).toBe("image/png")
-		expect(res.headers.get("Cache-Control")).toBe("public, max-age=86400")
+		// `private`, not `public`: the route is authenticated, so a shared
+		// cache in front of the app must never hand one user's response to the
+		// next request that happens to ask for the same path.
+		expect(res.headers.get("Cache-Control")).toBe("private, max-age=86400")
+		// Strong (no W/ prefix) — it is the sha256 of exactly these bytes.
+		expect(res.headers.get("ETag")).toBe(etagFor("png-bytes"))
 		expect(Buffer.from(await res.arrayBuffer()).toString()).toBe(
 			"png-bytes"
 		)
+	})
+
+	test("If-None-Match on the current bytes returns 304 with no body, and keeps the validator and Cache-Control", async () => {
+		authenticateRequestMock.mockResolvedValue({ id: 1, username: "a" })
+		getOrFetchCardBytesMock.mockResolvedValue(Buffer.from("png-bytes"))
+		const etag = etagFor("png-bytes")
+
+		const res = await GET(
+			fakeEvent("folder/file.png", undefined, { "If-None-Match": etag })
+		)
+
+		expect(res.status).toBe(304)
+		expect(res.headers.get("ETag")).toBe(etag)
+		expect(res.headers.get("Cache-Control")).toBe("private, max-age=86400")
+		expect(await res.text()).toBe("")
+	})
+
+	test("If-None-Match on stale bytes returns the new 200 and the new ETag", async () => {
+		authenticateRequestMock.mockResolvedValue({ id: 1, username: "a" })
+		getOrFetchCardBytesMock.mockResolvedValue(Buffer.from("new-bytes"))
+
+		const res = await GET(
+			fakeEvent("folder/file.png", undefined, {
+				"If-None-Match": etagFor("old-bytes")
+			})
+		)
+
+		expect(res.status).toBe(200)
+		expect(res.headers.get("ETag")).toBe(etagFor("new-bytes"))
+		expect(Buffer.from(await res.arrayBuffer()).toString()).toBe(
+			"new-bytes"
+		)
+	})
+
+	test("If-None-Match honours a list, a weak form of the same validator, and *", async () => {
+		authenticateRequestMock.mockResolvedValue({ id: 1, username: "a" })
+		getOrFetchCardBytesMock.mockResolvedValue(Buffer.from("png-bytes"))
+		const etag = etagFor("png-bytes")
+
+		// RFC 9110 §13.1.2: a list, and a weak comparison — a client (or an
+		// intermediary) may send back either form, and both mean "I already
+		// have these bytes".
+		for (const header of [`"something-else", ${etag}`, `W/${etag}`, "*"]) {
+			const res = await GET(
+				fakeEvent("folder/file.png", undefined, {
+					"If-None-Match": header
+				})
+			)
+			expect(res.status, `If-None-Match: ${header}`).toBe(304)
+		}
 	})
 
 	test("success: passes the cache key, the request signal, and IMAGE_TTL_MS through to getOrFetchCardBytes", async () => {

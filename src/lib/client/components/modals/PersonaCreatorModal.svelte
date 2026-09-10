@@ -11,9 +11,13 @@
 	interface Props {
 		open: boolean
 		onOpenChange?: (e: { open: boolean }) => void
+		// Fires with the row this modal just created, after it has closed
+		// itself. Lets a host (eg. the session form's persona picker) select
+		// the new persona immediately instead of re-finding it in a list.
+		onCreated?: (persona: SelectPersona) => void
 	}
 
-	let { open = $bindable(), onOpenChange }: Props = $props()
+	let { open = $bindable(), onOpenChange, onCreated }: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -48,6 +52,12 @@
 	})
 	let validationErrors: ValidationErrors = $state({})
 	let showCancelConfirmation = $state(false)
+	// "personas:create" is broadcast to every socket of the user, and several
+	// PersonaCreatorModal instances can be mounted at once (personas sidebar,
+	// home page, session form). Only the instance that actually emitted the
+	// create may close itself and report the new row. Not $state — nothing in
+	// the markup reads it.
+	let awaitingCreate = false
 
 	// Step definitions
 	const steps = [
@@ -156,6 +166,7 @@
 		delete newPersona._avatarFile
 		delete newPersona._avatar
 
+		awaitingCreate = true
 		socket.emit("personas:create", {
 			persona: newPersona,
 			// Client holds a browser File; the server receives it deserialized
@@ -177,6 +188,7 @@
 		}
 		validationErrors = {}
 		currentStep = 0
+		awaitingCreate = false
 		open = false
 	}
 
@@ -222,16 +234,21 @@
 			!!personaData._avatarFile
 	)
 
+	// Keep the reference: socket.off(event) with no listener drops *every*
+	// listener for that event across the whole app, not just this one.
+	const handlePersonaCreated = (res: Sockets.Personas.Create.Response) => {
+		if (!awaitingCreate || !res.persona) return
+		const created = res.persona
+		resetForm() // This will close the modal and reset data
+		onCreated?.(created)
+	}
+
 	onMount(() => {
-		socket.on("personas:create", (res: any) => {
-			if (res.persona) {
-				resetForm() // This will close the modal and reset data
-			}
-		})
+		socket.on("personas:create", handlePersonaCreated)
 	})
 
 	onDestroy(() => {
-		socket.off("personas:create")
+		socket.off("personas:create", handlePersonaCreated)
 	})
 </script>
 

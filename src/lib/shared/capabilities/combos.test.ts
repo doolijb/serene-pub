@@ -31,7 +31,7 @@ describe("servableTransforms", () => {
 		// union that returned one entry's keys would still contain both, so
 		// the discriminating pair is a transform only ONE entry declares
 		// beside one only a DIFFERENT entry declares.
-		expect(ids).toContain("text+document->text") // OPENAI_CHAT / ANTHROPIC
+		expect(ids).toContain("text+document->text") // OPENAI / ANTHROPIC
 		expect(ids).toContain("text->image") // KOBOLDCPP / A1111
 		expect(new Set(ids).size).toBe(ids.length)
 	})

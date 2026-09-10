@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import Avatar from "../Avatar.svelte"
+	import EmptyState from "../EmptyState.svelte"
 	import * as Icons from "@lucide/svelte"
 
 	interface Props {
@@ -8,13 +9,20 @@
 		characters: Partial<SelectCharacter>[]
 		onOpenChange: (e: { open: boolean }) => void
 		onSelect: (character: Partial<SelectCharacter> & { id: number }) => void
+		// Inline create. A picker must never be an overlay with nothing to
+		// offer and no way to make something — on a fresh install there are
+		// no characters at all, and the session form requires one. Callers
+		// that can host a creator pass this; when absent, no create
+		// affordance is rendered.
+		onCreateNew?: () => void
 	}
 
 	let {
 		open = $bindable(),
 		characters = [],
 		onOpenChange,
-		onSelect
+		onSelect,
+		onCreateNew
 	}: Props = $props()
 	let search = $state("")
 
@@ -61,52 +69,71 @@
 					placeholder="Search characters..."
 					bind:value={search}
 				/>
-				<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
-					<div
-						class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap"
-					>
-						{#if filtered.length === 0}
-							<div class="text-surface-700-300 text-center">
-								No characters found
-							</div>
-						{/if}
-						{#each filtered as c}
-							{#if c.id}
-								<div class="flex p-1 lg:basis-1/2">
-									<button
-										class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
-										onclick={() =>
-											onSelect(
-												c as Partial<SelectCharacter> & {
-													id: number
-												}
-											)}
-									>
-										<div class="w-fit shrink-0">
-											<Avatar char={c} />
-										</div>
-										<div
-											class="relative flex w-0 min-w-0 flex-1 flex-col"
+				{#if filtered.length === 0}
+					<EmptyState
+						icon={Icons.Users}
+						message={search
+							? `No characters found matching "${search}".`
+							: "No characters yet — create one to get started."}
+						ctaLabel={search || !onCreateNew
+							? undefined
+							: "New Character"}
+						onCta={search ? undefined : onCreateNew}
+					/>
+				{:else}
+					<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
+						<div
+							class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap"
+						>
+							{#each filtered as c}
+								{#if c.id}
+									<div class="flex p-1 lg:basis-1/2">
+										<button
+											class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
+											onclick={() =>
+												onSelect(
+													c as Partial<SelectCharacter> & {
+														id: number
+													}
+												)}
 										>
-											<div
-												class="w-full truncate text-left font-semibold"
-											>
-												{c.nickname || c.name}
+											<div class="w-fit shrink-0">
+												<Avatar char={c} />
 											</div>
 											<div
-												class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
+												class="relative flex w-0 min-w-0 flex-1 flex-col"
 											>
-												{c.creatorNotes ||
-													c.description ||
-													"No description"}
+												<div
+													class="w-full truncate text-left font-semibold"
+												>
+													{c.nickname || c.name}
+												</div>
+												<div
+													class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
+												>
+													{c.creatorNotes ||
+														c.description ||
+														"No description"}
+												</div>
 											</div>
-										</div>
-									</button>
-								</div>
-							{/if}
-						{/each}
+										</button>
+									</div>
+								{/if}
+							{/each}
+						</div>
 					</div>
-				</div>
+					{#if onCreateNew}
+						<div class="border-surface-300-700 border-t pt-4">
+							<button
+								type="button"
+								class="btn btn-sm preset-tonal-primary flex items-center gap-1"
+								onclick={onCreateNew}
+							>
+								<Icons.Plus size={16} /> New Character
+							</button>
+						</div>
+					{/if}
+				{/if}
 			</Dialog.Content>
 		</Dialog.Positioner>
 	</Portal>

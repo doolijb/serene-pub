@@ -29,6 +29,17 @@ import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 
 const OLLAMA = "http://localhost:11434"
 
+/**
+ * Which model to run against.
+ *
+ * `LIVE_MODEL_NAME` first, then the smallest installed one. The default is the
+ * smallest deliberately — this file proves the CHAIN, not a format, so the
+ * cheapest weights that answer at all are the right ones, and a machine with
+ * several models should not have a 14B loaded to prove a socket works. The
+ * override exists because "smallest" is not always "the one the reporter meant":
+ * a format- or template-specific question needs a model that speaks it, and
+ * naming it beats reordering somebody's model library.
+ */
 async function ollamaModel(): Promise<string | null> {
 	if (!process.env.LIVE_MODEL) return null
 	try {
@@ -37,6 +48,18 @@ async function ollamaModel(): Promise<string | null> {
 		})
 		if (!res.ok) return null
 		const body: any = await res.json()
+		const names: string[] = (body.models ?? []).map((m: any) => m.name)
+		const want = process.env.LIVE_MODEL_NAME
+		if (want) {
+			if (names.includes(want)) return want
+			// Named and absent is a mistake worth reporting rather than
+			// silently substituting: a run against a model nobody chose proves
+			// something about a different model.
+			console.warn(
+				`[live] LIVE_MODEL_NAME=${want} is not installed. Installed: ${names.join(", ")}`
+			)
+			return null
+		}
 		// Smallest available: this proves the chain, not the model.
 		const models = (body.models ?? []).sort(
 			(a: any, b: any) => (a.size ?? 0) - (b.size ?? 0)
@@ -73,7 +96,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -103,7 +126,7 @@ beforeAll(async () => {
 	const { setCapabilityDefault } = await import(
 		"$lib/server/connections/capabilityDefaults"
 	)
-	await setCapabilityDefault(db as any, "text->text", {
+	await setCapabilityDefault(db, "text->text", {
 		connectionId: connection.id,
 		samplingConfigId: sampling?.id ?? null
 	})
@@ -171,7 +194,7 @@ describe("a real reply, all the way through", () => {
 			"$lib/server/pipelines/runtime/runTurn"
 		)
 		const receipt: any = await runTurn({
-			db: db as any,
+			db: db,
 			sessionId,
 			userId,
 			currentCharacterId: characterId,

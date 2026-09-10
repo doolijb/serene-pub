@@ -490,122 +490,136 @@
 		}
 	}
 
+	// Named so `off` can name them too. A bare `socket.off("lorebooks:list")`
+	// removes EVERY listener for that event — including any other open
+	// lorebooks UI, not just this sidebar's.
+	function handleLorebooksList(msg: Sockets.Lorebooks.List.Response) {
+		if (msg.lorebookList) {
+			lorebookList = msg.lorebookList
+		}
+		isLoading = false
+	}
+
+	// The generic **:error listener in Layout.svelte already toasts this —
+	// this just stops the spinner from spinning forever if the initial
+	// fetch fails, so it settles into the (accurate enough) empty state.
+	function handleLorebooksListError() {
+		isLoading = false
+	}
+
+	function handleLorebooksUpdate(msg: Sockets.Lorebooks.Update.Response) {
+		// Server automatically emits updated list
+	}
+
+	function handleLorebooksImport(msg: Sockets.Lorebooks.Import.Response) {
+		if (msg.status === "conflict" && msg.conflict) {
+			importConflict = msg.conflict
+			showImportConflictModal = true
+			return
+		}
+		if (msg.status === "unchanged") {
+			toaster.success({
+				title: "Already Imported",
+				description: `"${msg.lorebook?.name}" is unchanged — using the existing lorebook.`
+			})
+			return
+		}
+		toaster.success({ title: "Lorebook Imported" })
+		// Server automatically emits updated list
+	}
+
+	function handleLorebooksImportError(msg: Sockets.ErrorResponse) {
+		toaster.error({ title: msg.error || "Failed to import lorebook" })
+	}
+
+	function handleLorebooksImportResolve(
+		msg: Sockets.Lorebooks.ImportResolve.Response
+	) {
+		toaster.success({ title: "Lorebook Imported" })
+		// Server automatically emits updated list
+	}
+
+	function handleLorebooksImportResolveError(msg: Sockets.ErrorResponse) {
+		toaster.error({
+			title: msg.error || "Failed to resolve lorebook import"
+		})
+	}
+
+	function handleLorebooksExport(msg: Sockets.Lorebooks.Export.Response) {
+		downloadBlob(msg)
+		toaster.success({
+			title: "Lorebook Exported",
+			description: `Lorebook exported as ${msg.filename}`
+		})
+	}
+
+	function handleLorebooksExportError(msg: Sockets.ErrorResponse) {
+		toaster.error({ title: msg.error || "Failed to export lorebook" })
+	}
+
+	function handleLorebooksDelete(msg: Sockets.Lorebooks.Delete.Response) {
+		toaster.success({ title: "Lorebook Deleted" })
+		// Server automatically emits updated list
+	}
+
+	function handleSessionsSetLorebook(
+		msg: Sockets.Sessions.SetLorebook.Response
+	) {
+		if (
+			!msg.session ||
+			openSessionCtx.sessionId === null ||
+			msg.session.id !== openSessionCtx.sessionId
+		)
+			return
+		toaster.success({
+			title: msg.session.lorebookId
+				? "Lorebook Attached"
+				: "Lorebook Detached"
+		})
+		// Full reload of the open session, not just a field patch — lore-bound
+		// content (RAG notices, etc.) can depend on the session's lorebook.
+		socket.emit("sessions:get", {
+			id: openSessionCtx.sessionId,
+			limit: 25
+		})
+	}
+
 	onMount(() => {
-		socket.on("lorebooks:list", (msg: Sockets.Lorebooks.List.Response) => {
-			if (msg.lorebookList) {
-				lorebookList = msg.lorebookList
-			}
-			isLoading = false
-		})
-		// The generic **:error listener in Layout.svelte already toasts this —
-		// this just stops the spinner from spinning forever if the initial
-		// fetch fails, so it settles into the (accurate enough) empty state.
-		socket.on("lorebooks:list:error", () => {
-			isLoading = false
-		})
+		socket.on("lorebooks:list", handleLorebooksList)
+		socket.on("lorebooks:list:error", handleLorebooksListError)
 		socket.on("lorebooks:create", handleLorebooksCreate)
-		socket.on(
-			"lorebooks:update",
-			(msg: Sockets.Lorebooks.Update.Response) => {
-				// Server automatically emits updated list
-			}
-		)
-		socket.on(
-			"lorebooks:import",
-			(msg: Sockets.Lorebooks.Import.Response) => {
-				if (msg.status === "conflict" && msg.conflict) {
-					importConflict = msg.conflict
-					showImportConflictModal = true
-					return
-				}
-				if (msg.status === "unchanged") {
-					toaster.success({
-						title: "Already Imported",
-						description: `"${msg.lorebook?.name}" is unchanged — using the existing lorebook.`
-					})
-					return
-				}
-				toaster.success({ title: "Lorebook Imported" })
-				// Server automatically emits updated list
-			}
-		)
-		socket.on("lorebooks:import:error", (msg: Sockets.ErrorResponse) => {
-			toaster.error({ title: msg.error || "Failed to import lorebook" })
-		})
-		socket.on(
-			"lorebooks:importResolve",
-			(msg: Sockets.Lorebooks.ImportResolve.Response) => {
-				toaster.success({ title: "Lorebook Imported" })
-				// Server automatically emits updated list
-			}
-		)
+		socket.on("lorebooks:update", handleLorebooksUpdate)
+		socket.on("lorebooks:import", handleLorebooksImport)
+		socket.on("lorebooks:import:error", handleLorebooksImportError)
+		socket.on("lorebooks:importResolve", handleLorebooksImportResolve)
 		socket.on(
 			"lorebooks:importResolve:error",
-			(msg: Sockets.ErrorResponse) => {
-				toaster.error({
-					title: msg.error || "Failed to resolve lorebook import"
-				})
-			}
+			handleLorebooksImportResolveError
 		)
-		socket.on(
-			"lorebooks:export",
-			(msg: Sockets.Lorebooks.Export.Response) => {
-				downloadBlob(msg)
-				toaster.success({
-					title: "Lorebook Exported",
-					description: `Lorebook exported as ${msg.filename}`
-				})
-			}
-		)
-		socket.on("lorebooks:export:error", (msg: Sockets.ErrorResponse) => {
-			toaster.error({ title: msg.error || "Failed to export lorebook" })
-		})
-		socket.on(
-			"lorebooks:delete",
-			(msg: Sockets.Lorebooks.Delete.Response) => {
-				toaster.success({ title: "Lorebook Deleted" })
-				// Server automatically emits updated list
-			}
-		)
-		socket.on(
-			"sessions:setLorebook",
-			(msg: Sockets.Sessions.SetLorebook.Response) => {
-				if (
-					!msg.session ||
-					openSessionCtx.sessionId === null ||
-					msg.session.id !== openSessionCtx.sessionId
-				)
-					return
-				toaster.success({
-					title: msg.session.lorebookId
-						? "Lorebook Attached"
-						: "Lorebook Detached"
-				})
-				// Full reload of the open session, not just a field patch — lore-bound
-				// content (RAG notices, etc.) can depend on the session's lorebook.
-				socket.emit("sessions:get", {
-					id: openSessionCtx.sessionId,
-					limit: 25
-				})
-			}
-		)
+		socket.on("lorebooks:export", handleLorebooksExport)
+		socket.on("lorebooks:export:error", handleLorebooksExportError)
+		socket.on("lorebooks:delete", handleLorebooksDelete)
+		socket.on("sessions:setLorebook", handleSessionsSetLorebook)
 		onclose = handleOnClose
 		socket.emit("lorebooks:list", {})
 	})
 
 	onDestroy(() => {
-		socket.off("lorebooks:list")
-		socket.off("lorebooks:list:error")
+		socket.off("lorebooks:list", handleLorebooksList)
+		socket.off("lorebooks:list:error", handleLorebooksListError)
 		socket.off("lorebooks:create", handleLorebooksCreate)
-		socket.off("lorebooks:update")
-		socket.off("lorebooks:import")
-		socket.off("lorebooks:import:error")
-		socket.off("lorebooks:importResolve")
-		socket.off("lorebooks:importResolve:error")
-		socket.off("lorebooks:export")
-		socket.off("lorebooks:export:error")
-		socket.off("lorebooks:delete")
-		socket.off("sessions:setLorebook")
+		socket.off("lorebooks:update", handleLorebooksUpdate)
+		socket.off("lorebooks:import", handleLorebooksImport)
+		socket.off("lorebooks:import:error", handleLorebooksImportError)
+		socket.off("lorebooks:importResolve", handleLorebooksImportResolve)
+		socket.off(
+			"lorebooks:importResolve:error",
+			handleLorebooksImportResolveError
+		)
+		socket.off("lorebooks:export", handleLorebooksExport)
+		socket.off("lorebooks:export:error", handleLorebooksExportError)
+		socket.off("lorebooks:delete", handleLorebooksDelete)
+		socket.off("sessions:setLorebook", handleSessionsSetLorebook)
 		onclose = undefined
 	})
 </script>

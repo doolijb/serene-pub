@@ -45,13 +45,6 @@ import { sql } from "drizzle-orm"
 import { pluginRows } from "$lib/server/db/schema"
 import type { PluginRowChange, PluginRowSnapshotEntry } from "./storageHost"
 
-type Db = {
-	select: any
-	insert: any
-	delete: any
-	transaction: any
-}
-
 /**
  * What `SandboxManager` needs of the row store, and nothing more.
  *

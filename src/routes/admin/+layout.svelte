@@ -117,6 +117,14 @@
 					label: "Context templates",
 					icon: "LayoutTemplate"
 				},
+				// Beside the context templates because they are the two halves
+				// of one rendered prompt: that one is the words, this one is
+				// what wraps each block of them.
+				{
+					href: "/admin/completion-templates",
+					label: "Completion templates",
+					icon: "Brackets"
+				},
 				{
 					href: "/admin/variable-templates",
 					label: "Variable templates",

@@ -14,10 +14,11 @@ import path from "path"
 import { PGlite } from "@electric-sql/pglite"
 import { drizzle } from "drizzle-orm/pglite"
 import { runMigrationsWithUpgrades, type DataUpgrade } from "./index"
+import { rawRows } from "../rawRows"
 
 let folder: string
 let client: PGlite
-let db: any
+let db: MigrationDb
 
 function writeJournal(entries: { tag: string; when: number }[]) {
 	fs.mkdirSync(path.join(folder, "meta"), { recursive: true })
@@ -77,13 +78,15 @@ async function seedOldInstall() {
 	await client.query(`INSERT INTO widget (legacy) VALUES ('abc'), ('defgh')`)
 }
 
-function upgrade(run: (tx: any) => Promise<void>): DataUpgrade[] {
+function upgrade(run: (tx: MigrationTx) => Promise<void>): DataUpgrade[] {
 	return [{ afterMigration: "0001_add_col", load: async () => ({ run }) }]
 }
 
-const fillComputed = async (tx: any) => {
-	const res = await tx.execute(`SELECT id, legacy FROM widget`)
-	for (const r of res.rows ?? res) {
+const fillComputed = async (tx: MigrationTx) => {
+	const rows = rawRows<{ id: number; legacy: string }>(
+		await tx.execute(`SELECT id, legacy FROM widget`)
+	)
+	for (const r of rows) {
 		await tx.execute(
 			`UPDATE widget SET computed = '${String(r.legacy).length}' WHERE id = ${r.id}`
 		)
@@ -158,7 +161,7 @@ describe("atomicity", () => {
 	test("a failing upgrade rolls back its anchor migration, and the retry succeeds", async () => {
 		await seedOldInstall()
 		let attempts = 0
-		const flaky = async (tx: any) => {
+		const flaky = async (tx: MigrationTx) => {
 			attempts++
 			await fillComputed(tx)
 			if (attempts === 1) throw new Error("simulated crash mid-upgrade")

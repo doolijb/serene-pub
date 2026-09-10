@@ -41,45 +41,53 @@
 	let settingsDraft = $state<Record<string, Record<string, unknown>>>({})
 	let settingsError = $state<Record<string, string | null>>({})
 
+	// Named so `off` can name them too — and so there is anything to off at
+	// all: these had no teardown, so every visit to this page left another set
+	// of listeners on the socket. A bare `socket.off(event)` is not the fix:
+	// it removes EVERY listener for that event across the app.
+	function handlePluginsList(res: Sockets.Plugins.List.Response) {
+		plugins = res.plugins
+		sandboxEnabled = res.sandboxEnabled
+		loading = false
+	}
+	function handlePluginsLogs(res: Sockets.Plugins.Logs.Response) {
+		logs = res.logs
+	}
+	function handlePluginsActive(res: Sockets.Plugins.Active.Response) {
+		active = res.active
+	}
+	function handlePluginsPermissions(
+		res: Sockets.Plugins.Permissions.Response
+	) {
+		permsByPlugin[res.pluginId] = res.permissions
+		storageByPlugin[res.pluginId] = res.storage
+	}
+	function handlePluginsGetSettings(
+		res: Sockets.Plugins.GetSettings.Response
+	) {
+		settingsByPlugin[res.pluginId] = res.settings
+		settingsError[res.pluginId] = null
+		// A fresh view supersedes the draft: it either reflects the
+		// save that just landed, or the panel was just opened.
+		delete settingsDraft[res.pluginId]
+	}
+	function handlePluginsSetSettingsError(
+		res: Sockets.Plugins.SetSettings.Response
+	) {
+		if (res.error) settingsError[res.pluginId] = res.error
+	}
+
 	onMount(() => {
 		if (!userCtx.user?.isAdmin) {
 			goto("/")
 			return
 		}
-		socket.on("plugins:list", (res: Sockets.Plugins.List.Response) => {
-			plugins = res.plugins
-			sandboxEnabled = res.sandboxEnabled
-			loading = false
-		})
-		socket.on("plugins:logs", (res: Sockets.Plugins.Logs.Response) => {
-			logs = res.logs
-		})
-		socket.on("plugins:active", (res: Sockets.Plugins.Active.Response) => {
-			active = res.active
-		})
-		socket.on(
-			"plugins:permissions",
-			(res: Sockets.Plugins.Permissions.Response) => {
-				permsByPlugin[res.pluginId] = res.permissions
-				storageByPlugin[res.pluginId] = res.storage
-			}
-		)
-		socket.on(
-			"plugins:getSettings",
-			(res: Sockets.Plugins.GetSettings.Response) => {
-				settingsByPlugin[res.pluginId] = res.settings
-				settingsError[res.pluginId] = null
-				// A fresh view supersedes the draft: it either reflects the
-				// save that just landed, or the panel was just opened.
-				delete settingsDraft[res.pluginId]
-			}
-		)
-		socket.on(
-			"plugins:setSettings:error",
-			(res: Sockets.Plugins.SetSettings.Response) => {
-				if (res.error) settingsError[res.pluginId] = res.error
-			}
-		)
+		socket.on("plugins:list", handlePluginsList)
+		socket.on("plugins:logs", handlePluginsLogs)
+		socket.on("plugins:active", handlePluginsActive)
+		socket.on("plugins:permissions", handlePluginsPermissions)
+		socket.on("plugins:getSettings", handlePluginsGetSettings)
+		socket.on("plugins:setSettings:error", handlePluginsSetSettingsError)
 		socket.emit("plugins:list", {})
 		socket.emit("plugins:logs", { limit: 100 })
 		socket.emit("plugins:active", {})
@@ -93,6 +101,12 @@
 
 	onDestroy(() => {
 		if (pollTimer) clearInterval(pollTimer)
+		socket.off("plugins:list", handlePluginsList)
+		socket.off("plugins:logs", handlePluginsLogs)
+		socket.off("plugins:active", handlePluginsActive)
+		socket.off("plugins:permissions", handlePluginsPermissions)
+		socket.off("plugins:getSettings", handlePluginsGetSettings)
+		socket.off("plugins:setSettings:error", handlePluginsSetSettingsError)
 	})
 
 	function setEnabled(p: Sockets.Plugins.PluginRow, enabled: boolean) {

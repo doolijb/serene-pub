@@ -483,10 +483,11 @@ export const mediaSetVisibility: Handler<
  *    JSON blob titled `core:image`, which is worse than a broken image and is
  *    still the media panel editing someone's transcript.
  *  - *Confirm and leave the reference dangling* is what 28 §2 already rules for
- *    every other pointer this file cannot see — `deleteFile`'s own docblock
- *    says a dangling pointer renders as a missing image and is tolerated on
- *    purpose. The message part is one more such pointer; the message, its text
- *    and its place in the transcript all survive.
+ *    every pointer with no FK behind it — see `deleteFile`'s own docblock. The
+ *    avatar pointers stopped being such a pointer in 0109 and now null
+ *    themselves, but a file id inside a message part is JSON no constraint can
+ *    reach, so it renders as a missing image and is tolerated on purpose. The
+ *    message, its text and its place in the transcript all survive.
  *
  * So the fix is not to change what delete does, but to stop it happening
  * unaware: a referenced file needs `confirmMessageRefs`, and the refusal names
@@ -521,17 +522,16 @@ export const mediaDelete: Handler<
 		// representations because it takes the file row with them.
 		await deleteFile(db, row.id)
 
-		// Clear the pointers we can see. A dangling pointer is tolerated by
-		// design elsewhere, but leaving one we could have cleared would show
-		// up immediately as a broken avatar.
-		await db
-			.update(schema.characters)
-			.set({ avatarMediaId: null })
-			.where(eq(schema.characters.avatarMediaId, row.id))
-		await db
-			.update(schema.personas)
-			.set({ avatarMediaId: null })
-			.where(eq(schema.personas.avatarMediaId, row.id))
+		// The character and persona avatar pointers used to be cleared by hand
+		// right here. 0109 made them real foreign keys, `ON DELETE SET NULL`,
+		// so `deleteFile` above already nulled them — the database did it, in
+		// the same statement, for every pointer rather than the two this
+		// handler happened to know about. Re-running the UPDATEs would match
+		// nothing.
+		//
+		// `backgroundMediaId` is NOT one of them and still needs clearing by
+		// hand: it lives on `user_settings` and has no FK, so nothing else
+		// clears it. Give it the same treatment and this block goes away too.
 		await db
 			.update(schema.userSettings)
 			.set({ backgroundMediaId: null })

@@ -56,6 +56,8 @@ import {
 	type ScopeKind
 } from "@serene-pub/sdk"
 import { capabilityDefault } from "./capabilityDefaults"
+import { withCompletionTemplate } from "./completionTemplates"
+import { withWireMode } from "./resolve"
 import { capabilityRefusal } from "$lib/server/pipelines/runtime/capabilityGuard"
 import { connectionIdentity, type ConnectionIdentity } from "./visibility"
 
@@ -168,7 +170,12 @@ export type CapabilityTargetResult =
 	| {
 			ok: true
 			capability: string
-			connection: SelectConnection
+			/**
+			 * The row WITH its completion template dereferenced, because this
+			 * is the last place that can do it — an adapter has no database and
+			 * `prompt_format` is only a key. See `AdapterConnection`.
+			 */
+			connection: AdapterConnection
 			/**
 			 * The ROW, or null. Null is not a failure: `resolveSampling(null)`
 			 * means "send nothing and let the backend use its own defaults",
@@ -191,11 +198,37 @@ export interface CapabilityTargetRequest {
 	sessionOverride?: CapabilityCandidate | null
 }
 
-/** Reads only; the resolver never writes. */
-type Db = { select: any }
+/**
+ * The two reads this resolver makes, spelled per table rather than through one
+ * `(db: { select: any }, table: any, id) => any` helper.
+ *
+ * That helper was the hole in miniature. `any` in, `any` out: `connection`
+ * below was an `any` for the whole of the function — every field read off it,
+ * everything handed to `capabilityRefusal`, `connectionIdentity` and
+ * `withCompletionTemplate`, and `connection: AdapterConnection` on the result,
+ * which was satisfied by construction rather than by checking. A column this
+ * table does not have would have type-checked here and in the four modules
+ * downstream. Two three-line reads cost less than that.
+ *
+ * Reads only; the resolver never writes.
+ */
+const connectionById = async (db: Db, id: number) =>
+	(
+		await db
+			.select()
+			.from(schema.connections)
+			.where(eq(schema.connections.id, id))
+			.limit(1)
+	)[0]
 
-const rowById = async (db: Db, table: any, id: number): Promise<any> =>
-	(await db.select().from(table).where(eq(table.id, id)).limit(1))[0]
+const samplingConfigById = async (db: Db, id: number) =>
+	(
+		await db
+			.select()
+			.from(schema.samplingConfigs)
+			.where(eq(schema.samplingConfigs.id, id))
+			.limit(1)
+	)[0]
 
 /**
  * Resolve one capability to the connection and sampling config it runs on.
@@ -309,7 +342,7 @@ export async function resolveCapabilityTarget(
 					}
 		}
 
-	const connection = await rowById(db, schema.connections, connectionId)
+	const connection = await connectionById(db, connectionId)
 	if (!connection)
 		return {
 			ok: false,
@@ -351,13 +384,38 @@ export async function resolveCapabilityTarget(
 	const sampling =
 		samplingConfigId == null
 			? null
-			: ((await rowById(db, schema.samplingConfigs, samplingConfigId)) ??
-				null)
+			: ((await samplingConfigById(db, samplingConfigId)) ?? null)
 
 	return {
 		ok: true,
 		capability,
-		connection,
+		/**
+		 * The row, plus the `completion_templates` row its `prompt_format`
+		 * names — see `AdapterConnection`.
+		 *
+		 * Attached here because this is where a connection destined for a run
+		 * is LOADED, and the alternative was threading `db` into five adapter
+		 * construction sites (two of which import none) to fetch one row an
+		 * adapter cannot fetch for itself. `prompt_format` is a key, and a bare
+		 * key resolves against the built-ins, so without this every
+		 * admin-authored template stopped generation on the DEFAULT's markers —
+		 * markers its own prompt does not contain, which does not error; it
+		 * runs on.
+		 *
+		 * One indexed `SELECT` on a table with single-digit rows, once per
+		 * resolution. Not cached, for the reason
+		 * `connections/completionTemplates.ts` gives at length: a cache here
+		 * would pin the template at first use, and an admin's save would appear
+		 * to do nothing until a restart.
+		 *
+		 * And the WIRE MODE, from the same row and for the same reason: chat or
+		 * completion is resolved from the connection's four capability layers,
+		 * an adapter has no way to do that reading and no accessor on it may
+		 * become async, and — the half that matters — it has to be the SAME value
+		 * `config/world.ts` handed the render. Two independent answers to which
+		 * shape a prompt takes is the whole of the defect this closes.
+		 */
+		connection: withWireMode(await withCompletionTemplate(db, connection)),
 		// A dangling sampling id degrades to null rather than failing, for the
 		// same reason an absent one does: no sampling means backend defaults,
 		// which is a working run. A dangling CONNECTION id cannot degrade —

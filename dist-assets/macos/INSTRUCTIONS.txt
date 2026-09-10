@@ -91,6 +91,9 @@ Notes
 Troubleshooting
 ---------------
 
+- If the database won't open, double-clicking the app opens the recovery page
+  in your browser by itself; if nothing starts at all it leaves the reason in
+  "serene-pub-last-error.log" in your data directory.
 - If macOS refuses to open the app, right-click it and choose "Open" rather
   than double-clicking.
 - If you get a permission error, run: chmod +x run.sh

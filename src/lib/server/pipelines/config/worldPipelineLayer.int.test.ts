@@ -61,7 +61,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
-	await bootstrapPipelines(db as any)
+	await bootstrapPipelines(db)
 
 	const [spec] = await db
 		.select()
@@ -76,7 +76,7 @@ afterAll(async () => {
 
 const worldFor = async () => {
 	const { buildWorld } = await import("$lib/server/pipelines/config/world")
-	return await buildWorld(db as any, {
+	return await buildWorld(db, {
 		sessionId,
 		specId: RESPOND_SPEC_ID
 	})
@@ -90,7 +90,7 @@ const resolvedAt = async (nodeKey: string, slot: string, path: string) => {
 
 const declarationsFor = async (specVersionId: number) => {
 	const { declarations } = await import("$lib/server/pipelines/config/panel")
-	return await declarations(db as any, specVersionId)
+	return await declarations(db, specVersionId)
 }
 
 /**
@@ -191,7 +191,7 @@ describe("the shipped configuration reaches a run", () => {
 		)
 		const decl = await promptDeclFor("context")
 		const id = await defaultPromptFor(
-			db as any,
+			db,
 			decl.nodeTypeId!,
 			decl.slot,
 			{
@@ -202,7 +202,7 @@ describe("the shipped configuration reaches a run", () => {
 		const { resolvePromptFields } = await import(
 			"$lib/server/pipelines/entities/prompts"
 		)
-		const fields = await resolvePromptFields(db as any, id!)
+		const fields = await resolvePromptFields(db, id!)
 		expect(resolved!.value).toBe(fields.systemPrompt)
 		expect(resolved!.scopeKind).toBe("defaults")
 	})
@@ -244,7 +244,7 @@ describe("the prompts floor follows each node's own pool", () => {
 		const { buildWorld } = await import(
 			"$lib/server/pipelines/config/world"
 		)
-		const world: any = await buildWorld(db as any, {
+		const world: any = await buildWorld(db, {
 			sessionId,
 			specId: SUMMARIZE_WORLD_SPEC_ID
 		})
@@ -257,13 +257,13 @@ describe("the prompts floor follows each node's own pool", () => {
 
 		for (const d of decls) {
 			const id = await defaultPromptFor(
-				db as any,
+				db,
 				d.nodeTypeId!,
 				d.slot,
 				{ id: spec.id, slug: SUMMARIZE_WORLD_SPEC_ID }
 			)
 			if (id == null) continue
-			const fields = await resolvePromptFields(db as any, id)
+			const fields = await resolvePromptFields(db, id)
 			const floor = world.overrides.filter(
 				(o: any) =>
 					o.scopeKind === "defaults" &&
@@ -364,7 +364,7 @@ describe("a prompt edited in the panel", () => {
 			"$lib/server/pipelines/config/named"
 		)
 		await selectConfig(
-			db as any,
+			db,
 			specId,
 			"session",
 			sessionId,
@@ -436,7 +436,7 @@ describe("each pipeline reads its own legacy prompt table", () => {
 		const { buildWorld } = await import(
 			"$lib/server/pipelines/config/world"
 		)
-		const world = await buildWorld(db as any, {
+		const world = await buildWorld(db, {
 			sessionId: nSessionId,
 			specId: slug
 		})
@@ -507,7 +507,7 @@ describe("each pipeline reads its own legacy prompt table", () => {
 		const { SUMMARIZE_WORLD_SPEC_ID } = await import(
 			"$lib/server/pipelines/specs"
 		)
-		const world: any = await buildWorld(db as any, {
+		const world: any = await buildWorld(db, {
 			sessionId: nSessionId,
 			specId: SUMMARIZE_WORLD_SPEC_ID
 		})

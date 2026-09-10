@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+	import { notePreview } from "$lib/shared/utils/connectionNotes"
 
 	interface Props {
 		label?: string
@@ -8,6 +9,9 @@
 			name?: string | null
 			type?: string | null
 			modality?: string | null
+			/** The user's own note about the connection, shown beside it here.
+			 *  Display-only free text — see `$lib/shared/utils/connectionNotes`. */
+			notes?: string | null
 		}[]
 		samplingList: { id?: number | null; name?: string | null }[]
 		connectionId?: number | null
@@ -68,7 +72,16 @@
 		{#each byService as [service, conns] (service)}
 			<optgroup label={service}>
 				{#each conns as c (c.id)}
-					<option value={c.id}>{c.name ?? c.id}</option>
+					{@const preview = notePreview(c.notes)}
+					<!-- A native `<option>` takes one line of plain text, so the
+					     note joins it rather than sitting under it, and
+					     `notePreview` is what stops a pasted note from making
+					     this dropdown wider than the panel. The whole note is on
+					     `title` — the same answer /admin/defaults already gives
+					     an option row that has more to say than fits. -->
+					<option value={c.id} title={c.notes ?? undefined}>
+						{c.name ?? c.id}{preview ? ` — ${preview}` : ""}
+					</option>
 				{/each}
 			</optgroup>
 		{/each}

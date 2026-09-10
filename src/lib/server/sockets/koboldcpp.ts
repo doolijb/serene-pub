@@ -52,6 +52,10 @@ import {
 	modelsDirsToScan,
 	resolveModelPath
 } from "$lib/server/koboldcpp/modelsDir"
+import {
+	formatForFilename,
+	modalityForKind
+} from "$lib/server/localModels/registry"
 import { resolveConnectionCapabilities } from "$lib/server/connections/resolve"
 import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
@@ -255,7 +259,7 @@ export const koboldCppListModelsHandler: Handler<
 		}
 
 		// Load DB records; exclude anything still downloading (or errored)
-		const dbModels = await db.query.koboldCppModels.findMany()
+		const dbModels = await db.query.localModels.findMany()
 		const dbByFilename = new Map(dbModels.map((m) => [m.filename, m]))
 		const incompleteFilenames = new Set(
 			dbModels
@@ -308,7 +312,7 @@ export const koboldCppListModelsHandler: Handler<
 
 		// Forget complete records for files removed outside the app — the
 		// listing itself is always driven by the directory scan above, so this
-		// only prevents koboldCppModels from accumulating rows for files that no
+		// only prevents localModels from accumulating rows for files that no
 		// longer exist. Which is also why skipping it is cheap and running it on
 		// an incomplete scan is not: a row nobody sees, against every model the
 		// user owns disappearing from the Manager.
@@ -321,9 +325,9 @@ export const koboldCppListModelsHandler: Handler<
 				.map((m) => m.filename)
 			if (staleFilenames.length > 0) {
 				await db
-					.delete(schema.koboldCppModels)
+					.delete(schema.localModels)
 					.where(
-						inArray(schema.koboldCppModels.filename, staleFilenames)
+						inArray(schema.localModels.filename, staleFilenames)
 					)
 			}
 		}
@@ -353,17 +357,24 @@ export const koboldCppListModelsHandler: Handler<
 						// to "unknown", so a new-architecture image model in the
 						// image folder would sit Unverified forever.
 						const [tracked] = await db
-							.insert(schema.koboldCppModels)
+							.insert(schema.localModels)
 							.values({
 								filename: name,
 								modelName: name.replace(MODEL_EXTENSION_RE, ""),
 								sizeBytes: size,
 								status: "complete",
+								// `isModelFilename` gated the extension above,
+								// so this is never null. `undefined` would fall
+								// through to the column's own "gguf" default,
+								// which is the guess `format` exists to stop
+								// anything making.
+								format: formatForFilename(name) ?? undefined,
 								kind: found.dirKind,
-								kindSource: "declared"
+								kindSource: "declared",
+								modality: modalityForKind(found.dirKind)
 							})
 							.onConflictDoUpdate({
-								target: schema.koboldCppModels.filename,
+								target: schema.localModels.filename,
 								set: { filename: name }
 							})
 							.returning()
@@ -410,10 +421,14 @@ export const koboldCppListModelsHandler: Handler<
 							kind = verdict.kind
 							kindSource = "detected"
 							await db
-								.update(schema.koboldCppModels)
-								.set({ kind, kindSource })
+								.update(schema.localModels)
+								.set({
+									kind,
+									kindSource,
+									modality: modalityForKind(kind)
+								})
 								.where(
-									eq(schema.koboldCppModels.filename, name)
+									eq(schema.localModels.filename, name)
 								)
 						} else if (
 							kindSource === "assumed" &&
@@ -431,12 +446,21 @@ export const koboldCppListModelsHandler: Handler<
 							// indefinite read is not a reason to throw away the
 							// only evidence there is, which is where the file
 							// was put.
+							//
+							// `modality` goes with it, through the same
+							// projection every other write here uses, so the two
+							// columns cannot end up disagreeing. ⚠ That is only
+							// safe while `assumed` is the sole `kind_source`
+							// reaching this branch: a lane that starts writing a
+							// modality the sniff cannot see (`embeddings` on a
+							// BERT GGUF) must raise that row above `assumed`, or
+							// an unreadable moment here would erase it.
 							kind = "unknown"
 							await db
-								.update(schema.koboldCppModels)
-								.set({ kind })
+								.update(schema.localModels)
+								.set({ kind, modality: modalityForKind(kind) })
 								.where(
-									eq(schema.koboldCppModels.filename, name)
+									eq(schema.localModels.filename, name)
 								)
 						}
 					}
@@ -640,8 +664,8 @@ export const koboldCppConnectImageModelHandler: Handler<
 			return fail("KoboldCPP Manager is disabled")
 		}
 
-		const rec = await db.query.koboldCppModels.findFirst({
-			where: eq(schema.koboldCppModels.filename, params.filename)
+		const rec = await db.query.localModels.findFirst({
+			where: eq(schema.localModels.filename, params.filename)
 		})
 		if (!rec || rec.status !== "complete") {
 			return fail("That model isn't installed")
@@ -1640,7 +1664,7 @@ export const koboldCppDownloadModelHandler: Handler<
 
 		// Upsert DB record before starting so the file is excluded from the available list immediately
 		await db
-			.insert(schema.koboldCppModels)
+			.insert(schema.localModels)
 			.values({
 				filename,
 				modelName,
@@ -1650,11 +1674,16 @@ export const koboldCppDownloadModelHandler: Handler<
 				sizeBytes: sizeBytes ?? null,
 				downloadUrl,
 				status: "downloading",
+				// `extensionAllowedForKind` rejected anything else above, so
+				// both branches are a known container rather than the column's
+				// "gguf" default standing in for one.
+				format: formatForFilename(filename) ?? undefined,
 				kind,
-				kindSource: "declared"
+				kindSource: "declared",
+				modality: modalityForKind(kind)
 			})
 			.onConflictDoUpdate({
-				target: schema.koboldCppModels.filename,
+				target: schema.localModels.filename,
 				set: {
 					modelName,
 					modelUrl,
@@ -1664,8 +1693,10 @@ export const koboldCppDownloadModelHandler: Handler<
 					downloadUrl,
 					status: "downloading",
 					errorMessage: null,
+					format: formatForFilename(filename) ?? undefined,
 					kind,
-					kindSource: "declared"
+					kindSource: "declared",
+					modality: modalityForKind(kind)
 				}
 			})
 
@@ -1774,17 +1805,18 @@ export const koboldCppDownloadModelHandler: Handler<
 				const corrected =
 					verdict.kind !== "unknown" && verdict.kind !== kind
 				await db
-					.update(schema.koboldCppModels)
+					.update(schema.localModels)
 					.set({
 						status: "complete",
 						...(corrected
 							? {
 									kind: verdict.kind,
-									kindSource: "detected" as const
+									kindSource: "detected" as const,
+									modality: modalityForKind(verdict.kind)
 								}
 							: {})
 					})
-					.where(eq(schema.koboldCppModels.filename, filename))
+					.where(eq(schema.localModels.filename, filename))
 			} catch (err: any) {
 				// Whatever ended the download — cancel or a genuine chunk
 				// error — any request still marked in-flight at this point
@@ -1798,17 +1830,17 @@ export const koboldCppDownloadModelHandler: Handler<
 				if (isCancelled) {
 					// Clean up partial file and DB record
 					fsPromises.unlink(destPath).catch(() => {})
-					db.delete(schema.koboldCppModels)
-						.where(eq(schema.koboldCppModels.filename, filename))
+					db.delete(schema.localModels)
+						.where(eq(schema.localModels.filename, filename))
 						.catch(() => {})
 				} else {
 					await db
-						.update(schema.koboldCppModels)
+						.update(schema.localModels)
 						.set({
 							status: "error",
 							errorMessage: err.message ?? "Unknown error"
 						})
-						.where(eq(schema.koboldCppModels.filename, filename))
+						.where(eq(schema.localModels.filename, filename))
 				}
 				emitDownloadProgress()
 			}
@@ -2324,8 +2356,8 @@ export const koboldCppDeleteModelHandler: Handler<
 		// install's single folder is deletable wherever it is. A row that says
 		// "unknown" starts at the text directory — the order only decides which
 		// stat runs first.
-		const rec = await db.query.koboldCppModels.findFirst({
-			where: eq(schema.koboldCppModels.filename, params.modelName)
+		const rec = await db.query.localModels.findFirst({
+			where: eq(schema.localModels.filename, params.modelName)
 		})
 		const filePath = await resolveModelPath(
 			rec?.kind === "image" ? "image" : "text",
@@ -2346,8 +2378,8 @@ export const koboldCppDeleteModelHandler: Handler<
 		// image connection that held `text->image` releases the slot rather than
 		// stranding it.
 		await db
-			.delete(schema.koboldCppModels)
-			.where(eq(schema.koboldCppModels.filename, params.modelName))
+			.delete(schema.localModels)
+			.where(eq(schema.localModels.filename, params.modelName))
 		await db
 			.delete(schema.connections)
 			.where(
@@ -2389,15 +2421,19 @@ export const koboldCppSetModelKindHandler: Handler<
 		if (params.kind !== "text" && params.kind !== "image") {
 			throw new Error("Invalid model kind")
 		}
-		const rec = await db.query.koboldCppModels.findFirst({
-			where: eq(schema.koboldCppModels.filename, params.filename)
+		const rec = await db.query.localModels.findFirst({
+			where: eq(schema.localModels.filename, params.filename)
 		})
 		if (!rec) throw new Error("That model isn't installed")
 
 		await db
-			.update(schema.koboldCppModels)
-			.set({ kind: params.kind, kindSource: "user" })
-			.where(eq(schema.koboldCppModels.filename, params.filename))
+			.update(schema.localModels)
+			.set({
+				kind: params.kind,
+				kindSource: "user",
+				modality: modalityForKind(params.kind)
+			})
+			.where(eq(schema.localModels.filename, params.filename))
 
 		// No self-heal of an image connection that names this file. Calling it a
 		// text model does not make koboldcpp's next TEXT load fail — the two

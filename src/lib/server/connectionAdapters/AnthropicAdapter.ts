@@ -157,6 +157,30 @@ function withAttachmentBlocks(
 	)
 }
 
+/**
+ * What a `redacted_thinking` block surfaces as.
+ *
+ * Anthropic returns one of these when its safety systems flag part of the
+ * model's internal reasoning: the block carries an encrypted `data` blob and no
+ * readable text at all. Three things could be done with it, and this is the
+ * choice:
+ *
+ *   - Drop it (what this adapter did). Wrong, quietly: with Extended Thinking
+ *     switched on and the model demonstrably thinking, the panel comes back
+ *     empty and reads as a broken feature rather than as a redaction.
+ *   - Surface the `data` blob. Worse: opaque ciphertext only Anthropic can
+ *     read, kilobytes of it, persisted into the message record as if it were
+ *     the model's prose.
+ *   - Surface a short fixed notice, and never the blob. Honest about what
+ *     happened, impossible to mistake for the model's own words, and the same
+ *     length however large the redacted reasoning was.
+ *
+ * ⚠ Exported for the test that pins it. It is not a template and takes no
+ * interpolation — a redaction is Anthropic's act, and the sentence names them.
+ */
+export const REDACTED_THINKING_NOTICE =
+	"[Part of this model's reasoning was encrypted by Anthropic's safety systems and cannot be shown.]"
+
 class AnthropicAdapter extends BaseConnectionAdapter {
 	private _client?: Anthropic
 	private abortController?: AbortController
@@ -271,16 +295,64 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 			}
 		}
 
-		// Anthropic requires the last message to be from user
-		// If it's assistant, add a placeholder user message
-		if (
-			messages.length > 0 &&
-			messages[messages.length - 1].role === "assistant"
-		) {
-			messages.push({ role: "user", content: "Please continue." })
+		/**
+		 * A trailing assistant turn is a PREFILL here, and is left alone.
+		 *
+		 * ⚠ `messages.push({role:"user", content:"Please continue."})` stood
+		 * here, on the belief that "Anthropic requires the last message to be
+		 * from user". It does not: the Messages API explicitly accepts a final
+		 * assistant turn and continues writing THAT turn — which is the whole
+		 * mechanism behind the Continue button. The extra user turn asked the
+		 * model, in words, to carry on, so it opened a NEW reply; `joinContinuation`
+		 * then glued that second beginning onto the partial and the seam read as
+		 * the model repeating itself. Nothing errored, because nothing was wrong
+		 * with the request.
+		 *
+		 * `continuationRoute` is where this adapter says it prefills, and it says
+		 * so from the manifest (`continuesIn: ["chat"]`) rather than from a flag
+		 * here — the panel and the verb read the same declaration, so a button
+		 * that is live is a button the send path honours.
+		 *
+		 * Two pieces of hygiene the API's own prefill rules require, both silent
+		 * failures otherwise:
+		 *
+		 *   - **No trailing whitespace** on the final text block. The prefill
+		 *     validator rejects it, and the partial arrives here ending in
+		 *     whatever the model stopped on — frequently a newline or a space.
+		 *     A 400 on a request that looks fine in the log.
+		 *   - **No empty text block.** A partial that is only whitespace strips
+		 *     to nothing, and an empty block is refused; dropping the turn
+		 *     entirely leaves a well-formed request that generates from the
+		 *     user's turn, which is what an empty partial means anyway.
+		 *
+		 * ⚠ Only a TRAILING assistant turn. One in the middle is history or a
+		 * few-shot example and is untouched — this runs after the merge loop
+		 * above, so `last` is the merged turn rather than one of its halves.
+		 */
+		const last = messages[messages.length - 1]
+		if (last?.role === "assistant" && typeof last.content === "string") {
+			const seed = last.content.replace(/\s+$/, "")
+			if (seed) last.content = seed
+			else messages.pop()
 		}
 
-		// Must have at least one user message
+		// Must have at least one user message.
+		//
+		// ⚠ **This floor is the loudest half of a defect that had no error
+		// attached to it.** The Messages API refuses an empty array, so something
+		// has to go in it — and for the whole of 0.6 what went in was this: the
+		// pipeline built a flat completion prompt, `compiledPrompt.messages` was
+		// `undefined`, the loop above produced nothing, and every generation on
+		// every Anthropic connection went out as the literal word "Hello" with an
+		// empty system prompt. The user's lore, persona and history, replaced by a
+		// five-letter greeting, with a perfectly good reply coming back.
+		//
+		// So it stays — an empty array is still a request the service rejects —
+		// but it is no longer reachable by that route: this adapter is chat wire
+		// mode by declaration, the render therefore produces messages, and the
+		// guard below refuses a payload that carries none instead of quietly
+		// papering over it. What remains for this line is a genuinely empty
+		// session, which is a request worth sending.
 		if (messages.length === 0) {
 			messages.push({ role: "user", content: "Hello" })
 		}
@@ -343,9 +415,41 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		const useThinking = this.connection.extraJson?.thinking ?? false
 		const thinkingBudget = this.connection.extraJson?.thinkingBudget ?? 8000
 
-		const compiledPrompt: CompiledPrompt = await this.compilePrompt({
-			useSessionFormat: true
-		})
+		// No `useSessionFormat` argument, and its removal is the fix rather than a
+		// tidy-up. It was read inside `compilePrompt(args)` — which the pipeline
+		// never reaches, because `withCompiledPrompt` returns the injected payload
+		// before the argument is looked at. So the flag was set on the legacy path
+		// and meaningless on the pipeline one, and this adapter was handed a
+		// payload built for text completion with no messages in it. What decides
+		// the shape now is the connection's WIRE MODE, resolved once and read by
+		// the render as well as by this send. The native Messages API declares
+		// only `wire_chat`, so it is always chat here — and the assertion below is
+		// what makes that a checked fact rather than a comment.
+		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
+
+		/**
+		 * A payload that carries no messages at all cannot be sent as a
+		 * conversation, and saying so is worth more than any recovery.
+		 *
+		 * ⚠ Deliberately NOT a fallback to `promptTextFor`. Rebuilding a flat
+		 * string here and posting it as one user turn would work, would look like
+		 * robustness, and would restore exactly the failure this change removes:
+		 * a wire mode decided locally by an adapter, disagreeing with the one the
+		 * prompt was rendered for, with nothing reporting the difference. The
+		 * connection says chat; if what arrived is not chat-shaped, the wiring is
+		 * wrong and the sentence names where.
+		 *
+		 * `prompt` alone is the shape this refuses — a payload with neither is
+		 * already refused on the way in by `toCompiledPrompt`.
+		 */
+		if (!Array.isArray(compiledPrompt.messages) && compiledPrompt.prompt)
+			throw new Error(
+				"this Anthropic connection is chat wire mode, but the prompt it was " +
+					"handed is one flat completion string with no messages in it. The " +
+					"render and the send are reading different wire modes — check that " +
+					"the assemble node's connection slot is wired to the sending " +
+					"Provider (slot.connectionOf), so both see the same connection."
+			)
 
 		const { system, messages } = this.buildAnthropicMessages(compiledPrompt)
 
@@ -378,6 +482,12 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 			model,
 			max_tokens: maxTokens,
 			messages,
+			// This adapter sent NO stop sequences at all until the ruling of
+			// 2026-09-10. Anthropic is a chat wire and always has been, so the
+			// composer hands over the author's own `explicit` list and nothing
+			// else — the Messages API takes exactly that as `stop_sequences`.
+			// Omitted when empty rather than sent as `[]`.
+			...(this.stops.length ? { stop_sequences: this.stops } : {}),
 			...(system ? { system } : {}),
 			...(thinkingParam ? { thinking: thinkingParam } : {}),
 			...allowedSampling
@@ -426,10 +536,36 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 							{ signal: this.abortController?.signal }
 						)
 
+						// Separates the notice from any reasoning already
+						// emitted, so it doesn't glue onto the end of a
+						// sentence the model actually wrote.
+						let thoughtSomething = false
+
 						for await (const event of streamResp) {
 							if (this.isAborting) {
 								streamResp.controller.abort()
 								return
+							}
+
+							// ⚠ A redacted block has NO delta — checked against
+							// the installed SDK: `RawContentBlockDelta` is
+							// TextDelta | InputJSONDelta | CitationsDelta |
+							// ThinkingDelta | SignatureDelta, with no redacted
+							// member, while `RawContentBlockStartEvent`'s
+							// content_block union does include
+							// RedactedThinkingBlock. It arrives whole, here, and
+							// the delta loop below would never see it.
+							if (
+								event.type === "content_block_start" &&
+								(event.content_block as any)?.type ===
+									"redacted_thinking"
+							) {
+								thinkingCb?.(
+									(thoughtSomething ? "\n" : "") +
+										REDACTED_THINKING_NOTICE
+								)
+								thoughtSomething = true
+								continue
 							}
 
 							if (event.type === "content_block_delta") {
@@ -439,6 +575,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 									delta.thinking
 								) {
 									thinkingCb?.(delta.thinking)
+									thoughtSomething = true
 								} else if (
 									delta.type === "text_delta" &&
 									delta.text
@@ -484,6 +621,11 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 				for (const block of response.content) {
 					if ((block as any).type === "thinking") {
 						thinking += (block as any).thinking || ""
+					} else if ((block as any).type === "redacted_thinking") {
+						// See REDACTED_THINKING_NOTICE: the notice, never the
+						// block's encrypted `data`.
+						thinking +=
+							(thinking ? "\n" : "") + REDACTED_THINKING_NOTICE
 					} else if (block.type === "text") {
 						content += block.text
 					}

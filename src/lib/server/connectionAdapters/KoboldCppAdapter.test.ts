@@ -186,7 +186,7 @@ describe("KoboldCppAdapter — base URL trailing-slash normalization", () => {
 
 // Round: connections-editing/thinking-toggle bugfix. See the plan for full
 // context — enable_thinking only has meaning inside koboldcpp's
-// session-template pipeline (useSession: true), and koboldcpp separates native
+// session-template pipeline (chat wire mode), and koboldcpp separates native
 // reasoning into a `reasoning_content` field this adapter previously never
 // read (unlike its Ollama/Anthropic siblings).
 describe("KoboldCppAdapter — enable_thinking request gating", () => {
@@ -256,7 +256,8 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		// KoboldCPP accepts `grammar` on both endpoints; a caller should not
 		// have to know which one their connection happens to use.
 		const adapter = makeAdapter({
-			extraJson: { useSession: false, stream: false }
+			wireMode: "completion",
+			extraJson: { stream: false }
 		})
 		mockCompilePrompt(adapter)
 		adapter.responseFormat = "json"
@@ -291,13 +292,10 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		expect(findGenerateCallBody()).not.toHaveProperty("grammar")
 	})
 
-	test("omits chat_template_kwargs entirely in text-completion mode (useSession: false), even with a value set", async () => {
+	test("omits chat_template_kwargs entirely in completion wire mode, even with a value set", async () => {
 		const adapter = makeAdapter({
-			extraJson: {
-				useSession: false,
-				stream: false,
-				enableThinking: true
-			}
+			wireMode: "completion",
+			extraJson: { stream: false, enableThinking: true }
 		})
 		mockCompilePrompt(adapter)
 		const result = await adapter.generateText()
@@ -314,7 +312,8 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 	// only reads a nested chat_template_kwargs object.
 	test("includes enable_thinking nested in chat_template_kwargs in session mode when explicitly set", async () => {
 		const adapter = makeAdapter({
-			extraJson: { useSession: true, stream: false, enableThinking: true }
+			wireMode: "chat",
+			extraJson: { stream: false, enableThinking: true }
 		})
 		mockCompilePrompt(adapter)
 		await adapter.generateText()
@@ -326,7 +325,8 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 
 	test("omits chat_template_kwargs in session mode when Auto (null)", async () => {
 		const adapter = makeAdapter({
-			extraJson: { useSession: true, stream: false, enableThinking: null }
+			wireMode: "chat",
+			extraJson: { stream: false, enableThinking: null }
 		})
 		mockCompilePrompt(adapter)
 		await adapter.generateText()
@@ -380,7 +380,8 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 		vi.stubGlobal("fetch", fetchMock)
 
 		const adapter = makeAdapter({
-			extraJson: { useSession: true, stream: true }
+			wireMode: "chat",
+			extraJson: { stream: true }
 		})
 		mockCompilePrompt(adapter)
 		const result = await adapter.generateText()
@@ -418,7 +419,8 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 		vi.stubGlobal("fetch", fetchMock)
 
 		const adapter = makeAdapter({
-			extraJson: { useSession: true, stream: false }
+			wireMode: "chat",
+			extraJson: { stream: false }
 		})
 		mockCompilePrompt(adapter)
 		const result = await adapter.generateText()
@@ -437,7 +439,8 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 		vi.stubGlobal("fetch", fetchMock)
 
 		const adapter = makeAdapter({
-			extraJson: { useSession: true, stream: false }
+			wireMode: "chat",
+			extraJson: { stream: false }
 		})
 		mockCompilePrompt(adapter)
 		const result = await adapter.generateText()
@@ -449,12 +452,14 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 /**
  * A payload built for a chat endpoint, handed to the text-completion branch.
  *
- * Reachable because the two facts are independent fields: the connection's
- * `prompt_format` decides what Assemble RENDERS (a role array for
- * `split_session`, one string otherwise), while `extraJson.useSession` decides
- * which KoboldCPP endpoint this adapter POSTS to. A connection can be set to
- * text completion while its format says split, and until the format reached the
- * render at all the contradiction could not arise — every payload was a string.
+ * Rarer than it was, and deliberately still covered. Wire mode is one resolved
+ * value read by both the render and this send, so the ordinary way to reach this
+ * branch is gone: a completion-mode connection renders a flat string. What can
+ * still arrive as messages is a payload a plugin assembled itself, a receipt
+ * replayed from an older build, or a connection whose `prompt_format` names a
+ * `role_array` template while the connection is in completion wire mode — the
+ * template's own render mode and the connection's method remain independent
+ * fields.
  *
  * What this pins is that the request body never carries `prompt: undefined`.
  * That is the shape that generates from nothing and reads as a model fault,
@@ -496,7 +501,8 @@ describe("KoboldCppAdapter — a messages-only payload in text-completion mode",
 	test("sends a real prompt string rather than undefined", async () => {
 		const adapter = makeAdapter({
 			promptFormat: "vicuna",
-			extraJson: { useSession: false, stream: false }
+			wireMode: "completion",
+			extraJson: { stream: false }
 		})
 		adapter.withCompiledPrompt(messagesOnly as any)
 		await adapter.generateText()
@@ -512,7 +518,8 @@ describe("KoboldCppAdapter — a messages-only payload in text-completion mode",
 		// blob that loses who said what.
 		const adapter = makeAdapter({
 			promptFormat: "chatml",
-			extraJson: { useSession: false, stream: false }
+			wireMode: "completion",
+			extraJson: { stream: false }
 		})
 		adapter.withCompiledPrompt(messagesOnly as any)
 		await adapter.generateText()
@@ -530,7 +537,8 @@ describe("KoboldCppAdapter — a messages-only payload in text-completion mode",
 		// start a reply twice.
 		const adapter = makeAdapter({
 			promptFormat: "vicuna",
-			extraJson: { useSession: false, stream: false }
+			wireMode: "completion",
+			extraJson: { stream: false }
 		})
 		adapter.withCompiledPrompt(messagesOnly as any)
 		await adapter.generateText()
@@ -545,7 +553,8 @@ describe("KoboldCppAdapter — a messages-only payload in text-completion mode",
 		// when there is a string to send.
 		const adapter = makeAdapter({
 			promptFormat: "vicuna",
-			extraJson: { useSession: false, stream: false }
+			wireMode: "completion",
+			extraJson: { stream: false }
 		})
 		adapter.withCompiledPrompt({
 			prompt: "### System:\nexactly this\n",
@@ -565,5 +574,135 @@ describe("KoboldCppAdapter module exports", () => {
 		expect(typeof exportsDefault.listModels).toBe("function")
 		expect(exportsDefault.connectionDefaults).toBeDefined()
 		expect(exportsDefault.samplingKeyMap).toBeDefined()
+	})
+})
+
+/**
+ * The reply and the scratchpad stay OUT of the server log.
+ *
+ * Three `[KCPP DEBUG]` lines survived the Gemma-4 thinking diagnosis they were
+ * added for. The streaming one was the worst of them:
+ * `JSON.stringify(data.choices?.[0])` inside the per-delta loop, so the entire
+ * reply and the entire reasoning were written to stdout token by token — a
+ * privacy problem and, at one `JSON.stringify` per delta, a cost on the hot
+ * path as well.
+ *
+ * The comment above them said "TEMPORARY DEBUG — remove after diagnosing", and
+ * they had outlived that condition: the diagnosis produced the
+ * `chat_template_kwargs` fix and the `reasoning_content` readback, both pinned
+ * by the suites above. These cases are what keeps the next diagnosis's
+ * leftovers from settling in the same way.
+ */
+describe("KoboldCppAdapter — generation writes nothing to the server log", () => {
+	function mockCompilePrompt(adapter: InstanceType<typeof KoboldCppAdapter>) {
+		adapter.withCompiledPrompt({
+			prompt: "hi",
+			messages: [{ role: "user", content: "Tell me a secret." }],
+			meta: {} as any
+		} as any)
+	}
+
+	afterEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	test("non-streaming: neither the request nor the reasoning is logged", async () => {
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+		try {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => ({
+					ok: true,
+					json: async () => ({
+						choices: [
+							{
+								message: {
+									content: "Hello there.",
+									reasoning_content: "Pondering deeply."
+								}
+							}
+						]
+					})
+				}))
+			)
+			const adapter = makeAdapter({
+				wireMode: "chat",
+				extraJson: { stream: false, enableThinking: true }
+			})
+			mockCompilePrompt(adapter)
+
+			const result = await adapter.generateText()
+			// Still delivered to the CALLER — this is about where it does not go.
+			expect((result as any).thinkingContent).toBe("Pondering deeply.")
+			expect(logSpy).not.toHaveBeenCalled()
+		} finally {
+			logSpy.mockRestore()
+		}
+	})
+
+	test("streaming: no per-delta dump of the reply or the reasoning", async () => {
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+		try {
+			const encoder = new TextEncoder()
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => ({
+					ok: true,
+					body: new ReadableStream({
+						start(controller) {
+							for (const payload of [
+								{
+									choices: [
+										{
+											delta: {
+												reasoning_content:
+													"Pondering deeply."
+											}
+										}
+									]
+								},
+								{
+									choices: [
+										{ delta: { content: "Hello there." } }
+									]
+								}
+							]) {
+								controller.enqueue(
+									encoder.encode(
+										`data: ${JSON.stringify(payload)}\n\n`
+									)
+								)
+							}
+							controller.enqueue(
+								encoder.encode("data: [DONE]\n\n")
+							)
+							controller.close()
+						}
+					})
+				}))
+			)
+			const adapter = makeAdapter({
+				wireMode: "chat",
+				extraJson: { stream: true, enableThinking: true }
+			})
+			mockCompilePrompt(adapter)
+
+			const result = await adapter.generateText()
+			let content = ""
+			let thinking = ""
+			await (result.completionResult as any)(
+				(chunk: string) => {
+					content += chunk
+				},
+				(chunk: string) => {
+					thinking += chunk
+				}
+			)
+			expect(content).toBe("Hello there.")
+			expect(thinking).toBe("Pondering deeply.")
+			expect(logSpy).not.toHaveBeenCalled()
+		} finally {
+			logSpy.mockRestore()
+		}
 	})
 })

@@ -11,6 +11,7 @@ import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { systemStyleSlug, type WidgetDecl } from "$lib/shared/widgets/types"
+import { withCorePresets } from "$lib/shared/widgets/corePresets"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -195,5 +196,124 @@ describe("syncWidgetStyles", () => {
 		expect(composer.map((r) => r.slug)).toContain(
 			systemStyleSlug("composer", "default")
 		)
+	})
+})
+
+describe("the shipped message + composer packs", () => {
+	/** What `withCorePresets` is expected to put in front of the reconciler. */
+	const coreDecls = () =>
+		withCorePresets([
+			widget("messages", [{ slug: "default", title: "Default", css: "" }]),
+			widget("composer", [{ slug: "default", title: "Default", css: "" }]),
+			widget("scene-portraits", [
+				{ slug: "default", title: "Default", css: "" }
+			])
+		])
+
+	test("seeds eight pack rows under the expected slugs", async () => {
+		await sync(coreDecls())
+		expect((await systemRows("messages")).map((r) => r.slug).sort()).toEqual(
+			[
+				systemStyleSlug("messages", "bubbles"),
+				systemStyleSlug("messages", "cameo"),
+				systemStyleSlug("messages", "compact"),
+				systemStyleSlug("messages", "default"),
+				systemStyleSlug("messages", "novel")
+			].sort()
+		)
+		expect((await systemRows("composer")).map((r) => r.slug).sort()).toEqual(
+			[
+				systemStyleSlug("composer", "default"),
+				systemStyleSlug("composer", "minimal"),
+				systemStyleSlug("composer", "writer")
+			].sort()
+		)
+	})
+
+	test("the `default` slot holds Clean / Classic, with Clean's real CSS", async () => {
+		// The slot an unpinned widget resolves to has to hold what a session
+		// looked like before the packs became styles.
+		await sync(coreDecls())
+		const messages = new Map(
+			(await systemRows("messages")).map((r) => [r.slug, r])
+		)
+		const clean = messages.get(systemStyleSlug("messages", "default"))!
+		expect(clean.title).toBe("Clean")
+		expect(clean.css).toContain("--sp-clean-card")
+		const composer = new Map(
+			(await systemRows("composer")).map((r) => [r.slug, r])
+		)
+		expect(
+			composer.get(systemStyleSlug("composer", "default"))!.title
+		).toBe("Classic")
+	})
+
+	test("pack rows are system rows and carry the seeding version", async () => {
+		await sync(coreDecls(), "9.9.9")
+		for (const r of [
+			...(await systemRows("messages")),
+			...(await systemRows("composer"))
+		]) {
+			expect(r.source).toBe("system")
+			expect(r.visibility).toBe("system")
+			expect(r.ownerUserId).toBeNull()
+			expect(r.seededByVersion).toBe("9.9.9")
+		}
+	})
+
+	test("a pack row is refreshed and pruned like any other system row", async () => {
+		await sync(coreDecls())
+		const [before] = await testDb
+			.select()
+			.from(schema.widgetStyles)
+			.where(
+				eq(
+					schema.widgetStyles.slug,
+					systemStyleSlug("messages", "bubbles")
+				)
+			)
+		await testDb
+			.update(schema.widgetStyles)
+			.set({ title: "tampered", css: "hacked" })
+			.where(eq(schema.widgetStyles.id, before.id))
+
+		// Re-seeding restores it in place — same id, shipped content back.
+		await sync(coreDecls())
+		const [after] = await testDb
+			.select()
+			.from(schema.widgetStyles)
+			.where(eq(schema.widgetStyles.id, before.id))
+		expect(after.title).toBe("Bubbles")
+		expect(after.css).toBe(before.css)
+
+		// And a release that drops the pack takes its row with it.
+		await sync([
+			widget("messages", [{ slug: "default", title: "Clean", css: "" }])
+		])
+		expect((await systemRows("messages")).map((r) => r.slug)).not.toContain(
+			systemStyleSlug("messages", "bubbles")
+		)
+	})
+
+	test("a user's own messages style survives a pack reseed", async () => {
+		await sync(coreDecls())
+		const [mine] = await testDb
+			.insert(schema.widgetStyles)
+			.values({
+				slug: "user:1:messages:packsafe",
+				widgetSlug: "messages",
+				source: "user",
+				ownerUserId: null,
+				visibility: "private",
+				title: "My Bubbles",
+				css: ".sp-msg{color:red}"
+			})
+			.returning()
+		await sync(coreDecls())
+		const [after] = await testDb
+			.select()
+			.from(schema.widgetStyles)
+			.where(eq(schema.widgetStyles.id, mine.id))
+		expect(after).toEqual(mine)
 	})
 })

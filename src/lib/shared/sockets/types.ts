@@ -1126,6 +1126,17 @@ declare global {
 					/** False disables the row; `reason` says why, in words. */
 					eligible: boolean
 					reason?: string
+					/**
+					 * The user's own note about this connection, shown beside
+					 * the row so the reminder arrives at the moment of choosing.
+					 *
+					 * ⚠ Display-only free text, and absent when there is none.
+					 * Nothing parses it and no eligibility follows from it —
+					 * `eligible` and `reason` are where a verdict about this
+					 * connection lives, precisely so this field never has to be
+					 * one. See the `connections.notes` column comment.
+					 */
+					notes?: string
 				}
 				interface SamplingOption {
 					id: number
@@ -1419,6 +1430,12 @@ declare global {
 				primarySlug: string | null
 				configSelections: Record<string, number>
 				includedActions: string[] | null
+				/**
+				 * The creation pre-fill (23 §9): loose keys the create form
+				 * applies where it recognises one and ignores otherwise. Null
+				 * when the preset declares none.
+				 */
+				defaults: Record<string, unknown> | null
 				enabled: boolean
 				isDefault: boolean
 				isImmutable: boolean
@@ -1895,6 +1912,28 @@ declare global {
 					 * there are to subscribe to.
 					 */
 					channels: string[]
+					/**
+					 * Why `continue` is unavailable on this session's messages,
+					 * or absent when it is available.
+					 *
+					 * Session-level, and on THIS payload rather than on each
+					 * message, because both halves of the answer are: the
+					 * genre's declared `messageVerbs`, which this handler
+					 * already reads, and the connection the session's replies
+					 * resolve to. A per-message field would be the same string
+					 * repeated once per row, and a lookup per message would be
+					 * a round trip per row.
+					 *
+					 * The client renders it as the DISABLED Continue button's
+					 * title rather than hiding the button: a control that
+					 * vanishes teaches nothing, and this sentence names the
+					 * switch to change and where it lives. The server refuses
+					 * the verb regardless — see `continueVerbRefusal` — so this
+					 * is an affordance, never the enforcement, and a stale one
+					 * (an admin repointing the default mid-session) costs a
+					 * refusal message rather than a wrong generation.
+					 */
+					continueRefusal?: string
 				}
 			}
 			/**
@@ -1918,6 +1957,25 @@ declare global {
 					close?: string[]
 				}
 			}
+			/**
+			 * One saved layout preset (PLAN 25 redesign, 2026-08-30) — a
+			 * reusable layout DEFINITION scoped to a genre. The rows a caller
+			 * is offered are the shipped per-genre defaults plus their OWN
+			 * saved layouts; another user's presets are never listed.
+			 */
+			interface LayoutPreset {
+				id: number
+				name: string
+				genreId: string
+				/**
+				 * `true` for the shipped per-genre default (author-less,
+				 * seeded). Its layout is `{}` — "no overrides", i.e. the app's
+				 * built-in arrangement — so applying it is the reset.
+				 */
+				isDefault: boolean
+				/** `{ zoneLayout?, widgetGrid?, arrangedGrid? }`, verbatim. */
+				layout: Record<string, unknown>
+			}
 			namespace PanelLayout {
 				namespace Get {
 					interface Params {
@@ -1927,17 +1985,144 @@ declare global {
 						sessionId: number
 						/** `{}` when the user has no saved layout yet. */
 						layout: Record<string, unknown>
+						/**
+						 * The preset this user has applied, or `null` for the
+						 * genre default. A reference — never the definition.
+						 */
+						layoutPresetId: number | null
+						/**
+						 * This user's own per-widget settings, keyed by widget
+						 * id. Stored verbatim; merged OVER the preset, under
+						 * `layout`.
+						 */
+						layoutSettings: Record<string, unknown>
+						/**
+						 * The ALREADY-RESOLVED layout of the active preset —
+						 * `layoutPresetId`'s row if it still resolves, else the
+						 * genre default, else `{}`. Resolving server-side keeps
+						 * the fallback chain in one place.
+						 */
+						presetLayout: Record<string, unknown>
+						/** What the Presets tab lists: default + this user's. */
+						presets: LayoutPreset[]
 					}
 				}
 				namespace Set {
 					interface Params {
 						sessionId: number
 						layout: Record<string, unknown>
+						/**
+						 * OPTIONAL, and absence is meaningful: a key that is
+						 * not present leaves the stored column alone, so the
+						 * surface manager's debounced blob save — which knows
+						 * only `layout` — can never clobber the user's preset
+						 * choice or their widget settings. `null` explicitly
+						 * clears the selection back to the genre default.
+						 */
+						layoutPresetId?: number | null
+						layoutSettings?: Record<string, unknown>
 					}
 					interface Response {
 						sessionId: number
 						ok: boolean
 						error?: string
+					}
+				}
+				/**
+				 * Save the caller's current arrangement as a NEW user-authored
+				 * preset for this session's genre. Never writes a seeded row:
+				 * `authorUserId` is always the caller and `seedKey` always
+				 * NULL, so the boot reconciler can never see, re-force, or
+				 * prune what a user saved here.
+				 */
+				namespace Save {
+					interface Params {
+						sessionId: number
+						name: string
+						layout: Record<string, unknown>
+					}
+					interface Response {
+						sessionId: number
+						ok: boolean
+						error?: string
+						/** The row just written. */
+						preset?: LayoutPreset
+						/** The refreshed list, so the tab needs no re-fetch. */
+						presets: LayoutPreset[]
+					}
+				}
+				/**
+				 * Rename one of the CALLER'S OWN presets. Managing a preset is a
+				 * narrower permission than seeing one: the list mixes the shipped
+				 * defaults with your saves, but only what you authored is yours to
+				 * rename — and admins are deliberately not a superset, because a
+				 * person's saved layouts are their own business.
+				 */
+				namespace Rename {
+					interface Params {
+						id: number
+						/** Trimmed and capped server-side; must not be blank. */
+						name: string
+					}
+					interface Response {
+						/** Echoed back so a client can match the reply to its ask. */
+						id: number
+						ok: boolean
+						error?: string
+						/**
+						 * The genre `presets` belongs to. Present only on success —
+						 * a refusal must not say which genre an id lives in. A client
+						 * on another genre ignores the list rather than adopting it.
+						 */
+						genreId?: string
+						/** The row as it now reads. */
+						preset?: LayoutPreset
+						/** The refreshed list, so the tab needs no re-fetch. */
+						presets: LayoutPreset[]
+					}
+				}
+				/**
+				 * Delete one of the caller's own presets. Nothing is stranded: the
+				 * `layout_preset_id` FK is `ON DELETE SET NULL`, so every session
+				 * that was on it silently falls back to the genre default. That is
+				 * the intended behaviour, which is exactly why the count comes back
+				 * — ask `Usage` first and warn before, not after.
+				 */
+				namespace Delete {
+					interface Params {
+						id: number
+					}
+					interface Response {
+						id: number
+						ok: boolean
+						error?: string
+						/** See `Rename.Response.genreId`. */
+						genreId?: string
+						/**
+						 * How many sessions were on it, counted BEFORE the delete —
+						 * afterwards the FK has already nulled the evidence. `0` on a
+						 * refusal.
+						 */
+						affectedSessions: number
+						/** The refreshed list, so the tab needs no re-fetch. */
+						presets: LayoutPreset[]
+					}
+				}
+				/**
+				 * How many sessions are on one of the caller's own presets — what
+				 * the delete confirmation warns with, asked before the delete
+				 * rather than reported after it.
+				 */
+				namespace Usage {
+					interface Params {
+						id: number
+					}
+					interface Response {
+						id: number
+						ok: boolean
+						error?: string
+						/** Sessions currently pinned to it; `0` on a refusal. */
+						sessions: number
 					}
 				}
 			}
@@ -2213,13 +2398,19 @@ declare global {
 						/**
 						 * What retrieval did, in the pipeline's own terms.
 						 *
-						 * Replaces `rag` below rather than extending it. Those
-						 * counters described the legacy infill engine's internal
-						 * phases — a guaranteed window, a RAG pass, a fill pass —
-						 * and the pipeline has none of them: it scores
-						 * candidates, allocates a budget, and records per block
-						 * why that block is in or out. `rag` stays declared only
-						 * until the legacy path is deleted.
+						 * ⚠ `rag` was declared below this and is gone. It counted the
+						 * legacy infill engine's internal phases — a guaranteed window, a
+						 * RAG pass, a fill pass — which the pipeline does not have, and it
+						 * carried a per-entry `score` naming `sceneAffinity`, `recency`
+						 * and `density`: signals the ranking engine no longer computes
+						 * (see `pipelines/ranking/weights.ts`). Nothing ever wrote it.
+						 * The handler answers with `toCompiledPrompt`, and
+						 * `CompiledPrompt.meta` dropped `rag` with the engines, so the
+						 * field was unreachable as well as unread — and a contract naming
+						 * culled signals is how the next implementer resurrects them.
+						 *
+						 * This is what the pipeline does record: it scores candidates,
+						 * allocates a budget, and reports per block why it is in or out.
 						 */
 						retrieval?: {
 							budget: {
@@ -2236,95 +2427,6 @@ declare global {
 								why: string[]
 							}>
 						}
-						rag?:
-							| {
-									used: true
-									lore: {
-										worldLore: {
-											pinned: number
-											rag: number
-										}
-										characterLore: {
-											pinned: number
-											rag: number
-										}
-										history: { pinned: number; rag: number }
-									}
-									graphPairs: number
-									messages: {
-										guaranteed: number
-										ragOlder: number
-										filledIn: number
-										total: number
-									}
-									scores: {
-										messageScores: number[]
-										loreScores: number[]
-										thresholdUsed: number
-										queryMessageCount: number
-									}
-							  }
-							| {
-									used: false
-									lore: {
-										worldLore: {
-											pinned: number
-											candidates: number
-											included: number
-											budget: number
-											topScore: number
-										}
-										characterLore: {
-											pinned: number
-											candidates: number
-											included: number
-											budget: number
-											topScore: number
-										}
-										history: {
-											pinned: number
-											candidates: number
-											included: number
-											budget: number
-											topScore: number
-											mostRecentDate: string | undefined
-										}
-									}
-									messages: {
-										guaranteed: number
-										candidates: number
-										filledIn: number
-										budget: number
-										total: number
-									}
-									tokens: {
-										reserve: number
-										total: number
-										limit: number
-										threshold: number
-									}
-									entries: Array<{
-										type:
-											| "worldLore"
-											| "characterLore"
-											| "history"
-											| "message"
-										id: number
-										name: string
-										score: {
-											total: number
-											keyword: number
-											nameMatch: number
-											entityCooccurrence: number
-											tfidf: number
-											sceneAffinity: number
-											lastRefRecency: number
-											recency: number
-											density: number
-											includedReason: string
-										}
-									}>
-							  }
 					}
 				}
 			}
@@ -2345,9 +2447,47 @@ declare global {
 					sessionId: number
 					/** Optional extra focus text for this specific generation. */
 					instructions?: string
+					/**
+					 * Who speaks, when this is a **side-character** turn rather
+					 * than world narration (ruling 2026-09-07).
+					 *
+					 * The trigger's first step accepts either — a character
+					 * from the dropdown, or a name somebody typed, or both
+					 * (a character announced under a scene-specific name).
+					 * Absent entirely, the request is world narration and the
+					 * narrator speaks, exactly as before.
+					 *
+					 * ⚠ **participant ≠ character.** Sending this never adds
+					 * anybody to the session's cast and never affects the
+					 * rotation; it names a voice for one turn.
+					 */
+					speaker?: {
+						characterId?: number | null
+						name?: string | null
+					}
 				}
 				interface Response {
 					success?: boolean
+					error?: string
+				}
+			}
+			/**
+			 * Who a side-character turn may be spoken by (ruling 2026-09-07):
+			 * this person's characters, minus the session's cast — a cast
+			 * member has a turn of their own. The free-form name needs no
+			 * list, which is the point of offering both.
+			 */
+			namespace SideCharacterOptions {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					characters: Array<{
+						id: number
+						name: string
+						nickname: string | null
+					}>
 					error?: string
 				}
 			}
@@ -2744,6 +2884,122 @@ declare global {
 		}
 
 		/**
+		 * Binding suggestions — names the story used that resolve to nothing.
+		 *
+		 * The candidates are **derived** on every `list` from the open tier of
+		 * `entry_annotations` / `message_annotations`; the *status* is stored,
+		 * because what a human said about a candidate is not in the text (plan
+		 * §1). Every payload names its lorebook or a row that belongs to one, and
+		 * the server checks ownership on each — a suggestion quotes a line of the
+		 * owner's transcript.
+		 */
+		namespace BindingSuggestions {
+			/** One row: the derived evidence and the stored decision, side by side. */
+			interface Suggestion {
+				id: number
+				lorebookId: number
+				/** `open:<normalized>` — the annotation key, verbatim. */
+				entityKey: string
+				/** The key without its tier prefix. */
+				name: string
+				/** The fullest surface form any source used — what to display. */
+				surface: string
+				status: "pending" | "ignored" | "added"
+				/** Total mentions across every source that named it. */
+				occurrences: number
+				/** How many distinct entries/messages named it. */
+				sourceCount: number
+				/** ISO. The earliest and latest SOURCE timestamps, not scan times. */
+				firstSeenAt: string
+				lastSeenAt: string
+				/** One line of the passage that named it, so a decision needs no hunting. */
+				exampleContext: string
+				/** `entry` | `message` | `''`. Provenance for the line above. */
+				exampleSourceKind: string
+				exampleSourceId: number | null
+				/** What `add` created; null until then, and again if it is deleted. */
+				resolvedBindingId: number | null
+				/** ISO. When a human moved it off `pending`. */
+				decidedAt: string | null
+				/**
+				 * ⚠ Whether the latest scan still derives it.
+				 *
+				 * A decision outlives its evidence — the passage was edited, or
+				 * the vocabulary widened until the name resolves. The log keeps
+				 * the row; this is what stops the UI claiming the story still
+				 * says it.
+				 */
+				stillPresent: boolean
+			}
+
+			/** How much of the book the background annotation lane has walked. */
+			interface Coverage {
+				entries: { annotated: number; total: number }
+				messages: { annotated: number; total: number }
+			}
+
+			/**
+			 * The response every one of these handlers answers with.
+			 *
+			 * ⚠ `scanned` is not decoration. Annotation runs in the background,
+			 * so an empty `suggestions` has two meanings — *"nothing to add"* and
+			 * *"not looked yet"* — and only one of them is safe to render as an
+			 * empty list. `outstanding` says how many sources the lane still
+			 * owes, which is the partial case between them.
+			 */
+			interface ListResult {
+				lorebookId: number
+				suggestions: Suggestion[]
+				/** False when no source of either kind carries a fresh annotation. */
+				scanned: boolean
+				/** Sources that exist but have no fresh annotation yet. */
+				outstanding: number
+				coverage: Coverage
+			}
+			namespace List {
+				interface Params {
+					lorebookId: number
+				}
+				type Response = ListResult
+			}
+			namespace Ignore {
+				interface Params {
+					id: number
+				}
+				interface Response extends ListResult {
+					/** Echoed, so a late answer is not attributed to another row. */
+					ignoredId: number
+				}
+			}
+			namespace Unignore {
+				interface Params {
+					id: number
+				}
+				interface Response extends ListResult {
+					restoredId: number
+				}
+			}
+			namespace Add {
+				interface Params {
+					id: number
+					/**
+					 * An override of the suggestion's surface form.
+					 *
+					 * Optional: the normalised open-tier key is lowercased, so
+					 * capitalising a name before accepting is the ordinary case.
+					 * Trimmed, capped and never allowed to be empty server-side;
+					 * everything else about the created row is server-derived.
+					 */
+					name?: string
+				}
+				interface Response extends ListResult {
+					addedId: number
+					lorebookBinding: SelectLorebookBinding
+				}
+			}
+		}
+
+		/**
 		 * Lorebook entries — one namespace, every declared type.
 		 *
 		 * `WorldLoreEntries`, `CharacterLoreEntries` and `HistoryEntries` were
@@ -2852,6 +3108,81 @@ declare global {
 					/** Wiring problems the turn reported. */
 					warnings?: string[]
 					error?: string
+				}
+			}
+		}
+
+		/**
+		 * Completion templates — the delimiters a connection's prompt is wrapped
+		 * in, as rows.
+		 *
+		 * ⚠ **Every handler is admin-only, per handler.** The `/admin` layout gate
+		 * is for the person; a row here shapes every prompt this instance sends,
+		 * so the check that matters is the one in the handler.
+		 */
+		namespace CompletionTemplates {
+			namespace List {
+				interface Params {}
+				interface Response {
+					/** Built-ins first, then by name — the /admin/sampling ordering. */
+					completionTemplatesList: SelectCompletionTemplate[]
+				}
+			}
+			namespace Get {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					completionTemplate: SelectCompletionTemplate
+				}
+			}
+			namespace Create {
+				interface Params {
+					completionTemplate: InsertCompletionTemplate
+				}
+				interface Response {
+					completionTemplate: SelectCompletionTemplate
+				}
+			}
+			namespace Update {
+				interface Params {
+					completionTemplate: UpdateCompletionTemplate
+				}
+				interface Response {
+					completionTemplate: SelectCompletionTemplate
+				}
+			}
+			namespace Delete {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					success?: string
+					error?: string
+				}
+			}
+			/** The way to a variant of a built-in — /admin/prompts' rule. */
+			namespace Clone {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					completionTemplate: SelectCompletionTemplate
+				}
+			}
+			/**
+			 * The connection format picker's options.
+			 *
+			 * Its own event rather than deriving from `list`, because the picker
+			 * wants only what `is_selectable` allows and the changelist wants
+			 * everything — and because the two lists drifting is exactly the defect
+			 * this replaces: `PromptFormats.options` was a hand-written array beside
+			 * the table, with only a test keeping them equal.
+			 */
+			namespace Options {
+				interface Params {}
+				interface Response {
+					options: { value: string; label: string }[]
 				}
 			}
 		}
@@ -3708,6 +4039,40 @@ declare global {
 				/** What was left of that ceiling. Present with `total`. */
 				remaining?: number
 			}
+			/**
+			 * One stop sequence, and where it came from (ruling 2026-09-10).
+			 *
+			 * The kind is what makes the panel's account possible at all: a flat
+			 * list can say a string was sent and can never say WHY, so the wire
+			 * rule that held one back reads as the app losing it.
+			 *
+			 *   · `format` — the completion template's own `stopStrings`.
+			 *   · `speaker` — `Name:` for everyone in the scene but the speaker.
+			 *   · `explicit` — what the author typed into the step's params.
+			 */
+			interface StopSequence {
+				value: string
+				kind: "format" | "speaker" | "explicit"
+			}
+			/** What a run sent, what it held back, and what ended the reply. */
+			interface RetrievalStops {
+				sent: StopSequence[]
+				/**
+				 * Held back by the wire rule — never "not composed". On a chat
+				 * wire the roles carry the structure, so `format` and `speaker`
+				 * entries have nothing to bite on and would override the model's
+				 * own stop tokens; they are listed here so a reader can see that
+				 * the app considered them rather than lost them.
+				 */
+				dropped: StopSequence[]
+				wire: "chat" | "completion"
+				/**
+				 * The sequence the service says actually matched, where it says.
+				 * Only llama.cpp reports the WORD; the others report a reason
+				 * code that names no sequence, so this is usually absent.
+				 */
+				hit?: string
+			}
 			namespace RunExplain {
 				interface Params {
 					runId: string
@@ -3747,7 +4112,129 @@ declare global {
 						 * truth is "nothing was recorded".
 						 */
 						budget?: RetrievalBudget
+						/**
+						 * What ended the reply, and what was not allowed to.
+						 *
+						 * Absent means the run recorded nothing — a receipt from
+						 * before this was kept, or a halt upstream of the
+						 * provider — which is a different answer from "no stop
+						 * sequences were sent", exactly as `budget` above is
+						 * absent rather than zeroed.
+						 */
+						stops?: RetrievalStops
 					}
+					error?: string
+				}
+			}
+			/**
+			 * What lore *would* fire, asked where the question is asked.
+			 *
+			 * The same explanation `RunExplain` gives for a turn that already
+			 * happened, for the turn that has not yet: a real preview run
+			 * against the draft sitting in the composer, projected by the same
+			 * `explainRetrieval`. "Would" and "did" are one mechanism here
+			 * rather than a second guess at the first — the whole reason this
+			 * compiles a turn instead of re-deriving the gather rules.
+			 *
+			 * ⚠ **Asked for, never live.** A turn is a real run with a real
+			 * embedding call behind it, so this answers a button rather than a
+			 * keystroke — the rule `EntryFireTest` already states for the
+			 * single-entry version of the same question.
+			 */
+			namespace PreviewRetrieval {
+				interface Params {
+					sessionId: number
+					/**
+					 * The unsent draft, spliced the way
+					 * `sessions:promptTokenCount` splices it — without it the
+					 * preview answers about the conversation *without* the
+					 * message it is being asked about.
+					 */
+					content?: string
+					/** Whose draft it is, so switching persona changes the answer. */
+					personaId?: number | null
+				}
+				interface Response {
+					sessionId?: number
+					explanation?: RunExplain.Response["explanation"]
+					error?: string
+				}
+			}
+			/**
+			 * Why *this reply* said what it said.
+			 *
+			 * `RunExplain` addresses a run, which is the admin workspace's
+			 * vocabulary; a reader looking at a message has a message. This is
+			 * the same projection addressed the way the question is asked, and
+			 * it resolves the run itself rather than making the client carry a
+			 * run id it was never given.
+			 *
+			 * Gated on the **session**, owner or guest — not on who owns the
+			 * run. A guest reading a reply in a conversation they are part of
+			 * is reading why that conversation said something to them, and an
+			 * owner-only gate would refuse them their own evidence.
+			 */
+			namespace MessageExplain {
+				interface Params {
+					messageId: number
+				}
+				interface Response {
+					messageId?: number
+					/** The run behind the message, when one is recorded. */
+					runId?: string
+					explanation?: RunExplain.Response["explanation"]
+					error?: string
+				}
+			}
+			/**
+			 * Which runs produced a given row.
+			 *
+			 * The reverse of a run's artifact list, and the direction a person
+			 * actually asks in: they are looking at the *thing* — an image in
+			 * the gallery, a reply in a session — and want to know what made
+			 * it. Recorded since `pipeline_run_artifacts` replaced the nullable
+			 * column, and unreadable from a client for anything but a message
+			 * until this existed.
+			 *
+			 * ⚠ **Gated on the artifact, not on the run.** A run row carries a
+			 * `user_id` and scoping to it would answer the wrong question —
+			 * "did you make this run" rather than "may you see this row". Each
+			 * kind is gated by whoever already owns that kind's access.
+			 *
+			 * Names and dates the runs; it does not carry a receipt. A receipt
+			 * is what `Run` is for, and returning one here would put a run's
+			 * whole output behind a gate written for an image.
+			 */
+			namespace ArtifactRuns {
+				interface Params {
+					/**
+					 * Which table `entityId` belongs to.
+					 *
+					 * The artifact vocabulary's four kinds, of which two are
+					 * answerable today: `variant` and `lore_entry` have
+					 * producers but no reader asking this, and a gate written
+					 * for a caller that does not exist is a gate nothing tests.
+					 */
+					kind: "message" | "file" | "variant" | "lore_entry"
+					entityId: number
+				}
+				interface Run {
+					runId: string
+					specSlug: string
+					startedAt: string | Date
+					/**
+					 * A preview is a weaker record than a send — it halted
+					 * before anything effectful — and which one a reader wants
+					 * is the caller's question, so both come back labelled
+					 * rather than one being filtered out here.
+					 */
+					isPreview: boolean
+				}
+				interface Response {
+					kind: Params["kind"]
+					entityId?: number
+					/** Newest first. Empty when no run claims the row. */
+					runs: Run[]
 					error?: string
 				}
 			}
@@ -4643,7 +5130,28 @@ declare global {
 						elapsedMs: number
 						tokensSpent: number
 						isPreview: boolean
-						messageId: number | null
+						/**
+						 * Every row this run produced, in the order it made
+						 * them.
+						 *
+						 * Replaced a single `messageId`, which could only ever
+						 * name one message and named none at all for the runs
+						 * that produce several (greeting seeding) or produce
+						 * something other than a message (an image render, a
+						 * summary entry). Ruled 2026-09-08: messages are
+						 * relational artifacts.
+						 *
+						 * `kind` is `message` | `file` | `variant` |
+						 * `lore_entry`; `action` is `created` | `updated` |
+						 * `attached`. `entityId` is the row's id in its own
+						 * table — and deliberately not a foreign key behind the
+						 * scenes, because the evidence outlives its subject.
+						 */
+						artifacts: {
+							kind: string
+							entityId: number
+							action: string
+						}[]
 						/**
 						 * The session this run belonged to, when it belonged to
 						 * one.
@@ -5935,6 +6443,26 @@ declare global {
 				interface Response {
 					success: boolean
 					enabled: boolean
+				}
+			}
+			/**
+			 * The two backup settings (ruled 2026-09-10).
+			 *
+			 * One event for both because they are one decision an admin makes
+			 * about backups, and because a partial update is expressible: an
+			 * omitted field is left alone rather than defaulted to false.
+			 */
+			namespace UpdateBackupSettings {
+				interface Params {
+					/** Take one a day. Omit to leave as it is. */
+					backupDaily?: boolean
+					/** Archive `users/` beside the dump. Omit to leave as is. */
+					backupIncludeUserFiles?: boolean
+				}
+				interface Response {
+					success: boolean
+					backupDaily: boolean
+					backupIncludeUserFiles: boolean
 				}
 			}
 			/** The scripts kill switch (18 §10) — a recovery lever, default on. */
@@ -7451,6 +7979,94 @@ declare global {
 			}
 		}
 
+		/**
+		 * Widget styles (PLAN 25) — the `widget_styles` rows a person may see,
+		 * use and manage. One namespace for both halves of the table: the
+		 * presets a widget SHIPS (`source: "system"`, reconciler-managed and
+		 * never editable here) and the styles people write.
+		 *
+		 * `list` answers with the rows the caller may USE — system + their own
+		 * + everything shared on the instance — which is exactly the candidate
+		 * set `shared/widgets/resolve.ts` expects to be handed. Management is a
+		 * narrower question than visibility and is decided per verb by the
+		 * server; nothing in this shape encodes it.
+		 */
+		namespace WidgetStyles {
+			/** The wire projection of a `widget_styles` row. */
+			interface WidgetStyleRow {
+				id: number
+				slug: string
+				widgetSlug: string
+				source: "system" | "user"
+				/** null for system rows; the author for user rows. */
+				ownerUserId: number | null
+				visibility: "system" | "private" | "shared"
+				title: string
+				css: string
+				vars: Record<string, string>
+				updatedAt: string
+			}
+
+			namespace List {
+				interface Params {
+					/** Narrow to one widget's styles; omit for all of them. */
+					widgetSlug?: string
+				}
+				interface Response {
+					/** System + own + shared — the rows this caller may use. */
+					styles: WidgetStyleRow[]
+				}
+			}
+
+			namespace Create {
+				interface Params {
+					widgetSlug: string
+					title: string
+					css?: string
+					vars?: Record<string, string>
+					/** Defaults to "private". */
+					visibility?: "private" | "shared"
+				}
+				interface Response {
+					style: WidgetStyleRow
+				}
+			}
+
+			namespace Update {
+				interface Params {
+					id: number
+					title?: string
+					css?: string
+					vars?: Record<string, string>
+					visibility?: "private" | "shared"
+				}
+				interface Response {
+					style: WidgetStyleRow
+				}
+			}
+
+			namespace Delete {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					id: number
+				}
+			}
+
+			namespace Clone {
+				interface Params {
+					id: number
+					/** Defaults to the source row's title plus " (copy)". */
+					title?: string
+				}
+				interface Response {
+					/** A new private row owned by the caller, with a new slug. */
+					style: WidgetStyleRow
+				}
+			}
+		}
+
 		// Invites namespace (plan 27 §3)
 		namespace Invites {
 			interface InviteView {
@@ -7624,6 +8240,83 @@ declare global {
 					 */
 					wildcard: boolean
 					hosts: HostEntry[]
+				}
+			}
+		}
+
+		// Backups namespace (PLAN-pglite-recovery P2).
+		//
+		// The read/create/delete half of `db/recovery.ts`, which the recovery
+		// page and the CLI also share. Restore is deliberately NOT here: on a
+		// healthy instance it would mean swapping the database out from under a
+		// live socket connection, and the only state in which restoring is the
+		// right answer is the one where this surface does not exist — the
+		// database will not open, so neither will these handlers.
+		namespace Backups {
+			interface BackupRow {
+				/** Filename only. Every action below takes this back. */
+				name: string
+				bytes: number
+				/** ISO 8601, from the file's mtime. */
+				modifiedAt: string
+				/** Whether a companion meta.json was archived beside it. */
+				hasMeta: boolean
+				/**
+				 * Whether a user-file tier (`<name>.users.tgz`) is beside it —
+				 * media and avatars, off by default (ruled 2026-09-10).
+				 */
+				hasUsers: boolean
+				/** That tier's size. 0 when there is none. */
+				usersBytes: number
+			}
+
+			/**
+			 * A database a recovery set aside, or an attempted restore that did
+			 * not open. Never deleted automatically — listed here so the owner
+			 * can reclaim the disk without going back to the recovery page,
+			 * which is unreachable once the instance is working again.
+			 */
+			interface SetAsideRow {
+				name: string
+				bytes: number
+				modifiedAt: string
+				kind: "broken" | "restore-failed"
+			}
+
+			namespace List {
+				interface Params {}
+				interface Response {
+					backupsDir: string
+					dataDir: string
+					backups: BackupRow[]
+					setAside: SetAsideRow[]
+				}
+			}
+
+			namespace Create {
+				interface Params {
+					/** Goes in the filename; defaults to the stored version. */
+					label?: string
+					/**
+					 * One-shot override of `backupIncludeUserFiles`. Omitted —
+					 * the normal case — the stored setting decides.
+					 */
+					includeUserFiles?: boolean
+				}
+				interface Response {
+					backup: BackupRow
+				}
+			}
+
+			namespace Delete {
+				interface Params {
+					name: string
+					/** `"backup"` removes a .tgz; `"setAside"` a directory. */
+					kind: "backup" | "setAside"
+				}
+				interface Response {
+					name: string
+					success: boolean
 				}
 			}
 		}

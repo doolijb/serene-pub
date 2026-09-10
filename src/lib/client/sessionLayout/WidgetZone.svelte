@@ -13,8 +13,10 @@
 	 * plus guides, which is what makes it WYSIWYG.
 	 */
 	import type { Snippet } from "svelte"
+	import type { PlacementInput } from "$lib/shared/widgets/context"
 	import {
 		cellsGridStyle,
+		stackPlacements,
 		widgetItemStyle,
 		widgetsInZone,
 		zoneGridStyle,
@@ -25,8 +27,12 @@
 	interface Props {
 		layout: GridLayout
 		zone: Zone
-		/** Render a widget's content by id (the parent owns what each id is). */
-		widget: Snippet<[{ id: string }]>
+		/**
+		 * Render a widget's content by id (the parent owns what each id is),
+		 * with the cell geometry this zone just placed it at — the input to its
+		 * `layout.v1`, so a widget's ctx describes where it really sits.
+		 */
+		widget: Snippet<[{ id: string; placement: PlacementInput }]>
 		/**
 		 * Gap between widgets in the zone. The chat middle passes "0" so the
 		 * composer sits flush against the message list (parity with the pre-grid
@@ -45,20 +51,55 @@
 			? cellsGridStyle(widgets, layout.cell)
 			: zoneGridStyle(widgets, layout.cell)
 	)
+
+	/* ── real placement (PLAN 25) ──────────────────────────────────────────
+	 * A widget's `layout.v1` has to be the cells it is actually in, so the
+	 * geometry the engine solved is reported rather than re-guessed.
+	 *
+	 * Two things must be MEASURED, because the CSS is what decides them:
+	 * `auto-fill` picks the column count from the zone's width, and a widget's
+	 * tier is a fact about its own rendered box. Reading `grid-template-columns`
+	 * back off the live element gives the count the browser actually used — gaps,
+	 * remainders and all — rather than a `floor(width / cell)` that disagrees
+	 * with the render whenever `gap` is not 0.
+	 *
+	 * Both start unmeasured (0 → 1 column, `compact`) for exactly one frame; the
+	 * correction is an ordinary placement change, which is what
+	 * `layout:changed` is for. */
+	let zoneEl = $state<HTMLElement | null>(null)
+	let zoneWidth = $state(0)
+	let columns = $state(1)
+	$effect(() => {
+		// `zoneWidth` is the dependency, not the value: a resize is what can
+		// change the column count, and clientWidth is what tells us one happened.
+		void zoneWidth
+		void widgets
+		void showCells
+		const el = zoneEl
+		if (!el) return
+		const tracks = getComputedStyle(el).gridTemplateColumns
+		const n = tracks && tracks !== "none" ? tracks.split(/\s+/).length : 1
+		columns = Math.max(1, n)
+	})
+	let placements = $derived(
+		stackPlacements(widgets, { columns, widthPx: zoneWidth })
+	)
 </script>
 
 <div
+	bind:this={zoneEl}
+	bind:clientWidth={zoneWidth}
 	class="widget-zone"
 	class:cells={showCells}
 	style="{gridStyle}gap:{gap};--cell:{layout.cell}px;"
 >
-	{#each widgets as w (w.id)}
+	{#each widgets as w, i (w.id)}
 		<div
 			class="widget"
 			data-widget-id={w.id}
 			style={widgetItemStyle(w, layout.cell)}
 		>
-			{@render widget({ id: w.id })}
+			{@render widget({ id: w.id, placement: placements[i] })}
 		</div>
 	{/each}
 </div>

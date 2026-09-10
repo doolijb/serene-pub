@@ -25,7 +25,6 @@ import { optionId } from "$lib/server/pipelines/config/panel/ids"
 import { layers, namespaceView } from "$lib/server/pipelines/config/panel/read"
 import { resolveWriteScope } from "$lib/server/pipelines/config/panel/scopes"
 import {
-	type Db,
 	type Decl,
 	OptionNotFoundError,
 	OptionNotWritableError,

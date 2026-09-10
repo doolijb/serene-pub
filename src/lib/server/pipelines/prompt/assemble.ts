@@ -26,7 +26,13 @@
  * core's default changed.
  */
 
+import {
+	completionTemplateOf,
+	type CompletionTemplate
+} from "$lib/shared/constants/completionTemplates"
 import { parseSplitChatPrompt } from "$lib/shared/utils/parseSplitChatPrompt"
+import { PromptFormats } from "$lib/shared/constants/PromptFormats"
+import type { WireMode } from "$lib/shared/connectionAdapters/wireMode"
 import { entryDeclarations } from "$lib/server/entries/declarations"
 import type { EntryOrderKey, EntryRoles } from "@serene-pub/sdk"
 import {
@@ -401,6 +407,37 @@ export interface RenderInput extends RenderRun {
 	 */
 	promptFormat?: string
 	/**
+	 * The `completion_templates` ROW the format above names, already loaded.
+	 *
+	 * ⚠ Supplying only the key renders the BUILT-INS and nothing else, because
+	 * that is all `completionTemplateOf` can resolve a bare string against. An
+	 * admin-authored template therefore rendered as Vicuna — the whole point of
+	 * authoring delimiters, absent from every prompt. `world.ts` dereferences
+	 * the row and `runtime/bindings.ts` carries it here.
+	 *
+	 * Optional, and legitimately absent: the debug preview, the parity harness
+	 * and the template editors all render with no connection in scope, and a
+	 * caller naming a BUILT-IN by key needs nothing else. `completionTemplateOf`
+	 * answers absence the same way it always has.
+	 */
+	completionTemplate?: CompletionTemplate
+	/**
+	 * Which METHOD the connection this prompt is FOR wants to be called by.
+	 *
+	 * `chat` means the model is handed role-tagged messages, so the render
+	 * produces those and the two fields above have nothing to do — in chat mode
+	 * there is no prompt format, not even a default one (NOMENCLATURE §10).
+	 * `completion` means one flat string in the connection's own template, which
+	 * is what this node has always produced.
+	 *
+	 * From the same `connection` slot as `promptFormat`, so the shape built here
+	 * and the shape the Provider sends are one value. Absent for a caller with no
+	 * connection in scope — the debug preview, the parity harness, the template
+	 * editors — and absent means "nobody said", which leaves the template's own
+	 * `renderMode` deciding exactly as it did before this field existed.
+	 */
+	wireMode?: WireMode
+	/**
 	 * Which template language `template` is written in.
 	 *
 	 * **Required, and no longer nullable.** It was `string | null`, on the
@@ -427,8 +464,38 @@ export interface RenderInput extends RenderRun {
 export interface RenderedContext {
 	rendered?: string
 	messages?: Array<{ role: string; content: string }>
+	/**
+	 * The format the render ACTUALLY used, for the receipt.
+	 *
+	 * Published from here rather than re-derived by the caller, because the
+	 * caller cannot know it: in chat wire mode this node renders `split_session`
+	 * and the connection's own format has no effect on a single byte, so a
+	 * receipt stamped from the connection would name a format the prompt was not
+	 * written in. Exactly the lie `dispatch.ts` already removed one layer down —
+	 * "reporting the value that was USED removes the disagreement instead of
+	 * documenting it".
+	 */
+	promptFormat?: string
 	/** What the template actually referenced, for the variable-awareness panel. */
 	usedVariables: string[]
+	/**
+	 * What this render had to do to something, said out loud — for the receipt.
+	 *
+	 * ⚠ Only ever present when there is something to say. On the ordinary path
+	 * this key is ABSENT rather than `[]`, so the payload a normal turn produces
+	 * is byte-identical to what it was before this field existed and no parity
+	 * golden moves.
+	 *
+	 * The `NodeReceipt.notes` vocabulary deliberately, because that is where a
+	 * fact like this belongs and where a reader debugging a turn looks. It rides
+	 * the payload to get there, exactly as `promptFormat` and `usedVariables`
+	 * above do: `runtime/bindings.ts` spreads this whole object into the
+	 * assemble node's `main`/`context`, and the executor records a node's output
+	 * on its receipt row. Publishing it from HERE rather than having the caller
+	 * re-derive it is the same rule `promptFormat` states — the caller cannot
+	 * know it, because only this function knows what it did.
+	 */
+	notes?: string[]
 }
 
 /**
@@ -533,10 +600,72 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		...(input.postHistory ? { postHistory: input.postHistory } : {})
 	}
 
+	/**
+	 * WHICH TEMPLATE the blocks are wrapped in — and therefore which shape comes
+	 * out, because the two are one decision.
+	 *
+	 * ## Chat wire mode
+	 *
+	 * `split_session` is not a format. It emits `<@role:…>` markers into one
+	 * string and parses them straight back out into a messages array, so it is a
+	 * transport for getting structure through a string-shaped seam — which is
+	 * exactly what a chat-shaped API needs and what the connection's own
+	 * delimiters cannot provide. In chat mode there is therefore no prompt format
+	 * at all, not even a default one (NOMENCLATURE §10), and any the connection
+	 * happens to carry is deliberately ignored here.
+	 *
+	 * ⚠ **This is the guarded path, and a second way to produce messages must
+	 * not be written.** `PromptBlockFormatter` neutralises any literal marker
+	 * appearing in user content, because a lore entry containing
+	 * `<@role:system>` would otherwise parse as a real system message and — for
+	 * Anthropic — be promoted into the top-level system prompt. The emitter, the
+	 * neutralised pattern and the parser are a three-way correspondence with four
+	 * injection tests over it. Building messages structurally is the design's
+	 * eventual replacement for all of it; a third spelling now would be one more
+	 * thing to retire.
+	 *
+	 * ## Completion wire mode, and callers with no connection
+	 *
+	 * The connection's own resolved row, exactly as before. A caller with no
+	 * connection in scope — the debug preview, the parity harness, the template
+	 * editors — supplies no wire mode, and this falls through to the same
+	 * expression it has always been.
+	 *
+	 * ⚠ The template's own `renderMode` below, never a substring test on its
+	 * name. This read `/split/i.test(input.promptFormat ?? "")`, which was
+	 * survivable only while the eight format keys were a hardcoded list nobody
+	 * could add to. With templates as rows a name is user-supplied: "Splitwise",
+	 * "my split format" or a Vicuna variant someone called "split-role test"
+	 * would each switch the WHOLE pipeline to role-array output — returning
+	 * `rendered: undefined` to a text-completion adapter and running the
+	 * role-marker parser over a string containing no markers, which yields an
+	 * empty messages array. Both failures surface as an empty generation.
+	 *
+	 * The resolved ROW first, then the key: `renderMode` is a column, so a
+	 * template that is not a built-in can only answer this question from the row
+	 * somebody loaded. Reading the key alone would send every admin-authored
+	 * template down the flat branch regardless of what its row says.
+	 */
+	const chatWire = input.wireMode === "chat"
+	const emit = chatWire
+		? completionTemplateOf(PromptFormats.SPLIT_CHAT)
+		: completionTemplateOf(input.completionTemplate ?? input.promptFormat)
+	// What the receipt should report, which is what was USED rather than what
+	// the row says — the same rule `dispatch.ts` states about `meta.promptFormat`.
+	// In chat mode the connection's format had no effect on a single byte, so
+	// naming it would put a reader debugging an empty reply on the wrong trail.
+	const promptFormat = chatWire
+		? PromptFormats.SPLIT_CHAT
+		: input.promptFormat
+
 	const rendered = await renderTemplate(input.engine, {
 		template: input.template,
 		variables: context,
-		promptFormat: input.promptFormat,
+		promptFormat,
+		// The resolved row, where the caller had one to resolve. The key stays
+		// beside it: it is what the receipt reports and what a plugin's engine
+		// has always been handed.
+		completionTemplate: emit,
 		// The run, so a plugin's engine rendering a large context is a call
 		// cancelling that run can still find. Absent when the caller has no run —
 		// the debug preview and the parity harness both render through here.
@@ -544,19 +673,90 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		user: input.user
 	})
 
-	// SPLIT_CHAT is the role-tagged format; anything else is one flat string.
-	// Decided here rather than by the caller so the preview and the send cannot
-	// disagree about which shape they are comparing.
-	const isSplit = /split/i.test(input.promptFormat ?? "")
+	const isSplit = emit.renderMode === "role_array"
+	const messages = isSplit
+		? (parseSplitChatPrompt(rendered) as Array<{
+				role: string
+				content: string
+			}>)
+		: undefined
+
+	/**
+	 * A context template that emits no role blocks: degrade LOUDLY, never refuse.
+	 *
+	 * ⚠ The one way chat wire mode can still lose a whole prompt, and it is worth
+	 * a paragraph rather than a shrug. `parseSplitChatPrompt` finds messages by
+	 * looking for the markers `{{#systemBlock}}` / `{{#userBlock}}` /
+	 * `{{#assistantBlock}}` emit; a template written without them renders
+	 * perfectly good text containing none, and the parse comes back EMPTY. Sent
+	 * as-is, that is a request with an empty conversation in it — the same silent
+	 * loss the wire-mode work removed, arriving by a different door.
+	 *
+	 * It could not happen before, because every render was flat whatever the
+	 * connection wanted, so a block-less template worked everywhere. It is
+	 * therefore a real configuration somebody is UPGRADING with — their template
+	 * worked yesterday.
+	 *
+	 * ## Why this stopped being a throw
+	 *
+	 * It threw. That is the project's governing rule broken in one line: **an
+	 * unavailable mechanism SUBTRACTS A SIGNAL; it never disables a path.** Role
+	 * structure is a mechanism, the template does not supply it, and the honest
+	 * consequence is a prompt with less structure than it might have had — not a
+	 * turn that fails. The user's alternative was to lose the reply outright and
+	 * be told to go and rewrite a template mid-conversation.
+	 *
+	 * So the whole rendered text goes out as ONE `user` message, and the receipt
+	 * says so in the sentence the throw used to carry. The two halves matter
+	 * together: keeping the bytes without reporting it would be the quiet
+	 * structure-loss the old comment rightly refused, and reporting it without
+	 * keeping the bytes is the throw again.
+	 *
+	 * ⚠ **`user`, and not `system`.** This is the inverse of
+	 * `buildTextPromptFromMessages` (`BaseConnectionAdapter`), which flattens a
+	 * role array into one string and appends an open assistant block for the
+	 * model to write into. Run backwards over a string carrying no markers there
+	 * is exactly one honest answer: the whole body is the turn the model is being
+	 * asked to continue, which is what `user` means. `system` would be actively
+	 * wrong — Anthropic hoists a system message to a top-level field and several
+	 * backends weight it differently, so the text would be moved somewhere the
+	 * author never put it; `assistant` would read as a prefill of the reply.
+	 *
+	 * An EMPTY render still falls through untouched — nothing was lost, and "this
+	 * session has nothing in it" is a different problem with different owners.
+	 */
+	const notes: string[] = []
+	if (isSplit && messages!.length === 0 && rendered.trim() !== "") {
+		messages!.push({ role: "user", content: rendered })
+		notes.push(
+			// The same sentence the throw carried, and the same branch, because
+			// the fix still differs: a chat CONNECTION is changed on the
+			// connection, while a role-array TEMPLATE is changed by picking a
+			// different one. Only the first clause is new — it says what was
+			// done, so a reader is not left inferring it from a prompt that
+			// merely looks flat.
+			"the whole rendered prompt was sent as one user message: " +
+				(chatWire
+					? "this connection is chat wire mode, "
+					: "this connection's completion template renders role messages, ") +
+				"but the context template produced no role blocks, so there are no " +
+				"messages to send. Role messages are marked out by {{#systemBlock}}, " +
+				"{{#userBlock}} and {{#assistantBlock}} — those are what say where one " +
+				"message ends and the next begins. Wrap the context template's sections " +
+				"in them, or " +
+				(chatWire
+					? "set this connection to completion wire mode, where one flat prompt is the expected shape."
+					: "pick a flat completion template, where one prompt string is the expected shape.")
+		)
+	}
+
 	return {
 		rendered: isSplit ? undefined : rendered,
-		messages: isSplit
-			? (parseSplitChatPrompt(rendered) as Array<{
-					role: string
-					content: string
-				}>)
-			: undefined,
-		usedVariables: referencedVariables(input.template)
+		messages,
+		promptFormat,
+		usedVariables: referencedVariables(input.template),
+		// Absent, not empty, on the ordinary path — see `RenderedContext.notes`.
+		...(notes.length ? { notes } : {})
 	}
 }
 

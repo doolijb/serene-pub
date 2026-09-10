@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
+	import { completionTemplateOptions } from "$lib/client/stores/completionTemplateOptions.svelte"
+	import { connectionWireMode } from "$lib/client/stores/connectionWireMode.svelte"
+	import { usesCompletionTemplate } from "$lib/shared/connectionAdapters/wireMode"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -21,14 +23,12 @@
 		think: boolean
 		keepAliveNumber: number
 		keepAliveUnit: string
-		useSession: boolean
 	}
 
 	interface ExtraJson {
 		stream?: boolean
 		think?: boolean
 		keepAlive?: string
-		useSession?: boolean
 	}
 
 	// Zod validation schema
@@ -48,7 +48,29 @@
 
 	let { connection = $bindable() } = $props()
 
+	/**
+	 * A completion template only means something in COMPLETION wire mode.
+	 *
+	 * In chat mode the roles carry the structure: no delimiter is emitted and no
+	 * stop string from the template is sent, so the picker below would be a
+	 * saved preference that changes no byte of any request. Same "no control
+	 * without an effect" rule the retrieval audit applied.
+	 *
+	 * Read through the store rather than off `connection.capabilities`, so the
+	 * wire-mode switches in the capability panel underneath take effect here at
+	 * once — that panel deliberately never writes into `connection`.
+	 */
+	const wireMode = connectionWireMode()
+	const showFormat = $derived(usesCompletionTemplate(wireMode.of(connection)))
+
 	const socket = useTypedSocket()
+	/**
+	 * The format picker's options, read from `completion_templates` instead of
+	 * the eight-entry constant that used to sit beside the table — so a template
+	 * an admin authored is offered by the one control that selects it. Falls back
+	 * to the built-ins until the reply lands.
+	 */
+	const formatOptions = completionTemplateOptions()
 	const defaultExtraJson =
 		CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].extraJson
 
@@ -133,7 +155,6 @@
 		return {
 			stream: extraJson.stream || false,
 			think: extraJson.think || false,
-			useSession: extraJson.useSession ?? true,
 			keepAliveNumber: extraJson.keepAlive
 				? parseInt(extraJson.keepAlive) || 300
 				: 300,
@@ -147,8 +168,7 @@
 		return {
 			stream: fields.stream,
 			think: fields.think,
-			keepAlive: `${fields.keepAliveNumber}${fields.keepAliveUnit}`,
-			useSession: fields.useSession ?? true
+			keepAlive: `${fields.keepAliveNumber}${fields.keepAliveUnit}`
 		}
 	}
 
@@ -232,11 +252,11 @@
 			{/if}
 		</button>
 	</div>
-	{#if !ollamaFields?.useSession}
+	{#if showFormat}
 		<Select
 			class="mt-2"
 			label="Prompt Format"
-			options={PromptFormats.options}
+			options={formatOptions.value}
 			bind:value={connection.promptFormat}
 		/>
 	{/if}
@@ -288,23 +308,13 @@
 				</div>
 			</div>
 			<section class="w-full space-y-4 pt-4">
-				<Switch
-					name="useSession"
-					checked={ollamaFields.useSession}
-					onCheckedChange={(e) =>
-						(ollamaFields!.useSession = e.checked)}
-					class="flex items-center justify-between gap-4"
-				>
-					<Switch.Label class="font-semibold">
-						Use Session Mode
-					</Switch.Label>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
+				<!-- "Use Session Mode" lived here. It is a CAPABILITY now —
+				     Chat messages / Text completion, in the Capabilities panel
+				     below, graded through the same four layers as everything
+				     else and with a hand-set value outranking every later test.
+				     Left as two controls for one fact, the switch and the
+				     capability could disagree, and only one of them decided
+				     what went on the wire. -->
 				<Switch
 					name="stream"
 					checked={ollamaFields.stream}

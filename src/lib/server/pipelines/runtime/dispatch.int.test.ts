@@ -42,7 +42,16 @@ let seen: {
  * test.
  */
 let adapterSendsAttachments = true
-let mode: "text" | "stream" | "empty" | "abort" = "text"
+let mode:
+	| "text"
+	| "stream"
+	| "empty"
+	| "abort"
+	| "inlineThinking"
+	| "inlineThinkingStream"
+	| "prefilledClose"
+	| "nativeAndInline"
+	| "streamWithThinkingContent" = "text"
 let connectionForRun: any = connection
 
 /** Pinned to the real action, so a rename cannot pass here — fakeTextAdapter.ts. */
@@ -52,6 +61,12 @@ class FakeAdapter implements FakeTextAdapter {
 	promptBuilder: any = {}
 	constructor(params: any) {
 		seen.constructedWith = params
+	}
+	/** The composed stop list. Recorded so a test can assert what was handed over. */
+	stops: any
+	withStops(s: any) {
+		this.stops = s
+		return this
 	}
 	withCompiledPrompt(p: any) {
 		this.injected = p
@@ -96,6 +111,71 @@ class FakeAdapter implements FakeTextAdapter {
 						onContent(chunk)
 					}
 				}
+			}
+		// A model whose backend has no reasoning parser: the delimiters arrive
+		// as ordinary text in the completion, with nothing on `thinkingContent`.
+		if (mode === "inlineThinking")
+			return {
+				completionResult: "<think>weighing it up</think>Hello there",
+				compiledPrompt: this.injected,
+				isAborted: false
+			}
+		// The same, streamed — and with the markup split across chunks, which is
+		// safe because the parse runs over the accumulated buffer.
+		if (mode === "inlineThinkingStream")
+			return {
+				compiledPrompt: this.injected,
+				isAborted: false,
+				completionResult: async (
+					onContent: (c: string) => void,
+					_onThinking?: (c: string) => void
+				) => {
+					for (const chunk of [
+						"<thi",
+						"nk>weighing ",
+						"it up</think>Hel",
+						"lo there"
+					]) {
+						if (this.aborted) return
+						onContent(chunk)
+					}
+				}
+			}
+		// An adapter that streams the text but hands its reasoning back on the
+		// result object. `TextGenResult` says this cannot happen — the field is
+		// documented as non-streaming only — so this is the contract-breaking
+		// case, pinned so the fallback that catches it is not deleted as dead.
+		if (mode === "streamWithThinkingContent")
+			return {
+				compiledPrompt: this.injected,
+				isAborted: false,
+				thinkingContent: "reasoned up front",
+				completionResult: async (
+					onContent: (c: string) => void,
+					_onThinking?: (c: string) => void
+				) => {
+					for (const chunk of ["Hel", "lo ", "there"]) {
+						if (this.aborted) return
+						onContent(chunk)
+					}
+				}
+			}
+		// DeepSeek-R1's shape: the template emitted the opening tag, so only the
+		// close is generated.
+		if (mode === "prefilledClose")
+			return {
+				completionResult: "weighing it up</think>Hello there",
+				compiledPrompt: this.injected,
+				isAborted: false
+			}
+		// Native reasoning AND a stray inline block. The native trace must win
+		// the `thinking` port; the markup must still leave the text.
+		if (mode === "nativeAndInline")
+			return {
+				completionResult: "<think>stray</think>Hello there",
+				compiledPrompt: this.injected,
+				isAborted: false,
+				thinkingContent: "the native trace"
 			}
 		return {
 			completionResult: "Hello there",
@@ -497,6 +577,88 @@ describe("what dispatch refuses to hand back", () => {
 		expect(r.kind).toBe("ok")
 		expect(JSON.stringify(r.value)).not.toContain(SECRET_KEY)
 		expect(r.value.text).toBe("Hello there")
+	})
+})
+
+/**
+ * The pipeline path used to do no inline parsing at all: the only parser lived
+ * in `generateResponse` and was module-private, so `text` came back with the
+ * delimiters intact and every consumer of this function — lore entries, scenes,
+ * summaries, session events, contributed functions — wrote raw markup into a
+ * durable record. Reasoning already had a home on the result; nothing did the
+ * moving.
+ */
+describe("reasoning never reaches the port as markup", () => {
+	const dispatch = () =>
+		dispatchGeneration({
+			db: fakeDb,
+			compiledPrompt: compiled,
+			sessionId: 7,
+			userId: 1
+		})
+
+	it("lifts an inline block out of a non-streamed completion", async () => {
+		mode = "inlineThinking"
+		const r = await dispatch()
+		expect(r.text).toBe("Hello there")
+		expect(r.thinking).toBe("weighing it up")
+	})
+
+	it("lifts an inline block out of a streamed completion", async () => {
+		mode = "inlineThinkingStream"
+		const r = await dispatch()
+		expect(r.text).toBe("Hello there")
+		expect(r.thinking).toBe("weighing it up")
+	})
+
+	it("handles a prefilled opening tag (only the close is generated)", async () => {
+		mode = "prefilledClose"
+		const r = await dispatch()
+		expect(r.text).toBe("Hello there")
+		expect(r.thinking).toBe("weighing it up")
+	})
+
+	it("native reasoning leads the trace, and the text is still cleaned", async () => {
+		// The native trace leads; the stray inline block is kept behind it
+		// rather than deleted, so nothing the parser judged is ever lost.
+		mode = "nativeAndInline"
+		const r = await dispatch()
+		expect(r.text).toBe("Hello there")
+		expect(r.thinking).toBe("the native trace\n\nstray")
+	})
+
+	it("forwards the raw stream to the sink, unfiltered", async () => {
+		// Deliberate: a sink is a live view of what the model is emitting, and
+		// the caller re-parses the accumulated buffer anyway. Filtering deltas
+		// would mean parsing across chunk boundaries.
+		mode = "inlineThinkingStream"
+		const chunks: string[] = []
+		await dispatchGeneration({
+			db: fakeDb,
+			compiledPrompt: compiled,
+			sessionId: 7,
+			onChunk: (c) => chunks.push(c)
+		})
+		expect(chunks.join("")).toContain("<think>")
+	})
+
+	it("leaves a completion with no delimiters exactly as it was", async () => {
+		mode = "text"
+		const r = await dispatch()
+		expect(r.text).toBe("Hello there")
+		expect(r.thinking).toBe("hmm")
+	})
+
+	it("does not drop thinkingContent from an adapter that also streams", async () => {
+		// The asymmetry the streaming branch used to have: it read reasoning
+		// only from the callback while the non-streaming branch read the field,
+		// so an adapter populating both lost the half it streamed. Contractually
+		// impossible (`TextGenResult.thinkingContent` is non-streaming only) —
+		// which is exactly why nothing would have noticed.
+		mode = "streamWithThinkingContent"
+		const r = await dispatch()
+		expect(r.text).toBe("Hello there")
+		expect(r.thinking).toBe("reasoned up front")
 	})
 })
 

@@ -13,7 +13,7 @@
 
 import { describe, expect, test } from "vitest"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-import { OPENAI_CHAT_PRESETS } from "$lib/shared/utils/connectionDefaults"
+import { OPENAI_COMPATIBLE_PRESETS } from "$lib/shared/utils/connectionDefaults"
 import { PRESET_CAPABILITIES } from "./manifest"
 import {
 	isKnownPresetSlug,
@@ -21,11 +21,11 @@ import {
 	presetHomeType
 } from "./presetSlug"
 
-const OPENAI = CONNECTION_TYPE.OPENAI_CHAT
+const OPENAI = CONNECTION_TYPE.OPENAI
 
 describe("the known-slug vocabulary is the UNION of both lists", () => {
 	test("every slug a preset offers is known", () => {
-		const offered = OPENAI_CHAT_PRESETS.map(
+		const offered = OPENAI_COMPATIBLE_PRESETS.map(
 			(p) => (p as { slug?: string }).slug
 		).filter((s): s is string => !!s)
 		// Not a snapshot of the count: presets get added, and a test that
@@ -49,7 +49,7 @@ describe("the known-slug vocabulary is the UNION of both lists", () => {
 	 */
 	test("`anthropic` is accepted even though no preset offers it", () => {
 		expect(
-			OPENAI_CHAT_PRESETS.some(
+			OPENAI_COMPATIBLE_PRESETS.some(
 				(p) => (p as { slug?: string }).slug === "anthropic"
 			)
 		).toBe(false)
@@ -65,7 +65,7 @@ describe("the known-slug vocabulary is the UNION of both lists", () => {
 
 describe("a slug's home type is derived from membership", () => {
 	test("every preset-offered slug is an openai-chat preset", () => {
-		for (const p of OPENAI_CHAT_PRESETS) {
+		for (const p of OPENAI_COMPATIBLE_PRESETS) {
 			const slug = (p as { slug?: string }).slug
 			if (slug) expect(presetHomeType(slug)).toBe(OPENAI)
 		}

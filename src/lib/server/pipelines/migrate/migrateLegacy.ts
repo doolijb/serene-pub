@@ -52,9 +52,22 @@ import {
 	SUMMARIZE_WORLD_SPEC_ID
 } from "$lib/server/pipelines/specs"
 
-type Db = { select: any; insert: any; update: any; delete: any }
-
 const str = (v: unknown): string => (typeof v === "string" ? v : "")
+
+/**
+ * The NUMBER-valued columns of a row, as a key union.
+ *
+ * Every dynamic column name in this file names one — a legacy pointer holds a
+ * config id, a legacy param holds a count — and each was spelt `string` behind
+ * an `as any` at the read. Derived from the row instead, a misspelt column is a
+ * compile error rather than an `undefined` that silently migrates nothing,
+ * which is the failure this whole file exists to avoid repeating.
+ */
+type NumberColumn<Row> = {
+	[K in keyof Row]-?: Row[K] extends number | null ? K : never
+}[keyof Row]
+type SystemPointerColumn = NumberColumn<SelectSystemSettings>
+type SessionPointerColumn = NumberColumn<SelectSession>
 
 /** One legacy table, and how its rows become a pipeline's prompts. */
 interface LegacySource {
@@ -220,7 +233,7 @@ async function freePromptName(
 				eq(schema.pipelinePrompts.slot, slot)
 			)
 		)
-	const taken = new Set((rows as any[]).map((r) => r.name))
+	const taken = new Set(rows.map((r) => r.name))
 	if (!taken.has(base)) return base
 	let n = 2
 	while (taken.has(`${base} (${n})`)) n++
@@ -261,7 +274,7 @@ export async function migrateLegacyConfigs(db: Db): Promise<MigrationReport[]> {
 			.from(source.table)
 			.orderBy(asc(source.table.id))
 
-		for (const row of rows as any[]) {
+		for (const row of rows) {
 			if (row.seedKey) continue // core's own — already shipped
 
 			const seedKey = migratedKey(source.specSlug, row.id)
@@ -407,24 +420,25 @@ export async function migrateLegacyParams(db: Db): Promise<number> {
 	const [system] = await db.select().from(schema.systemSettings).limit(1)
 	const sessionRows = await db.select().from(schema.sessions)
 	const prompts = await db.select().from(schema.promptConfigs)
-	const byId = new Map((prompts as any[]).map((p) => [p.id, p]))
+	const byId = new Map(prompts.map((p) => [p.id, p]))
 
 	/** The column defaults these fields carry; equal means "never touched". */
-	const DEFAULTS: Record<string, number> = {
-		postHistoryDepth: 0,
-		postHistoryTokenTrigger: 0
-	}
+	const DEFAULTS: ReadonlyArray<
+		readonly [NumberColumn<SelectPromptConfig>, number]
+	> = [
+		["postHistoryDepth", 0],
+		["postHistoryTokenTrigger", 0]
+	]
 
 	let written = 0
 	/** The tuned fields a legacy config carries, or none. */
 	const tuned = (configId: number | null | undefined) => {
 		const row = configId != null ? byId.get(configId) : undefined
 		if (!row) return []
-		return Object.entries(DEFAULTS)
-			.filter(([path, fallback]) => {
-				const value = row[path]
-				return value != null && value !== fallback
-			})
+		return DEFAULTS.filter(([path, fallback]) => {
+			const value = row[path]
+			return value != null && value !== fallback
+		})
 			.map(([path]) => ({
 				path,
 				value: row[path],
@@ -465,7 +479,7 @@ export async function migrateLegacyParams(db: Db): Promise<number> {
 			const { resolveSelectedConfig, duplicateConfig, selectConfig } =
 				await import("$lib/server/pipelines/config/named")
 			let selected = await resolveSelectedConfig(
-				db as any,
+				db,
 				spec.id,
 				RESPOND_SPEC_ID,
 				{}
@@ -477,21 +491,15 @@ export async function migrateLegacyParams(db: Db): Promise<number> {
 					.where(eq(schema.pipelineConfigs.id, selected.configId))
 					.limit(1)
 				let targetId = selected.configId
-				if ((cfg as any)?.isImmutable) {
+				if (cfg?.isImmutable) {
 					const copy = await duplicateConfig(
-						db as any,
+						db,
 						selected.configId,
-						`${(cfg as any).name} (customized)`
+						`${cfg.name} (customized)`
 					).catch(() => null)
 					if (copy) {
 						targetId = copy.id
-						await selectConfig(
-							db as any,
-							spec.id,
-							"instance",
-							0,
-							targetId
-						)
+						await selectConfig(db, spec.id, "instance", 0, targetId)
 					} else {
 						targetId = -1
 					}
@@ -515,7 +523,7 @@ export async function migrateLegacyParams(db: Db): Promise<number> {
 		}
 	}
 	// User-scope rows no longer migrate (ruled 2026-08-24) — the layer is gone.
-	for (const c of sessionRows as any[]) await write(c.id, c.promptConfigId)
+	for (const c of sessionRows) await write(c.id, c.promptConfigId)
 
 	return written
 }
@@ -536,9 +544,9 @@ export async function migrateLegacySelections(db: Db): Promise<number> {
 	/** Which legacy pointer selects which namespace. */
 	const POINTERS: Array<{
 		specSlug: string
-		system?: string
+		system?: SystemPointerColumn
 		user?: string
-		session?: string
+		session?: SessionPointerColumn
 	}> = [
 		{
 			specSlug: RESPOND_SPEC_ID,
@@ -626,15 +634,14 @@ export async function migrateLegacySelections(db: Db): Promise<number> {
 			selected++
 		}
 
-		if (pointer.system)
-			await apply("instance", 0, (system as any)?.[pointer.system])
+		if (pointer.system) await apply("instance", 0, system?.[pointer.system])
 
 		// User-scope selections no longer migrate (ruled 2026-08-24): the
 		// layer is gone, and carrying them to session scope would promote a
 		// preference into a per-session decision nobody made.
 
 		if (pointer.session)
-			for (const c of sessionRows as any[])
+			for (const c of sessionRows)
 				await apply("session", c.id, c[pointer.session], c.userId)
 	}
 

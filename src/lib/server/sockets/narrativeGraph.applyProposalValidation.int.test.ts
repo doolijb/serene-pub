@@ -162,7 +162,7 @@ describe("narrativeGraphApplyProposalHandler — proposal length caps + enum val
 		expect(rels[0].visibility).toBe("acknowledged")
 	})
 
-	test("valid nodeState/visibility values pass through unchanged", async () => {
+	test("valid nodeState passes through, and a proposed `public` is bounded", async () => {
 		const { narrativeGraphApplyProposalHandler } = await import(
 			"./narrativeGraph"
 		)
@@ -220,7 +220,15 @@ describe("narrativeGraphApplyProposalHandler — proposal length caps + enum val
 		const rel = await testDb.query.narrativeRelationships.findFirst({
 			where: eq(schema.narrativeRelationships.lorebookId, lorebook.id)
 		})
-		expect(rel?.visibility).toBe("public")
+		// ⚠ Changed deliberately (plan §6, ruled 2026-09-08): `public` is a
+		// claim about the world knowing, which no single scene establishes, so
+		// an inference may never write it — it must be authored. The value is
+		// bounded rather than rejected, and this edge has no scene provenance,
+		// so it lands at the column's own default.
+		// `utils/relationshipVisibility.test.ts` and
+		// `narrativeGraph.relationshipVisibility.int.test.ts` own the rule; this
+		// stays as the caps-and-enums file's own record that the value moved.
+		expect(rel?.visibility).toBe("acknowledged")
 		expect(rel?.description).toBe("a short description")
 		expect(rel?.reason).toBe("a short reason")
 	})
