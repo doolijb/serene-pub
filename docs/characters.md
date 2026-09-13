@@ -88,6 +88,22 @@ Gallery and avatar changes take effect immediately (they're saved via their own 
 
 Uploaded avatar and gallery images are stored per-character on the server (in that character's own data directory), addressed by path rather than embedded in the database record. When a character is deleted, its entire data directory — avatar plus every gallery image — is removed along with the character record.
 
+### Avatar URLs Carry a Revision
+
+Your browser caches an image against the exact address it was loaded from, so an avatar address that never changes would keep showing the old face after you replace it. Every avatar link Serene Pub renders therefore carries the image's current revision number, and the server bumps that number whenever the bytes behind a link change — a replaced avatar, a re-cut thumbnail, or an image reclaimed by storage cleanup. A new revision is a new address, so the new picture loads straight away. Open sessions are told about both kinds of change over their live connection, which is why every message avatar, the composer, the scene portraits and the sidebars all switch to the new image at once, with no page refresh.
+
+### Cropping an Avatar
+
+Small pictures of an avatar (the sidebars, message avatars, scene portraits, the composer) are cut from one **crop** stored against the image. Until you choose one, that crop is the largest square taken from the **top** of the picture and centred across it, because character art is usually a portrait with the face in the upper part of the frame; a landscape image keeps its full height instead.
+
+To choose your own:
+
+- **When you pick a new avatar**, the crop editor opens over the image you chose, before anything is uploaded. Drag the picture to move it under the square, use the wheel, a pinch or the zoom slider to zoom, and the arrow keys to nudge it a pixel at a time (hold Shift for ten). Two live previews show exactly what the round and the square avatar will look like. **Save** keeps your crop; **Cancel** uploads the image uncropped, which means the default crop above.
+- **For an avatar you already have**, the **Adjust crop** button beside the avatar in the character or persona form opens the same editor on the stored image, starting from the crop that is in force.
+- **From the Media panel**, any image's **⋮** menu has a **Crop** action, which edits the same value.
+
+**Reset** puts the crop back to the default rule rather than to whatever it was before. The crop is never destructive: the full image is always kept, so a lightbox still shows everything and you can re-crop as often as you like. Changing the crop re-cuts the small picture and gives it a new address, so every open view switches to it at once (see below).
+
 ## Creating a Character
 
 There are two ways to create a character, both reachable from the **New** button (plus icon) in the Characters sidebar:

@@ -139,12 +139,55 @@ export async function sync() {
 				// deliberately drops high-probability tokens and DRY penalises
 				// repeated strings; both are actively harmful when the wanted
 				// output is a rigid, repetitive JSON shape with a fixed key order.
+				//
+				// `reasoning` is ON and resolves to the shape's declared `off`, per
+				// the `values` rule above: a reasoning trace before a structured
+				// answer is spent out of the same response budget the answer needs,
+				// and a schema on the wire leaves nothing for it to help with.
 				enabled: [
 					"temperature",
 					"topP",
 					"topK",
 					"contextTokens",
-					"responseTokens"
+					"responseTokens",
+					"reasoning"
+				]
+			},
+			{
+				// For stages nobody reads: planning, state keeping, summaries.
+				//
+				// Precise (Extraction)'s numbers, under a name that says WHEN to
+				// reach for it rather than what it does. The two are deliberately
+				// separate rows carrying the same values: an extraction pass and a
+				// background stage want the same settings today and are not the
+				// same decision, so retuning one must not retune the other. There
+				// is no `description` column on this table, which is why the
+				// sentence is here.
+				//
+				// NO `id`, per the rule above — the sequence assigns one.
+				seedKey: "sampling-background",
+				name: "Background",
+				isImmutable: true,
+				shape: S.textGen,
+				values: {
+					temperature: 0.2,
+					topP: 0.9,
+					topK: 20,
+					contextTokens: 8192,
+					responseTokens: 1024
+				},
+				// `reasoning` resolves to the declared `off`. It is the whole
+				// reason this row exists beside the instance default: a stage
+				// whose output is read by the next node and by nobody else pays
+				// for a reasoning trace out of the same response budget, and
+				// nothing downstream is any better for it.
+				enabled: [
+					"temperature",
+					"topP",
+					"topK",
+					"contextTokens",
+					"responseTokens",
+					"reasoning"
 				]
 			},
 			// ── Image presets: one per MODEL FAMILY ───────────────────────────
@@ -997,19 +1040,6 @@ export async function sync() {
 		await backfillRelationshipHistoryEntries(db)
 	} catch (error) {
 		console.error("Error backfilling relationship history entries:", error)
-	}
-
-	try {
-		const vecConfig = await db.query.vectorizationConfigs.findFirst({
-			where: (c, { eq }) => eq(c.id, 1)
-		})
-		if (!vecConfig) {
-			await db
-				.insert(schema.vectorizationConfigs)
-				.values({ id: 1, embeddingModelTtlMinutes: 5 })
-		}
-	} catch (error) {
-		console.error("Error syncing vectorization config:", error)
 	}
 
 	try {

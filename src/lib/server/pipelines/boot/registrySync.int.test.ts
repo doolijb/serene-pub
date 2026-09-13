@@ -8,8 +8,7 @@ import { describe, it, expect, beforeAll } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import {
 	syncTypeRegistry,
-	readTypeRegistry,
-	TypeRegistryConflictError
+	readTypeRegistry
 } from "$lib/server/pipelines/boot/registrySync"
 import { saveDocument, loadDocument } from "$lib/server/pipelines/boot/store"
 import type { Descriptor } from "@serene-pub/sdk"
@@ -104,10 +103,12 @@ describe("type registry sync", () => {
 		expect(restore.updated).toContain("core:query/session-history@1")
 	})
 
-	it("raises when a published version's content changed — never publishes, never ignores", async () => {
-		// Publishing silently would rewrite the meaning of every pin to @1.
-		// Ignoring would leave the rows describing a build that no longer exists,
-		// so plugin drift diagnostics would start reporting core's drift as theirs.
+	it("moves the pointer when a published declaration's content changed", async () => {
+		// This raised until the content-addressing ruling (2026-09-10), and the
+		// refusal reached `bootstrapPipelines`, which returned early — so a
+		// descriptor edit stopped every pipeline on an upgrading install and
+		// the only way to ship one was a migration deleting rows.
+		//
 		// Built as a plain descriptor rather than through describeTaskType,
 		// because a type id may only be registered once per process (F5) — and
 		// what this test simulates is core's *next build*, not a second
@@ -121,13 +122,46 @@ describe("type registry sync", () => {
 				out: { main: S.json, chunks: S.json }
 			}
 		} as unknown as Descriptor
-		await expect(
-			syncTypeRegistry(db, [drifted], { release: "0.6.1" })
-		).rejects.toThrow(TypeRegistryConflictError)
 
-		await expect(
-			syncTypeRegistry(db, [drifted], { release: "0.6.1" })
-		).rejects.toThrow(/Publish core:task\/chunk-text@2 instead/)
+		const before = (
+			await db
+				.select()
+				.from(schema.pipelineTypeRegistry)
+				.where(
+					and(
+						eq(
+							schema.pipelineTypeRegistry.typeId,
+							"core:task/chunk-text"
+						),
+						eq(schema.pipelineTypeRegistry.version, 1)
+					)
+				)
+		)[0]! as any
+
+		const moved = await syncTypeRegistry(db, [drifted], {
+			release: "0.6.1"
+		})
+		expect(moved.republished).toContain("core:task/chunk-text@1")
+
+		// Idempotent from there: the same declaration a second time is not a
+		// second pointer move.
+		const again = await syncTypeRegistry(db, [drifted], {
+			release: "0.6.1"
+		})
+		expect(again.republished).toEqual([])
+
+		// And the declaration the pointer moved off is still resolvable, which
+		// is the whole reason the refusal could be dropped.
+		const archived = await db
+			.select()
+			.from(schema.pipelineTypeDeclarations)
+			.where(
+				eq(
+					schema.pipelineTypeDeclarations.contentHash,
+					before.contentHash
+				)
+			)
+		expect(archived).toHaveLength(1)
 	})
 
 	it("a new version lands beside the old one rather than replacing it", async () => {
@@ -451,26 +485,24 @@ describe("script types ride the node-type sync", () => {
 		expect(again.updated).toEqual([])
 	})
 
-	it("refuses a moved script contract exactly as it refuses a moved node one", async () => {
-		// The freeze rule is the whole reason scripts share this path. A
-		// contract that could change under a pin would let every chain using it
-		// start behaving differently with nothing on screen to say so.
+	it("republishes a moved script contract exactly as it republishes a node one", async () => {
+		// One rule is the whole reason scripts share this path: a script type
+		// that published differently from a node type would need its own
+		// answer to every question this file asks.
 		const before = await scriptRow("core:script:text/stop")
 		await db
 			.update(schema.pipelineTypeRegistry)
 			.set({ contentHash: "stale-from-the-previous-build" })
 			.where(eq(schema.pipelineTypeRegistry.id, before.id))
 
-		await expect(
-			syncTypeRegistry(db, ALL(), { release: "test" })
-		).rejects.toBeInstanceOf(TypeRegistryConflictError)
+		const moved = await syncTypeRegistry(db, ALL(), { release: "test" })
+		expect(moved.republished).toContain("core:script:text/stop@1")
 
-		// Put it back, so the shared database is not left conflicting for
-		// whatever runs next in this file.
-		await db
-			.update(schema.pipelineTypeRegistry)
-			.set({ contentHash: before.contentHash })
-			.where(eq(schema.pipelineTypeRegistry.id, before.id))
+		// The row is back on the build's own declaration, so the rest of this
+		// file sees what it expects.
+		expect((await scriptRow("core:script:text/stop")).contentHash).toBe(
+			before.contentHash
+		)
 	})
 
 	it("carries the blast radius as display text, out of the hash", async () => {

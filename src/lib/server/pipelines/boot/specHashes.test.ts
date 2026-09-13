@@ -1,27 +1,41 @@
 /**
- * A core spec's shape and its version move together.
+ * What each core spec's slug resolves to, as a checked-in fact.
  *
- * Seeding matches on `(slug, semver)` and **skips when it finds a match**, so a
- * changed pipeline published under an unchanged version never reaches an
- * install that already booted. The instance keeps running the old document
- * while the code says otherwise, and nothing anywhere reports it.
+ * ## What this used to be for, and what it is for now
  *
- * Tests do not catch this on their own: a fresh database publishes whatever the
- * code currently says, so every integration test passes on the new shape while
- * real upgrades silently get the old one. This is the check that a fresh
- * database cannot perform — a recorded hash from the last time the pair was
- * known to agree.
+ * Seeding matched on `(slug, semver)` and **skipped on a match**, so a changed
+ * pipeline published under an unchanged version reached no install that had
+ * already booted: the instance kept running the old document while the code said
+ * otherwise, and nothing anywhere reported it. Tests could not catch it — a
+ * fresh database publishes whatever the code currently says, so every
+ * integration test passed on the new shape while real upgrades silently got the
+ * old one.
  *
- * Found the hard way. A version bump written as a string replacement matched
- * nothing, because another session had already moved that spec to the version
- * being written; the replace was a silent no-op and the whole change sat behind
- * a version that seeding skipped.
+ * Since the content-addressing ruling (2026-09-10) a version is `(spec, semver,
+ * canonical hash)`: an edited document publishes as a **new row**, the slug's
+ * `active_version_id` moves to it, and the row it moved off is retired for the
+ * receipts that pinned it. So the silent-skip is gone, and with it the reason
+ * every in-place spec edit needed a migration deleting version rows (0095, 0100,
+ * 0102, 0106, 0110, 0111, 0113, 0115 — eight of them, one per edit).
+ *
+ * What remains is the question this file has always really been asking: **did
+ * you mean to change what that pin means?** A moved hash is now shippable and
+ * still has to be deliberate, which is what a recorded snapshot makes it.
+ *
+ * Found the hard way, and worth keeping written down. A version bump written as
+ * a string replacement matched nothing, because another session had already
+ * moved that spec to the version being written; the replace was a silent no-op
+ * and the whole change sat behind a version that seeding skipped.
  *
  * ## When this fails
  *
- * You changed a core spec. Bump its `*_VERSION` and record the new hash here,
- * in the same commit. Two lines, and they are the two that have to stay
- * together — this file exists to make forgetting the first one loud.
+ * You changed a core spec. Either bump its `*_VERSION` and add the new pin, or —
+ * under the 0.6 version freeze, which is the usual case — record the new hash
+ * against the existing pin, in the same commit as the edit. **No migration is
+ * involved any more**; the comments below that name one are history.
+ *
+ * That the slug's row actually *carries* the recorded hash after a boot is
+ * asserted by `contentAddressing.int.test.ts`, where a database is available.
  */
 
 import { describe, expect, it } from "vitest"
@@ -39,6 +53,44 @@ const PUBLISHED: Record<string, string> = {
 	// 1.0.0: the standard session type as a create spec (23 §7) — the F29
 	// floor's shape moves from the input descriptor to this document.
 	"core:spec/create-chat@2.2.0": "fa56525a69fb9",
+	/**
+	 * The Adventure genre (DESIGN-adventure-genre.md) — five new slugs, and
+	 * nothing above them moves. Every node they pin is either one core already
+	 * shipped or one declared beside them; no existing spec or type was edited,
+	 * which is what keeps `core:spec/respond@1.20.0` on the hash it has.
+	 *
+	 * `adventure-respond` is the multi-agent turn: plan, narrate, one voice per
+	 * speaker the planner named, then a state keeper whose changes are proposed
+	 * unless the session trusts the narrator. The other three are actions on the
+	 * open `session-action` slot.
+	 */
+	"core:spec/adventure-create@1.0.0": "8ffc3130734e3",
+	// ⚠ MOVED, in place, while the genre is still unreleased: the planner and
+	// the keeper now pin `core:provider/generate-json@1` instead of
+	// `generate-text` + `parse-json`, their transcript comes from
+	// `core:task/prose-transcript@1`, and the narrator builds its own. A live
+	// playtest showed why: asked as ordinary replies, both JSON stages wrote the
+	// character's next paragraph and appended the document under it, and the
+	// keeper reproduced the PLANNER's schema it had read in the transcript.
+	// `core:spec/respond@1.20.0` is untouched.
+	// ⚠ MOVED AGAIN, same terms: the resolver now takes the planner's document
+	// on a `plan` port (its `worldHints` were required by the schema and read by
+	// nobody), the voices take the state and the plan so a cast member knows
+	// where they are standing, and the narrator's own assembly template is gone
+	// — every variable in it was wrong, so the narrator's prompt arrived with no
+	// instructions, no transcript and two `[object Object]` blocks.
+	// ⚠ MOVED AGAIN, same unreleased-genre terms: the preset points the
+	// planner's and the keeper's Sampling slots at the seeded Background row,
+	// by seed identity (`{ seedKey: 'sampling-background' }`) because a row id
+	// differs per install. The narrator and the voices are untouched: those
+	// are the prose a person waits for, and they keep the session's own pick.
+	"core:spec/adventure-respond@1.0.0": "890fe65ccfdc4",
+	"core:spec/adventure-look@1.0.0": "17e9e37a86a2c2",
+	// ⚠ MOVED, in place, on the same unreleased-genre terms: Rest and Time
+	// passes ask `core:provider/generate-json@1` for the keeper's own shape
+	// instead of parsing prose out of a prefilled reply.
+	"core:spec/adventure-rest@1.0.0": "eaa7a41b6cd8c",
+	"core:spec/adventure-advance-time@1.0.0": "135459cfe7c4c0",
 	"core:spec/create-chat@2.1.0": "ea80f2679383c",
 	"core:spec/create-chat@2.0.0": "a6281141b21ea",
 	// 1.16.0 / 1.10.0: the three lore gather branches and the narrator's trigger query
@@ -200,10 +252,12 @@ const PUBLISHED: Record<string, string> = {
 	// RECEIPT — `dispatch.ts` publishes `payload.groups` as the run's `sources`,
 	// which is the budget panel's entire data set and has been an empty object on
 	// every run ever recorded.
-	// (was "127bfb179f55dd", then "13d5772f33e5ec", then "9cfae9a28583f")
-	"core:spec/narrate-character@1.0.0": "17c8c28ac7fd7f",
-	// (was "b6ba835e86244", then "431aa4254af1", then "12971669b900fd")
-	"core:spec/narrate@1.11.0": "bc304a8a52b71",
+	// (was "127bfb179f55dd", then "13d5772f33e5ec", then "9cfae9a28583f",
+	//  then "17c8c28ac7fd7f")
+	"core:spec/narrate-character@1.0.0": "1a1055550a18d6",
+	// (was "b6ba835e86244", then "431aa4254af1", then "12971669b900fd",
+	//  then "bc304a8a52b71")
+	"core:spec/narrate@1.11.0": "1276c81165cdd1",
 	// ⚠ `core:spec/respond@1.20.0`'s hash MOVED for the SECOND time without a
 	// bump, on the same terms as the two paragraphs above and paired with
 	// `drizzle/0106_continuation_prefill_reprojection`, which deletes its
@@ -237,9 +291,55 @@ const PUBLISHED: Record<string, string> = {
 	// And a FIFTH time, by `drizzle/0113_declared_ports_and_rank_groups.sql` —
 	// the `prompt` node's `groups` edge, the paragraph above
 	// `narrate-character@1.0.0`, which all three moved for and nothing else.
+	//
+	// And a SIXTH time, by `drizzle/0115_config_deviations.sql`, on the same
+	// terms and for the last of the three shapes `paramsSlotWiring.test.ts`
+	// tracks: the `generate` node wires `params: slot.params()`, so the stop
+	// sequences a person types reach `input?.params?.stopSequences` instead of
+	// arriving as `undefined`. Behaviour-preserving, and the declaration is what
+	// makes it so — `core:provider/generate-text@1` gives `stopSequences` no
+	// default, so an install that never typed one resolves `undefined` exactly
+	// as it always has. All three documents moved for this and nothing else;
+	// `registryHashes.test.ts` records nothing, because no DECLARATION changed.
+	//
+	// And a SEVENTH time, by `drizzle/0118_relationship_search.sql`, on the same
+	// terms and for the relationships ruling (2026-09-10, Q1). ⚠ This one is
+	// respond's ALONE — the narrator has no speaker, and a graph read needs a
+	// speaker's perspective, so the two narrate documents are untouched and
+	// their pins below have not moved.
+	//
+	// What moved: `gather` gains a `relationships` branch pinning the new
+	// `core:query/relationship-search@1`, and `loreLinked` concatenates its
+	// candidates behind the two lists it already had. It reads the same three
+	// graph layers the two existing relationship branches read — one traversal,
+	// two projections, so they cannot disagree — and publishes them as
+	// candidates in the `relationships` budget band, ordered scene presence →
+	// speaker → recency.
+	//
+	// ⚠ **Byte-identical prompts, and the reason is a default rather than a
+	// dead edge.** `rank-hybrid`'s `share.relationships` is 0, which `select`
+	// reads as "leave this source out": every candidate the arm produces is
+	// excluded with `excluded_group_disabled`, spends nothing, and renders
+	// nowhere. What fills in is the RECEIPT — the graph appears in the
+	// retrieval explanation with a rank reason per tie, which it never has.
+	// `registryHashes.test.ts` records the new type as a NEW entry; no
+	// published type declaration moved, so it re-projects nothing.
+	//
+	// And an EIGHTH time, closing the half of that ruling the seventh left open:
+	// the ranked band reached allocation and the receipt and rendered NOWHERE.
+	// `context` moves BELOW `rank` — nothing between them ever read it — and its
+	// two relationship in-ports each carry `{ band: rank.candidates, graph: <the
+	// dump> }`, so the prompt's relationship sections are built from what
+	// ranking selected, in rank order, inside the band's share. ⚠ Still
+	// byte-identical on a shipped install, and by the same default: with
+	// `share.relationships` at 0 nothing is allocated and the `graph` half is
+	// what renders, exactly as before. Respond's alone again — the narrator has
+	// no speaker and no relationship ports. No declaration moved, so
+	// `registryHashes.test.ts` records nothing.
 	// (was "1f78a2ce64600", then "1bc665208daf27", then "196d136945332b",
-	//  then "1586b6f70f4a1c")
-	"core:spec/respond@1.20.0": "1799ea677e50b5",
+	//  then "1586b6f70f4a1c", then "1799ea677e50b5", then "11ff0e3a9af9c9",
+	//  then "40057185a1f3c")
+	"core:spec/respond@1.20.0": "1459d5e20d701a",
 	"core:spec/respond@1.19.0": "fdf2f7090f13c",
 	"core:spec/respond@1.18.0": "9315ce3ddeaa4",
 	"core:spec/respond@1.17.0": "118378cf44739b",
@@ -319,7 +419,18 @@ const PUBLISHED: Record<string, string> = {
 	"core:spec/echo@1.0.0": "155ebfa1de7484",
 	// 1.0.0: local image generation end to end — a composer button, the review
 	// gate as the prompt entry, and the render posted as a message.
-	"core:spec/generate-image@1.0.0": "7be8979159e48"
+	// Hash moved: `render` names its `params` slot, which the node type now
+	// declares — without it the streaming control would render and do nothing.
+	"core:spec/generate-image@1.0.0": "59e76913bf2cf",
+	// 1.0.0: the tool-loop reference (20 §9, 01 §4a) — a bounded agentic turn
+	// written out, bound to no genre so it is never offered in a composer. New
+	// slug, not a bump: the 0.6 freeze forbids moving an existing semver and
+	// says nothing about publishing a new one.
+	// Hash moved: `generate`'s dead `prompts` share now points at `prompt`,
+	// which owns the pool, instead of the reverse (2026-09-10).
+	// Hash moved: the template's opening instruction and its closing reminder
+	// are the `prompts` slot's shipped row now, not literals (2026-09-10).
+	"core:spec/tool-loop@1.0.0": "1802d01a31438f"
 }
 
 describe("published spec hashes", () => {
@@ -332,7 +443,7 @@ describe("published spec hashes", () => {
 		return out
 	}
 
-	it("has not changed shape under an already-recorded version", () => {
+	it("resolves every recorded pin to the hash recorded for it", () => {
 		const now = current()
 		const drifted = Object.entries(PUBLISHED)
 			.filter(([pin, hash]) => now[pin] && now[pin] !== hash)
@@ -341,10 +452,12 @@ describe("published spec hashes", () => {
 		expect(
 			drifted,
 			drifted.length
-				? "A published version is frozen. Bump the spec's *_VERSION and " +
-						"add the new pin below — seeding matches on (slug, semver) " +
-						"and skips, so an unbumped change never reaches an install " +
-						"that has already booted."
+				? "This pin now names a different document. That is shippable — " +
+						"the edited document publishes as a new version row and the " +
+						"slug's pointer moves to it, with no migration — but it must " +
+						"be deliberate: bump the spec's *_VERSION and add the new " +
+						"pin, or record the new hash against the existing one in the " +
+						"same commit as the edit."
 				: undefined
 		).toEqual([])
 	})

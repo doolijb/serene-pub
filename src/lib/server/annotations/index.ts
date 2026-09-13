@@ -52,7 +52,8 @@ import {
 	EMPTY_GAZETTEER,
 	type Entity,
 	type Gazetteer,
-	type GazetteerName
+	type GazetteerName,
+	type ModelSpan
 } from "$lib/server/pipelines/ranking/entities"
 
 // db is the global Db — see db/types.d.ts
@@ -91,6 +92,40 @@ export const MAX_ANNOTATED_LENGTH = 20_000
  * messages converge over several turns, oldest last.
  */
 export const ANNOTATION_BATCH = 200
+
+/**
+ * Tier zero's spans for one passage, or none.
+ *
+ * `modelId` is the identity the lane took a LEASE on. Two things follow from
+ * reading it here rather than asking the runtime what is loaded:
+ *
+ *  - **Nothing is loaded by this path.** Residency is the broker's, so an
+ *    annotate call that arrives with nothing resident contributes no spans
+ *    rather than starting a 100MB download inside whoever asked first.
+ *  - **A model that was swapped underneath the pass contributes nothing.** The
+ *    resident identity is compared against the leased one, so spans from a
+ *    different model never land in a row whose neighbours came from this one.
+ *
+ * Never throws. An extraction that fails is a subtracted signal — the lexical
+ * tiers still answer, and the row is still written — which is the governing rule
+ * for every optional mechanism in the retrieval stack.
+ */
+async function modelSpansFor(
+	text: string,
+	modelId: string | null | undefined
+): Promise<ModelSpan[]> {
+	if (!modelId || !text) return []
+	try {
+		const { extractNerSpans, getLoadedNerModelId } = await import(
+			"$lib/server/ner"
+		)
+		if (getLoadedNerModelId() !== modelId) return []
+		return await extractNerSpans(text)
+	} catch (err) {
+		console.warn("[annotations] entity model produced nothing:", err)
+		return []
+	}
+}
 
 /** Short digests: enough to distinguish, short enough to store on every row. */
 const digest = (value: string) =>
@@ -261,6 +296,12 @@ interface AnnotationValues {
  */
 const CONFIDENCE: Record<string, number> = { gazetteer: 1, open: 0.5 }
 
+/**
+ * ⚠ No `model` entry, deliberately. A model tier entity carries the model's OWN
+ * score on `Entity.confidence`, and a prior here would be a number that
+ * overwrote a measurement.
+ */
+
 const valuesFor = (
 	entities: readonly Entity[],
 	sourceHash: string,
@@ -295,7 +336,7 @@ const valuesFor = (
 		characterId: e.ref?.kind === "character" ? e.ref.id : null,
 		personaId: e.ref?.kind === "persona" ? e.ref.id : null,
 		refEntryId: e.ref?.kind === "entry" ? e.ref.id : null,
-		confidence: CONFIDENCE[e.tier] ?? 0.5,
+		confidence: e.confidence ?? CONFIDENCE[e.tier] ?? 0.5,
 		mentions: e.count,
 		spans: e.spans,
 		...base
@@ -424,7 +465,7 @@ export async function annotateEntries(
 	db: Db,
 	entryIds: readonly number[],
 	vocabulary: AnnotationVocabulary,
-	opts: { limit?: number } = {}
+	opts: { limit?: number; modelId?: string | null } = {}
 ): Promise<AnnotationPassReport> {
 	const limit = opts.limit ?? ANNOTATION_BATCH
 	if (!entryIds.length) return { examined: 0, written: 0, deferred: 0 }
@@ -456,7 +497,11 @@ export async function annotateEntries(
 			deferred++
 			continue
 		}
-		const { entities } = extractEntities(text, vocabulary.gazetteer)
+		const { entities } = extractEntities(
+			text,
+			vocabulary.gazetteer,
+			await modelSpansFor(text, opts.modelId)
+		)
 		await writeAnnotations(
 			db,
 			schema.entryAnnotations,
@@ -489,7 +534,9 @@ export async function annotateEntries(
 export async function annotateEntry(
 	db: Db,
 	entryId: number,
-	vocabulary: AnnotationVocabulary
+	vocabulary: AnnotationVocabulary,
+	/** The entity model the lane leased for this item, or null for a lexical pass. */
+	modelId: string | null = null
 ): Promise<boolean> {
 	const rows = await db
 		.select({
@@ -505,7 +552,11 @@ export async function annotateEntry(
 	if (!row) return false
 
 	const text = entryAnnotationText(row)
-	const { entities } = extractEntities(text, vocabulary.gazetteer)
+	const { entities } = extractEntities(
+		text,
+		vocabulary.gazetteer,
+		await modelSpansFor(text, modelId)
+	)
 	await writeAnnotations(
 		db,
 		schema.entryAnnotations,
@@ -528,7 +579,9 @@ export async function annotateEntry(
 export async function annotateMessage(
 	db: Db,
 	messageId: number,
-	vocabulary: AnnotationVocabulary
+	vocabulary: AnnotationVocabulary,
+	/** The entity model the lane leased for this item, or null for a lexical pass. */
+	modelId: string | null = null
 ): Promise<boolean> {
 	const rows = await db
 		.select({
@@ -546,7 +599,11 @@ export async function annotateMessage(
 	if (!row) return false
 
 	const text = (row.content ?? "").slice(0, MAX_ANNOTATED_LENGTH)
-	const { entities } = extractEntities(text, vocabulary.gazetteer)
+	const { entities } = extractEntities(
+		text,
+		vocabulary.gazetteer,
+		await modelSpansFor(text, modelId)
+	)
 	await writeAnnotations(
 		db,
 		schema.messageAnnotations,
@@ -574,7 +631,7 @@ export async function annotateMessage(
 export async function annotateLorebook(
 	db: Db,
 	lorebookId: number,
-	opts: { limit?: number } = {}
+	opts: { limit?: number; modelId?: string | null } = {}
 ): Promise<AnnotationPassReport> {
 	const vocabulary = await loadVocabulary(db, lorebookId)
 	const ids = (
@@ -604,7 +661,7 @@ export async function annotateSessionMessages(
 	db: Db,
 	sessionId: number,
 	vocabulary: AnnotationVocabulary,
-	opts: { limit?: number } = {}
+	opts: { limit?: number; modelId?: string | null } = {}
 ): Promise<AnnotationPassReport> {
 	const limit = opts.limit ?? ANNOTATION_BATCH
 
@@ -654,7 +711,11 @@ export async function annotateSessionMessages(
 			deferred++
 			continue
 		}
-		const { entities } = extractEntities(text, vocabulary.gazetteer)
+		const { entities } = extractEntities(
+			text,
+			vocabulary.gazetteer,
+			await modelSpansFor(text, opts.modelId)
+		)
 		await writeAnnotations(
 			db,
 			schema.messageAnnotations,

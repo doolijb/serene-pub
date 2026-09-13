@@ -77,10 +77,15 @@ function makeSession(): any {
 	}
 }
 
-function makeAdapter(connectionOverrides: Record<string, any> = {}) {
+function makeAdapter(
+	connectionOverrides: Record<string, any> = {},
+	// Already RESOLVED, the way an adapter receives it: a key being present is
+	// the switch being on.
+	sampling: Record<string, unknown> = {}
+) {
 	return new exportsDefault.Adapter({
 		connection: makeConnection(connectionOverrides),
-		sampling: {} as any,
+		sampling: sampling as any,
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "Test system prompt." } as any,
 		session: makeSession(),
@@ -476,5 +481,105 @@ describe("LMStudioAdapter — native reasoning readback", () => {
 		const result = await adapter.generateText()
 		expect(result.completionResult).toBe("Hello there.")
 		expect(result.thinkingContent).toBeUndefined()
+	})
+})
+
+/**
+ * The node's `streaming` parameter, at the one line that reads it.
+ *
+ * `auto` resolves to the CONNECTION's answer and nothing else: this adapter's
+ * default is `|| false`, and widening an unset flag to true would change what
+ * every untouched LM Studio connection sends. Read off `completionResult`,
+ * because that is the fact the dispatch branches on — a function is a stream to
+ * drain, a string is an answer already in hand.
+ */
+describe("LMStudioAdapter — the node's streaming parameter", () => {
+	const sendWith = async (stream: boolean, mode?: "auto" | "off") => {
+		listDownloadedModelsMock.mockResolvedValue([{ modelKey: "some-model" }])
+		respondMock.mockReset()
+		// Only the non-streaming branch reaches this: a streaming request
+		// returns a closure and calls `respond()` when somebody drains it.
+		respondMock.mockResolvedValue({ content: "ok" } as any)
+		const adapter = makeAdapter({
+			wireMode: "chat",
+			extraJson: { ttl: 60, stream }
+		})
+		adapter.withCompiledPrompt({
+			prompt: "hi",
+			messages: [{ role: "user", content: "hi" }],
+			meta: {} as any
+		} as any)
+		if (mode) adapter.withStreaming(mode)
+		const result = await adapter.generateText()
+		return typeof result.completionResult === "function"
+			? "streamed"
+			: "one request"
+	}
+
+	test("auto answers whatever the connection says, both ways", async () => {
+		expect(await sendWith(true, "auto")).toBe("streamed")
+		expect(await sendWith(false, "auto")).toBe("one request")
+	})
+
+	test("a node that hands nothing over is the same as auto", async () => {
+		expect(await sendWith(true)).toBe("streamed")
+		expect(await sendWith(false)).toBe("one request")
+	})
+
+	test("off sends one request even on a streaming connection", async () => {
+		expect(await sendWith(true, "off")).toBe("one request")
+	})
+})
+
+/**
+ * Reasoning, as a SAMPLING parameter (ruling 2026-09-12).
+ *
+ * LM Studio's own server speaks the OpenAI spelling, so the level rides in
+ * `options` beside the rest of `mapSamplingConfig` — which is where this
+ * adapter has always put a key the SDK may or may not forward.
+ */
+describe("LMStudioAdapter — reasoning on the wire", () => {
+	async function optionsFor(sampling: Record<string, unknown>) {
+		respondMock.mockClear()
+		completeMock.mockClear()
+		const adapter = makeAdapter(
+			{ wireMode: "chat", extraJson: { ttl: 60, stream: false } },
+			sampling
+		)
+		adapter.withCompiledPrompt({
+			prompt: "hi",
+			messages: [{ role: "user", content: "hi" }],
+			meta: {} as any
+		} as any)
+		await adapter.generateText()
+		const opts = (respondMock.mock.calls[0] ??
+			completeMock.mock.calls[0])?.[1] as any
+		return { opts, adapter }
+	}
+
+	test("a config that never enabled it sends no key at all", async () => {
+		const { opts, adapter } = await optionsFor({ temperature: 0.5 })
+		expect(opts).not.toHaveProperty("reasoning_effort")
+		expect(adapter.ignoredSamplers).toEqual([])
+	})
+
+	test("off, and the three levels, go across as the OpenAI word", async () => {
+		expect(
+			(await optionsFor({ reasoning: "off" })).opts.reasoning_effort
+		).toBe("none")
+		for (const level of ["low", "medium", "high"] as const)
+			expect(
+				(await optionsFor({ reasoning: level })).opts.reasoning_effort
+			).toBe(level)
+	})
+
+	test("a budget has no field here, and says so", async () => {
+		const { opts, adapter } = await optionsFor({
+			reasoning: "low",
+			reasoningBudget: 2048
+		})
+		expect(opts.reasoning_effort).toBe("low")
+		expect(opts).not.toHaveProperty("reasoningBudget")
+		expect(adapter.ignoredSamplers).toEqual(["reasoningBudget"])
 	})
 })

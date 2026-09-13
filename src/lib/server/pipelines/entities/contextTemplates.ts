@@ -46,6 +46,7 @@ import { and, asc, eq, inArray, isNull, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { declarations } from "$lib/server/pipelines/config/panel"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
+import { parseTemplate } from "$lib/shared/utils/templateValidation"
 import {
 	contextPoolKeyFor,
 	poolKeyFor
@@ -104,9 +105,12 @@ const toRecord = (r: any): ContextTemplateRecord => ({
 /**
  * Every template a node can use, in the order the picker should show them.
  *
- * `engine` narrows to the language the slot declares, and is required for the
- * reason the file header gives: a list that crossed engines would offer a
- * person a template that stores cleanly and renders its own markup as prose.
+ * `engine` narrows to the languages the slot declares — one, or the set of them
+ * — and is required for the reason the file header gives: a list that crossed
+ * into a language the slot does not accept would offer a person a template that
+ * stores cleanly and renders its own markup as prose. A SET is not that: every
+ * engine in it is one this slot renders, so the union is exactly the rows a
+ * picker here may legitimately show.
  *
  * `forSpecId` is the pipeline being configured. Omitted, everything not shipped
  * lands in `alsoFits` — which is the right answer for a caller that is not
@@ -115,9 +119,10 @@ const toRecord = (r: any): ContextTemplateRecord => ({
 export async function listContextTemplates(
 	db: Db,
 	nodeTypeId: string,
-	engine: string,
+	engine: string | readonly string[],
 	forSpecId?: number
 ): Promise<GroupedContextTemplate[]> {
+	const engines = asEngineSet(engine)
 	const rows = await db
 		.select()
 		.from(schema.pipelineContextTemplates)
@@ -127,7 +132,7 @@ export async function listContextTemplates(
 					schema.pipelineContextTemplates.nodeTypeId,
 					poolKeyFor(nodeTypeId)
 				),
-				eq(schema.pipelineContextTemplates.engine, engine)
+				inArray(schema.pipelineContextTemplates.engine, engines)
 			)
 		)
 		.orderBy(asc(schema.pipelineContextTemplates.id))
@@ -171,10 +176,17 @@ export async function listContextTemplates(
  * Check that a template may be selected for this node, and say why if not.
  *
  * Two hard rules, and they are the two halves of the pool key: the node type
- * must match, and so must the **engine**. Everything else about "does this fit"
- * — whether the variables it names are supplied by this version — is a warning,
- * because a template referencing a variable a pipeline does not supply renders
- * it as empty, which is a legible outcome and sometimes the intended one.
+ * must match, and the **engine** must be one the slot accepts. Everything else
+ * about "does this fit" — whether the variables it names are supplied by this
+ * version — is a warning, because a template referencing a variable a pipeline
+ * does not supply renders it as empty, which is a legible outcome and sometimes
+ * the intended one.
+ *
+ * `engine` is one language or the set of them. A set does not weaken the rule
+ * it enforces: every member is a language this slot genuinely renders, so a row
+ * in any of them arrives at a renderer that understands it. What it stops being
+ * is a way to say "this layout may only ever be written in one language", which
+ * was never a fact about the slot — only about how the slot was spelled.
  *
  * The engine refusal names the *language* rather than the engine id, because
  * the id is a pinned string a person did not choose and the language is the
@@ -186,8 +198,9 @@ export async function assertSelectable(
 	db: Db,
 	nodeTypeId: string,
 	templateId: number,
-	engine: string
+	engine: string | readonly string[]
 ): Promise<ContextTemplateRecord> {
+	const accepted = asEngineSet(engine)
 	const [row] = await db
 		.select()
 		.from(schema.pipelineContextTemplates)
@@ -208,12 +221,13 @@ export async function assertSelectable(
 		)
 
 	const rowEngine = row.engine ?? CORE_TEMPLATE_ENGINE
-	if (rowEngine !== engine)
+	if (!accepted.includes(rowEngine))
 		throw new ContextTemplateNotUsableError(
 			`'${row.name}' is written in ${languageOf(rowEngine)} and this step ` +
-				`renders ${languageOf(engine)}. Selected anyway it would not be ` +
-				`translated — its markup would be sent to the model as ordinary ` +
-				`text. Duplicate it and rewrite the copy in ${languageOf(engine)}.`
+				`renders ${languagesOf(accepted)}. Selected anyway it would not ` +
+				`be translated — its markup would be sent to the model as ` +
+				`ordinary text. Duplicate it and rewrite the copy in ` +
+				`${languagesOf(accepted)}.`
 		)
 
 	return toRecord(row)
@@ -231,6 +245,63 @@ const languageOf = (engineId: string): string => {
 	const name = engineId.split("/")[1]?.split("@")[0]
 	if (!name) return engineId
 	return name.charAt(0).toUpperCase() + name.slice(1)
+}
+
+/** The same, for a slot that accepts several: "Handlebars or Liquid". */
+const languagesOf = (engineIds: readonly string[]): string => {
+	const names = engineIds.map(languageOf)
+	if (names.length < 2) return names[0] ?? "no language"
+	return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`
+}
+
+/** One engine or the set of them, as the set. */
+const asEngineSet = (engine: string | readonly string[]): string[] =>
+	typeof engine === "string" ? [engine] : [...engine]
+
+/**
+ * The language a new template in this slot is written in, refusing one the slot
+ * cannot render.
+ *
+ * The default is the slot's FIRST accepted engine, never core's: "the caller
+ * said nothing" and "the caller said Handlebars" are different answers, and
+ * collapsing them writes the row into a pool this slot's picker never reads,
+ * where it is invisible to the person who just created it.
+ *
+ * Refuses rather than silently substituting the default: a person who asked for
+ * Liquid and got Handlebars would find out from the syntax highlighting.
+ */
+export function assertEngineAccepted(
+	accepted: readonly string[],
+	requested?: string | null
+): string {
+	const set = asEngineSet(accepted)
+	const fallback = set[0] ?? CORE_TEMPLATE_ENGINE
+	if (requested == null) return fallback
+	if (!set.includes(requested))
+		throw new ContextTemplateNotUsableError(
+			`This step renders ${languagesOf(set)}, so a template written in ` +
+				`${languageOf(requested)} could not be used here — its markup ` +
+				`would be sent to the model as ordinary text.`
+		)
+	return requested
+}
+
+/**
+ * Refuse a template that does not parse, in the engine the row declares.
+ *
+ * Stored unparsed, it is a pipeline that fails at generation time — far from
+ * the edit that caused it, and with an error nobody reading a session can act
+ * on. The engine's own words are passed through rather than rephrased: they
+ * name the construct and point at the character.
+ */
+function refuseUnparsable(engine: string, source: string, name: string): void {
+	const err = parseTemplate(engine, source)
+	if (!err) return
+	throw new ContextTemplateNotUsableError(
+		`'${name}' is not valid ${languageOf(engine)}` +
+			(err.line ? ` (line ${err.line})` : "") +
+			`:\n${err.message}`
+	)
 }
 
 /**
@@ -274,6 +345,11 @@ export async function createContextTemplate(
 	db: Db,
 	input: CreateContextTemplateInput
 ): Promise<ContextTemplateRecord> {
+	refuseUnparsable(
+		input.engine ?? CORE_TEMPLATE_ENGINE,
+		input.source,
+		input.name
+	)
 	const [row] = await db
 		.insert(schema.pipelineContextTemplates)
 		.values({
@@ -360,6 +436,28 @@ export async function updateContextTemplate(
 			? (row.engine ?? CORE_TEMPLATE_ENGINE)
 			: (patch.engine ?? CORE_TEMPLATE_ENGINE)
 	const nextName = patch.name ?? row.name
+	const rowEngine = row.engine ?? CORE_TEMPLATE_ENGINE
+
+	/**
+	 * Changing the engine on a row that has been written in is a REWRITE, and
+	 * a save cannot perform one.
+	 *
+	 * The text is not translated by storing it under a different id: every
+	 * `{{#if}}` in it would reach the model as literal characters. So the
+	 * engine is a choice made when the template is created, and afterwards the
+	 * way to change languages is to duplicate and rewrite the copy — which
+	 * leaves everything already pointing at the original working.
+	 */
+	if (nextEngine !== rowEngine && (row.source ?? "").trim())
+		throw new ContextTemplateNotUsableError(
+			`'${row.name}' is written in ${languageOf(rowEngine)}, and saving it as ` +
+				`${languageOf(nextEngine)} would not translate a word of it — its markup ` +
+				`would be sent to the model as ordinary text. Duplicate it and rewrite ` +
+				`the copy in ${languageOf(nextEngine)}.`
+		)
+
+	if (patch.source !== undefined)
+		refuseUnparsable(nextEngine, patch.source, nextName)
 
 	/**
 	 * The unique key is `(node type, engine, name)`, and both halves a person

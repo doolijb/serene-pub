@@ -192,10 +192,15 @@ function makeSession(): any {
 	}
 }
 
-function makeAdapter(connectionOverrides: Record<string, any> = {}) {
+function makeAdapter(
+	connectionOverrides: Record<string, any> = {},
+	// Already RESOLVED, the way an adapter receives it: a key being present is
+	// the switch being on.
+	sampling: Record<string, unknown> = {}
+) {
 	const adapter = new exportsDefault.Adapter({
 		connection: makeConnection(connectionOverrides),
-		sampling: {} as any,
+		sampling: sampling as any,
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "Test system prompt." } as any,
 		session: makeSession(),
@@ -216,7 +221,6 @@ function makeAdapter(connectionOverrides: Record<string, any> = {}) {
 }
 
 describe("LlamaCppAdapter — reasoning arrives inline, with no field to read", () => {
-
 	test("non-streaming: posts /completion — the route with no reasoning field — and reports no thinkingContent", async () => {
 		vi.mocked(axios.post).mockResolvedValueOnce({
 			// Everything `/completion` actually returns for a thinking model:
@@ -425,5 +429,178 @@ describe("LlamaCppAdapter — chat wire mode", () => {
 		const body = vi.mocked(axios.post).mock.calls.at(-1)?.[1] as any
 		expect(body.response_format).toEqual({ type: "json_object" })
 		expect(body).not.toHaveProperty("grammar")
+	})
+})
+
+/**
+ * The prompt cache, recorded (ruled "later, non-disruptive").
+ *
+ * llama.cpp is the one server here that reports the reused PREFIX directly,
+ * though not under a field of that name: `tokens_evaluated` is the whole prompt
+ * and `timings.prompt_n` is the part of it this request actually pushed through
+ * the model, so the difference is what its KV cache already held.
+ *
+ * ⚠ **Not `tokens_cached`.** That field is the slot's cache size AFTER the
+ * request — prompt and generated tokens together — so reading it as the reused
+ * prefix would report a number larger than the prompt on any second turn.
+ */
+describe("LlamaCppAdapter — prompt cache accounting", () => {
+	test("the reused prefix is the prompt total minus what was evaluated", async () => {
+		vi.mocked(axios.post).mockResolvedValueOnce({
+			data: {
+				content: "Hello there.",
+				tokens_evaluated: 4096,
+				tokens_cached: 4108,
+				timings: { prompt_n: 1024, predicted_n: 12 }
+			}
+		})
+		const adapter = makeAdapter({ extraJson: { stream: false } })
+
+		const result = await adapter.generateText()
+		expect(result.tokensPrompt).toBe(4096)
+		expect(result.tokensCached).toBe(3072)
+	})
+
+	test("a response with no timings claims nothing about reuse", async () => {
+		// Absent, never zero: "this server did not say" and "nothing was
+		// reused" are different answers and only one of them is true here.
+		vi.mocked(axios.post).mockResolvedValueOnce({
+			data: { content: "Hello there.", tokens_evaluated: 4096 }
+		})
+		const adapter = makeAdapter({ extraJson: { stream: false } })
+
+		const result = await adapter.generateText()
+		expect(result.tokensPrompt).toBe(4096)
+		expect(result.tokensCached).toBeUndefined()
+	})
+
+	test("a full re-evaluation reports zero reused, which is not the same as absent", async () => {
+		vi.mocked(axios.post).mockResolvedValueOnce({
+			data: {
+				content: "Hello there.",
+				tokens_evaluated: 900,
+				timings: { prompt_n: 900 }
+			}
+		})
+		const adapter = makeAdapter({ extraJson: { stream: false } })
+
+		const result = await adapter.generateText()
+		expect(result.tokensCached).toBe(0)
+	})
+})
+
+/**
+ * The node's `streaming` parameter, at the one line that reads it.
+ *
+ * `auto` resolves to the CONNECTION's answer and nothing else: this adapter's
+ * default is `|| false`, and widening an unset flag to true would change what
+ * every untouched llama.cpp connection sends. Read off `completionResult`,
+ * because that is the fact the dispatch branches on — a function is a stream to
+ * drain, a string is an answer already in hand.
+ */
+describe("LlamaCppAdapter — the node's streaming parameter", () => {
+	const sendWith = async (stream: boolean, mode?: "auto" | "off") => {
+		// Only the non-streaming branch reaches this: a streaming request
+		// returns a closure and POSTs when somebody drains it.
+		vi.mocked(axios.post).mockResolvedValue({
+			data: { content: "Hello there." }
+		})
+		const adapter = makeAdapter({ extraJson: { stream } })
+		if (mode) adapter.withStreaming(mode)
+		const result = await adapter.generateText()
+		return typeof result.completionResult === "function"
+			? "streamed"
+			: "one request"
+	}
+
+	test("auto answers whatever the connection says, both ways", async () => {
+		expect(await sendWith(true, "auto")).toBe("streamed")
+		expect(await sendWith(false, "auto")).toBe("one request")
+	})
+
+	test("a node that hands nothing over is the same as auto", async () => {
+		expect(await sendWith(true)).toBe("streamed")
+		expect(await sendWith(false)).toBe("one request")
+	})
+
+	test("off sends one request even on a streaming connection", async () => {
+		expect(await sendWith(true, "off")).toBe("one request")
+		// And the record says so: `stream` is a field on this format's body.
+		expect(vi.mocked(axios.post).mock.calls.at(-1)?.[1]).toMatchObject({
+			stream: false
+		})
+	})
+})
+
+/**
+ * Reasoning, as a SAMPLING parameter (ruling 2026-09-12).
+ *
+ * llama-server splits the question the way its own flags do — a token budget
+ * and a Jinja variable — and both are `/v1/chat/completions` features. The
+ * native `/completion` route runs no chat template at all, which is why the
+ * choice is recorded as unsendable there rather than posted as a no-op.
+ */
+describe("LlamaCppAdapter — reasoning on the wire", () => {
+	async function bodyFor(
+		sampling: Record<string, unknown>,
+		wireMode: "chat" | "completion" = "chat"
+	) {
+		vi.mocked(axios.post).mockClear()
+		vi.mocked(axios.post).mockResolvedValueOnce({
+			data:
+				wireMode === "chat"
+					? { choices: [{ message: { content: "ok" } }] }
+					: { content: "ok" }
+		})
+		const adapter = makeAdapter(
+			{ wireMode, extraJson: { stream: false } },
+			sampling
+		)
+		await adapter.generateText()
+		const body = vi.mocked(axios.post).mock.calls.at(-1)![1] as any
+		return { body, adapter }
+	}
+
+	test("a config that never enabled it sends neither field", async () => {
+		const { body, adapter } = await bodyFor({ temperature: 0.4 })
+		expect(body).not.toHaveProperty("reasoning_budget")
+		expect(body).not.toHaveProperty("chat_template_kwargs")
+		expect(adapter.ignoredSamplers).toEqual([])
+	})
+
+	test("off is a budget of zero AND the template variable, together", async () => {
+		// One without the other leaves a chat template that asks the other
+		// question doing the opposite of what was chosen.
+		const { body } = await bodyFor({ reasoning: "off" })
+		expect(body.reasoning_budget).toBe(0)
+		expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
+	})
+
+	test("a level becomes the shared table's token count", async () => {
+		const { body } = await bodyFor({ reasoning: "high" })
+		expect(body.reasoning_budget).toBe(32000)
+		expect(body.chat_template_kwargs).toEqual({ enable_thinking: true })
+	})
+
+	test("a budget set outright beats the level's table entry", async () => {
+		const { body, adapter } = await bodyFor({
+			reasoning: "low",
+			reasoningBudget: 5000
+		})
+		expect(body.reasoning_budget).toBe(5000)
+		expect(adapter.ignoredSamplers).toEqual([])
+	})
+
+	test("the completion route records both rather than posting a no-op", async () => {
+		const { body, adapter } = await bodyFor(
+			{ reasoning: "high", reasoningBudget: 5000 },
+			"completion"
+		)
+		expect(body).not.toHaveProperty("reasoning_budget")
+		expect(body).not.toHaveProperty("chat_template_kwargs")
+		expect(adapter.ignoredSamplers).toEqual([
+			"reasoning",
+			"reasoningBudget"
+		])
 	})
 })

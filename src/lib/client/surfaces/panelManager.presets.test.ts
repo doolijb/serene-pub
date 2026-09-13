@@ -16,6 +16,8 @@ import { describe, expect, it, vi } from "vitest"
 import { SurfaceManager } from "./panelManager.svelte"
 import {
 	arrangementIsEmpty,
+	loadArranged,
+	unitPinned,
 	type Arranged
 } from "$lib/client/sessionLayout/arrangedGeometry"
 
@@ -324,5 +326,56 @@ describe("SurfaceManager — an empty commit must not mask the preset base", () 
 		m.setArrangedGrid({})
 		expect(m.effectiveArrangedGrid).toEqual({})
 		expect(m.effectiveArrangedGrid).not.toEqual(BASE.arrangedGrid)
+	})
+})
+
+/**
+ * The per-group pin (ruled 2026-09-10) rides the SAME courier slot: it is a
+ * field on the arranged items, so a preset that was saved with a group unpinned
+ * hands that back, and a preset saved from a session captures what the session
+ * shows. Nothing in the manager knows about it — which is the property worth
+ * pinning, because a slot that "just carries the blob" is what makes a new
+ * field in the arrangement free.
+ */
+describe("SurfaceManager — a preset carries the per-group pin", () => {
+	const unpinned = {
+		left: {
+			cols: 9,
+			rows: 12,
+			items: [
+				{ id: "map", x: 0, y: 0, w: 9, h: 4 },
+				{ id: "notes", x: 0, y: 4, w: 9, h: 4, pinned: false }
+			]
+		}
+	}
+
+	it("restores it from the preset for a session that has no arrangement", () => {
+		const m = make({}, { arrangedGrid: unpinned })
+		const items = loadArranged(m.effectiveArrangedGrid).left!.items
+		expect(items.map((i) => unitPinned([i]))).toEqual([true, false])
+	})
+
+	it("saves it — the preset is written from the EFFECTIVE arrangement", () => {
+		const m = make({}, BASE)
+		m.setArrangedGrid(unpinned)
+		// What `saveLayoutPreset` sends (src/routes/sessions/[id]/+page.svelte).
+		const sent = JSON.parse(
+			JSON.stringify({ arrangedGrid: m.effectiveArrangedGrid })
+		)
+		const back = loadArranged(sent.arrangedGrid).left!.items
+		expect(unitPinned(back.filter((i) => i.id === "notes"))).toBe(false)
+	})
+
+	it("reads a preset saved before the field existed as all pinned", () => {
+		const m = make({}, BASE) // BASE's zone has no pin field anywhere
+		m.setArrangedGrid({
+			left: {
+				cols: 9,
+				rows: 12,
+				items: [{ id: "map", x: 0, y: 0, w: 9, h: 4 }]
+			}
+		})
+		const items = loadArranged(m.effectiveArrangedGrid).left!.items
+		expect(unitPinned(items)).toBe(true)
 	})
 })

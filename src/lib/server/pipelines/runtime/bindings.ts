@@ -18,7 +18,7 @@
  */
 
 import type { Bindings } from "@serene-pub/sdk"
-import { ok, halt, roughTokens } from "@serene-pub/sdk"
+import { ok, halt, err, roughTokens } from "@serene-pub/sdk"
 /**
  * The node declarations themselves, as types.
  *
@@ -33,8 +33,11 @@ import type {
 	CoreQueryCtx,
 	NodeInput,
 	ProviderCtx,
+	SharedInput,
+	Supplied,
 	TaskCtx,
-	Unsupplied
+	Unsupplied,
+	UnsuppliedParam
 } from "./bindingTypes"
 import {
 	keywordQuery,
@@ -56,6 +59,12 @@ import {
 	rankEntityLinks,
 	type EntityLinkHit
 } from "$lib/server/pipelines/ranking/entityLink"
+// The relationship mechanism (ruling 2026-09-10, Q1), in its own module — see
+// the header there for why it is not written inline.
+import { relationshipSearchBindings } from "./bindings.relationships"
+// Stats and states, in their own module for the same reason — see its header
+// for why the write does not go through a host seam.
+import { stateBindings } from "./bindings.state"
 import { buildScanWindow } from "$lib/server/pipelines/ranking/signals"
 import { bindingNames } from "$lib/server/pipelines/ranking/entities"
 import {
@@ -85,7 +94,13 @@ import {
 import { resolveContextInput } from "$lib/server/pipelines/prompt/promptFields"
 import { processMessages } from "$lib/server/pipelines/prompt/messages"
 import { resolvePostHistoryContext } from "$lib/server/pipelines/prompt/postHistory"
+import type { PostHistoryDiag } from "$lib/server/pipelines/prompt/promptTypes"
 import { buildTemplateContext } from "$lib/server/pipelines/prompt/templateContext"
+import {
+	sceneAnchor,
+	slotGuide,
+	stateSummary
+} from "$lib/server/pipelines/prompt/adventureContext"
 import {
 	buildBatchPrompt,
 	buildCharacterExtractionPrompt,
@@ -98,6 +113,26 @@ import { parseSummaryOutput } from "$lib/server/utils/summarizer/parser"
 import { resolveBatchBudget } from "$lib/server/utils/summarizer/batchBudget"
 import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
 import { explicitStopsFrom } from "$lib/server/connections/stops"
+import { streamingModeFrom } from "$lib/server/connections/streaming"
+
+/**
+ * The three exemption reasons more than one site shares.
+ *
+ * An exemption requires a sentence, and a sentence copied five times is
+ * five places for the fifth copy to go stale. These are the recurring ones —
+ * everything else is written at its own site, because it happens once.
+ *
+ * ⚠ Each is a **finding waiting to be closed**, not an exemption granted. The
+ * sentence is what a later reader needs in order to decide the key can finally
+ * go; that decision needs the config archaeology, which is why it is not made
+ * here.
+ */
+type WhyTopLevelLimit =
+	"a top-level message-window spelling no lore lane declares; kept so a config carried forward from an older document still resolves"
+type WhyFlatSpeakerId =
+	"the speaker travels inside the `scope` port; this flat spelling has no supplier and is the stored-config fallback behind it"
+type WhyFlatTopic =
+	"a flat spelling of `request.topic`, which is the declared port's payload"
 
 /** Not built yet, and saying so plainly beats failing like a bug. */
 const notYet = (what: string, where: string) => async () =>
@@ -221,7 +256,9 @@ function signalsFrom(
 	)
 	if (!carried.length) return null
 	const signals: Partial<Record<RetrievalBand, SignalWeights>> = {}
-	for (const source of Object.keys(DEFAULT_SIGNAL_WEIGHTS) as RetrievalBand[]) {
+	for (const source of Object.keys(
+		DEFAULT_SIGNAL_WEIGHTS
+	) as RetrievalBand[]) {
 		const set = { ...DEFAULT_SIGNAL_WEIGHTS[source] }
 		for (const [param, signal] of carried) {
 			const v = params[param][source]
@@ -252,7 +289,8 @@ function mechanismsFrom(params: any): Partial<MechanismWeights> | null {
 	const out: Partial<MechanismWeights> = {}
 	for (const key of ["keyword", "semantic", "name"] as const) {
 		const v = raw[key]
-		if (typeof v === "number" && Number.isFinite(v)) out[key] = Math.max(0, v)
+		if (typeof v === "number" && Number.isFinite(v))
+			out[key] = Math.max(0, v)
 	}
 	return Object.keys(out).length ? out : null
 }
@@ -537,14 +575,38 @@ function withFingerprints(skipped: any[], entries: any[] | null | undefined) {
  * fact about this query, and reporting it here would tell someone their world
  * lore was skipped when it was a character entry all along.
  */
+/**
+ * The three lanes `loreFor` serves — the **runtime** twin of the
+ * `SharedInput<[…]>` on its `input`, and the same three ids in the same order.
+ *
+ * ⚠ Two lists, one fact, and the duplication is forced rather than chosen: a
+ * type annotation cannot be read at run time and a runtime array cannot be read
+ * by `tsc`, so the compile-time rule and the boot-time rule have to name their
+ * contracts separately. They are kept adjacent so a divergence is a three-line
+ * diff, and `bindingCompat.ts` asserts every id here is actually bound — which
+ * is the half that catches a group whose member was renamed or dropped.
+ */
+const LORE_LANES = [
+	"core:query/world-lore@1",
+	"core:query/character-lore@1",
+	"core:query/history-entries@1"
+] as const
+
 async function loreFor(
 	source: string,
 	/**
-	 * The three lore lanes declare the same two in-ports (`text`, `scope`) and
-	 * the same `params` slot, so one type covers all three callers — and the
-	 * `limit` below is the one key none of them declares. See `Unsupplied`.
+	 * Typed as the **intersection** of the three lanes it serves, not as one of
+	 * them with the other two assumed to match. They declare identically today
+	 * — the same two in-ports and one `params` slot, from one `loreSlots()`
+	 * helper — and `SharedInput` is what makes that a checked fact rather than
+	 * a coincidence: the day one lane declares a port the others do not, this
+	 * handler stops compiling instead of reading `undefined` on two lanes out
+	 * of three with nothing failing anywhere.
 	 */
-	input: NodeInput<typeof C.worldLore, Unsupplied<"limit">>,
+	input: SharedInput<
+		[typeof C.worldLore, typeof C.characterLore, typeof C.historyEntries],
+		Unsupplied<"limit", WhyTopLevelLimit>
+	>,
 	ctx: CoreQueryCtx
 ) {
 	const params = withDefaults(retrievalParamsFrom(input?.params))
@@ -727,10 +789,18 @@ function toBudgetGroups(candidates: any[]): any[] {
  * weighted and laid out independently. They sit in the same `async` block, so
  * the cost is concurrency rather than wall-clock.
  */
+/** The two relationship nodes `readGraph` serves. See `LORE_LANES`. */
+const RELATIONSHIP_NODES = [
+	"core:query/relationships-perspectives@1",
+	"core:query/relationships-known@1"
+] as const
+
 async function readGraph(
-	input: NodeInput<
-		typeof C.relationshipsPerspectives,
-		Unsupplied<"currentCharacterId">
+	// Both relationship nodes call it, so both are named — see `loreFor` for
+	// why the intersection rather than one of them.
+	input: SharedInput<
+		[typeof C.relationshipsPerspectives, typeof C.relationshipsKnown],
+		Unsupplied<"currentCharacterId", WhyFlatSpeakerId>
 	>,
 	ctx: CoreQueryCtx
 ) {
@@ -799,8 +869,30 @@ function capRelationships(
  * 3. **No speaker is an outcome, not a failure.** A null id is exactly what
  *    the legacy path handed on, so nothing here halts.
  */
+/** The four turn strategies `pickSpeaker` serves. See `LORE_LANES`. */
+const TURN_STRATEGIES = [
+	"core:task/turn-round-robin@1",
+	"core:task/turn-random@1",
+	"core:task/turn-manual@1",
+	"core:task/turn-none@1"
+] as const
+
 function pickSpeaker(strategy: string) {
-	return async (input: NodeInput<typeof C.turnRoundRobin>, ctx: TaskCtx) => {
+	// All four turn strategies below are this one function. They come from one
+	// `turnStrategy()` helper in the contracts and so declare identically —
+	// which is exactly the fact a single-contract annotation would have been
+	// silently relying on.
+	return async (
+		input: SharedInput<
+			[
+				typeof C.turnRoundRobin,
+				typeof C.turnRandom,
+				typeof C.turnManual,
+				typeof C.turnNone
+			]
+		>,
+		ctx: TaskCtx
+	) => {
 		const done = (characterId: number | null, via: string) =>
 			ok({
 				main: { characterId, strategy, via },
@@ -862,10 +954,7 @@ function pickSpeaker(strategy: string) {
  * Values, not ids — the host reduces them (`refId`), and for sampling that
  * reduction reads the row reference the executor carries beside the values.
  */
-const stepSlots = (input: {
-	connection?: unknown
-	sampling?: unknown
-}) => ({
+const stepSlots = (input: { connection?: unknown; sampling?: unknown }) => ({
 	connection: input?.connection ?? null,
 	sampling: input?.sampling ?? null
 })
@@ -881,6 +970,417 @@ const stepSlots = (input: {
  * has both the run and the binding table. Absent for a caller with no run: the
  * parity harness, `boundTypeIds`, and a test poking one binding directly.
  */
+/**
+ * A tool's answer, written the way the model was taught to write its question.
+ *
+ * The mirror of `advertise-tools`' prompt door: it teaches one fenced block
+ * called `tool_call`, so a result comes back in a `tool_result` block. One
+ * convention, both directions — a model that learned the first reads the
+ * second without being told, and a person reading the transcript can see
+ * exactly what the model was given.
+ *
+ * JSON rather than prose because the payload is data with a shape (see
+ * `project_json_prompt_rationale`), and truncated because a tool that returns
+ * a hundred entries would otherwise spend the next prompt's whole budget on
+ * one answer — the model is told it was truncated rather than left to conclude
+ * the world is small.
+ */
+const TOOL_RESULT_LIMIT = 6000
+
+export function renderToolResult(result: unknown): string {
+	let body: string
+	try {
+		body = JSON.stringify(result ?? null, null, 0) ?? "null"
+	} catch {
+		body = JSON.stringify({
+			error: "the tool returned something unreadable"
+		})
+	}
+	const truncated =
+		body.length > TOOL_RESULT_LIMIT
+			? body.slice(0, TOOL_RESULT_LIMIT) +
+				` … (truncated at ${TOOL_RESULT_LIMIT} characters)`
+			: body
+	return "```tool_result\n" + truncated + "\n```"
+}
+
+/**
+ * Generate, for both pins (20 §9).
+ *
+ * `core:provider/generate-text@1` and `core:provider/generate-with-tools@1`
+ * differ by two ports and nothing else, and the second exists only because the
+ * first is published and frozen. One function so the two cannot come to
+ * disagree about a stop sequence or an attachment — the failure two copies of
+ * a fifty-line forward always eventually produce.
+ *
+ * The input is the INTERSECTION of the two contracts, which is what makes
+ * binding one function to two ids sound: every name read here is declared by
+ * whichever one the run resolved. The two ports outside that intersection —
+ * `tools` in and `toolCall` out — are named as `Supplied`, because they are
+ * genuinely wired on one of the two.
+ */
+const generateBinding = async (
+	input: SharedInput<
+		[typeof C.generateText, typeof C.generateWithTools],
+		| Unsupplied<
+				"compiledPrompt" | "main" | "generatingMessageMetadata",
+				"two earlier spellings of the declared `context` port — an unrefined `$.assemble` lands on `main` — plus host state that never became a port"
+		  >
+		| Supplied<
+				"tools",
+				"the `tools` in-port of core:provider/generate-with-tools@1, which the other pin does not declare"
+		  >
+	>,
+	ctx: ProviderCtx
+) => {
+	const result: any = await ctx.call({
+		// The rendered prompt, whatever produced it. Accepting the assemble
+		// node's whole output as well as a bare payload means a spec can wire
+		// `$.assembled` straight in without a shim node in between.
+		compiledPrompt: input?.compiledPrompt ?? input?.context ?? input?.main,
+		currentCharacterId: input?.currentCharacterId ?? null,
+		generatingMessageMetadata: input?.generatingMessageMetadata,
+		// The node's own slots — tier 2 of
+		// `capability default → pipeline config → session override`.
+		//
+		// Forwarded here for the same reason the `generate-image` binding
+		// below forwards them, and their absence was the reason the
+		// panel's Connection and Sampling pickers on the reply step were
+		// decoration: the values stored, and no reader ever saw them. The
+		// host resolves them; this binding only has to stop dropping them.
+		connection: input?.connection ?? null,
+		sampling: input?.sampling ?? null,
+		// The files this step's `attachments` port carries, as media
+		// REFERENCES and in order. Forwarded rather than resolved: the
+		// substrate turns a uuid into bytes, having first checked it
+		// against the run — a binding never sees the bytes, exactly as it
+		// never sees the connection.
+		attachments: input?.attachments,
+		/**
+		 * The author's own stop sequences (ruling 2026-09-10).
+		 *
+		 * ⚠ **Declared since this node type was written and read by
+		 * nothing** — the third member of the dead-control family bugs
+		 * 12 and 15 kept finding, and the one `paramsSlotWiring.test.ts`
+		 * carries three ledger lines for. The panel rendered the
+		 * textarea, the scope chain stored the lines, and no request
+		 * ever carried them.
+		 *
+		 * Forwarded rather than composed: this is the EXPLICIT kind, and
+		 * the other two — the completion template's own list and the
+		 * scene's speaker labels — are derived from facts the dispatch
+		 * already holds. `connections/stops.ts` puts all three together
+		 * once and applies the wire rule; an author's sequence is their
+		 * choice rather than the template's, so it is the one kind that
+		 * rides either wire.
+		 *
+		 * ⚠ A spec must NAME the slot (`params: slot.params()`) for this
+		 * to be anything but `undefined` — `resolveInput` resolves only
+		 * the config keys a node's config mentions. The three shipped
+		 * reply specs do not name it yet; that half is core-catalog work.
+		 */
+		stopSequences: explicitStopsFrom(input?.params?.stopSequences),
+		/**
+		 * How this step is sent — `auto` defers to the connection, `off` forces
+		 * one request and waits.
+		 *
+		 * The same slot as the stop sequences and the same rule: forwarded
+		 * rather than resolved, because what `auto` means is the CONNECTION's
+		 * answer and a binding never sees one.
+		 */
+		streaming: streamingModeFrom(input?.params?.streaming),
+		/**
+		 * The advertisement's native door, forwarded verbatim.
+		 *
+		 * Undefined on `generate-text`, which declares no such port, so that
+		 * node's request is byte-identical to what it always was. The dispatch
+		 * REFUSES a request carrying tools that its connection or adapter
+		 * cannot send rather than sending it stripped — see there.
+		 */
+		tools: Array.isArray(input?.tools) ? input.tools : undefined
+	})
+
+	/**
+	 * What the provider said about the prompt it just read (ruled "later,
+	 * non-disruptive").
+	 *
+	 * ⚠ **Before the halts below, deliberately.** A run that was cancelled
+	 * mid-generation, or that came back with nothing, still paid for the prompt
+	 * — and those are exactly the turns somebody asks about. Reported to the
+	 * RECEIPT rather than put on a port: it is accounting about the call, not a
+	 * value the next node consumes.
+	 *
+	 * Only the numbers the service actually gave. Several report none, and
+	 * absent must not become zero — see `ProviderCtx.reportCacheUsage`.
+	 */
+	if (
+		typeof result?.tokensPrompt === "number" ||
+		typeof result?.tokensCached === "number" ||
+		typeof result?.tokensCacheWrite === "number"
+	)
+		ctx.reportCacheUsage?.({
+			...(typeof result.tokensPrompt === "number"
+				? { prompt: result.tokensPrompt }
+				: {}),
+			...(typeof result.tokensCached === "number"
+				? { cached: result.tokensCached }
+				: {}),
+			...(typeof result.tokensCacheWrite === "number"
+				? { cacheWrite: result.tokensCacheWrite }
+				: {})
+		})
+
+	/**
+	 * What the request could not carry of the sampling config.
+	 *
+	 * ⚠ **Before the halts below, for the same reason the counts above
+	 * are.** A run that came back with nothing still sent a request, and a
+	 * request that dropped a sampler is exactly the one somebody asks
+	 * about. Reported only when the adapter left something out, so a node
+	 * that carried everything writes nothing to the receipt.
+	 *
+	 * The same channel `generate-image` reports on further down, for the
+	 * same reason it does: "why did changing this do nothing" has no
+	 * answer anywhere else on the screen.
+	 */
+	if (Array.isArray(result?.samplingIgnored) && result.samplingIgnored.length)
+		ctx.reportSampling?.(
+			result.samplingApplied ?? {},
+			result.samplingIgnored
+		)
+
+	if (result?.isAborted)
+		return halt("generation was aborted before the model finished")
+	if (!result?.text)
+		// The provider type used to be named here. `haltReason` is a
+		// plain string on the SDK receipt, so nothing downstream can
+		// take it back out again — and a non-admin reads their own
+		// receipt through `pipelines:run`. The fact moves to the field
+		// below, which the projection can remove.
+		return halt("the model returned nothing — there is no message to write")
+
+	return ok({
+		main: result.text,
+		text: result.text,
+		thinking: result.thinking,
+		// The connection *type*, not the connection: enough to answer
+		// "which provider answered this turn" from the receipt, and
+		// nothing that could be replayed by whoever reads it.
+		//
+		// Under `connection` rather than as a bare `via` string, because
+		// this value IS the node's receipt output and a non-admin can
+		// fetch their own receipt. Which provider the administrator runs
+		// is still the administrator's business; the projection removes
+		// this key for everyone else.
+		connection: { type: result.via },
+		/**
+		 * What this request stopped on, and what it was not allowed to.
+		 *
+		 * On the node's OUTPUT because that is where a receipt reader
+		 * looks, and because the failure it reports has no error
+		 * attached to it: a stop sequence the model never saw means a
+		 * reply that runs on past its turn, and one held back by the
+		 * wire rule is a control that looks configured and is not.
+		 * `dropped` is the half that answers "why is my stop sequence
+		 * not working"; `wire` names the rule that decided.
+		 *
+		 * Carries no connection identity — three kinds, some strings the
+		 * user themselves wrote, and the wire mode — so the projection
+		 * has nothing to remove here.
+		 */
+		stops: result.stops,
+		/**
+		 * What the adapter put on the wire, and what came back.
+		 *
+		 * On the output beside `stops` for the same reason `stops` is there, and
+		 * under the same rule `connection` above follows: this one names the
+		 * base URL, the model and the body, so the projection removes the whole
+		 * key for everyone who is not an administrator. Absent on an adapter
+		 * that recorded nothing.
+		 */
+		...(result.wire ? { wire: result.wire } : {}),
+		/**
+		 * `{ tool, args }` or null — the same shape `parse-tool-call`
+		 * publishes, so `run-tool` and a loop's predicate take either door
+		 * without knowing which was used.
+		 *
+		 * Published from both pins, and always null on `generate-text`: an
+		 * out-port the contract does not declare is unreachable from any spec,
+		 * so it costs that node one key in its receipt output — and the
+		 * alternative is a branch on the type id inside a function whose whole
+		 * point is not having one.
+		 */
+		toolCall: result.toolCall ?? null
+	})
+}
+
+/**
+ * Select what a downstream port can take, from a document it cannot reach into.
+ *
+ * A data reference is `{node, port}` with no sub-path, so `path` is how one node
+ * serves both the step that reads the whole answer and the block that iterates
+ * one list inside it — the same parameter and the same spelling `parse-json@1`
+ * carries.
+ *
+ * Several comma-separated paths join in order. That is what makes an answer
+ * split into ARMS wireable: a schema can only be strict about a list whose items
+ * are all one shape, so a keeper that reports values and possessions reports two
+ * lists, and the node that resolves them takes one.
+ */
+export function selectJsonPaths(
+	json: unknown,
+	path: unknown
+): { value: unknown; items: unknown[] } {
+	const spec = typeof path === "string" ? path.trim() : ""
+	const at = (dotted: string): unknown => {
+		let value: unknown = json
+		for (const segment of dotted ? dotted.split(".") : []) {
+			if (value == null || typeof value !== "object") return undefined
+			value = (value as Record<string, unknown>)[segment]
+		}
+		return value
+	}
+	// A single value becomes a one-element list and an absent one an empty
+	// list, so a `map` wired to `items` is always wired to a list.
+	const listed = (value: unknown): unknown[] =>
+		Array.isArray(value) ? value : value == null ? [] : [value]
+
+	const paths = spec
+		.split(",")
+		.map((p) => p.trim())
+		.filter(Boolean)
+	if (paths.length <= 1) {
+		const value = at(paths[0] ?? "")
+		return { value, items: listed(value) }
+	}
+	const items = paths.flatMap((p) => listed(at(p)))
+	// `value` IS the joined list when several paths were named: there is no
+	// single value to publish, and a reader of `value` on a multi-path node is
+	// asking the same question `items` answers.
+	return { value: items, items }
+}
+
+/**
+ * Generate a DOCUMENT.
+ *
+ * Its own function rather than a third id on `generateBinding`, and the reason
+ * is the shape of the request rather than the shape of the code: that one
+ * forwards a turn — a speaker, the files travelling with it, the assistant line
+ * the model continues — and this one forwards a question. The two share a
+ * dispatcher, which is where the parts that genuinely are the same live.
+ *
+ * ⚠ **The absence of a trailing assistant line is the TRANSCRIPT's guarantee,
+ * not this function's.** By the time a prompt reaches here it has been rendered,
+ * and on a completion wire the seed is an open block inside one string that
+ * nothing can take back out. `core:task/prose-transcript@1` is where the line is
+ * never written, and the shipped spec wires it for exactly that reason.
+ */
+const generateJsonBinding = async (
+	input: NodeInput<typeof C.generateJson>,
+	ctx: ProviderCtx
+) => {
+	const result: any = await ctx.call({
+		compiledPrompt: input?.context,
+		// Names no speaker: the stop composer's speaker labels and the
+		// continuation machinery both key on this, and neither belongs on a
+		// request that is not somebody's turn.
+		currentCharacterId: null,
+		connection: input?.connection ?? null,
+		sampling: input?.sampling ?? null,
+		stopSequences: explicitStopsFrom(input?.params?.stopSequences),
+		// Same slot, same rule as on the turn-taking sibling above: `auto` is
+		// the connection's answer and only the dispatch has the connection.
+		streaming: streamingModeFrom(input?.params?.streaming),
+		// The ask. Which door it goes out through is the dispatch's answer,
+		// because only the dispatch has the connection.
+		schema: input?.schema ?? undefined
+	})
+
+	if (
+		typeof result?.tokensPrompt === "number" ||
+		typeof result?.tokensCached === "number" ||
+		typeof result?.tokensCacheWrite === "number"
+	)
+		ctx.reportCacheUsage?.({
+			...(typeof result.tokensPrompt === "number"
+				? { prompt: result.tokensPrompt }
+				: {}),
+			...(typeof result.tokensCached === "number"
+				? { cached: result.tokensCached }
+				: {}),
+			...(typeof result.tokensCacheWrite === "number"
+				? { cacheWrite: result.tokensCacheWrite }
+				: {})
+		})
+
+	/**
+	 * What the request could not carry of the sampling config.
+	 *
+	 * ⚠ **Before the halts below, for the same reason the counts above
+	 * are.** A run that came back with nothing still sent a request, and a
+	 * request that dropped a sampler is exactly the one somebody asks
+	 * about. Reported only when the adapter left something out, so a node
+	 * that carried everything writes nothing to the receipt.
+	 *
+	 * The same channel `generate-image` reports on further down, for the
+	 * same reason it does: "why did changing this do nothing" has no
+	 * answer anywhere else on the screen.
+	 */
+	if (Array.isArray(result?.samplingIgnored) && result.samplingIgnored.length)
+		ctx.reportSampling?.(
+			result.samplingApplied ?? {},
+			result.samplingIgnored
+		)
+
+	if (result?.isAborted)
+		return halt("generation was aborted before the model finished")
+	if (!result?.text)
+		return halt("the model returned nothing — there is no answer to read")
+
+	/**
+	 * An answer that cannot be read is reported, not thrown away.
+	 *
+	 * `json` is null and `parseError` says which way it failed, so a reader can
+	 * tell a model that ignored its schema from one whose reply hit the token
+	 * limit mid-document. The node is `optional`, so downstream this is the same
+	 * absence a halt would have produced — with the sentence kept.
+	 */
+	const { extractJson, JsonExtractionError } = await import(
+		"$lib/server/utils/extractJson"
+	)
+	let json: unknown = null
+	let parseError: string | undefined
+	try {
+		json = JSON.parse(extractJson(result.text))
+	} catch (e) {
+		parseError =
+			e instanceof JsonExtractionError && e.truncated
+				? "the answer stopped in the middle of its JSON, which usually means the reply hit its token limit"
+				: "the answer was not readable as JSON"
+	}
+
+	const { value, items } = selectJsonPaths(json, input?.params?.path)
+
+	return ok({
+		main: json,
+		json,
+		value,
+		items,
+		text: result.text,
+		// The connection TYPE, not the connection — the same key the projection
+		// removes for everyone who is not an administrator.
+		connection: { type: result.via },
+		stops: result.stops,
+		// The exchange, under the key the projection removes — see the
+		// `generate-text` sibling above.
+		...(result.wire ? { wire: result.wire } : {}),
+		// Which door the request went out through. Without it, "the model
+		// ignored the schema" and "no schema was ever sent" read identically.
+		structured: result.structured ?? null,
+		...(parseError ? { parseError } : {})
+	})
+}
+
 export function coreBindings(run: RenderRun = {}): Bindings {
 	const bindings: Bindings = {
 		// ── Inputs ──────────────────────────────────────────────────────────
@@ -929,7 +1429,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			// with no supplier — and is now what `channel` already was.
 			input: NodeInput<
 				typeof C.sessionHistory,
-				Unsupplied<"limit" | "channel">
+				Unsupplied<
+					"limit" | "channel",
+					"dead top-level spellings of two declared parameters (ruling 2026-09-09) — `params` is the live read and this is the fallback behind it"
+				>
 			>,
 			ctx: CoreQueryCtx
 		) => {
@@ -990,30 +1493,36 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		// already carry which they are, so a separate implementation would be
 		// two things to keep in step for no gain.
 		"core:query/world-lore@1": async (
-			input: NodeInput<typeof C.worldLore, Unsupplied<"limit">>,
+			input: NodeInput<
+				typeof C.worldLore,
+				Unsupplied<"limit", WhyTopLevelLimit>
+			>,
 			ctx: CoreQueryCtx
-		) =>
-			await loreFor("worldLore", input, ctx),
+		) => await loreFor("worldLore", input, ctx),
 		"core:query/character-lore@1": async (
-			input: NodeInput<typeof C.characterLore, Unsupplied<"limit">>,
+			input: NodeInput<
+				typeof C.characterLore,
+				Unsupplied<"limit", WhyTopLevelLimit>
+			>,
 			ctx: CoreQueryCtx
-		) =>
-			await loreFor("characterLore", input, ctx),
+		) => await loreFor("characterLore", input, ctx),
 		// ⚠ The third lane, absent between spec 1.8.0 and 1.10.0. The two lore
 		// queries each filter the shared scan to their own source, and nothing
 		// filtered for `history` — so those candidates were built, scored and
 		// dropped, with the ranker still holding a `history` band and
 		// `assemble` still asking for history blocks.
 		"core:query/history-entries@1": async (
-			input: NodeInput<typeof C.historyEntries, Unsupplied<"limit">>,
+			input: NodeInput<
+				typeof C.historyEntries,
+				Unsupplied<"limit", WhyTopLevelLimit>
+			>,
 			ctx: CoreQueryCtx
-		) =>
-			await loreFor("history", input, ctx),
+		) => await loreFor("history", input, ctx),
 
 		"core:query/lorebook-triggers@1": async (
 			input: NodeInput<
 				typeof C.lorebookTriggers,
-				Unsupplied<"limit">
+				Unsupplied<"limit", WhyTopLevelLimit>
 			>,
 			ctx: CoreQueryCtx
 		) => {
@@ -1095,7 +1604,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		"core:query/vector-search@1": async (
 			input: NodeInput<
 				typeof C.vectorSearch,
-				Unsupplied<"vector" | "sources">
+				Unsupplied<
+					"vector" | "sources",
+					"a singular alias for the declared `vectors` port, and a source filter no shipped spec wires"
+				>
 			>,
 			ctx: CoreQueryCtx
 		) => {
@@ -1456,7 +1968,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * do, by construction rather than by a rule restated a third time.
 		 */
 		"core:query/entity-search@1": async (
-			input: NodeInput<typeof C.entitySearch, Unsupplied<"limit">>,
+			input: NodeInput<
+				typeof C.entitySearch,
+				Unsupplied<"limit", WhyTopLevelLimit>
+			>,
 			ctx: CoreQueryCtx
 		) => {
 			const params = input?.params ?? {}
@@ -1653,7 +2168,6 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			})
 		},
 
-
 		/**
 		 * The mention detector — the query half of the entity-vector space.
 		 *
@@ -1812,7 +2326,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 						entityLink: reason
 					}
 				})
-			if (maxLinks === 0) return off("off — no links requested (maxLinks is 0)")
+			if (maxLinks === 0)
+				return off("off — no links requested (maxLinks is 0)")
 			// ⚠ Two states with one symptom, and the note has to admit it. The
 			// mechanism's switch is `mention-spans`' `maxMentions`, which ships at 0, so
 			// an empty mention list is *usually* "the mechanism is off" and not "the
@@ -1840,7 +2355,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			if (!pool.length) return off("no candidates to rank")
 
 			const embedding = await ctx.read("embedding_status", {})
-			if (!embedding?.available) return off(embedding?.reason ?? "unavailable")
+			if (!embedding?.available)
+				return off(embedding?.reason ?? "unavailable")
 
 			/**
 			 * The searchable ids, taken off the pool rather than read again.
@@ -1955,7 +2471,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		"core:query/relationships-perspectives@1": async (
 			input: NodeInput<
 				typeof C.relationshipsPerspectives,
-				Unsupplied<"currentCharacterId">
+				Unsupplied<"currentCharacterId", WhyFlatSpeakerId>
 			>,
 			ctx: CoreQueryCtx
 		) => {
@@ -1974,7 +2490,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		"core:query/relationships-known@1": async (
 			input: NodeInput<
 				typeof C.relationshipsKnown,
-				Unsupplied<"currentCharacterId">
+				Unsupplied<"currentCharacterId", WhyFlatSpeakerId>
 			>,
 			ctx: CoreQueryCtx
 		) => {
@@ -1995,10 +2511,17 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			return ok({ main: value, relationshipsKnown: value })
 		},
 
+		// The same graph, ranked and budgeted rather than dumped.
+		...relationshipSearchBindings(),
+
+		// The session's stats, states and possessions: one node reads them,
+		// one changes them.
+		...stateBindings(run),
+
 		"core:query/session-cast@1": async (
 			input: NodeInput<
 				typeof C.sessionCast,
-				Unsupplied<"currentCharacterId">
+				Unsupplied<"currentCharacterId", WhyFlatSpeakerId>
 			>,
 			ctx: CoreQueryCtx
 		) => {
@@ -2212,7 +2735,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					// Copied, because the merge above writes into `signals` and
 					// the mechanisms hand out objects they may still be holding — the
 					// vector mechanism keeps its own `hits` array pointing at these.
-					const own = { ...candidate, signals: { ...candidate?.signals } }
+					const own = {
+						...candidate,
+						signals: { ...candidate?.signals }
+					}
 					at.set(key, own)
 					candidates.push(own)
 				}
@@ -2267,7 +2793,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		"core:task/rank-semantic@1": async (
 			input: NodeInput<
 				typeof C.rankSemantic,
-				Unsupplied<"lists" | "similarity">
+				Unsupplied<
+					"lists" | "similarity",
+					"the two ranked-list ports `core:query/vector-search@1` publishes and this node never declared, so no spec can wire them"
+				>
 			>
 		) => {
 			const params = withDefaults({ semantic: input?.params ?? {} })
@@ -2351,7 +2880,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		"core:task/rank-hybrid@1": async (
 			input: NodeInput<
 				typeof C.rankHybrid,
-				Unsupplied<"availableTokens">
+				Unsupplied<
+					"availableTokens",
+					"a flat spelling of `budget.remaining` from before the budget port carried a payload"
+				>
 			>
 		) => {
 			const params = withDefaults(rankingParamsFrom(input?.params))
@@ -2413,7 +2945,12 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			input: NodeInput<
 				typeof C.buildTemplateContext,
 				Unsupplied<
-					"main" | "promptConfig" | "narratorName" | "characterLore"
+					| "main"
+					| "promptConfig"
+					| "narratorName"
+					| "characterLore"
+					| "fields",
+					"four pre-contract spellings — an unrefined `$.node` landing on `main`, `promptConfig` before the prompts slot, `narratorName` before it moved inside it, and a `characterLore` port that was never declared — plus `fields`, which a SIBLING BINDING supplies: the four adventure wrappers at the bottom of this file call this handler with the variables their prompt rows interpolate. Undeclared here on purpose, because this node is frozen for 0.6 and the supplier is code rather than a spec"
 				>
 			>,
 			ctx: TaskCtx
@@ -2468,6 +3005,16 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			const templateContext = await buildTemplateContext({
 				...resolved,
 				variables: input?.variables,
+				// The variables an authored prompt row interpolates beside
+				// `{{char}}`: a genre's own fields, and whatever the surface
+				// that called this computed for them. They have to arrive here
+				// rather than be merged onto the answer, because `instructions`
+				// is interpolated inside the builder — see `fields` there.
+				fields: input?.fields as Record<string, unknown> | undefined,
+				// Unwired on every shipped spec, which is why it is read
+				// defensively rather than required: a chat has no state block
+				// and must not grow one by declaring a port.
+				state: input?.state,
 				// Every layout here may be a plugin's engine, so the run rides
 				// along — without it a cancelled run cannot stop them.
 				...run
@@ -2513,6 +3060,36 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		},
 
 		/**
+		 * The same conversation, as prose, with no turn to continue.
+		 *
+		 * One implementation with the two differences on it as flags, rather
+		 * than a second copy of the naming chain: `SessionMessageProcessor`
+		 * reaches through participants who have since left to a name
+		 * snapshotted at removal, and a second version of that agrees on every
+		 * session until somebody leaves one.
+		 */
+		"core:task/prose-transcript@1": async (
+			input: NodeInput<typeof C.proseTranscript>
+		) => {
+			const ctxValue = input?.templateContext ?? {}
+			const result = processMessages({
+				messages: input?.messages ?? [],
+				cast: input?.cast ?? {},
+				charName: ctxValue.char ?? "",
+				personaName: ctxValue.user ?? "",
+				// The two that make this node what it is. No name is needed for
+				// a line that is not written.
+				seed: false,
+				plainProse: true
+			})
+			return ok({
+				main: result.messages,
+				messages: result.messages,
+				includedIds: result.includedIds
+			})
+		},
+
+		/**
 		 * Allocate and render.
 		 *
 		 * Pure, and rendering happens through core's own Handlebars — the same
@@ -2526,7 +3103,14 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * render the same bytes; rendering itself is no longer the gap.
 		 */
 		"core:task/assemble@2": async (
-			input: NodeInput<typeof C.assemble>,
+			input: NodeInput<
+				typeof C.assemble,
+				never,
+				UnsuppliedParam<
+					"budget",
+					"the live read is the declared `budget` in-port; `params.budget` is a spelling the schema never carried, kept as the fallback behind it"
+				>
+			>,
 			ctx: TaskCtx
 		) => {
 			const slot = input?.template
@@ -2543,10 +3127,14 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			 * whole prompt for that run was the seven characters of a
 			 * stringified empty object, sent to the model as prose.
 			 *
-			 * It is reachable on a real install: `bootstrapPipelines` returns
-			 * early on a `TypeRegistryConflictError` without writing config
-			 * values, and this slot then resolves to `{}` on every run. The
-			 * halt is the correct outcome, and it names the missing thing.
+			 * It is reachable on a real install: a pipeline config that never
+			 * had a template selected stores no value for this slot, and it
+			 * resolves to `{}` on that config's every run. (`bootstrapPipelines`
+			 * does not return early on a changed declaration — it archives the
+			 * old one and republishes the changed one, ruling 2026-09-10 — so a
+			 * missing value here is a config nobody set, not a skipped boot
+			 * pass.) The halt is the correct outcome, and it names the missing
+			 * thing.
 			 */
 			const template =
 				typeof slot === "string"
@@ -2625,6 +3213,16 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			const messages = input?.messages ?? []
 			const ctxPostHistory = (input?.templateContext as any)?.postHistory
 			let postHistory = ctxPostHistory
+			/**
+			 * The decision, for the receipt.
+			 *
+			 * The trigger is a suppression, and a suppressed reminder leaves no
+			 * trace in the prompt: the only difference between "the trigger held
+			 * it back" and "nobody configured one" is a block that is not there.
+			 * This node is where the difference is known, so it is where it is
+			 * written down.
+			 */
+			let postHistoryDiag: PostHistoryDiag | undefined
 			if (ctxPostHistory?.hasContent && messages.length) {
 				const resolved = await resolvePostHistoryContext({
 					renderMessages: messages,
@@ -2643,6 +3241,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					}
 				})
 				postHistory = resolved.postHistory
+				postHistoryDiag = resolved.diagnostics
 			}
 
 			/**
@@ -2713,6 +3312,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				allocation,
 				postHistory,
 				template,
+				blocks: input?.params?.blocks,
 				// Resolved from the template slot, so a config written in a
 				// plugin's engine renders with the plugin's assembler rather
 				// than being run through core's (12 §2a).
@@ -2771,7 +3371,18 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				 * left alone (assemble.ts, NOMENCLATURE §24).
 				 */
 				allocations: allocation.blocks,
-				budget: allocation.budget
+				budget: allocation.budget,
+				/**
+				 * Whether the post-history reminder went in, and on what
+				 * numbers. Undeclared, like the two fields above it: nothing
+				 * core wires this, and the receipt is the reader.
+				 *
+				 * Absent when this node made no decision — a context carrying
+				 * no reminder at all, or a render with no messages to place one
+				 * among. Absence is drawn as absence, so the inspector never
+				 * reports a verdict that was never reached.
+				 */
+				...(postHistoryDiag ? { postHistory: postHistoryDiag } : {})
 			})
 		},
 
@@ -2858,109 +3469,23 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * pipeline. Halting says "this run has no answer" where an `err` would send
 		 * whoever is reading the receipt looking for a bug.
 		 */
-		"core:provider/generate-text@1": async (
-			input: NodeInput<
-				typeof C.generateText,
-				Unsupplied<
-					"compiledPrompt" | "main" | "generatingMessageMetadata"
-				>
-			>,
-			ctx: ProviderCtx
-		) => {
-			const result: any = await ctx.call({
-				// The rendered prompt, whatever produced it. Accepting the assemble
-				// node's whole output as well as a bare payload means a spec can wire
-				// `$.assembled` straight in without a shim node in between.
-				compiledPrompt:
-					input?.compiledPrompt ?? input?.context ?? input?.main,
-				currentCharacterId: input?.currentCharacterId ?? null,
-				generatingMessageMetadata: input?.generatingMessageMetadata,
-				// The node's own slots — tier 2 of
-				// `capability default → pipeline config → session override`.
-				//
-				// Forwarded here for the same reason the `generate-image` binding
-				// below forwards them, and their absence was the reason the
-				// panel's Connection and Sampling pickers on the reply step were
-				// decoration: the values stored, and no reader ever saw them. The
-				// host resolves them; this binding only has to stop dropping them.
-				connection: input?.connection ?? null,
-				sampling: input?.sampling ?? null,
-				// The files this step's `attachments` port carries, as media
-				// REFERENCES and in order. Forwarded rather than resolved: the
-				// substrate turns a uuid into bytes, having first checked it
-				// against the run — a binding never sees the bytes, exactly as it
-				// never sees the connection.
-				attachments: input?.attachments,
-				/**
-				 * The author's own stop sequences (ruling 2026-09-10).
-				 *
-				 * ⚠ **Declared since this node type was written and read by
-				 * nothing** — the third member of the dead-control family bugs
-				 * 12 and 15 kept finding, and the one `paramsSlotWiring.test.ts`
-				 * carries three ledger lines for. The panel rendered the
-				 * textarea, the scope chain stored the lines, and no request
-				 * ever carried them.
-				 *
-				 * Forwarded rather than composed: this is the EXPLICIT kind, and
-				 * the other two — the completion template's own list and the
-				 * scene's speaker labels — are derived from facts the dispatch
-				 * already holds. `connections/stops.ts` puts all three together
-				 * once and applies the wire rule; an author's sequence is their
-				 * choice rather than the template's, so it is the one kind that
-				 * rides either wire.
-				 *
-				 * ⚠ A spec must NAME the slot (`params: slot.params()`) for this
-				 * to be anything but `undefined` — `resolveInput` resolves only
-				 * the config keys a node's config mentions. The three shipped
-				 * reply specs do not name it yet; that half is core-catalog work.
-				 */
-				stopSequences: explicitStopsFrom(input?.params?.stopSequences)
-			})
-
-			if (result?.isAborted)
-				return halt("generation was aborted before the model finished")
-			if (!result?.text)
-				// The provider type used to be named here. `haltReason` is a
-				// plain string on the SDK receipt, so nothing downstream can
-				// take it back out again — and a non-admin reads their own
-				// receipt through `pipelines:run`. The fact moves to the field
-				// below, which the projection can remove.
-				return halt(
-					"the model returned nothing — there is no message to write"
-				)
-
-			return ok({
-				main: result.text,
-				text: result.text,
-				thinking: result.thinking,
-				// The connection *type*, not the connection: enough to answer
-				// "which provider answered this turn" from the receipt, and
-				// nothing that could be replayed by whoever reads it.
-				//
-				// Under `connection` rather than as a bare `via` string, because
-				// this value IS the node's receipt output and a non-admin can
-				// fetch their own receipt. Which provider the administrator runs
-				// is still the administrator's business; the projection removes
-				// this key for everyone else.
-				connection: { type: result.via },
-				/**
-				 * What this request stopped on, and what it was not allowed to.
-				 *
-				 * On the node's OUTPUT because that is where a receipt reader
-				 * looks, and because the failure it reports has no error
-				 * attached to it: a stop sequence the model never saw means a
-				 * reply that runs on past its turn, and one held back by the
-				 * wire rule is a control that looks configured and is not.
-				 * `dropped` is the half that answers "why is my stop sequence
-				 * not working"; `wire` names the rule that decided.
-				 *
-				 * Carries no connection identity — three kinds, some strings the
-				 * user themselves wrote, and the wire mode — so the projection
-				 * has nothing to remove here.
-				 */
-				stops: result.stops
-			})
-		},
+		"core:provider/generate-text@1": generateBinding,
+		/**
+		 * The structured door (A). A separate function above rather than a
+		 * third id on the shared one: it forwards a question, not a turn.
+		 */
+		"core:provider/generate-json@1": generateJsonBinding,
+		/**
+		 * The native tool door (20 §9) — the same node with the declarations on
+		 * the wire.
+		 *
+		 * One handler, two pins, so the two cannot drift about a stop sequence
+		 * or an attachment. Its input is the INTERSECTION of the two contracts,
+		 * which is what makes that sound: every name read below is declared by
+		 * whichever one the run resolved. `tools` and `toolCall` are the two
+		 * that are not in the intersection, and they are named at the site.
+		 */
+		"core:provider/generate-with-tools@1": generateBinding,
 
 		/**
 		 * The image render — the structural twin of generate-text above.
@@ -2972,7 +3497,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * left here for a binding to decide.
 		 */
 		"core:provider/generate-image@1": async (
-			input: NodeInput<typeof C.generateImage, Unsupplied<"main">>,
+			input: NodeInput<
+				typeof C.generateImage,
+				Unsupplied<
+					"main",
+					"an unrefined `$.node` wiring lands on `main`; the declared port is `prompt`"
+				>
+			>,
 			ctx: ProviderCtx
 		) => {
 			const result: any = await ctx.call({
@@ -2981,7 +3512,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				prompts: input?.prompts,
 				connection: input?.connection,
 				sampling: input?.sampling,
-				init: input?.init
+				init: input?.init,
+				// `off` here means a render with no progress poll and no
+				// previews — the image node's whole use for the parameter.
+				streaming: streamingModeFrom(input?.params?.streaming)
 			})
 
 			// Halts rather than errs, for the same reason generate-text does: a
@@ -3160,6 +3694,213 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		},
 
 		/**
+		 * What tools this session has, as declarations a model can read.
+		 *
+		 * A Query so that the answer is the install's, not the spec's: which
+		 * extensions are enabled is a fact about this moment, and a spec
+		 * listing its tools by hand would advertise one that was uninstalled
+		 * and refuse one that was added. The host resolves the list; this is
+		 * the shape.
+		 */
+		"core:query/available-tools@1": async (
+			input: NodeInput<typeof C.availableTools>,
+			ctx: CoreQueryCtx
+		) => {
+			const tools = await ctx.read("available_tools", {
+				sessionId: input?.scope?.sessionId,
+				include: input?.params?.include ?? [],
+				plugins: input?.params?.plugins !== false
+			})
+			const list = Array.isArray(tools) ? tools : []
+			return ok({ main: list, tools: list })
+		},
+
+		/**
+		 * The call itself — the one impure step of a tool loop (20 §9).
+		 *
+		 * Three rules, and each closes a way an agentic turn ends badly:
+		 *
+		 *  - **A null call is not an error.** It is the ordinary last
+		 *    iteration, where the model answered in prose and the loop is
+		 *    about to stop on its predicate. Nothing runs.
+		 *  - **A tool that was not advertised is refused by name.** `tools` is
+		 *    the list the model was actually given, so a name it invented
+		 *    cannot reach a tool that exists but was withheld from this step —
+		 *    and the refusal says the name, because a model that reads "unknown
+		 *    tool" with no name asks for the same one again.
+		 *  - **An error is a result.** `main` carries `{ tool, error }` and
+		 *    `text` renders it, so the model reads what went wrong and tries
+		 *    something else. A throw here would end the run at the one moment
+		 *    the agent could have recovered.
+		 *
+		 * The time-box is the node type's own `timeoutMs`: one invocation is
+		 * one tool, so the executor's timeout already is the tool's, and a
+		 * second deadline here could only disagree with it.
+		 */
+		"core:provider/run-tool@1": async (
+			input: NodeInput<typeof C.runTool>,
+			ctx: ProviderCtx
+		) => {
+			const call = input?.call as
+				| { tool?: unknown; args?: unknown }
+				| null
+				| undefined
+			const tool = typeof call?.tool === "string" ? call.tool : ""
+			// The ordinary last iteration: the model answered instead of
+			// asking, so nothing runs and the prose is what this iteration
+			// contributed to the conversation.
+			if (!tool)
+				return ok({
+					main: null,
+					text: "",
+					answer: String(input?.text ?? "")
+				})
+
+			const advertised = (Array.isArray(input?.tools) ? input.tools : [])
+				.map((t: any) => t?.name)
+				.filter((n: unknown): n is string => typeof n === "string")
+			if (advertised.length && !advertised.includes(tool)) {
+				const refusal = {
+					tool,
+					error:
+						`'${tool}' is not one of the tools offered here. ` +
+						(advertised.length
+							? `Available: ${advertised.join(", ")}.`
+							: "No tools are offered on this step.")
+				}
+				return ok({
+					main: refusal,
+					text: renderToolResult(refusal),
+					answer: ""
+				})
+			}
+
+			const args =
+				call?.args && typeof call.args === "object"
+					? (call.args as Record<string, unknown>)
+					: {}
+			const result = (await ctx.call({ tool, args })) as Record<
+				string,
+				unknown
+			>
+			return ok({
+				main: result,
+				text: renderToolResult(result),
+				// Empty because this iteration worked rather than answered:
+				// the prose beside a tool call is the model narrating its own
+				// reasoning, and the turn's reply is the iteration that made
+				// no call. It is on the receipt either way.
+				answer: ""
+			})
+		},
+
+		/**
+		 * A repeated block's outputs, joined.
+		 *
+		 * `path` reads one key off each entry because an iteration's value is
+		 * its chain's last node's ports object, and empty entries are skipped
+		 * — which is what makes "every iteration's `answer`" resolve to the one
+		 * iteration that had an answer without a filter node in between.
+		 */
+		"core:task/join-text@1": async (
+			input: NodeInput<typeof C.joinText>
+		) => {
+			const items = Array.isArray(input?.items) ? input.items : []
+			const path = input?.params?.path ?? "text"
+			const separator = input?.params?.separator ?? "\n\n"
+			const parts = items
+				.map((entry: any) => {
+					const value =
+						path && entry && typeof entry === "object"
+							? entry[path]
+							: entry
+					return typeof value === "string"
+						? value
+						: value == null
+							? ""
+							: String(value)
+				})
+				.map((t: string) => t.trim())
+				.filter((t: string) => t.length > 0)
+			const text = parts.join(separator)
+			return ok({ main: text, text })
+		},
+
+		/**
+		 * A model's JSON answer, read back as data.
+		 *
+		 * ## Three failures, one answer
+		 *
+		 * A fenced block, a preamble the model could not resist, and a reply cut
+		 * off by the token limit are all "there is no readable answer here", and
+		 * `extractJson` separates the third from the other two by walking brace
+		 * depth rather than slicing to the last `}`. Every reader of a model's
+		 * JSON goes through that one walker, so a trailing "hope that helps!"
+		 * costs the same nothing everywhere.
+		 *
+		 * ## `err`, never `halt`
+		 *
+		 * The type declares `optional`, so an `err` is absorbed as
+		 * `recoveredAsEmpty` with the reason on the receipt and every downstream
+		 * port reads absent — a `map` over the missing list runs zero times, a
+		 * template renders no block. A halt would stop the turn instead, which
+		 * is the wrong cost: a planner that ignored its schema should lose the
+		 * turn its plan, not its reply.
+		 *
+		 * ## `path` is what makes the answer wireable
+		 *
+		 * A data reference is `{node, port}` with no sub-path, so a `map` cannot
+		 * iterate `plan.speakers` off a port carrying the whole document. `json`
+		 * is always the document; `value` and `items` are whatever `path`
+		 * selects, and `items` is that as a list so a map wired to it never has
+		 * to defend itself.
+		 */
+		"core:task/parse-json@1": async (
+			input: NodeInput<typeof C.parseJson>
+		) => {
+			const raw = typeof input?.text === "string" ? input.text : ""
+			if (!raw.trim())
+				return err(
+					"there was nothing to read — the step above produced no text"
+				)
+			const { extractJson, JsonExtractionError } = await import(
+				"$lib/server/utils/extractJson"
+			)
+			let json: unknown
+			try {
+				json = JSON.parse(extractJson(raw))
+			} catch (e) {
+				const truncated =
+					e instanceof JsonExtractionError && e.truncated
+				return err(
+					truncated
+						? "the answer stopped in the middle of its JSON, which usually means the reply hit its token limit"
+						: "the answer was not readable as JSON"
+				)
+			}
+			const path =
+				typeof input?.params?.path === "string"
+					? input.params.path.trim()
+					: ""
+			let value: unknown = json
+			for (const segment of path ? path.split(".") : []) {
+				if (value == null || typeof value !== "object") {
+					value = undefined
+					break
+				}
+				value = (value as Record<string, unknown>)[segment]
+			}
+			// A single value becomes a one-element list and an absent one an
+			// empty list, so a `map` wired to `items` is always wired to a list.
+			const items = Array.isArray(value)
+				? value
+				: value == null
+					? []
+					: [value]
+			return ok({ main: json, json, value, items })
+		},
+
+		/**
 		 * The cut, and the one decision it is allowed to make.
 		 *
 		 * `batchTokens` is the admin's knob — *how many tokens of chat one draft
@@ -3248,7 +3989,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		"core:provider/summarize-batch@1": async (
 			input: NodeInput<
 				typeof C.summarizeBatch,
-				Unsupplied<"topic">
+				Unsupplied<"topic", WhyFlatTopic>
 			>,
 			ctx: ProviderCtx
 		) => {
@@ -3297,7 +4038,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		"core:provider/summarize-synth@1": async (
 			input: NodeInput<
 				typeof C.summarizeSynth,
-				Unsupplied<"topic">
+				Unsupplied<"topic", WhyFlatTopic>
 			>,
 			ctx: ProviderCtx
 		) => {
@@ -3373,7 +4114,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		"core:provider/extract-cast@1": async (
 			input: NodeInput<
 				typeof C.extractCast,
-				Unsupplied<"knownCast">
+				Unsupplied<
+					"knownCast",
+					"a flat spelling of `request.knownCast`, which is the declared port's payload"
+				>
 			>,
 			ctx: ProviderCtx
 		) => {
@@ -3432,7 +4176,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			input: NodeInput<typeof C.entryKeys>,
 			ctx: CoreQueryCtx
 		) => {
-			const content = typeof input?.content === "string" ? input.content : ""
+			const content =
+				typeof input?.content === "string" ? input.content : ""
 			const empty = { main: [], keys: [], rejected: [] }
 			if (!content.trim()) return ok(empty)
 
@@ -3521,30 +4266,25 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		"core:consumer/create-message@1": async (
 			input: NodeInput<typeof C.createMessage>,
 			ctx: ConsumerCtx
-		) =>
-			ok(await ctx.commit(input)),
+		) => ok(await ctx.commit(input)),
 		"core:consumer/seed-greetings@1": async (
 			input: NodeInput<typeof C.seedGreetings>,
 			ctx: ConsumerCtx
-		) =>
-			ok(await ctx.commit(input)),
+		) => ok(await ctx.commit(input)),
 		"core:consumer/update-message@1": async (
 			input: NodeInput<typeof C.updateMessage>,
 			ctx: ConsumerCtx
-		) =>
-			ok(await ctx.commit(input)),
+		) => ok(await ctx.commit(input)),
 		"core:consumer/create-lore-entry@1": async (
 			input: NodeInput<typeof C.createLoreEntry>,
 			ctx: ConsumerCtx
-		) =>
-			ok(await ctx.commit(input)),
+		) => ok(await ctx.commit(input)),
 		// Gate-eligible, and that is the mechanism behind "a graph build stops at
 		// the review screen": what comes back is a proposal, not rows.
 		"core:consumer/graph-proposal@1": async (
 			input: NodeInput<typeof C.graphProposal>,
 			ctx: ConsumerCtx
-		) =>
-			ok(await ctx.commit(input))
+		) => ok(await ctx.commit(input))
 	}
 
 	/**
@@ -3561,6 +4301,162 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		bindings["core:task/build-template-context@1"]!
 
 	/**
+	 * The Adventure genre's four agent surfaces, on the same one implementation.
+	 *
+	 * They are separate *types* for a mechanical reason rather than a stylistic
+	 * one: a shipped prompt is resolved per (node type, slot) per spec, so four
+	 * agents sharing a context type would ship four agents one set of
+	 * instructions. What they add on top of the shared builder is one merge each
+	 * — the facts the shared builder has no port for — and `mergeContext` is the
+	 * one place that happens, so the four cannot come to disagree about how a
+	 * key reaches a template.
+	 *
+	 * ⚠ Every extra key is a VARIABLE — something an authored prompt row and an
+	 * authored template render (`{{tone}}`, `{{location}}`) and nothing else
+	 * reads. None of them reaches the resolution input: `resolveContextInput`
+	 * owns the card rules and nothing here may reach into them.
+	 */
+	const mergeContext =
+		(
+			extras: (input: any) => Record<string, unknown> = () => ({}),
+			/**
+			 * What the shared builder is asked, where this surface asks it
+			 * something different.
+			 *
+			 * The narrator is the one that needs it: every other agent here
+			 * builds its context as the session's current speaker, and the
+			 * narrator must not be anybody. Kept as a parameter rather than a
+			 * fourth wrapper, so "what this surface adds" and "what it asks"
+			 * sit in one place per agent.
+			 */
+			prepare: (input: any) => any = (input) => input
+		) =>
+		async (input: any, ctx: TaskCtx) => {
+			/**
+			 * ⚠ **Handed to the builder, not merged onto its answer.**
+			 *
+			 * `instructions` is interpolated INSIDE the builder, so a shipped
+			 * prompt saying "Difficulty is {{difficulty}}" rendered
+			 * "Difficulty is " for as long as these were merged afterwards.
+			 * The merge below stays, because the same keys are read by the
+			 * assembly template; what changed is that the builder sees them
+			 * first.
+			 */
+			const variables = {
+				...genreFields(input),
+				...adventureVariables(input),
+				...extras(input)
+			}
+			const base = await bindings["core:task/build-template-context@1"]!(
+				{ ...prepare(input), fields: variables },
+				ctx
+			)
+			if (base.kind !== "ok") return base
+			const value = base.value as {
+				main: unknown
+				templateContext: Record<string, unknown>
+			}
+			const merged = { ...value.templateContext, ...variables }
+			return ok({ ...value, main: merged, templateContext: merged })
+		}
+
+	/**
+	 * The genre's declared fields, by their own names.
+	 *
+	 * `{{tone}}` and `{{difficulty}}` are what a shipped Adventure prompt
+	 * writes, and this is the step that makes them render: declared on the
+	 * genre, edited in session settings, stored on the row, published by the
+	 * input node, and read here. Filtered to a plain object because it is a
+	 * `json` port and a list or a string arriving there must not spread.
+	 */
+	const genreFields = (input: any): Record<string, unknown> =>
+		input?.fields &&
+		typeof input.fields === "object" &&
+		!Array.isArray(input.fields)
+			? (input.fields as Record<string, unknown>)
+			: {}
+
+	/**
+	 * The facts every agent in a planned turn is given before it writes:
+	 * `{{location}}`, `{{timeOfDay}}`, `{{weather}}`, `{{beats}}`,
+	 * `{{stateSummary}}` and `{{slots}}`.
+	 *
+	 * Computed here rather than left to the template, because `state` and
+	 * `plan` are STRUCTURE: a template writing `{{{state}}}` over an object
+	 * renders `[object Object]`, which is exactly what the shipped narrator
+	 * template did on every live turn. See `prompt/adventureContext.ts`.
+	 *
+	 * Gated on there being a state or a plan at all, so the one non-adventure
+	 * pipeline that shares a surface here — `core:spec/narrate-character`,
+	 * which wires neither — gets the context it always got, key for key.
+	 */
+	const adventureVariables = (input: any): Record<string, unknown> => {
+		if (!input?.state && !input?.plan) return {}
+		const cast = input?.cast ?? input?.main
+		const names = (
+			Array.isArray(cast?.sessionCharacters) ? cast.sessionCharacters : []
+		)
+			.map((cc: any) => cc?.character?.name)
+			.filter((n: unknown): n is string => typeof n === "string")
+		return {
+			...sceneAnchor(input.state, input.plan),
+			stateSummary: stateSummary(input.state, names),
+			slots: slotGuide(input.state)
+		}
+	}
+
+	bindings["core:task/build-planner-context@1"] = mergeContext() as any
+
+	/**
+	 * Nobody is speaking, and that is the whole of the narrator stage.
+	 *
+	 * `resolveContextInput` keys everything off `currentCharacterId`: the card
+	 * shown at full visibility, what `{{char}}` renders, and — the one that
+	 * decides how the reply reads — the NAME on the line the model continues
+	 * from. With the session's speaker still set, the narrator's prompt ended
+	 * `Verity:` and the scene came back as Verity in the first person, however
+	 * plainly the instructions said to narrate.
+	 *
+	 * Cleared on the cast bundle as well as on the input, because the speaker
+	 * travels WITH the cast (`session-cast@1`) and the builder falls through to
+	 * it. Clearing one of the two is clearing neither.
+	 *
+	 * The seed name then falls to the prompts slot's `narratorName`, which is
+	 * the same rung `build-narrator-context@1` lands on and the reason that
+	 * field is declared on this node's prompts slot.
+	 */
+	const asNarrator = (input: any) => {
+		const cast = input?.cast ?? input?.main
+		return {
+			...input,
+			currentCharacterId: null,
+			...(cast && typeof cast === "object"
+				? { cast: { ...cast, currentCharacterId: null } }
+				: {})
+		}
+	}
+
+	bindings["core:task/build-scene-context@1"] = mergeContext(
+		(input) => ({
+			// What the planning step decided this turn is about, as structure,
+			// for a template that wants to walk it. The narrator reads its
+			// beats through `{{beats}}` instead, which is text.
+			plan: input?.plan
+		}),
+		asNarrator
+	) as any
+
+	bindings["core:task/build-keeper-context@1"] = mergeContext((input) => ({
+		// The reply this keeper is reporting on. The transcript does not carry
+		// it yet: it was written by the node immediately above.
+		reply: typeof input?.reply === "string" ? input.reply : undefined
+		// ⚠ `afterWrite` stays off the template context. It is an ordering
+		// edge — the reply's write result, taken on a port so this node runs
+		// after the write rather than beside it — and a write result in a
+		// prompt is a row id the model reads as prose.
+	})) as any
+
+	/**
 	 * The third surface, and the one place the implementation genuinely differs.
 	 *
 	 * Not an alias, because this node takes a `speaker` in-port the other two do
@@ -3575,47 +4471,82 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 	 * shape, and the receipt shows an empty speaker on the input node, which
 	 * says so far more precisely than a halt in the context builder would.
 	 *
-	 * ⚠ **The name and the card come from the port; the speaker *id* is left
-	 * alone**, and the reason is worth writing down because the obvious code is
-	 * the other one.
+	 * ⚠ **The port decides who is speaking — the name, the card AND the id.**
 	 *
-	 * An earlier draft also mapped `speaker.characterId` onto
-	 * `currentCharacterId` here, on the "payload wins" principle (19 §5).
-	 * Mutating it back in changes no test and no prompt, which is the honest
-	 * finding: `resolveContextInput` uses that id for exactly one thing —
-	 * looking the speaker up **in the cast** — and a side character is by
-	 * definition not in it, so for every turn this node runs the mapping is a
-	 * no-op. For the one case where it would not be (a cast member picked as a
-	 * side character), the run's scope already carries the same id, because
-	 * `generateResponse` sets it from the same fact it puts on the port.
+	 * `resolveContextInput` keys everything off `currentCharacterId`: the card
+	 * at full visibility, what `{{char}}` renders, the example dialogue, and the
+	 * name on the line the model continues from. A spec that names a speaker on
+	 * the port and leaves the session's own speaker in place is therefore asking
+	 * for one person's turn and building another's prompt — which is what two
+	 * voices in a multi-agent turn both seeded with the same name is.
 	 *
-	 * So the line is not defence in depth, it is a second source for a value
-	 * that has one — and the one it duplicates is the one the HOST read used to
-	 * decide which character lore it was willing to hand over. Two sources that
-	 * agree today are two sources that can drift, and the drift would be a
-	 * prompt in one voice over another's private knowledge.
+	 * So the id is DERIVED from the port rather than taken beside it, which
+	 * keeps one source for one fact: a name the cast holds resolves to that
+	 * member, a name it does not resolves to nobody, and that second branch is
+	 * the one a genuine side character takes so `speakerName` reaches the seed.
+	 * A spec that wires no speaker at all keeps the session's, untouched.
 	 */
-	bindings["core:task/build-side-character-context@1"] = async (
-		input: NodeInput<typeof C.buildSideCharacterContext>,
-		ctx: TaskCtx
+	const asSideCharacter = (
+		input: NodeInput<typeof C.buildSideCharacterContext>
 	) => {
 		const speaker = (input?.speaker ?? {}) as {
 			name?: unknown
 			character?: unknown
 		}
 		const name = typeof speaker.name === "string" ? speaker.name.trim() : ""
-		return await bindings["core:task/build-template-context@1"]!(
-			{
-				...input,
-				speakerName: name || undefined,
-				speakerCharacter:
-					speaker.character && typeof speaker.character === "object"
-						? speaker.character
-						: null
-			},
-			ctx
-		)
+		const cast = (input?.cast ?? (input as any)?.main) as any
+		// Matched on name and nickname alike: either can open a line in a
+		// transcript, and a planner names whichever the conversation uses.
+		const seated = Array.isArray(cast?.sessionCharacters)
+			? cast.sessionCharacters
+			: []
+		const matches = (character: any) => {
+			const known = [character?.name, character?.nickname]
+				.filter((n: unknown): n is string => typeof n === "string")
+				.map((n) => n.trim().toLowerCase())
+			return known.includes(name.toLowerCase())
+		}
+		const speaking = name
+			? (seated.find((cc: any) => matches(cc?.character))?.character
+					?.id ?? null)
+			: null
+		return {
+			...input,
+			speakerName: name || undefined,
+			speakerCharacter:
+				speaker.character && typeof speaker.character === "object"
+					? speaker.character
+					: null,
+			// Only when the port named somebody: a spec that wires no
+			// speaker at all keeps the session's, which is every pipeline
+			// this node served before the adventure genre existed.
+			...(name
+				? {
+						currentCharacterId: speaking,
+						...(cast && typeof cast === "object"
+							? {
+									cast: {
+										...cast,
+										currentCharacterId: speaking
+									}
+								}
+							: {})
+					}
+				: {})
+		}
 	}
+
+	/**
+	 * ⚠ **Through `mergeContext` like its three siblings**, so a voice is told
+	 * where it is standing and who else is there. Without it a voice answered
+	 * from whatever the transcript suggested and walked the scene to a harbour
+	 * the plan had never mentioned. `core:spec/narrate-character` wires neither
+	 * `state` nor `plan`, so its context is unchanged key for key.
+	 */
+	bindings["core:task/build-side-character-context@1"] = mergeContext(
+		() => ({}),
+		asSideCharacter
+	) as any
 
 	return bindings
 }
@@ -3627,39 +4558,60 @@ export function coreBindings(run: RenderRun = {}): Bindings {
  * string: five near-identical bindings would be five places to fix the next
  * time the call shape changes, and the fifth is the one that gets missed.
  */
-function graphSteps(): Bindings {
-	const steps: Array<[string, string, string]> = [
-		["core:provider/graph-pre-filter@1", "preFilter", "graph:pre-filter"],
-		[
-			"core:provider/graph-node-resolution@1",
-			"nodeResolution",
-			"graph:node-resolution"
-		],
-		[
-			"core:provider/graph-perspective@1",
-			"perspective",
-			"graph:perspective"
-		],
-		[
-			"core:provider/graph-node-description@1",
-			"nodeDescription",
-			"graph:node-description"
-		],
-		[
-			"core:provider/graph-state-detection@1",
-			"stateDetection",
-			"graph:state-detection"
-		]
+/**
+ * The five graph steps one loop binds. Unlike the three groups above this one
+ * is **derived** rather than restated — `GRAPH_STEPS` below is the same array
+ * the loop iterates, so there is nothing here to drift.
+ */
+/**
+ * The five graph steps, as `[typeId, promptField, label]`.
+ *
+ * Hoisted out of `graphSteps()` so the group is readable as data. Unlike
+ * `LORE_LANES` and its two siblings this one is **derived rather than
+ * restated** — the loop below binds exactly these ids and `bindingCompat.ts`
+ * reads exactly this array, so there is no second list to drift.
+ */
+const GRAPH_STEPS: Array<[string, string, string]> = [
+	["core:provider/graph-pre-filter@1", "preFilter", "graph:pre-filter"],
+	[
+		"core:provider/graph-node-resolution@1",
+		"nodeResolution",
+		"graph:node-resolution"
+	],
+	["core:provider/graph-perspective@1", "perspective", "graph:perspective"],
+	[
+		"core:provider/graph-node-description@1",
+		"nodeDescription",
+		"graph:node-description"
+	],
+	[
+		"core:provider/graph-state-detection@1",
+		"stateDetection",
+		"graph:state-detection"
 	]
+]
+
+function graphSteps(): Bindings {
+	const steps = GRAPH_STEPS
 
 	return Object.fromEntries(
 		steps.map(([typeId, field, label]) => [
 			typeId,
-			// The five differ in one string, so one input type covers them:
-			// each declares `scenes` in and the connection/sampling/prompts
-			// slots, and none declares anything the loop reads beyond those.
+			// The five differ in one string, so one input type covers them —
+			// and `SharedInput` is what says so in the type rather than in
+			// this comment. Each declares `scenes` in and the
+			// connection/sampling/prompts slots; the intersection is exactly
+			// what the loop below reads.
 			async (
-				input: NodeInput<typeof C.graphPreFilter>,
+				input: SharedInput<
+					[
+						typeof C.graphPreFilter,
+						typeof C.graphNodeResolution,
+						typeof C.graphPerspective,
+						typeof C.graphNodeDescription,
+						typeof C.graphStateDetection
+					]
+				>,
 				ctx: ProviderCtx
 			) => {
 				const result: any = await ctx.call({
@@ -3681,3 +4633,30 @@ function graphSteps(): Bindings {
 
 /** Which type ids core can actually run today, for the diagnostics screen. */
 export const boundTypeIds = () => Object.keys(coreBindings())
+
+/**
+ * Every core handler that serves more than one node type, and which types.
+ *
+ * The runtime shadow of the `SharedInput<[…]>` annotations — see `LORE_LANES`
+ * for why the two lists are separate and how they are kept honest.
+ *
+ * ⚠ **A handler missing from this list is not caught by anything**, and the
+ * limit is worth stating rather than discovering. `bindingCompat.ts` checks
+ * that every group named here is whole and that its members still have
+ * something in common; it cannot see a handler that serves two ids and says
+ * so nowhere. That was the state of this file four times over — `loreFor`,
+ * `readGraph`, `pickSpeaker` and `graphSteps`, the last of which even said
+ * "one input type covers them" in a comment — each typed against one of its
+ * types with the others assumed to match. Assumed correctly, as it happens;
+ * assumed nonetheless. Adding a multi-type handler means adding it here, and
+ * the `SharedInput<[…]>` on its `input` is the reminder.
+ */
+export const SHARED_CORE_HANDLERS: ReadonlyArray<{
+	handler: string
+	typeIds: readonly string[]
+}> = [
+	{ handler: "loreFor", typeIds: LORE_LANES },
+	{ handler: "readGraph", typeIds: RELATIONSHIP_NODES },
+	{ handler: "pickSpeaker", typeIds: TURN_STRATEGIES },
+	{ handler: "graphSteps", typeIds: GRAPH_STEPS.map(([id]) => id) }
+]

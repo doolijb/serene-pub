@@ -70,7 +70,7 @@ Every account has a single `isAdmin` flag — there's no tiered permission syste
 
 - View, create, edit, and delete any user account (except they can't delete their own account — the server explicitly blocks that).
 - Grant or revoke admin status on other accounts.
-- Access the **System** settings tab (server-wide connection, summarization, RAG, and account settings — see [System Settings](./system-settings.md)).
+- Access the **System** settings tab (server-wide connection, RAG, and account settings — see [System Settings](./system-settings.md)).
 - Import data from SillyTavern via the **Data Import** section of their own Settings tab.
 
 **Standard (non-admin) users:**
@@ -78,7 +78,7 @@ Every account has a single `isAdmin` flag — there's no tiered permission syste
 - Have their own private characters, personas, sessions, lorebooks, and tags, scoped only to their account.
 - Can view the Users list (to see who else is on the server) but cannot create, edit, or delete accounts.
 - Only see the **User** and **Themes** tabs in Settings — no System tab.
-- Get a shorter setup wizard on first login that skips the connection/summarization/RAG steps entirely, since those are server-wide and already configured by an admin. See [Getting Started](./getting-started.md) for the full wizard walkthrough.
+- Get a shorter setup wizard on first login that skips the connection and RAG steps entirely, since those are server-wide and already configured by an admin. See [Getting Started](./getting-started.md) for the full wizard walkthrough.
 
 Deleting a user is a **soft delete** — the account is flagged as deleted and disappears from the Users list and login, but its underlying data isn't destroyed outright by that action alone.
 
@@ -178,10 +178,10 @@ Three ways back in, in the order you should try them:
    boot your password is reset, two-factor is cleared, and every session is
    revoked.
 
-   The key is recorded as spent, so booting again with the same key does
-   nothing — the variables can stay in place without resetting your password on
-   every restart. To reset again, choose a **new** key. See
-   [environment variables](./environment-variables.md#account-recovery).
+    The key is recorded as spent, so booting again with the same key does
+    nothing — the variables can stay in place without resetting your password on
+    every restart. To reset again, choose a **new** key. See
+    [environment variables](./environment-variables.md#account-recovery).
 
 There is no email-based password reset. Setting those variables requires access
 to the machine or container the app runs in, and that access is what authorises

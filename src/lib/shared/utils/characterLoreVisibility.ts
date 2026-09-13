@@ -8,7 +8,7 @@
  * private self-knowledge (invisible to every other character, even ones in
  * the same session), and a persona binding gates on which persona is currently
  * playing. This mirrors that rule in plain language for display purposes —
- * CharacterLoreManager.svelte's list/view/edit modes — so it's not a
+ * the Character Lore row and editor — so it's not a
  * surprise the first time an entry silently never shows up.
  */
 

@@ -8,9 +8,13 @@ import { DEFAULT_SIDE_RULES } from "./schema"
 import {
 	EDIT_SIDE_FRACTION,
 	EDIT_ZONE_CHROME_PX,
+	MOBILE_EDIT_PX,
+	SIM_HEIGHT_PX,
 	SIM_OPTIONS,
 	SIM_WIDTH_PX,
 	ULTRAWIDE_PREVIEW_PX,
+	mobileEditing,
+	narrowWidth,
 	railColumns,
 	simulatedGeometry,
 	simulationExit
@@ -44,6 +48,33 @@ describe("SIM_WIDTH_PX — the tier table", () => {
 		for (const o of SIM_OPTIONS) {
 			expect(o.width).toBe(SIM_WIDTH_PX[o.tier])
 			expect(o.label).toMatch(/^[A-Z]/)
+		}
+	})
+})
+
+describe("SIM_HEIGHT_PX — the height a tier previews at", () => {
+	it("gives every preset a height, because the rail model is decided on one", () => {
+		// Whether a side group can expand beside the pinned ones is a question
+		// about the COLUMN's height (see ./sideRail). Previewing five tiers at
+		// this monitor's height would answer it the same way five times.
+		for (const o of SIM_OPTIONS) {
+			expect(SIM_HEIGHT_PX[o.tier]).toBeGreaterThan(0)
+		}
+		expect(Object.keys(SIM_HEIGHT_PX).sort()).toEqual(
+			Object.keys(SIM_WIDTH_PX).sort()
+		)
+	})
+
+	it("pairs each width with a plausible logical height for that device", () => {
+		// The two narrow presets are held portrait — a phone and a tablet (or a
+		// split window, which is the same shape); the desktop ones are
+		// landscape. That is the whole claim: they are that device's numbers,
+		// not this window's.
+		for (const t of ["compact", "cozy"] as const) {
+			expect(SIM_HEIGHT_PX[t]).toBeGreaterThan(SIM_WIDTH_PX[t])
+		}
+		for (const t of ["roomy", "wide", "ultrawide"] as const) {
+			expect(SIM_HEIGHT_PX[t]).toBeLessThan(SIM_WIDTH_PX[t])
 		}
 	})
 })
@@ -252,5 +283,28 @@ describe("Ultrawide — the rail ladder's multi-column branch", () => {
 		const g = simulatedGeometry(w, CELL)
 		expect(g.left).toBe(Math.round(w * EDIT_SIDE_FRACTION))
 		expect(g.left + g.centre + g.right).toBe(w)
+	})
+})
+
+describe("mobileEditing — which editor a width gets", () => {
+	it("puts the phone's own breakpoint at the width the side rails dock", () => {
+		expect(MOBILE_EDIT_PX).toBe(TIER_MIN_PX.roomy)
+		expect(narrowWidth(MOBILE_EDIT_PX - 1)).toBe(true)
+		expect(narrowWidth(MOBILE_EDIT_PX)).toBe(false)
+	})
+
+	it("gives a real narrow window the row editor, with no way out of it", () => {
+		expect(mobileEditing({ narrow: true, simNarrow: true, grid: false })).toBe(true)
+		expect(mobileEditing({ narrow: true, simNarrow: true, grid: true })).toBe(true)
+		expect(mobileEditing({ narrow: true, simNarrow: false, grid: true })).toBe(true)
+	})
+
+	it("gives a previewed phone the row editor a desktop can look at", () => {
+		expect(mobileEditing({ narrow: false, simNarrow: true, grid: false })).toBe(true)
+		expect(mobileEditing({ narrow: false, simNarrow: true, grid: true })).toBe(false)
+	})
+
+	it("leaves a wide window on the grid", () => {
+		expect(mobileEditing({ narrow: false, simNarrow: false, grid: false })).toBe(false)
 	})
 })

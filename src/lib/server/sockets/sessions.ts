@@ -16,11 +16,10 @@ import {
 	channelsOf
 } from "$lib/server/messages/channels"
 import { and, asc, count, desc, eq, inArray, isNull, lt, or } from "drizzle-orm"
-import {
-	syncLorebookBindingsForCharacter,
-	syncLorebookBindingsForPersona
-} from "$lib/server/utils/characterBindingSync"
-import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
+import { resolveOrCreateBindingRow } from "$lib/server/utils/characterBindingSync"
+// Replacing a message is not deleting one, so the anchor cascade cannot fire —
+// see the call sites in the regenerate and swipe-right handlers.
+import { retractStateAnchoredTo } from "$lib/server/state/write"
 import { generateResponse } from "../utils/generateResponse"
 import { getNextCharacterTurn } from "$lib/server/utils/getNextCharacterTurn"
 import { getConnectionAdapter } from "../utils/getConnectionAdapter"
@@ -41,6 +40,7 @@ import {
 	createSessionBroadcaster,
 	emitToUserRedacted
 } from "./utils/broadcastHelpers"
+import { lorebookBindingListHandler } from "./lorebooks"
 import {
 	CONNECTION_REFUSAL,
 	ConnectionChoiceRefused,
@@ -57,6 +57,10 @@ import {
 	resolveActivePresetLayout,
 	saveUserLayoutPreset
 } from "$lib/server/db/layoutPresets"
+import {
+	readWidgetSettings,
+	writeWidgetSettings
+} from "$lib/server/db/widgetSettings"
 import {
 	resolveCharacterName,
 	resolvePersonaName
@@ -312,6 +316,11 @@ async function buildSessionsListFor(
 							id: true,
 							name: true,
 							avatarMediaId: true
+						},
+						with: {
+							avatarMedia: {
+								columns: { uuid: true, rev: true }
+							}
 						}
 					}
 				},
@@ -326,6 +335,11 @@ async function buildSessionsListFor(
 							id: true,
 							name: true,
 							avatarMediaId: true
+						},
+						with: {
+							avatarMedia: {
+								columns: { uuid: true, rev: true }
+							}
 						}
 					}
 				},
@@ -519,7 +533,13 @@ export const sessionsCreateHandler: Handler<
 					.from(schema.sessionPresets)
 					.where(eq(schema.sessionPresets.id, presetId))
 					.limit(1)
-				if (!preset || !preset.enabled)
+				// Withdrawn beside disabled (0119): a preset whose plugin is
+				// gone cannot start a new session either. `enabled` does not
+				// cover it — that flag is the administrator's decision and
+				// survives a withdrawal on purpose — so reading it alone
+				// accepts a preset the picker has already dropped. Sessions
+				// already on one keep resolving it; only creation refuses.
+				if (!preset || !preset.enabled || preset.withdrawnAt != null)
 					throw new Error("That session preset is not available.")
 				const [typeSetting] = await db
 					.select()
@@ -639,6 +659,19 @@ export const sessionsCreateHandler: Handler<
 				}))
 			)
 		}
+		// The cast arrives with the session (ruling 2026-09-12). Before the
+		// create pipeline runs, not after: its nodes may already write lore
+		// against this book, and lore anchored to a cast member that does not
+		// exist yet has nothing to anchor to.
+		if (newSession.lorebookId) {
+			await runLorebookBindingCheck(
+				socket,
+				newSession.id,
+				newSession.lorebookId,
+				emitToUser
+			).catch(console.error)
+		}
+
 		// Creation as a run (24 §12, T8): the genre's create pipeline answers
 		// `session-created` — greeting seeding is its nodes now, receipted
 		// like any other run. Dispatch keys on (genre, event); nothing serving
@@ -743,10 +776,32 @@ async function getSessionFromDB(
 		where: (c, { eq }) => eq(c.id, sessionId),
 		with: {
 			sessionPersonas: {
-				with: { persona: true },
+				// `avatarMedia` is joined wherever a participant reaches a
+				// render site: an avatar URL built from `avatarMediaId` alone
+				// is one string for every revision of the file, so a browser
+				// keeps its cached pixels when the row changes in place.
+				with: {
+					persona: {
+						with: {
+							avatarMedia: {
+								columns: { uuid: true, rev: true }
+							}
+						}
+					}
+				},
 				orderBy: (cp, { asc }) => asc(cp.position)
 			},
-			sessionCharacters: { with: { character: true } },
+			sessionCharacters: {
+				with: {
+					character: {
+						with: {
+							avatarMedia: {
+								columns: { uuid: true, rev: true }
+							}
+						}
+					}
+				}
+			},
 			sessionMessages: {
 				where:
 					beforeId != null ? (cm) => lt(cm.id, beforeId) : undefined,
@@ -1063,6 +1118,9 @@ export const sessionsFunctionCandidatesHandler: Handler<
 				genreId,
 				params.function
 			)
+			// The verdict's slug: a preset binding the instance cannot
+			// resolve falls back rather than refusing (ruled 2026-09-10), and the
+			// picker must show what actually wins.
 			res.resolved = await resolveFunctionSpec(
 				db,
 				genreId,
@@ -1284,7 +1342,7 @@ export const sessionsTriggerFunctionHandler: Handler<
 					)
 
 				const {
-					resolveFunctionSpec,
+					resolveFunctionVerdict,
 					STANDARD_GENRE_ID,
 					genreFieldsFor,
 					sessionGenreAvailable
@@ -1330,12 +1388,17 @@ export const sessionsTriggerFunctionHandler: Handler<
 							`session settings, under Actions.`
 					)
 
-				const specId = await resolveFunctionSpec(
+				// The verdict rather than the slug (ruled 2026-09-10): a
+				// preset binding that stopped resolving falls back to the
+				// genre's default rather than refusing the trigger, and the
+				// run it produces records the substitution.
+				const routed = await resolveFunctionVerdict(
 					db,
 					genreId,
 					params.function,
 					{ sessionId: params.sessionId }
 				)
+				const specId = routed.spec
 				if (!specId)
 					return fail(
 						`Nothing serves '${params.function}' for this session's mode.`
@@ -1409,6 +1472,18 @@ export const sessionsTriggerFunctionHandler: Handler<
 						// shape Cancel aborted the in-flight request and the
 						// graph walked on to the next node anyway.
 						cancelSignal: () => runRegistry.cancellation(handle),
+						// A run reached through a substitution says so on its
+						// own receipt.
+						...(routed.fallback
+							? {
+									meta: {
+										preset: {
+											via: "fallback",
+											...routed.fallback
+										}
+									}
+								}
+							: {}),
 						sink: {
 							onProgress: (event) => {
 								// Throttled: a preview frame is a whole image, so
@@ -1494,6 +1569,20 @@ export const sessionsTriggerFunctionHandler: Handler<
 
 				// Whatever the spec's consumers wrote, the participants see it.
 				await sessionsListHandler.handler(socket, {}, emitToUser)
+				// And whatever it changed in the world. A `set-state` node has
+				// no socket of its own, so the announcement is the trigger's —
+				// without it, an action whose whole output is a ledger line
+				// ("Rest", "Time passes") reads as a button that does nothing.
+				{
+					const { announceStateChanges } = await import(
+						"$lib/server/state/announce"
+					)
+					await announceStateChanges(
+						socket.io,
+						params.sessionId,
+						receipt
+					)
+				}
 				const res: Sockets.Sessions.TriggerFunction.Response = {
 					sessionId: params.sessionId,
 					function: params.function,
@@ -1535,7 +1624,7 @@ export const sessionsPipelinesHandler: Handler<
 		}
 		if (access.hasAccess) {
 			const {
-				resolveFunctionSpec,
+				resolveFunctionVerdict,
 				enabledSessionFunctions,
 				STANDARD_GENRE_ID
 			} = await import("$lib/server/pipelines/entities/sessionGenres")
@@ -1555,10 +1644,26 @@ export const sessionsPipelinesHandler: Handler<
 				return row?.name ?? null
 			}
 			const seen = new Set<string>()
+			/**
+			 * Deduped by event as well as by slug: two functions bound to the
+			 * same dead pipeline is one thing wrong, not two.
+			 */
+			const fallbacks = new Map<
+				string,
+				Sockets.SessionAdmin.StaleBinding
+			>()
 			const add = async (
-				slug: string | null,
+				resolved: { spec: string | null; fallback?: any },
 				label: string
 			): Promise<void> => {
+				if (resolved.fallback)
+					fallbacks.set(resolved.fallback.event, {
+						event: resolved.fallback.event,
+						bound: resolved.fallback.bound,
+						reason: resolved.fallback.reason,
+						fallbackSpec: resolved.spec
+					})
+				const slug = resolved.spec
 				if (!slug || seen.has(slug)) return
 				seen.add(slug)
 				res.pipelines.push({
@@ -1569,8 +1674,13 @@ export const sessionsPipelinesHandler: Handler<
 
 			// The reply pipeline is always involved; then every function the
 			// session actually has switched on (19 §4) — narrate included.
+			//
+			// The verdict rather than the slug (ruled 2026-09-10): a preset
+			// binding that stopped resolving must not fail this read, and the
+			// list must not quietly show a pipeline the preset does not name
+			// as though the preset had named it.
 			await add(
-				await resolveFunctionSpec(db, genreId, "respond", {
+				await resolveFunctionVerdict(db, genreId, "respond", {
 					sessionId: params.sessionId
 				}),
 				"Respond"
@@ -1583,13 +1693,95 @@ export const sessionsPipelinesHandler: Handler<
 			)
 			for (const fn of fns)
 				await add(
-					await resolveFunctionSpec(db, genreId, fn.function, {
+					await resolveFunctionVerdict(db, genreId, fn.function, {
 						sessionId: params.sessionId
 					}),
 					fn.name
 				)
+			if (fallbacks.size) res.presetFallbacks = [...fallbacks.values()]
 		}
 		emitToUser("sessions:pipelines", res)
+		return res
+	}
+}
+
+/**
+ * Is this session running what its preset says (ruled 2026-09-10)?
+ *
+ * The banner's one read. A binding that stopped resolving never refuses the
+ * turn — the genre's default runs — so the only thing that stops the
+ * substitution being invisible is somebody saying it where the session is, and
+ * this is what they say it from.
+ *
+ * Every bound event is evaluated, not only the ones this session has fired: a
+ * preset whose `session-created` slot is dead is still a preset running
+ * something other than what it promises, and a person who has not branched a
+ * session yet is exactly the person who has not found out.
+ *
+ * Not admin-gated, and deliberately: the *fact* belongs to whoever is in the
+ * session. What differs by tier is the sentence the client writes from it —
+ * an administrator gets the slug and a link to the preset, everybody else
+ * gets "this session is running the default pipeline for <event>", because
+ * only one of them can do anything about it.
+ */
+export const sessionsPresetStatusHandler: Handler<
+	Sockets.Sessions.PresetStatus.Params,
+	Sockets.Sessions.PresetStatus.Response
+> = {
+	event: "sessions:presetStatus",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const access = await checkSessionAccess(params.sessionId, userId)
+		const res: Sockets.Sessions.PresetStatus.Response = {
+			sessionId: params.sessionId,
+			presetId: null,
+			presetName: null,
+			stale: []
+		}
+		if (access.hasAccess) {
+			const { sessionPreset, presetBindingVerdict } = await import(
+				"$lib/server/pipelines/entities/presetBindings"
+			)
+			const { STANDARD_GENRE_ID } = await import(
+				"$lib/server/pipelines/entities/sessionGenres"
+			)
+			const preset = await sessionPreset(db, params.sessionId)
+			if (preset) {
+				res.presetId = preset.id
+				res.presetName = preset.name
+				const [session] = await db
+					.select({ genreId: schema.sessions.genreId })
+					.from(schema.sessions)
+					.where(eq(schema.sessions.id, params.sessionId))
+					.limit(1)
+				// The SESSION's genre, not the preset's: a session that was
+				// upgraded to another genre is still on this preset, and
+				// judging its bindings against the genre it left would
+				// report every slot as stale.
+				const genreId = session?.genreId ?? STANDARD_GENRE_ID
+				const bindings = (preset.bindings ?? {}) as Record<
+					string,
+					{ spec?: string }
+				>
+				for (const event of Object.keys(bindings)) {
+					if (!bindings[event]?.spec) continue
+					const verdict = await presetBindingVerdict(
+						db,
+						preset,
+						genreId,
+						event
+					)
+					if (verdict.via !== "fallback") continue
+					res.stale.push({
+						event,
+						bound: verdict.bound,
+						reason: verdict.reason,
+						fallbackSpec: verdict.spec
+					})
+				}
+			}
+		}
+		emitToUser("sessions:presetStatus", res)
 		return res
 	}
 }
@@ -1773,6 +1965,7 @@ export const sessionsPanelLayoutGetHandler: Handler<
 		let layout: Record<string, unknown> = {}
 		let layoutPresetId: number | null = null
 		let layoutSettings: Record<string, unknown> = {}
+		let widgetSettings: Record<string, Record<string, unknown>> = {}
 		let presetLayout: Record<string, unknown> = {}
 		let presets: Sockets.Sessions.LayoutPreset[] = []
 		if (access.hasAccess) {
@@ -1799,6 +1992,8 @@ export const sessionsPanelLayoutGetHandler: Handler<
 			if (row?.layoutSettings && typeof row.layoutSettings === "object")
 				layoutSettings = row.layoutSettings as Record<string, unknown>
 
+			widgetSettings = await readWidgetSettings(params.sessionId, userId)
+
 			const genreId = await genreOfSession(params.sessionId)
 			presetLayout = await resolveActivePresetLayout(
 				genreId,
@@ -1812,12 +2007,31 @@ export const sessionsPanelLayoutGetHandler: Handler<
 			layout,
 			layoutPresetId,
 			layoutSettings,
+			widgetSettings,
 			presetLayout,
 			presets
 		}
 		emitToUser("sessions:panelLayout:get", res)
 		return res
 	}
+}
+
+/**
+ * Is this a `{ widgetId: { field: value } }` payload?
+ *
+ * Shape only: what a field means is the widget's declaration to say, and the
+ * client prunes against it before writing. The boot reconciler prunes whatever
+ * a stale or hand-made client stored anyway, so the guard here is the one thing
+ * the server can know on its own.
+ */
+function isWidgetSettingsPayload(
+	value: unknown
+): value is Record<string, Record<string, unknown>> {
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		return false
+	return Object.values(value).every(
+		(v) => !!v && typeof v === "object" && !Array.isArray(v)
+	)
 }
 
 /** Guard behind `layoutPresetId`: this session's genre, and seeded or mine. */
@@ -1857,6 +2071,7 @@ export const sessionsPanelLayoutSetHandler: Handler<
 		let error: string | undefined
 		const setsPreset = "layoutPresetId" in params
 		const setsSettings = "layoutSettings" in params
+		const setsWidgets = "widgetSettings" in params
 		if (!access.hasAccess) {
 			error = "No access to this session"
 		} else if (!params.layout || typeof params.layout !== "object") {
@@ -1867,6 +2082,11 @@ export const sessionsPanelLayoutSetHandler: Handler<
 				typeof params.layoutSettings !== "object")
 		) {
 			error = "Invalid layout settings"
+		} else if (
+			setsWidgets &&
+			!isWidgetSettingsPayload(params.widgetSettings)
+		) {
+			error = "Invalid widget settings"
 		} else if (
 			setsPreset &&
 			params.layoutPresetId != null &&
@@ -1906,6 +2126,12 @@ export const sessionsPanelLayoutSetHandler: Handler<
 						updatedAt: new Date()
 					}
 				})
+			if (setsWidgets)
+				await writeWidgetSettings(
+					params.sessionId,
+					userId,
+					params.widgetSettings!
+				)
 			ok = true
 		}
 		const res: Sockets.Sessions.PanelLayout.Set.Response = {
@@ -2463,11 +2689,25 @@ export const sessionsSaveDraftHandler: Handler<
 // graph row now, so there's no separate "node" to reconcile it with.
 
 /**
- * After a session is saved with a lorebook:
+ * The cast a session reads into its book, kept whole:
  * - Quietly create bindings for chars/personas that don't have one yet.
  * - Emit bindingCheck:result for any orphaned bindings (bindings without a char/persona).
+ *
+ * Ruling 2026-09-12: cast members arrive from the session on their own.
+ * There is no "pull the cast" button to press, so every path that puts a
+ * lorebook and a session together — or adds a member to a session that
+ * already reads one — calls this. Removing a member does NOT remove the
+ * binding: lore, relationships and scene appearances may be anchored to it.
+ *
+ * Creation goes through resolveOrCreateBindingRow rather than a bare insert.
+ * This read every binding once and inserted against that snapshot, which is
+ * only safe while one path can reach it; now that several can, two of them
+ * running at once (an attach and a member add) would both pass the same
+ * check. The advisory lock inside that helper covers check-and-insert as one
+ * step, and the partial unique indexes (0125) refuse the second row outright.
  */
-async function runLorebookBindingCheck(
+export async function runLorebookBindingCheck(
+	socket: any,
 	sessionId: number,
 	lorebookId: number,
 	emitToUser: (event: string, data: any) => void
@@ -2494,65 +2734,76 @@ async function runLorebookBindingCheck(
 		]
 	)
 
-	const bindingsByChar = new Map(
-		existingBindings
-			.filter((b) => b.characterId)
-			.map((b) => [b.characterId!, b])
+	const bindingsByChar = new Set(
+		existingBindings.filter((b) => b.characterId).map((b) => b.characterId!)
 	)
-	const bindingsByPersona = new Map(
-		existingBindings
-			.filter((b) => b.personaId)
-			.map((b) => [b.personaId!, b])
+	const bindingsByPersona = new Set(
+		existingBindings.filter((b) => b.personaId).map((b) => b.personaId!)
 	)
 
 	// Flow 1a: Create missing bindings for chars/personas. Each binding's
 	// token is derived from the lorebook's own per-lorebook counter (never
 	// reused after a delete) — never a recomputed max/count, which is what
 	// let deleted binding numbers get silently reused before.
+	let minted = false
 	for (const { characterId } of sessionChars) {
 		if (!characterId || bindingsByChar.has(characterId)) continue
-		const created = await db.transaction(async (tx) => {
-			const token = await deriveNextBindingToken(lorebookId, tx)
-			const [inserted] = await tx
-				.insert(schema.lorebookBindings)
-				.values({ lorebookId, characterId, binding: token })
-				.returning()
-			return inserted
-		})
-		await syncLorebookBindingsForCharacter(characterId)
-		bindingsByChar.set(characterId, created)
-		existingBindings.push(created)
+		const { created } = await resolveOrCreateBindingRow(
+			{ lorebookId, characterId },
+			db
+		)
+		minted ||= created
+		bindingsByChar.add(characterId)
 	}
 
 	for (const { personaId } of sessionPersonas) {
 		if (!personaId || bindingsByPersona.has(personaId)) continue
-		const created = await db.transaction(async (tx) => {
-			const token = await deriveNextBindingToken(lorebookId, tx)
-			const [inserted] = await tx
-				.insert(schema.lorebookBindings)
-				.values({ lorebookId, personaId, binding: token })
-				.returning()
-			return inserted
-		})
-		await syncLorebookBindingsForPersona(personaId)
-		bindingsByPersona.set(personaId, created)
-		existingBindings.push(created)
+		const { created } = await resolveOrCreateBindingRow(
+			{ lorebookId, personaId },
+			db
+		)
+		minted ||= created
+		bindingsByPersona.add(personaId)
 	}
 
-	// Flow 1b: Collect orphaned bindings (no char or persona)
+	// The cast changed, so anyone looking at it should see the new rows
+	// without reloading — the same refresh lorebooks:createBinding sends.
+	// Only the book's owner may read that list, and the list handler refuses
+	// everyone else, so a guest whose member add triggered this is asked for
+	// nothing on their behalf.
+	if (minted) {
+		const ownedBook = await db.query.lorebooks.findFirst({
+			where: and(
+				eq(schema.lorebooks.id, lorebookId),
+				eq(schema.lorebooks.userId, socket.user!.id)
+			),
+			columns: { id: true }
+		})
+		if (ownedBook) {
+			await lorebookBindingListHandler.handler(
+				socket,
+				{ lorebookId },
+				emitToUser
+			)
+		}
+	}
+
+	// Flow 1b: Collect orphaned bindings (no char or persona). Read off the
+	// pre-loop snapshot: a row minted above is bound by construction and can
+	// never be one.
 	const orphaned = existingBindings.filter(
 		(b) => !b.characterId && !b.personaId
 	)
 	if (orphaned.length > 0) {
 		const unboundChars = sessionChars
-			.filter((c) => c.characterId && !bindingsByChar.get(c.characterId))
+			.filter((c) => c.characterId && !bindingsByChar.has(c.characterId))
 			.map((c) => ({
 				type: "character" as const,
 				id: c.characterId!,
 				name: ""
 			}))
 		const unboundPersonas = sessionPersonas
-			.filter((p) => p.personaId && !bindingsByPersona.get(p.personaId))
+			.filter((p) => p.personaId && !bindingsByPersona.has(p.personaId))
 			.map((p) => ({
 				type: "persona" as const,
 				id: p.personaId!,
@@ -3089,10 +3340,15 @@ export const sessionsUpdateHandler: Handler<
 			emitToUser("sessions:update", res)
 			await sessionsListHandler.handler(socket, {}, emitToUser) // Refresh session list
 
-			// Flow 1+2: binding and node checks (fire-and-forget, errors are non-fatal)
+			// Flow 1: the cast this session reads into its book. Awaited, not
+			// fired and forgotten: several paths reach this now, and a promise
+			// left running past its own request can interleave with the next
+			// one. Errors stay non-fatal — a book that cannot be written must
+			// not fail the session update that named it.
 			const lorebookId = (updatedSession as any).lorebookId
 			if (lorebookId) {
-				runLorebookBindingCheck(
+				await runLorebookBindingCheck(
+					socket,
 					params.session.id!,
 					lorebookId,
 					emitToUser
@@ -3178,6 +3434,21 @@ export const sessionsAddPersonaHandler: Handler<
 				personaId,
 				position: nextPosition
 			})
+
+			// A member added to a session that reads a book joins that book's
+			// cast (ruling 2026-09-12).
+			const bookForPersona = await db.query.sessions.findFirst({
+				where: eq(schema.sessions.id, sessionId),
+				columns: { lorebookId: true }
+			})
+			if (bookForPersona?.lorebookId) {
+				await runLorebookBindingCheck(
+					socket,
+					sessionId,
+					bookForPersona.lorebookId,
+					emitToUser
+				).catch(console.error)
+			}
 
 			// Broadcast updated session to all participants
 			const updatedSession = await getSessionFromDB(sessionId, userId)
@@ -3818,6 +4089,22 @@ export const sessionsReassignRemovedParticipantHandler: Handler<
 				})
 			}
 
+			// The replacement is a new member of this session, so it joins the
+			// book's cast like any other (ruling 2026-09-12). The participant
+			// it replaced keeps its binding: lore may be anchored to it.
+			const bookForReassign = await db.query.sessions.findFirst({
+				where: eq(schema.sessions.id, sessionId),
+				columns: { lorebookId: true }
+			})
+			if (bookForReassign?.lorebookId) {
+				await runLorebookBindingCheck(
+					socket,
+					sessionId,
+					bookForReassign.lorebookId,
+					emitToUser
+				).catch(console.error)
+			}
+
 			const updatedSession = await getSessionFromDB(sessionId, userId)
 			const res: Sockets.Sessions.ReassignRemovedParticipant.Response = {
 				success: true,
@@ -4272,6 +4559,16 @@ export const sessionMessagesRegenerateHandler: Handler<
 
 					const currentMetadata =
 						(messageToRegenerate.metadata as any) || {}
+
+					// Take back what this reply changed about the world.
+					//
+					// ⚠ A regenerate REPLACES the text and keeps the row, so
+					// nothing is deleted and the `messages.id` cascade that
+					// retracts anchored state on a real delete never fires. The
+					// values and possessions this message wrote would otherwise
+					// outlive the sentence that justified them; the new reply
+					// proposes its own.
+					await retractStateAnchoredTo(db, params.id)
 
 					// Clear the content and set as generating
 					const [updated] = await updateLegacyWhere(
@@ -4799,6 +5096,10 @@ export const sessionMessagesSwipeRightHandler: Handler<
 					data.metadata!.swipes!.thinkingHistory = th
 					// Clear active thinking — new slot has no thinking yet
 					data.metadata!.thinking = null
+					// And take back what the swipe being left behind changed
+					// about the world — this branch replaces the reply without
+					// deleting the row, so the anchor cascade cannot see it.
+					await retractStateAnchoredTo(db, message.id)
 				}
 
 				// Drop `id` — it's the primary key, not an updatable column, and
@@ -6172,6 +6473,7 @@ export function registerSessionHandlers(
 	register(socket, sessionsLayoutPresetDeleteHandler, emitToUser)
 	register(socket, sessionsLayoutPresetUsageHandler, emitToUser)
 	register(socket, sessionsPipelinesHandler, emitToUser)
+	register(socket, sessionsPresetStatusHandler, emitToUser)
 	register(socket, sessionsTriggerFunctionHandler, emitToUser)
 	register(socket, sessionsPresetsHandler, emitToUser)
 	register(socket, sessionsChoosePresetHandler, emitToUser)

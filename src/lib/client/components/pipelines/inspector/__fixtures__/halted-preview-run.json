@@ -1,0 +1,2499 @@
+{
+	"id": 3,
+	"runId": "ae7d3e6d-3636-4c3b-a507-726a636c1a61",
+	"specSlug": "core:spec/adventure-respond",
+	"specVersion": "1.0.0",
+	"specHash": "52f756474ff85",
+	"specHashIsCurrent": true,
+	"outcome": "halt",
+	"haltNodeKey": "planWrite",
+	"haltReason": "preview: stopped before planWrite, nothing sent",
+	"elapsedMs": 70,
+	"tokensSpent": 0,
+	"isPreview": false,
+	"artifacts": [
+		{
+			"kind": "message",
+			"entityId": 4,
+			"action": "created"
+		}
+	],
+	"sessionId": 2,
+	"startedAt": "2026-09-11T01:24:02.399Z",
+	"receipt": {
+		"runId": "ae7d3e6d-3636-4c3b-a507-726a636c1a61",
+		"specId": "core:spec/adventure-respond",
+		"specVersion": "1.0.0",
+		"schemaVersion": 1,
+		"seed": "88f65cba-7b99-46fe-a98a-3fee27ef445a",
+		"triggerSource": "ui",
+		"depth": 0,
+		"startedAt": 1789089842399,
+		"endedAt": 1789089842469,
+		"outcome": "halt",
+		"nodes": [
+			{
+				"nodeKey": "input",
+				"seq": 0,
+				"kind": "input",
+				"typeId": "core:input/user-message@1",
+				"result": "ok",
+				"startedAt": 1789089842399,
+				"endedAt": 1789089842400,
+				"elapsedMs": 0,
+				"notes": [],
+				"output": {
+					"text": "",
+					"continuationPrefill": "",
+					"speaker": null,
+					"sessionId": 2,
+					"characterId": 1,
+					"sessionScope": {
+						"sessionId": 2,
+						"currentCharacterId": 1
+					},
+					"fields": {
+						"tone": "grounded",
+						"difficulty": "normal",
+						"trustNarrator": false
+					}
+				}
+			},
+			{
+				"nodeKey": "gather.history.read",
+				"seq": 1,
+				"kind": "query",
+				"typeId": "core:query/session-history@1",
+				"result": "ok",
+				"startedAt": 1789089842400,
+				"endedAt": 1789089842403,
+				"elapsedMs": 3,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 2,
+						"currentCharacterId": 1
+					},
+					"params": {
+						"limit": 100,
+						"channel": "main",
+						"priority": "normal"
+					}
+				},
+				"timeoutMsApplied": 2000,
+				"output": {
+					"main": [
+						{
+							"id": 2,
+							"role": "assistant",
+							"content": "The archive is closed, but the door was open. Come in.",
+							"characterId": 1,
+							"personaId": null,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						},
+						{
+							"id": 3,
+							"role": "user",
+							"content": "I step inside and set my lantern on the table. \"Verity? The bell rang again tonight. What does it mean?\"",
+							"characterId": null,
+							"personaId": 1,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						}
+					],
+					"messages": [
+						{
+							"id": 2,
+							"role": "assistant",
+							"content": "The archive is closed, but the door was open. Come in.",
+							"characterId": 1,
+							"personaId": null,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						},
+						{
+							"id": 3,
+							"role": "user",
+							"content": "I step inside and set my lantern on the table. \"Verity? The bell rang again tonight. What does it mean?\"",
+							"characterId": null,
+							"personaId": 1,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						}
+					]
+				}
+			},
+			{
+				"nodeKey": "gather.worldLore.read",
+				"seq": 2,
+				"kind": "query",
+				"typeId": "core:query/world-lore@1",
+				"result": "ok",
+				"startedAt": 1789089842400,
+				"endedAt": 1789089842439,
+				"elapsedMs": 39,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 2,
+						"currentCharacterId": 1
+					},
+					"params": {
+						"scanDepth": 10,
+						"guaranteedMessages": 10,
+						"maxRecursionDepth": 0,
+						"admitThreshold": 0,
+						"lexicalScoring": "overlap",
+						"trigramFolding": 0,
+						"titleWeight": 1
+					}
+				},
+				"timeoutMsApplied": 2000,
+				"output": {
+					"main": [
+						{
+							"id": 1,
+							"source": "worldLore",
+							"tokens": 25,
+							"signals": {
+								"keyword": 0.3333333333333333,
+								"proximity": 0,
+								"nameMatch": 0,
+								"entityCooccurrence": 0.6321205588285577,
+								"tfidf": 0,
+								"lastRefRecency": 0.9900498337491681,
+								"density": 1
+							},
+							"priority": 1,
+							"position": 1,
+							"pinned": false,
+							"payload": {
+								"id": 1,
+								"source": "worldLore",
+								"fingerprint": "d9a1fff71a6b3fb3",
+								"name": "The Drowned Bell",
+								"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+								"keys": "bell, drowned bell, harbour",
+								"caseSensitive": false,
+								"useRegex": false,
+								"matchMode": null,
+								"secondaryKeys": "",
+								"selectiveLogic": null,
+								"recursionDepth": null,
+								"priority": 1,
+								"constant": false,
+								"enabled": true,
+								"position": 1,
+								"lorebookBindingId": null,
+								"bindingCharacterId": null,
+								"year": null,
+								"month": null,
+								"day": null,
+								"hasEmbedding": false
+							}
+						}
+					],
+					"hits": [
+						{
+							"id": 1,
+							"source": "worldLore",
+							"tokens": 25,
+							"signals": {
+								"keyword": 0.3333333333333333,
+								"proximity": 0,
+								"nameMatch": 0,
+								"entityCooccurrence": 0.6321205588285577,
+								"tfidf": 0,
+								"lastRefRecency": 0.9900498337491681,
+								"density": 1
+							},
+							"priority": 1,
+							"position": 1,
+							"pinned": false,
+							"payload": {
+								"id": 1,
+								"source": "worldLore",
+								"fingerprint": "d9a1fff71a6b3fb3",
+								"name": "The Drowned Bell",
+								"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+								"keys": "bell, drowned bell, harbour",
+								"caseSensitive": false,
+								"useRegex": false,
+								"matchMode": null,
+								"secondaryKeys": "",
+								"selectiveLogic": null,
+								"recursionDepth": null,
+								"priority": 1,
+								"constant": false,
+								"enabled": true,
+								"position": 1,
+								"lorebookBindingId": null,
+								"bindingCharacterId": null,
+								"year": null,
+								"month": null,
+								"day": null,
+								"hasEmbedding": false
+							}
+						}
+					],
+					"skipped": [],
+					"diagnostics": {
+						"scanDepth": 10,
+						"guaranteedMessages": 10,
+						"recursionDepth": 0,
+						"windowChars": 159,
+						"considered": 1,
+						"matched": 1,
+						"admitThreshold": 0,
+						"admittedByEvidence": 0,
+						"entities": ["Verity", "bell"],
+						"extractorVersion": "core:extract/entities-heuristic@2",
+						"vectorSearch": "no embedding model is loaded and validated"
+					}
+				}
+			},
+			{
+				"nodeKey": "gather.characterLore.read",
+				"seq": 3,
+				"kind": "query",
+				"typeId": "core:query/character-lore@1",
+				"result": "ok",
+				"startedAt": 1789089842400,
+				"endedAt": 1789089842440,
+				"elapsedMs": 40,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 2,
+						"currentCharacterId": 1
+					},
+					"params": {
+						"scanDepth": 10,
+						"guaranteedMessages": 10,
+						"maxRecursionDepth": 0,
+						"admitThreshold": 0,
+						"lexicalScoring": "overlap",
+						"trigramFolding": 0,
+						"titleWeight": 1
+					}
+				},
+				"timeoutMsApplied": 2000,
+				"output": {
+					"main": [],
+					"hits": [],
+					"skipped": [],
+					"diagnostics": {
+						"scanDepth": 10,
+						"guaranteedMessages": 10,
+						"recursionDepth": 0,
+						"windowChars": 159,
+						"considered": 0,
+						"matched": 0,
+						"admitThreshold": 0,
+						"admittedByEvidence": 0,
+						"entities": ["Verity", "bell"],
+						"extractorVersion": "core:extract/entities-heuristic@2",
+						"vectorSearch": "no embedding model is loaded and validated"
+					}
+				}
+			},
+			{
+				"nodeKey": "gather.historyEntries.read",
+				"seq": 4,
+				"kind": "query",
+				"typeId": "core:query/history-entries@1",
+				"result": "ok",
+				"startedAt": 1789089842401,
+				"endedAt": 1789089842441,
+				"elapsedMs": 40,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 2,
+						"currentCharacterId": 1
+					},
+					"params": {
+						"scanDepth": 10,
+						"guaranteedMessages": 10,
+						"maxRecursionDepth": 0,
+						"admitThreshold": 0,
+						"lexicalScoring": "overlap",
+						"trigramFolding": 0,
+						"titleWeight": 1
+					}
+				},
+				"timeoutMsApplied": 2000,
+				"output": {
+					"main": [],
+					"hits": [],
+					"skipped": [],
+					"diagnostics": {
+						"scanDepth": 10,
+						"guaranteedMessages": 10,
+						"recursionDepth": 0,
+						"windowChars": 159,
+						"considered": 0,
+						"matched": 0,
+						"admitThreshold": 0,
+						"admittedByEvidence": 0,
+						"entities": ["Verity", "bell"],
+						"extractorVersion": "core:extract/entities-heuristic@2",
+						"vectorSearch": "no embedding model is loaded and validated"
+					}
+				}
+			},
+			{
+				"nodeKey": "gather.cast.read",
+				"seq": 5,
+				"kind": "query",
+				"typeId": "core:query/session-cast@1",
+				"result": "ok",
+				"startedAt": 1789089842401,
+				"endedAt": 1789089842427,
+				"elapsedMs": 26,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 2,
+						"currentCharacterId": 1
+					}
+				},
+				"timeoutMsApplied": 2000,
+				"output": {
+					"main": {
+						"sessionCharacters": [
+							{
+								"isActive": true,
+								"visibility": "visible",
+								"position": 0,
+								"removedAt": null,
+								"character": {
+									"id": 1,
+									"uuid": "e968bc7f-1c02-43db-bf89-a28311a32d86",
+									"userId": 1,
+									"name": "Verity",
+									"nickname": "",
+									"characterVersion": "1.0",
+									"description": "A quiet archivist who remembers everything.",
+									"personality": "",
+									"scenario": "",
+									"firstMessage": "The archive is closed, but the door was open. Come in.",
+									"alternateGreetings": [],
+									"exampleDialogues": [],
+									"metadata": {},
+									"avatarMediaId": null,
+									"creatorNotes": "",
+									"creatorNotesMultilingual": {},
+									"groupOnlyGreetings": [],
+									"postHistoryInstructions": "",
+									"source": [],
+									"createdAt": "2026-09-10",
+									"updatedAt": {},
+									"lorebookId": null,
+									"extensions": {},
+									"aliases": [],
+									"summary": null,
+									"creator": null,
+									"category": null,
+									"isFavorite": false,
+									"isDeleted": false,
+									"embedding": null,
+									"embeddingModel": null,
+									"vectorizedAt": null
+								},
+								"absorbedAliases": []
+							}
+						],
+						"sessionPersonas": [
+							{
+								"persona": {
+									"id": 1,
+									"uuid": "61ec60c2-3701-48ca-9142-a163af98386b",
+									"userId": 1,
+									"isDefault": false,
+									"avatarMediaId": null,
+									"name": "Wren",
+									"description": "A traveller who asks too many questions.",
+									"position": 0,
+									"createdAt": "2026-09-10",
+									"updatedAt": {},
+									"lorebookId": null,
+									"aliases": [],
+									"summary": null,
+									"creator": null,
+									"category": null,
+									"isDeleted": false,
+									"embedding": null,
+									"embeddingModel": null,
+									"vectorizedAt": null
+								},
+								"position": 0,
+								"removedAt": null,
+								"absorbedAliases": []
+							}
+						],
+						"sessionScenario": "",
+						"isGroup": false,
+						"currentCharacterId": 1
+					},
+					"cast": {
+						"sessionCharacters": [
+							{
+								"isActive": true,
+								"visibility": "visible",
+								"position": 0,
+								"removedAt": null,
+								"character": {
+									"id": 1,
+									"uuid": "e968bc7f-1c02-43db-bf89-a28311a32d86",
+									"userId": 1,
+									"name": "Verity",
+									"nickname": "",
+									"characterVersion": "1.0",
+									"description": "A quiet archivist who remembers everything.",
+									"personality": "",
+									"scenario": "",
+									"firstMessage": "The archive is closed, but the door was open. Come in.",
+									"alternateGreetings": [],
+									"exampleDialogues": [],
+									"metadata": {},
+									"avatarMediaId": null,
+									"creatorNotes": "",
+									"creatorNotesMultilingual": {},
+									"groupOnlyGreetings": [],
+									"postHistoryInstructions": "",
+									"source": [],
+									"createdAt": "2026-09-10",
+									"updatedAt": {},
+									"lorebookId": null,
+									"extensions": {},
+									"aliases": [],
+									"summary": null,
+									"creator": null,
+									"category": null,
+									"isFavorite": false,
+									"isDeleted": false,
+									"embedding": null,
+									"embeddingModel": null,
+									"vectorizedAt": null
+								},
+								"absorbedAliases": []
+							}
+						],
+						"sessionPersonas": [
+							{
+								"persona": {
+									"id": 1,
+									"uuid": "61ec60c2-3701-48ca-9142-a163af98386b",
+									"userId": 1,
+									"isDefault": false,
+									"avatarMediaId": null,
+									"name": "Wren",
+									"description": "A traveller who asks too many questions.",
+									"position": 0,
+									"createdAt": "2026-09-10",
+									"updatedAt": {},
+									"lorebookId": null,
+									"aliases": [],
+									"summary": null,
+									"creator": null,
+									"category": null,
+									"isDeleted": false,
+									"embedding": null,
+									"embeddingModel": null,
+									"vectorizedAt": null
+								},
+								"position": 0,
+								"removedAt": null,
+								"absorbedAliases": []
+							}
+						],
+						"sessionScenario": "",
+						"isGroup": false,
+						"currentCharacterId": 1
+					}
+				}
+			},
+			{
+				"nodeKey": "gather.state.read",
+				"seq": 6,
+				"kind": "query",
+				"typeId": "core:query/session-state@1",
+				"result": "ok",
+				"startedAt": 1789089842401,
+				"endedAt": 1789089842454,
+				"elapsedMs": 53,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 2,
+						"currentCharacterId": 1
+					}
+				},
+				"timeoutMsApplied": 2000,
+				"output": {
+					"main": {
+						"world": {
+							"core_time_of_day": "morning",
+							"time-of-day": "morning",
+							"core_weather": "clear",
+							"weather": "clear"
+						},
+						"cast": {
+							"verity": {
+								"core_hp": 20,
+								"hp": 20,
+								"core_mood": "calm",
+								"mood": "calm",
+								"core_stamina": 10,
+								"stamina": 10,
+								"core_trust": 0,
+								"trust": 0
+							}
+						},
+						"possessions": {}
+					},
+					"state": {
+						"world": {
+							"core_time_of_day": "morning",
+							"time-of-day": "morning",
+							"core_weather": "clear",
+							"weather": "clear"
+						},
+						"cast": {
+							"verity": {
+								"core_hp": 20,
+								"hp": 20,
+								"core_mood": "calm",
+								"mood": "calm",
+								"core_stamina": 10,
+								"stamina": 10,
+								"core_trust": 0,
+								"trust": 0
+							}
+						},
+						"possessions": {}
+					}
+				}
+			},
+			{
+				"nodeKey": "contextBudget",
+				"seq": 7,
+				"kind": "task",
+				"typeId": "core:task/context-budget@1",
+				"result": "ok",
+				"startedAt": 1789089842454,
+				"endedAt": 1789089842454,
+				"elapsedMs": 0,
+				"resolvedRefs": {
+					"sampling": "scene"
+				},
+				"notes": [],
+				"input": {
+					"sampling": {
+						"temperature": 0.7,
+						"responseTokens": 512,
+						"contextTokens": 8192
+					},
+					"params": {
+						"safetyMargin": 0.05
+					}
+				},
+				"timeoutMsApplied": 500,
+				"output": {
+					"main": {
+						"total": 7296,
+						"remaining": 7296,
+						"available": 7296
+					},
+					"available": {
+						"total": 7296,
+						"remaining": 7296,
+						"available": 7296
+					}
+				}
+			},
+			{
+				"nodeKey": "lore",
+				"seq": 8,
+				"kind": "task",
+				"typeId": "core:task/concat-candidates@1",
+				"result": "ok",
+				"startedAt": 1789089842454,
+				"endedAt": 1789089842454,
+				"elapsedMs": 0,
+				"notes": [],
+				"input": {
+					"sources": [
+						[
+							{
+								"id": 1,
+								"source": "worldLore",
+								"tokens": 25,
+								"signals": {
+									"keyword": 0.3333333333333333,
+									"proximity": 0,
+									"nameMatch": 0,
+									"entityCooccurrence": 0.6321205588285577,
+									"tfidf": 0,
+									"lastRefRecency": 0.9900498337491681,
+									"density": 1
+								},
+								"priority": 1,
+								"position": 1,
+								"pinned": false,
+								"payload": {
+									"id": 1,
+									"source": "worldLore",
+									"fingerprint": "d9a1fff71a6b3fb3",
+									"name": "The Drowned Bell",
+									"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+									"keys": "bell, drowned bell, harbour",
+									"caseSensitive": false,
+									"useRegex": false,
+									"matchMode": null,
+									"secondaryKeys": "",
+									"selectiveLogic": null,
+									"recursionDepth": null,
+									"priority": 1,
+									"constant": false,
+									"enabled": true,
+									"position": 1,
+									"lorebookBindingId": null,
+									"bindingCharacterId": null,
+									"year": null,
+									"month": null,
+									"day": null,
+									"hasEmbedding": false
+								}
+							}
+						],
+						[],
+						[]
+					]
+				},
+				"timeoutMsApplied": 500,
+				"output": {
+					"main": [
+						{
+							"id": 1,
+							"source": "worldLore",
+							"tokens": 25,
+							"signals": {
+								"keyword": 0.3333333333333333,
+								"proximity": 0,
+								"nameMatch": 0,
+								"entityCooccurrence": 0.6321205588285577,
+								"tfidf": 0,
+								"lastRefRecency": 0.9900498337491681,
+								"density": 1
+							},
+							"priority": 1,
+							"position": 1,
+							"pinned": false,
+							"payload": {
+								"id": 1,
+								"source": "worldLore",
+								"fingerprint": "d9a1fff71a6b3fb3",
+								"name": "The Drowned Bell",
+								"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+								"keys": "bell, drowned bell, harbour",
+								"caseSensitive": false,
+								"useRegex": false,
+								"matchMode": null,
+								"secondaryKeys": "",
+								"selectiveLogic": null,
+								"recursionDepth": null,
+								"priority": 1,
+								"constant": false,
+								"enabled": true,
+								"position": 1,
+								"lorebookBindingId": null,
+								"bindingCharacterId": null,
+								"year": null,
+								"month": null,
+								"day": null,
+								"hasEmbedding": false
+							}
+						}
+					],
+					"candidates": [
+						{
+							"id": 1,
+							"source": "worldLore",
+							"tokens": 25,
+							"signals": {
+								"keyword": 0.3333333333333333,
+								"proximity": 0,
+								"nameMatch": 0,
+								"entityCooccurrence": 0.6321205588285577,
+								"tfidf": 0,
+								"lastRefRecency": 0.9900498337491681,
+								"density": 1
+							},
+							"priority": 1,
+							"position": 1,
+							"pinned": false,
+							"payload": {
+								"id": 1,
+								"source": "worldLore",
+								"fingerprint": "d9a1fff71a6b3fb3",
+								"name": "The Drowned Bell",
+								"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+								"keys": "bell, drowned bell, harbour",
+								"caseSensitive": false,
+								"useRegex": false,
+								"matchMode": null,
+								"secondaryKeys": "",
+								"selectiveLogic": null,
+								"recursionDepth": null,
+								"priority": 1,
+								"constant": false,
+								"enabled": true,
+								"position": 1,
+								"lorebookBindingId": null,
+								"bindingCharacterId": null,
+								"year": null,
+								"month": null,
+								"day": null,
+								"hasEmbedding": false
+							}
+						}
+					],
+					"diagnostics": {
+						"sources": [1, 0, 0],
+						"duplicates": 0,
+						"enriched": 0,
+						"kept": 1
+					}
+				}
+			},
+			{
+				"nodeKey": "rank",
+				"seq": 9,
+				"kind": "task",
+				"typeId": "core:task/rank-hybrid@1",
+				"result": "ok",
+				"startedAt": 1789089842454,
+				"endedAt": 1789089842455,
+				"elapsedMs": 1,
+				"notes": [],
+				"input": {
+					"candidates": [
+						{
+							"id": 1,
+							"source": "worldLore",
+							"tokens": 25,
+							"signals": {
+								"keyword": 0.3333333333333333,
+								"proximity": 0,
+								"nameMatch": 0,
+								"entityCooccurrence": 0.6321205588285577,
+								"tfidf": 0,
+								"lastRefRecency": 0.9900498337491681,
+								"density": 1
+							},
+							"priority": 1,
+							"position": 1,
+							"pinned": false,
+							"payload": {
+								"id": 1,
+								"source": "worldLore",
+								"fingerprint": "d9a1fff71a6b3fb3",
+								"name": "The Drowned Bell",
+								"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+								"keys": "bell, drowned bell, harbour",
+								"caseSensitive": false,
+								"useRegex": false,
+								"matchMode": null,
+								"secondaryKeys": "",
+								"selectiveLogic": null,
+								"recursionDepth": null,
+								"priority": 1,
+								"constant": false,
+								"enabled": true,
+								"position": 1,
+								"lorebookBindingId": null,
+								"bindingCharacterId": null,
+								"year": null,
+								"month": null,
+								"day": null,
+								"hasEmbedding": false
+							}
+						}
+					],
+					"budget": {
+						"total": 7296,
+						"remaining": 7296,
+						"available": 7296
+					},
+					"params": {
+						"share": {
+							"messages": 0.5,
+							"worldLore": 0.1667,
+							"characterLore": 0.1667,
+							"history": 0.1666,
+							"relationships": 0
+						},
+						"maxEntries": {
+							"messages": 50,
+							"worldLore": 20,
+							"characterLore": 15,
+							"history": 10,
+							"relationships": 0
+						},
+						"minEntries": {
+							"messages": 6
+						},
+						"mechanismWeights": {
+							"keyword": 1,
+							"semantic": 1,
+							"name": 1
+						},
+						"signalKeyword": {
+							"messages": 0,
+							"worldLore": 0.35,
+							"characterLore": 0.35,
+							"history": 0.35,
+							"relationships": 0
+						},
+						"signalNameMatch": {
+							"messages": 0,
+							"worldLore": 0.25,
+							"characterLore": 0.25,
+							"history": 0,
+							"relationships": 0
+						},
+						"signalEntityCooccurrence": {
+							"messages": 0,
+							"worldLore": 0.35,
+							"characterLore": 0.2,
+							"history": 0,
+							"relationships": 0
+						},
+						"signalSemantic": {
+							"messages": 0,
+							"worldLore": 0.3,
+							"characterLore": 0.3,
+							"history": 0.3,
+							"relationships": 0
+						},
+						"signalEntityVector": {
+							"messages": 0,
+							"worldLore": 0.2,
+							"characterLore": 0.2,
+							"history": 0.2,
+							"relationships": 0
+						},
+						"signalTfidf": {
+							"messages": 0.1,
+							"worldLore": 0.1,
+							"characterLore": 0.1,
+							"history": 0.1,
+							"relationships": 0
+						},
+						"signalLastRefRecency": {
+							"messages": 0,
+							"worldLore": 0.1,
+							"characterLore": 0.1,
+							"history": 0.1,
+							"relationships": 0
+						},
+						"signalDensity": {
+							"messages": 0.1,
+							"worldLore": 0,
+							"characterLore": 0,
+							"history": 0,
+							"relationships": 0
+						},
+						"signalProximity": {
+							"messages": 0,
+							"worldLore": 0,
+							"characterLore": 0,
+							"history": 0,
+							"relationships": 0
+						},
+						"signalPriorityBonus": {
+							"messages": 0,
+							"worldLore": 0.15,
+							"characterLore": 0.15,
+							"history": 0,
+							"relationships": 0
+						},
+						"scoreLedAllocation": false
+					}
+				},
+				"timeoutMsApplied": 500,
+				"output": {
+					"main": [
+						{
+							"id": 1,
+							"source": "worldLore",
+							"tokens": 25,
+							"signals": {
+								"keyword": 0.3333333333333333,
+								"proximity": 0,
+								"nameMatch": 0,
+								"entityCooccurrence": 0.6321205588285577,
+								"tfidf": 0,
+								"lastRefRecency": 0.9900498337491681,
+								"density": 1
+							},
+							"priority": 1,
+							"position": 1,
+							"pinned": false,
+							"payload": {
+								"id": 1,
+								"source": "worldLore",
+								"fingerprint": "d9a1fff71a6b3fb3",
+								"name": "The Drowned Bell",
+								"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+								"keys": "bell, drowned bell, harbour",
+								"caseSensitive": false,
+								"useRegex": false,
+								"matchMode": null,
+								"secondaryKeys": "",
+								"selectiveLogic": null,
+								"recursionDepth": null,
+								"priority": 1,
+								"constant": false,
+								"enabled": true,
+								"position": 1,
+								"lorebookBindingId": null,
+								"bindingCharacterId": null,
+								"year": null,
+								"month": null,
+								"day": null,
+								"hasEmbedding": false
+							}
+						}
+					],
+					"candidates": [
+						{
+							"id": 1,
+							"source": "worldLore",
+							"tokens": 25,
+							"signals": {
+								"keyword": 0.3333333333333333,
+								"proximity": 0,
+								"nameMatch": 0,
+								"entityCooccurrence": 0.6321205588285577,
+								"tfidf": 0,
+								"lastRefRecency": 0.9900498337491681,
+								"density": 1
+							},
+							"priority": 1,
+							"position": 1,
+							"pinned": false,
+							"payload": {
+								"id": 1,
+								"source": "worldLore",
+								"fingerprint": "d9a1fff71a6b3fb3",
+								"name": "The Drowned Bell",
+								"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+								"keys": "bell, drowned bell, harbour",
+								"caseSensitive": false,
+								"useRegex": false,
+								"matchMode": null,
+								"secondaryKeys": "",
+								"selectiveLogic": null,
+								"recursionDepth": null,
+								"priority": 1,
+								"constant": false,
+								"enabled": true,
+								"position": 1,
+								"lorebookBindingId": null,
+								"bindingCharacterId": null,
+								"year": null,
+								"month": null,
+								"day": null,
+								"hasEmbedding": false
+							}
+						}
+					],
+					"decisions": [
+						{
+							"candidate": {
+								"id": 1,
+								"source": "worldLore",
+								"tokens": 25,
+								"signals": {
+									"keyword": 0.3333333333333333,
+									"proximity": 0,
+									"nameMatch": 0,
+									"entityCooccurrence": 0.6321205588285577,
+									"tfidf": 0,
+									"lastRefRecency": 0.9900498337491681,
+									"density": 1
+								},
+								"priority": 1,
+								"position": 1,
+								"pinned": false,
+								"payload": {
+									"id": 1,
+									"source": "worldLore",
+									"fingerprint": "d9a1fff71a6b3fb3",
+									"name": "The Drowned Bell",
+									"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+									"keys": "bell, drowned bell, harbour",
+									"caseSensitive": false,
+									"useRegex": false,
+									"matchMode": null,
+									"secondaryKeys": "",
+									"selectiveLogic": null,
+									"recursionDepth": null,
+									"priority": 1,
+									"constant": false,
+									"enabled": true,
+									"position": 1,
+									"lorebookBindingId": null,
+									"bindingCharacterId": null,
+									"year": null,
+									"month": null,
+									"day": null,
+									"hasEmbedding": false
+								}
+							},
+							"score": 0.43691384563157865,
+							"reason": "filled_scored",
+							"included": true,
+							"why": "scored 0.437, 25 tokens"
+						}
+					],
+					"groups": {
+						"messages": {
+							"allocated": 3648,
+							"used": 0,
+							"entries": 0,
+							"cap": 50
+						},
+						"worldLore": {
+							"allocated": 1216,
+							"used": 25,
+							"entries": 1,
+							"cap": 20
+						},
+						"characterLore": {
+							"allocated": 1216,
+							"used": 0,
+							"entries": 0,
+							"cap": 15
+						},
+						"history": {
+							"allocated": 1215,
+							"used": 0,
+							"entries": 0,
+							"cap": 10
+						},
+						"relationships": {
+							"allocated": 0,
+							"used": 0,
+							"entries": 0,
+							"cap": 0
+						}
+					}
+				}
+			},
+			{
+				"nodeKey": "planContext",
+				"seq": 10,
+				"kind": "task",
+				"typeId": "core:task/build-planner-context@1",
+				"result": "ok",
+				"startedAt": 1789089842455,
+				"endedAt": 1789089842462,
+				"elapsedMs": 7,
+				"notes": [],
+				"input": {
+					"cast": {
+						"sessionCharacters": [
+							{
+								"isActive": true,
+								"visibility": "visible",
+								"position": 0,
+								"removedAt": null,
+								"character": {
+									"id": 1,
+									"uuid": "e968bc7f-1c02-43db-bf89-a28311a32d86",
+									"userId": 1,
+									"name": "Verity",
+									"nickname": "",
+									"characterVersion": "1.0",
+									"description": "A quiet archivist who remembers everything.",
+									"personality": "",
+									"scenario": "",
+									"firstMessage": "The archive is closed, but the door was open. Come in.",
+									"alternateGreetings": [],
+									"exampleDialogues": [],
+									"metadata": {},
+									"avatarMediaId": null,
+									"creatorNotes": "",
+									"creatorNotesMultilingual": {},
+									"groupOnlyGreetings": [],
+									"postHistoryInstructions": "",
+									"source": [],
+									"createdAt": "2026-09-10",
+									"updatedAt": {},
+									"lorebookId": null,
+									"extensions": {},
+									"aliases": [],
+									"summary": null,
+									"creator": null,
+									"category": null,
+									"isFavorite": false,
+									"isDeleted": false,
+									"embedding": null,
+									"embeddingModel": null,
+									"vectorizedAt": null
+								},
+								"absorbedAliases": []
+							}
+						],
+						"sessionPersonas": [
+							{
+								"persona": {
+									"id": 1,
+									"uuid": "61ec60c2-3701-48ca-9142-a163af98386b",
+									"userId": 1,
+									"isDefault": false,
+									"avatarMediaId": null,
+									"name": "Wren",
+									"description": "A traveller who asks too many questions.",
+									"position": 0,
+									"createdAt": "2026-09-10",
+									"updatedAt": {},
+									"lorebookId": null,
+									"aliases": [],
+									"summary": null,
+									"creator": null,
+									"category": null,
+									"isDeleted": false,
+									"embedding": null,
+									"embeddingModel": null,
+									"vectorizedAt": null
+								},
+								"position": 0,
+								"removedAt": null,
+								"absorbedAliases": []
+							}
+						],
+						"sessionScenario": "",
+						"isGroup": false,
+						"currentCharacterId": 1
+					},
+					"state": {
+						"world": {
+							"core_time_of_day": "morning",
+							"time-of-day": "morning",
+							"core_weather": "clear",
+							"weather": "clear"
+						},
+						"cast": {
+							"verity": {
+								"core_hp": 20,
+								"hp": 20,
+								"core_mood": "calm",
+								"mood": "calm",
+								"core_stamina": 10,
+								"stamina": 10,
+								"core_trust": 0,
+								"trust": 0
+							}
+						},
+						"possessions": {}
+					},
+					"fields": {
+						"tone": "grounded",
+						"difficulty": "normal",
+						"trustNarrator": false
+					},
+					"prompts": {
+						"systemPrompt": "You plan the next moment of an adventure. You do not write it.\n\nRead what the player just did, the scene so far, and the world state. Decide what should happen next, who in the cast has a reason to speak or act, and what the world is doing while they do it. Difficulty is {{difficulty}}: at story the world yields, at normal it pushes back fairly, at hard it costs something every time.\n\nReply with JSON and nothing else:\n\n{\n  \"beats\": [\"one short sentence per thing that happens, in order\"],\n  \"speakers\": [{ \"name\": \"a cast member by the name the conversation uses\", \"intent\": \"what they are trying to do\" }],\n  \"worldHints\": { \"location\": \"where this happens\", \"timeOfDay\": \"morning|day|dusk|night\", \"weather\": \"clear|fog|rain|storm|snow\" },\n  \"needsLookup\": false\n}\n\nName only people who are actually in the scene, and name nobody if nobody has a reason to speak. Set needsLookup to true when answering well needs a fact you can see you do not have.",
+						"postHistoryInstructions": "Remember: JSON only, no prose around it. Plan the moment; do not write it."
+					},
+					"variables": {
+						"instructions": {
+							"engine": "core:template/handlebars@1",
+							"source": "Instructions:\n\"\"\"\n{{{instructions}}}\n\"\"\""
+						},
+						"characters": {
+							"engine": "core:template/handlebars@1",
+							"source": "Assistant Characters (AI-controlled):\n```json\n{{#if characters.length}}[\n{{#each characters}}  {\n    \"name\": {{{jsonValue name}}}{{#if (ne nickname undefined)}},\n    \"nickname\": {{{jsonValue nickname}}}{{/if}}{{#if (ne description undefined)}},\n    \"description\": {{{jsonValue description}}}{{/if}}{{#if (ne personality undefined)}},\n    \"personality\": {{{jsonValue personality}}}{{/if}}{{#if (ne this.[extra lore] undefined)}},\n    \"extra lore\": {{{jsonValue this.[extra lore] 4}}}{{/if}}\n  }{{#unless @last}},{{/unless}}\n{{/each}}]{{else}}[]{{/if}}\n```"
+						},
+						"personas": {
+							"engine": "core:template/handlebars@1",
+							"source": "User Characters (player-controlled):\n```json\n{{#if personas.length}}[\n{{#each personas}}  {\n    \"name\": {{{jsonValue name}}}{{#if (ne description undefined)}},\n    \"description\": {{{jsonValue description}}}{{/if}}\n  }{{#unless @last}},{{/unless}}\n{{/each}}]{{else}}[]{{/if}}\n```"
+						},
+						"scenario": {
+							"engine": "core:template/handlebars@1",
+							"source": "Scenario:\n\"\"\"\n{{{scenario}}}\n\"\"\""
+						},
+						"postHistoryInstructions": {
+							"engine": "core:template/handlebars@1",
+							"source": "{{{postHistoryInstructions}}}"
+						},
+						"characterNames": {
+							"engine": "core:template/handlebars@1",
+							"source": "{{{characterNames}}}"
+						},
+						"personaNames": {
+							"engine": "core:template/handlebars@1",
+							"source": "{{{personaNames}}}"
+						}
+					}
+				},
+				"timeoutMsApplied": 2000,
+				"output": {
+					"main": {
+						"instructions": "Instructions:\n\"\"\"\nYou plan the next moment of an adventure. You do not write it.\n\nRead what the player just did, the scene so far, and the world state. Decide what should happen next, who in the cast has a reason to speak or act, and what the world is doing while they do it. Difficulty is : at story the world yields, at normal it pushes back fairly, at hard it costs something every time.\n\nReply with JSON and nothing else:\n\n{\n  \"beats\": [\"one short sentence per thing that happens, in order\"],\n  \"speakers\": [{ \"name\": \"a cast member by the name the conversation uses\", \"intent\": \"what they are trying to do\" }],\n  \"worldHints\": { \"location\": \"where this happens\", \"timeOfDay\": \"morning|day|dusk|night\", \"weather\": \"clear|fog|rain|storm|snow\" },\n  \"needsLookup\": false\n}\n\nName only people who are actually in the scene, and name nobody if nobody has a reason to speak. Set needsLookup to true when answering well needs a fact you can see you do not have.\n\"\"\"",
+						"relationshipsPerspectives": "",
+						"relationshipsKnown": "",
+						"characters": "Assistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Verity\",\n    \"description\": \"A quiet archivist who remembers everything.\"\n  }\n]\n```",
+						"personas": "User Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Wren\",\n    \"description\": \"A traveller who asks too many questions.\"\n  }\n]\n```",
+						"characterNames": "Verity",
+						"personaNames": "Wren",
+						"scenario": "",
+						"exampleDialogue": "",
+						"postHistoryInstructions": "",
+						"postHistory": {
+							"targetIndex": 0,
+							"instructions": "Remember: JSON only, no prose around it. Plan the moment; do not write it.",
+							"hasContent": true
+						},
+						"sessionMessages": [],
+						"state": {
+							"world": {
+								"core_time_of_day": "morning",
+								"time-of-day": "morning",
+								"core_weather": "clear",
+								"weather": "clear"
+							},
+							"cast": {
+								"verity": {
+									"core_hp": 20,
+									"hp": 20,
+									"core_mood": "calm",
+									"mood": "calm",
+									"core_stamina": 10,
+									"stamina": 10,
+									"core_trust": 0,
+									"trust": 0
+								}
+							},
+							"possessions": {}
+						},
+						"char": "Verity",
+						"character": "Verity",
+						"user": "Wren",
+						"persona": "Wren",
+						"tone": "grounded",
+						"difficulty": "normal",
+						"trustNarrator": false
+					},
+					"templateContext": {
+						"instructions": "Instructions:\n\"\"\"\nYou plan the next moment of an adventure. You do not write it.\n\nRead what the player just did, the scene so far, and the world state. Decide what should happen next, who in the cast has a reason to speak or act, and what the world is doing while they do it. Difficulty is : at story the world yields, at normal it pushes back fairly, at hard it costs something every time.\n\nReply with JSON and nothing else:\n\n{\n  \"beats\": [\"one short sentence per thing that happens, in order\"],\n  \"speakers\": [{ \"name\": \"a cast member by the name the conversation uses\", \"intent\": \"what they are trying to do\" }],\n  \"worldHints\": { \"location\": \"where this happens\", \"timeOfDay\": \"morning|day|dusk|night\", \"weather\": \"clear|fog|rain|storm|snow\" },\n  \"needsLookup\": false\n}\n\nName only people who are actually in the scene, and name nobody if nobody has a reason to speak. Set needsLookup to true when answering well needs a fact you can see you do not have.\n\"\"\"",
+						"relationshipsPerspectives": "",
+						"relationshipsKnown": "",
+						"characters": "Assistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Verity\",\n    \"description\": \"A quiet archivist who remembers everything.\"\n  }\n]\n```",
+						"personas": "User Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Wren\",\n    \"description\": \"A traveller who asks too many questions.\"\n  }\n]\n```",
+						"characterNames": "Verity",
+						"personaNames": "Wren",
+						"scenario": "",
+						"exampleDialogue": "",
+						"postHistoryInstructions": "",
+						"postHistory": {
+							"targetIndex": 0,
+							"instructions": "Remember: JSON only, no prose around it. Plan the moment; do not write it.",
+							"hasContent": true
+						},
+						"sessionMessages": [],
+						"state": {
+							"world": {
+								"core_time_of_day": "morning",
+								"time-of-day": "morning",
+								"core_weather": "clear",
+								"weather": "clear"
+							},
+							"cast": {
+								"verity": {
+									"core_hp": 20,
+									"hp": 20,
+									"core_mood": "calm",
+									"mood": "calm",
+									"core_stamina": 10,
+									"stamina": 10,
+									"core_trust": 0,
+									"trust": 0
+								}
+							},
+							"possessions": {}
+						},
+						"char": "Verity",
+						"character": "Verity",
+						"user": "Wren",
+						"persona": "Wren",
+						"tone": "grounded",
+						"difficulty": "normal",
+						"trustNarrator": false
+					},
+					"seedName": "Verity",
+					"exampleDialogueIndex": null
+				}
+			},
+			{
+				"nodeKey": "lines",
+				"seq": 11,
+				"kind": "task",
+				"typeId": "core:task/process-messages@1",
+				"result": "ok",
+				"startedAt": 1789089842462,
+				"endedAt": 1789089842462,
+				"elapsedMs": 0,
+				"notes": [],
+				"input": {
+					"messages": [
+						{
+							"id": 2,
+							"role": "assistant",
+							"content": "The archive is closed, but the door was open. Come in.",
+							"characterId": 1,
+							"personaId": null,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						},
+						{
+							"id": 3,
+							"role": "user",
+							"content": "I step inside and set my lantern on the table. \"Verity? The bell rang again tonight. What does it mean?\"",
+							"characterId": null,
+							"personaId": 1,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						}
+					],
+					"cast": {
+						"sessionCharacters": [
+							{
+								"isActive": true,
+								"visibility": "visible",
+								"position": 0,
+								"removedAt": null,
+								"character": {
+									"id": 1,
+									"uuid": "e968bc7f-1c02-43db-bf89-a28311a32d86",
+									"userId": 1,
+									"name": "Verity",
+									"nickname": "",
+									"characterVersion": "1.0",
+									"description": "A quiet archivist who remembers everything.",
+									"personality": "",
+									"scenario": "",
+									"firstMessage": "The archive is closed, but the door was open. Come in.",
+									"alternateGreetings": [],
+									"exampleDialogues": [],
+									"metadata": {},
+									"avatarMediaId": null,
+									"creatorNotes": "",
+									"creatorNotesMultilingual": {},
+									"groupOnlyGreetings": [],
+									"postHistoryInstructions": "",
+									"source": [],
+									"createdAt": "2026-09-10",
+									"updatedAt": {},
+									"lorebookId": null,
+									"extensions": {},
+									"aliases": [],
+									"summary": null,
+									"creator": null,
+									"category": null,
+									"isFavorite": false,
+									"isDeleted": false,
+									"embedding": null,
+									"embeddingModel": null,
+									"vectorizedAt": null
+								},
+								"absorbedAliases": []
+							}
+						],
+						"sessionPersonas": [
+							{
+								"persona": {
+									"id": 1,
+									"uuid": "61ec60c2-3701-48ca-9142-a163af98386b",
+									"userId": 1,
+									"isDefault": false,
+									"avatarMediaId": null,
+									"name": "Wren",
+									"description": "A traveller who asks too many questions.",
+									"position": 0,
+									"createdAt": "2026-09-10",
+									"updatedAt": {},
+									"lorebookId": null,
+									"aliases": [],
+									"summary": null,
+									"creator": null,
+									"category": null,
+									"isDeleted": false,
+									"embedding": null,
+									"embeddingModel": null,
+									"vectorizedAt": null
+								},
+								"position": 0,
+								"removedAt": null,
+								"absorbedAliases": []
+							}
+						],
+						"sessionScenario": "",
+						"isGroup": false,
+						"currentCharacterId": 1
+					},
+					"templateContext": {
+						"instructions": "Instructions:\n\"\"\"\nYou plan the next moment of an adventure. You do not write it.\n\nRead what the player just did, the scene so far, and the world state. Decide what should happen next, who in the cast has a reason to speak or act, and what the world is doing while they do it. Difficulty is : at story the world yields, at normal it pushes back fairly, at hard it costs something every time.\n\nReply with JSON and nothing else:\n\n{\n  \"beats\": [\"one short sentence per thing that happens, in order\"],\n  \"speakers\": [{ \"name\": \"a cast member by the name the conversation uses\", \"intent\": \"what they are trying to do\" }],\n  \"worldHints\": { \"location\": \"where this happens\", \"timeOfDay\": \"morning|day|dusk|night\", \"weather\": \"clear|fog|rain|storm|snow\" },\n  \"needsLookup\": false\n}\n\nName only people who are actually in the scene, and name nobody if nobody has a reason to speak. Set needsLookup to true when answering well needs a fact you can see you do not have.\n\"\"\"",
+						"relationshipsPerspectives": "",
+						"relationshipsKnown": "",
+						"characters": "Assistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Verity\",\n    \"description\": \"A quiet archivist who remembers everything.\"\n  }\n]\n```",
+						"personas": "User Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Wren\",\n    \"description\": \"A traveller who asks too many questions.\"\n  }\n]\n```",
+						"characterNames": "Verity",
+						"personaNames": "Wren",
+						"scenario": "",
+						"exampleDialogue": "",
+						"postHistoryInstructions": "",
+						"postHistory": {
+							"targetIndex": 0,
+							"instructions": "Remember: JSON only, no prose around it. Plan the moment; do not write it.",
+							"hasContent": true
+						},
+						"sessionMessages": [],
+						"state": {
+							"world": {
+								"core_time_of_day": "morning",
+								"time-of-day": "morning",
+								"core_weather": "clear",
+								"weather": "clear"
+							},
+							"cast": {
+								"verity": {
+									"core_hp": 20,
+									"hp": 20,
+									"core_mood": "calm",
+									"mood": "calm",
+									"core_stamina": 10,
+									"stamina": 10,
+									"core_trust": 0,
+									"trust": 0
+								}
+							},
+							"possessions": {}
+						},
+						"char": "Verity",
+						"character": "Verity",
+						"user": "Wren",
+						"persona": "Wren",
+						"tone": "grounded",
+						"difficulty": "normal",
+						"trustNarrator": false
+					},
+					"seedName": "Verity"
+				},
+				"timeoutMsApplied": 1000,
+				"output": {
+					"main": [
+						{
+							"id": 2,
+							"role": "assistant",
+							"name": "Verity",
+							"message": "The archive is closed, but the door was open. Come in."
+						},
+						{
+							"id": 3,
+							"role": "user",
+							"name": "Wren",
+							"message": "I step inside and set my lantern on the table. \"Verity? The bell rang again tonight. What does it mean?\""
+						},
+						{
+							"id": -2,
+							"role": "assistant",
+							"name": "Verity",
+							"message": ""
+						}
+					],
+					"messages": [
+						{
+							"id": 2,
+							"role": "assistant",
+							"name": "Verity",
+							"message": "The archive is closed, but the door was open. Come in."
+						},
+						{
+							"id": 3,
+							"role": "user",
+							"name": "Wren",
+							"message": "I step inside and set my lantern on the table. \"Verity? The bell rang again tonight. What does it mean?\""
+						},
+						{
+							"id": -2,
+							"role": "assistant",
+							"name": "Verity",
+							"message": ""
+						}
+					],
+					"includedIds": [2, 3]
+				}
+			},
+			{
+				"nodeKey": "planPrompt",
+				"seq": 12,
+				"kind": "task",
+				"typeId": "core:task/assemble@2",
+				"result": "ok",
+				"startedAt": 1789089842462,
+				"endedAt": 1789089842468,
+				"elapsedMs": 6,
+				"resolvedRefs": {
+					"prompts": "planContext",
+					"connection": "planWrite"
+				},
+				"notes": [],
+				"input": {
+					"candidates": [
+						{
+							"id": 1,
+							"source": "worldLore",
+							"tokens": 25,
+							"signals": {
+								"keyword": 0.3333333333333333,
+								"proximity": 0,
+								"nameMatch": 0,
+								"entityCooccurrence": 0.6321205588285577,
+								"tfidf": 0,
+								"lastRefRecency": 0.9900498337491681,
+								"density": 1
+							},
+							"priority": 1,
+							"position": 1,
+							"pinned": false,
+							"payload": {
+								"id": 1,
+								"source": "worldLore",
+								"fingerprint": "d9a1fff71a6b3fb3",
+								"name": "The Drowned Bell",
+								"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+								"keys": "bell, drowned bell, harbour",
+								"caseSensitive": false,
+								"useRegex": false,
+								"matchMode": null,
+								"secondaryKeys": "",
+								"selectiveLogic": null,
+								"recursionDepth": null,
+								"priority": 1,
+								"constant": false,
+								"enabled": true,
+								"position": 1,
+								"lorebookBindingId": null,
+								"bindingCharacterId": null,
+								"year": null,
+								"month": null,
+								"day": null,
+								"hasEmbedding": false
+							}
+						}
+					],
+					"decisions": [
+						{
+							"candidate": {
+								"id": 1,
+								"source": "worldLore",
+								"tokens": 25,
+								"signals": {
+									"keyword": 0.3333333333333333,
+									"proximity": 0,
+									"nameMatch": 0,
+									"entityCooccurrence": 0.6321205588285577,
+									"tfidf": 0,
+									"lastRefRecency": 0.9900498337491681,
+									"density": 1
+								},
+								"priority": 1,
+								"position": 1,
+								"pinned": false,
+								"payload": {
+									"id": 1,
+									"source": "worldLore",
+									"fingerprint": "d9a1fff71a6b3fb3",
+									"name": "The Drowned Bell",
+									"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+									"keys": "bell, drowned bell, harbour",
+									"caseSensitive": false,
+									"useRegex": false,
+									"matchMode": null,
+									"secondaryKeys": "",
+									"selectiveLogic": null,
+									"recursionDepth": null,
+									"priority": 1,
+									"constant": false,
+									"enabled": true,
+									"position": 1,
+									"lorebookBindingId": null,
+									"bindingCharacterId": null,
+									"year": null,
+									"month": null,
+									"day": null,
+									"hasEmbedding": false
+								}
+							},
+							"score": 0.43691384563157865,
+							"reason": "filled_scored",
+							"included": true,
+							"why": "scored 0.437, 25 tokens"
+						}
+					],
+					"groups": {
+						"messages": {
+							"allocated": 3648,
+							"used": 0,
+							"entries": 0,
+							"cap": 50
+						},
+						"worldLore": {
+							"allocated": 1216,
+							"used": 25,
+							"entries": 1,
+							"cap": 20
+						},
+						"characterLore": {
+							"allocated": 1216,
+							"used": 0,
+							"entries": 0,
+							"cap": 15
+						},
+						"history": {
+							"allocated": 1215,
+							"used": 0,
+							"entries": 0,
+							"cap": 10
+						},
+						"relationships": {
+							"allocated": 0,
+							"used": 0,
+							"entries": 0,
+							"cap": 0
+						}
+					},
+					"budget": {
+						"total": 7296,
+						"remaining": 7296,
+						"available": 7296
+					},
+					"messages": [
+						{
+							"id": 2,
+							"role": "assistant",
+							"name": "Verity",
+							"message": "The archive is closed, but the door was open. Come in."
+						},
+						{
+							"id": 3,
+							"role": "user",
+							"name": "Wren",
+							"message": "I step inside and set my lantern on the table. \"Verity? The bell rang again tonight. What does it mean?\""
+						},
+						{
+							"id": -2,
+							"role": "assistant",
+							"name": "Verity",
+							"message": ""
+						}
+					],
+					"templateContext": {
+						"instructions": "Instructions:\n\"\"\"\nYou plan the next moment of an adventure. You do not write it.\n\nRead what the player just did, the scene so far, and the world state. Decide what should happen next, who in the cast has a reason to speak or act, and what the world is doing while they do it. Difficulty is : at story the world yields, at normal it pushes back fairly, at hard it costs something every time.\n\nReply with JSON and nothing else:\n\n{\n  \"beats\": [\"one short sentence per thing that happens, in order\"],\n  \"speakers\": [{ \"name\": \"a cast member by the name the conversation uses\", \"intent\": \"what they are trying to do\" }],\n  \"worldHints\": { \"location\": \"where this happens\", \"timeOfDay\": \"morning|day|dusk|night\", \"weather\": \"clear|fog|rain|storm|snow\" },\n  \"needsLookup\": false\n}\n\nName only people who are actually in the scene, and name nobody if nobody has a reason to speak. Set needsLookup to true when answering well needs a fact you can see you do not have.\n\"\"\"",
+						"relationshipsPerspectives": "",
+						"relationshipsKnown": "",
+						"characters": "Assistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Verity\",\n    \"description\": \"A quiet archivist who remembers everything.\"\n  }\n]\n```",
+						"personas": "User Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Wren\",\n    \"description\": \"A traveller who asks too many questions.\"\n  }\n]\n```",
+						"characterNames": "Verity",
+						"personaNames": "Wren",
+						"scenario": "",
+						"exampleDialogue": "",
+						"postHistoryInstructions": "",
+						"postHistory": {
+							"targetIndex": 0,
+							"instructions": "Remember: JSON only, no prose around it. Plan the moment; do not write it.",
+							"hasContent": true
+						},
+						"sessionMessages": [],
+						"state": {
+							"world": {
+								"core_time_of_day": "morning",
+								"time-of-day": "morning",
+								"core_weather": "clear",
+								"weather": "clear"
+							},
+							"cast": {
+								"verity": {
+									"core_hp": 20,
+									"hp": 20,
+									"core_mood": "calm",
+									"mood": "calm",
+									"core_stamina": 10,
+									"stamina": 10,
+									"core_trust": 0,
+									"trust": 0
+								}
+							},
+							"possessions": {}
+						},
+						"char": "Verity",
+						"character": "Verity",
+						"user": "Wren",
+						"persona": "Wren",
+						"tone": "grounded",
+						"difficulty": "normal",
+						"trustNarrator": false
+					},
+					"template": {
+						"source": "{{#systemBlock}}\n{{#if currentDate}}\n{{{currentDate}}}\n{{/if}}\n\n{{#if instructions}}\n{{{instructions}}}\n{{/if}}\n\n{{#if characters}}\n{{{characters}}}\n{{/if}}\n\n{{#if personas}}\n{{{personas}}}\n{{/if}}\n\n{{#if scenario}}\n{{{scenario}}}\n{{/if}}\n\n{{#if worldLore}}\n{{{worldLore}}}\n{{/if}}\n\n{{#if history}}\n{{{history}}}\n{{/if}}\n\n{{#if relationshipsPerspectives}}\n{{{relationshipsPerspectives}}}\n{{/if}}\n{{#if relationshipsKnown}}\n{{{relationshipsKnown}}}\n{{/if}}\n\n{{/systemBlock}}\n\n{{#each sessionMessages as |sessionMessage msgIndex|}}\n{{#each (lookup ../injectionsByIndex msgIndex)}}\n{{#if (eq this.role \"assistant\")}}\n{{#assistantBlock}}\n{{{this.content}}}\n{{/assistantBlock}}\n{{else if (eq this.role \"user\")}}\n{{#userBlock}}\n{{{this.content}}}\n{{/userBlock}}\n{{else}}\n{{#systemBlock}}\n{{{this.content}}}\n{{/systemBlock}}\n{{/if}}\n{{/each}}\n{{#with ../postHistory}}\n{{#if (and (eq msgIndex targetIndex) hasContent)}}\n{{#systemBlock}}\n{{#if instructions}}\nResponse reminder:\n```text\n{{{instructions}}}\n```\n{{/if}}\n{{#if charInstructions}}\nCharacter reminder:\n```text\n{{{charInstructions}}}\n```\n{{/if}}\n{{#if exampleDialogue}}\nExample dialogue:\n```text\n{{{exampleDialogue}}}\n```\n{{/if}}\n{{/systemBlock}}\n{{/if}}\n{{/with}}\n{{#if (eq role \"assistant\")}}\n{{#assistantBlock}}\n{{{name}}}: {{{message}}}\n{{/assistantBlock}}\n{{/if}}\n{{#if (eq role \"user\")}}\n{{#userBlock}}\n{{{name}}}: {{{message}}}\n{{/userBlock}}\n{{/if}}\n{{/each}}",
+						"engine": "core:template/handlebars@1"
+					},
+					"prompts": {
+						"systemPrompt": "You plan the next moment of an adventure. You do not write it.\n\nRead what the player just did, the scene so far, and the world state. Decide what should happen next, who in the cast has a reason to speak or act, and what the world is doing while they do it. Difficulty is {{difficulty}}: at story the world yields, at normal it pushes back fairly, at hard it costs something every time.\n\nReply with JSON and nothing else:\n\n{\n  \"beats\": [\"one short sentence per thing that happens, in order\"],\n  \"speakers\": [{ \"name\": \"a cast member by the name the conversation uses\", \"intent\": \"what they are trying to do\" }],\n  \"worldHints\": { \"location\": \"where this happens\", \"timeOfDay\": \"morning|day|dusk|night\", \"weather\": \"clear|fog|rain|storm|snow\" },\n  \"needsLookup\": false\n}\n\nName only people who are actually in the scene, and name nobody if nobody has a reason to speak. Set needsLookup to true when answering well needs a fact you can see you do not have.",
+						"postHistoryInstructions": "Remember: JSON only, no prose around it. Plan the moment; do not write it."
+					},
+					"variables": {
+						"worldLore": {
+							"engine": "core:template/handlebars@1",
+							"source": "World lore: \n```json\n{{#if worldLore}}{ {{~#each worldLore}}{{{jsonValue @key indent=0}}}:{{{jsonValue this indent=0}}}{{#unless @last}},{{/unless}}{{/each~}} }{{else}}{}{{/if}}\n```"
+						},
+						"history": {
+							"engine": "core:template/handlebars@1",
+							"source": "Story history:\n```json\n{{#if history}}{ {{~#each history}}{{{jsonValue @key indent=0}}}:{{{jsonValue this indent=0}}}{{#unless @last}},{{/unless}}{{/each~}} }{{else}}{}{{/if}}\n```"
+						},
+						"currentDate": {
+							"engine": "core:template/handlebars@1",
+							"source": "The current date in the story is {{currentDate.year}}{{#if (isSet currentDate.month)}}-{{pad currentDate.month 2}}{{/if}}{{#if (isSet currentDate.day)}}-{{pad currentDate.day 2}}{{/if}}."
+						}
+					},
+					"params": {
+						"postHistoryDepth": 0,
+						"postHistoryTokenTrigger": 0,
+						"truncation": "oldest-first",
+						"blocks": [
+							{
+								"id": "currentDate",
+								"enabled": true
+							},
+							{
+								"id": "instructions",
+								"enabled": true
+							},
+							{
+								"id": "characters",
+								"enabled": true
+							},
+							{
+								"id": "personas",
+								"enabled": true
+							},
+							{
+								"id": "scenario",
+								"enabled": true
+							},
+							{
+								"id": "worldLore",
+								"enabled": true
+							},
+							{
+								"id": "history",
+								"enabled": true
+							},
+							{
+								"id": "relationshipsPerspectives",
+								"enabled": true
+							},
+							{
+								"id": "relationshipsKnown",
+								"enabled": true
+							}
+						]
+					},
+					"connection": {
+						"id": "1",
+						"kind": "core:shape/text-gen@1",
+						"metadata": {
+							"model": "hf.co/bartowski/MN-12B-Lyra-v4-GGUF:Q4_K_M",
+							"tokenizer": "estimate",
+							"promptFormat": "vicuna",
+							"completionTemplate": {
+								"key": "vicuna",
+								"name": "Vicuna (Default)",
+								"renderMode": "flat",
+								"roles": {
+									"system": {
+										"prefix": "### System:\n",
+										"suffix": "\n"
+									},
+									"user": {
+										"prefix": "### User:\n",
+										"suffix": "\n"
+									},
+									"assistant": {
+										"prefix": "### Assistant:\n",
+										"suffix": "\n"
+									},
+									"model": {
+										"prefix": "### Model:\n",
+										"suffix": "\n"
+									},
+									"tool": {
+										"prefix": "### Tool:\n",
+										"suffix": "\n"
+									},
+									"function": {
+										"prefix": "### Function:\n",
+										"suffix": "\n"
+									}
+								},
+								"fallbackRole": {
+									"prefix": "### User:\n",
+									"suffix": "\n"
+								},
+								"stopStrings": [
+									"</s>",
+									"system:",
+									"System:",
+									"user:",
+									"User:",
+									"assistant:",
+									"Assistant:"
+								],
+								"isSelectable": true
+							},
+							"wireMode": "chat"
+						}
+					}
+				},
+				"timeoutMsApplied": 1000,
+				"output": {
+					"main": {
+						"blocks": [
+							{
+								"source": "worldLore",
+								"id": 1,
+								"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+								"tokens": 25,
+								"name": "The Drowned Bell",
+								"included": true,
+								"why": [
+									"scored 0.437, 25 tokens",
+									"score 0.437",
+									"filled_scored"
+								]
+							}
+						],
+						"totalTokens": 25,
+						"budget": {
+							"total": 7296,
+							"used": 25,
+							"remaining": 7271
+						},
+						"groups": {
+							"messages": {
+								"allocated": 3648,
+								"used": 0,
+								"entries": 0,
+								"cap": 50
+							},
+							"worldLore": {
+								"allocated": 1216,
+								"used": 25,
+								"entries": 1,
+								"cap": 20
+							},
+							"characterLore": {
+								"allocated": 1216,
+								"used": 0,
+								"entries": 0,
+								"cap": 15
+							},
+							"history": {
+								"allocated": 1215,
+								"used": 0,
+								"entries": 0,
+								"cap": 10
+							},
+							"relationships": {
+								"allocated": 0,
+								"used": 0,
+								"entries": 0,
+								"cap": 0
+							}
+						},
+						"messages": [
+							{
+								"role": "system",
+								"content": "Instructions:\n\"\"\"\nYou plan the next moment of an adventure. You do not write it.\n\nRead what the player just did, the scene so far, and the world state. Decide what should happen next, who in the cast has a reason to speak or act, and what the world is doing while they do it. Difficulty is : at story the world yields, at normal it pushes back fairly, at hard it costs something every time.\n\nReply with JSON and nothing else:\n\n{\n  \"beats\": [\"one short sentence per thing that happens, in order\"],\n  \"speakers\": [{ \"name\": \"a cast member by the name the conversation uses\", \"intent\": \"what they are trying to do\" }],\n  \"worldHints\": { \"location\": \"where this happens\", \"timeOfDay\": \"morning|day|dusk|night\", \"weather\": \"clear|fog|rain|storm|snow\" },\n  \"needsLookup\": false\n}\n\nName only people who are actually in the scene, and name nobody if nobody has a reason to speak. Set needsLookup to true when answering well needs a fact you can see you do not have.\n\"\"\"\n\nAssistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Verity\",\n    \"description\": \"A quiet archivist who remembers everything.\"\n  }\n]\n```\n\nUser Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Wren\",\n    \"description\": \"A traveller who asks too many questions.\"\n  }\n]\n```\n\n\nWorld lore: \n```json\n{\"The Drowned Bell\":\"A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.\"}\n```"
+							},
+							{
+								"role": "assistant",
+								"content": "Verity: The archive is closed, but the door was open. Come in."
+							},
+							{
+								"role": "user",
+								"content": "Wren: I step inside and set my lantern on the table. \"Verity? The bell rang again tonight. What does it mean?\""
+							},
+							{
+								"role": "system",
+								"content": "Response reminder:\n```text\nRemember: JSON only, no prose around it. Plan the moment; do not write it.\n```"
+							},
+							{
+								"role": "assistant",
+								"content": "Verity:"
+							}
+						],
+						"promptFormat": "split_session",
+						"usedVariables": [
+							"systemBlock",
+							"currentDate",
+							"instructions",
+							"characters",
+							"personas",
+							"scenario",
+							"worldLore",
+							"history",
+							"relationshipsPerspectives",
+							"relationshipsKnown",
+							"sessionMessages",
+							"each",
+							"if",
+							"assistantBlock",
+							"this.content",
+							"else",
+							"userBlock",
+							"..",
+							"charInstructions",
+							"exampleDialogue",
+							"name",
+							"message"
+						]
+					},
+					"context": {
+						"blocks": [
+							{
+								"source": "worldLore",
+								"id": 1,
+								"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+								"tokens": 25,
+								"name": "The Drowned Bell",
+								"included": true,
+								"why": [
+									"scored 0.437, 25 tokens",
+									"score 0.437",
+									"filled_scored"
+								]
+							}
+						],
+						"totalTokens": 25,
+						"budget": {
+							"total": 7296,
+							"used": 25,
+							"remaining": 7271
+						},
+						"groups": {
+							"messages": {
+								"allocated": 3648,
+								"used": 0,
+								"entries": 0,
+								"cap": 50
+							},
+							"worldLore": {
+								"allocated": 1216,
+								"used": 25,
+								"entries": 1,
+								"cap": 20
+							},
+							"characterLore": {
+								"allocated": 1216,
+								"used": 0,
+								"entries": 0,
+								"cap": 15
+							},
+							"history": {
+								"allocated": 1215,
+								"used": 0,
+								"entries": 0,
+								"cap": 10
+							},
+							"relationships": {
+								"allocated": 0,
+								"used": 0,
+								"entries": 0,
+								"cap": 0
+							}
+						},
+						"messages": [
+							{
+								"role": "system",
+								"content": "Instructions:\n\"\"\"\nYou plan the next moment of an adventure. You do not write it.\n\nRead what the player just did, the scene so far, and the world state. Decide what should happen next, who in the cast has a reason to speak or act, and what the world is doing while they do it. Difficulty is : at story the world yields, at normal it pushes back fairly, at hard it costs something every time.\n\nReply with JSON and nothing else:\n\n{\n  \"beats\": [\"one short sentence per thing that happens, in order\"],\n  \"speakers\": [{ \"name\": \"a cast member by the name the conversation uses\", \"intent\": \"what they are trying to do\" }],\n  \"worldHints\": { \"location\": \"where this happens\", \"timeOfDay\": \"morning|day|dusk|night\", \"weather\": \"clear|fog|rain|storm|snow\" },\n  \"needsLookup\": false\n}\n\nName only people who are actually in the scene, and name nobody if nobody has a reason to speak. Set needsLookup to true when answering well needs a fact you can see you do not have.\n\"\"\"\n\nAssistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Verity\",\n    \"description\": \"A quiet archivist who remembers everything.\"\n  }\n]\n```\n\nUser Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Wren\",\n    \"description\": \"A traveller who asks too many questions.\"\n  }\n]\n```\n\n\nWorld lore: \n```json\n{\"The Drowned Bell\":\"A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.\"}\n```"
+							},
+							{
+								"role": "assistant",
+								"content": "Verity: The archive is closed, but the door was open. Come in."
+							},
+							{
+								"role": "user",
+								"content": "Wren: I step inside and set my lantern on the table. \"Verity? The bell rang again tonight. What does it mean?\""
+							},
+							{
+								"role": "system",
+								"content": "Response reminder:\n```text\nRemember: JSON only, no prose around it. Plan the moment; do not write it.\n```"
+							},
+							{
+								"role": "assistant",
+								"content": "Verity:"
+							}
+						],
+						"promptFormat": "split_session",
+						"usedVariables": [
+							"systemBlock",
+							"currentDate",
+							"instructions",
+							"characters",
+							"personas",
+							"scenario",
+							"worldLore",
+							"history",
+							"relationshipsPerspectives",
+							"relationshipsKnown",
+							"sessionMessages",
+							"each",
+							"if",
+							"assistantBlock",
+							"this.content",
+							"else",
+							"userBlock",
+							"..",
+							"charInstructions",
+							"exampleDialogue",
+							"name",
+							"message"
+						]
+					},
+					"allocations": [
+						{
+							"source": "worldLore",
+							"id": 1,
+							"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+							"tokens": 25,
+							"name": "The Drowned Bell",
+							"included": true,
+							"why": [
+								"scored 0.437, 25 tokens",
+								"score 0.437",
+								"filled_scored"
+							]
+						}
+					],
+					"budget": {
+						"total": 7296,
+						"used": 25,
+						"remaining": 7271
+					}
+				}
+			},
+			{
+				"nodeKey": "planWrite",
+				"seq": 13,
+				"kind": "provider",
+				"typeId": "core:provider/generate-text@1",
+				"result": "halt",
+				"startedAt": 1789089842469,
+				"endedAt": 1789089842469,
+				"elapsedMs": 0,
+				"resolvedRefs": {
+					"prompts": "planContext"
+				},
+				"notes": [],
+				"input": {
+					"context": {
+						"blocks": [
+							{
+								"source": "worldLore",
+								"id": 1,
+								"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+								"tokens": 25,
+								"name": "The Drowned Bell",
+								"included": true,
+								"why": [
+									"scored 0.437, 25 tokens",
+									"score 0.437",
+									"filled_scored"
+								]
+							}
+						],
+						"totalTokens": 25,
+						"budget": {
+							"total": 7296,
+							"used": 25,
+							"remaining": 7271
+						},
+						"groups": {
+							"messages": {
+								"allocated": 3648,
+								"used": 0,
+								"entries": 0,
+								"cap": 50
+							},
+							"worldLore": {
+								"allocated": 1216,
+								"used": 25,
+								"entries": 1,
+								"cap": 20
+							},
+							"characterLore": {
+								"allocated": 1216,
+								"used": 0,
+								"entries": 0,
+								"cap": 15
+							},
+							"history": {
+								"allocated": 1215,
+								"used": 0,
+								"entries": 0,
+								"cap": 10
+							},
+							"relationships": {
+								"allocated": 0,
+								"used": 0,
+								"entries": 0,
+								"cap": 0
+							}
+						},
+						"messages": [
+							{
+								"role": "system",
+								"content": "Instructions:\n\"\"\"\nYou plan the next moment of an adventure. You do not write it.\n\nRead what the player just did, the scene so far, and the world state. Decide what should happen next, who in the cast has a reason to speak or act, and what the world is doing while they do it. Difficulty is : at story the world yields, at normal it pushes back fairly, at hard it costs something every time.\n\nReply with JSON and nothing else:\n\n{\n  \"beats\": [\"one short sentence per thing that happens, in order\"],\n  \"speakers\": [{ \"name\": \"a cast member by the name the conversation uses\", \"intent\": \"what they are trying to do\" }],\n  \"worldHints\": { \"location\": \"where this happens\", \"timeOfDay\": \"morning|day|dusk|night\", \"weather\": \"clear|fog|rain|storm|snow\" },\n  \"needsLookup\": false\n}\n\nName only people who are actually in the scene, and name nobody if nobody has a reason to speak. Set needsLookup to true when answering well needs a fact you can see you do not have.\n\"\"\"\n\nAssistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Verity\",\n    \"description\": \"A quiet archivist who remembers everything.\"\n  }\n]\n```\n\nUser Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Wren\",\n    \"description\": \"A traveller who asks too many questions.\"\n  }\n]\n```\n\n\nWorld lore: \n```json\n{\"The Drowned Bell\":\"A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.\"}\n```"
+							},
+							{
+								"role": "assistant",
+								"content": "Verity: The archive is closed, but the door was open. Come in."
+							},
+							{
+								"role": "user",
+								"content": "Wren: I step inside and set my lantern on the table. \"Verity? The bell rang again tonight. What does it mean?\""
+							},
+							{
+								"role": "system",
+								"content": "Response reminder:\n```text\nRemember: JSON only, no prose around it. Plan the moment; do not write it.\n```"
+							},
+							{
+								"role": "assistant",
+								"content": "Verity:"
+							}
+						],
+						"promptFormat": "split_session",
+						"usedVariables": [
+							"systemBlock",
+							"currentDate",
+							"instructions",
+							"characters",
+							"personas",
+							"scenario",
+							"worldLore",
+							"history",
+							"relationshipsPerspectives",
+							"relationshipsKnown",
+							"sessionMessages",
+							"each",
+							"if",
+							"assistantBlock",
+							"this.content",
+							"else",
+							"userBlock",
+							"..",
+							"charInstructions",
+							"exampleDialogue",
+							"name",
+							"message"
+						]
+					},
+					"connection": {
+						"id": "1",
+						"kind": "core:shape/text-gen@1",
+						"metadata": {
+							"model": "hf.co/bartowski/MN-12B-Lyra-v4-GGUF:Q4_K_M",
+							"tokenizer": "estimate",
+							"promptFormat": "vicuna",
+							"completionTemplate": {
+								"key": "vicuna",
+								"name": "Vicuna (Default)",
+								"renderMode": "flat",
+								"roles": {
+									"system": {
+										"prefix": "### System:\n",
+										"suffix": "\n"
+									},
+									"user": {
+										"prefix": "### User:\n",
+										"suffix": "\n"
+									},
+									"assistant": {
+										"prefix": "### Assistant:\n",
+										"suffix": "\n"
+									},
+									"model": {
+										"prefix": "### Model:\n",
+										"suffix": "\n"
+									},
+									"tool": {
+										"prefix": "### Tool:\n",
+										"suffix": "\n"
+									},
+									"function": {
+										"prefix": "### Function:\n",
+										"suffix": "\n"
+									}
+								},
+								"fallbackRole": {
+									"prefix": "### User:\n",
+									"suffix": "\n"
+								},
+								"stopStrings": [
+									"</s>",
+									"system:",
+									"System:",
+									"user:",
+									"User:",
+									"assistant:",
+									"Assistant:"
+								],
+								"isSelectable": true
+							},
+							"wireMode": "chat"
+						}
+					},
+					"sampling": {
+						"temperature": 0.7,
+						"responseTokens": 512,
+						"contextTokens": 8192
+					},
+					"params": {},
+					"prompts": {
+						"systemPrompt": "You plan the next moment of an adventure. You do not write it.\n\nRead what the player just did, the scene so far, and the world state. Decide what should happen next, who in the cast has a reason to speak or act, and what the world is doing while they do it. Difficulty is {{difficulty}}: at story the world yields, at normal it pushes back fairly, at hard it costs something every time.\n\nReply with JSON and nothing else:\n\n{\n  \"beats\": [\"one short sentence per thing that happens, in order\"],\n  \"speakers\": [{ \"name\": \"a cast member by the name the conversation uses\", \"intent\": \"what they are trying to do\" }],\n  \"worldHints\": { \"location\": \"where this happens\", \"timeOfDay\": \"morning|day|dusk|night\", \"weather\": \"clear|fog|rain|storm|snow\" },\n  \"needsLookup\": false\n}\n\nName only people who are actually in the scene, and name nobody if nobody has a reason to speak. Set needsLookup to true when answering well needs a fact you can see you do not have.",
+						"postHistoryInstructions": "Remember: JSON only, no prose around it. Plan the moment; do not write it."
+					}
+				},
+				"reason": "preview: stopped before planWrite, nothing sent",
+				"output": {
+					"stops": {
+						"sent": [],
+						"dropped": [
+							{
+								"value": "</s>",
+								"kind": "format"
+							},
+							{
+								"value": "system:",
+								"kind": "format"
+							},
+							{
+								"value": "System:",
+								"kind": "format"
+							},
+							{
+								"value": "user:",
+								"kind": "format"
+							},
+							{
+								"value": "User:",
+								"kind": "format"
+							},
+							{
+								"value": "assistant:",
+								"kind": "format"
+							},
+							{
+								"value": "Assistant:",
+								"kind": "format"
+							},
+							{
+								"value": "Wren:",
+								"kind": "speaker"
+							}
+						],
+						"wire": "chat"
+					}
+				},
+				"tokensPrompt": 467
+			}
+		],
+		"emitted": [],
+		"consumption": {
+			"tokens": 0,
+			"nodeExecutions": 14
+		},
+		"preview": {
+			"atNode": "planWrite",
+			"typeId": "core:provider/generate-text@1",
+			"targetedBy": "first-provider-on-spine",
+			"connection": {
+				"id": "1",
+				"kind": "core:shape/text-gen@1",
+				"tokenizer": "estimate"
+			},
+			"budget": {
+				"available": {
+					"total": 7296,
+					"remaining": 7296,
+					"available": 7296
+				}
+			},
+			"context": {
+				"rendered": {
+					"blocks": [
+						{
+							"source": "worldLore",
+							"id": 1,
+							"content": "A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.",
+							"tokens": 25,
+							"name": "The Drowned Bell",
+							"included": true,
+							"why": [
+								"scored 0.437, 25 tokens",
+								"score 0.437",
+								"filled_scored"
+							]
+						}
+					],
+					"totalTokens": 25,
+					"budget": {
+						"total": 7296,
+						"used": 25,
+						"remaining": 7271
+					},
+					"groups": {
+						"messages": {
+							"allocated": 3648,
+							"used": 0,
+							"entries": 0,
+							"cap": 50
+						},
+						"worldLore": {
+							"allocated": 1216,
+							"used": 25,
+							"entries": 1,
+							"cap": 20
+						},
+						"characterLore": {
+							"allocated": 1216,
+							"used": 0,
+							"entries": 0,
+							"cap": 15
+						},
+						"history": {
+							"allocated": 1215,
+							"used": 0,
+							"entries": 0,
+							"cap": 10
+						},
+						"relationships": {
+							"allocated": 0,
+							"used": 0,
+							"entries": 0,
+							"cap": 0
+						}
+					},
+					"messages": [
+						{
+							"role": "system",
+							"content": "Instructions:\n\"\"\"\nYou plan the next moment of an adventure. You do not write it.\n\nRead what the player just did, the scene so far, and the world state. Decide what should happen next, who in the cast has a reason to speak or act, and what the world is doing while they do it. Difficulty is : at story the world yields, at normal it pushes back fairly, at hard it costs something every time.\n\nReply with JSON and nothing else:\n\n{\n  \"beats\": [\"one short sentence per thing that happens, in order\"],\n  \"speakers\": [{ \"name\": \"a cast member by the name the conversation uses\", \"intent\": \"what they are trying to do\" }],\n  \"worldHints\": { \"location\": \"where this happens\", \"timeOfDay\": \"morning|day|dusk|night\", \"weather\": \"clear|fog|rain|storm|snow\" },\n  \"needsLookup\": false\n}\n\nName only people who are actually in the scene, and name nobody if nobody has a reason to speak. Set needsLookup to true when answering well needs a fact you can see you do not have.\n\"\"\"\n\nAssistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Verity\",\n    \"description\": \"A quiet archivist who remembers everything.\"\n  }\n]\n```\n\nUser Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Wren\",\n    \"description\": \"A traveller who asks too many questions.\"\n  }\n]\n```\n\n\nWorld lore: \n```json\n{\"The Drowned Bell\":\"A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.\"}\n```"
+						},
+						{
+							"role": "assistant",
+							"content": "Verity: The archive is closed, but the door was open. Come in."
+						},
+						{
+							"role": "user",
+							"content": "Wren: I step inside and set my lantern on the table. \"Verity? The bell rang again tonight. What does it mean?\""
+						},
+						{
+							"role": "system",
+							"content": "Response reminder:\n```text\nRemember: JSON only, no prose around it. Plan the moment; do not write it.\n```"
+						},
+						{
+							"role": "assistant",
+							"content": "Verity:"
+						}
+					],
+					"promptFormat": "split_session",
+					"usedVariables": [
+						"systemBlock",
+						"currentDate",
+						"instructions",
+						"characters",
+						"personas",
+						"scenario",
+						"worldLore",
+						"history",
+						"relationshipsPerspectives",
+						"relationshipsKnown",
+						"sessionMessages",
+						"each",
+						"if",
+						"assistantBlock",
+						"this.content",
+						"else",
+						"userBlock",
+						"..",
+						"charInstructions",
+						"exampleDialogue",
+						"name",
+						"message"
+					]
+				},
+				"tokens": 862
+			},
+			"blocks": [
+				{
+					"id": 1,
+					"included": true,
+					"tokens": 25,
+					"why": [
+						"scored 0.437, 25 tokens",
+						"score 0.437",
+						"filled_scored"
+					],
+					"reason": "filled_scored"
+				}
+			],
+			"totals": {
+				"blocks": 1,
+				"included": 1,
+				"dropped": 0,
+				"tokensIncluded": 25,
+				"tokensDropped": 0
+			}
+		},
+		"haltReason": "preview: stopped before planWrite, nothing sent",
+		"haltNodeKey": "planWrite",
+		"reviews": [
+			{
+				"nodeKey": "planWrite",
+				"position": "off",
+				"action": "approve",
+				"originalHash": "1acc961b"
+			}
+		]
+	}
+}

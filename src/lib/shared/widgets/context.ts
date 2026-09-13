@@ -85,6 +85,13 @@ export interface WidgetData {
 	channels: { v1: string[] }
 	messages: { v1: MessageV1[] }
 	props: { v1: Payload }
+	/**
+	 * This instance's effective settings (shared/widgets/settings.ts): every
+	 * field the widget declares, defaults filled in, with the user's deviations
+	 * over them. Complete by construction, so a widget reads a value rather than
+	 * re-deriving its own defaults. Empty for a widget that declares none.
+	 */
+	settings: { v1: Payload }
 	// scoped — present iff declared + granted
 	persona?: { v1: unknown }
 	characters?: { v1: unknown[] }
@@ -170,6 +177,8 @@ export interface ProjectInput {
 	channels: string[]
 	messages: SurfaceMessage[]
 	props?: Payload
+	/** The widget's effective settings; defaulted+overridden by the host. */
+	settings?: Payload
 	placement: PlacementInput
 	/** The effective granted scopes (declared − admin-denied). Default none. */
 	grants?: WidgetScope[]
@@ -399,7 +408,8 @@ export function projectWidgetData(input: ProjectInput): WidgetData {
 		},
 		channels: { v1: [...input.channels] },
 		messages: { v1: scopeMessages(input.messages, input.channels) },
-		props: { v1: { ...(input.props ?? {}) } }
+		props: { v1: { ...(input.props ?? {}) } },
+		settings: { v1: { ...(input.settings ?? {}) } }
 	}
 
 	// Scoped sections — present iff granted AND source data supplied.

@@ -12,12 +12,62 @@ import type { TextGenResult } from "$lib/server/adapters/actions"
 import axios from "axios"
 import { Readable } from "stream"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-import { llamaCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
+import {
+	isReasoningKey,
+	llamaCppSamplingKeyMap,
+	reasoningBudgetFor,
+	reasoningOf
+} from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { JSON_OBJECT_GBNF } from "./jsonGrammar"
 import { jsonSchemaToGbnf } from "./jsonSchemaToGbnf"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import { LLM_IDLE_TIMEOUT_MS } from "./idleTimeout"
+
+/**
+ * What llama.cpp says about the prompt, and how much of it the KV cache held.
+ *
+ * This is the one server here that reports the reused PREFIX directly, though
+ * not under a field of that name: `tokens_evaluated` is the whole prompt and
+ * `timings.prompt_n` is the part of it this request actually pushed through the
+ * model, so the difference is what the cache already had.
+ *
+ * ⚠ **Not `tokens_cached`.** That field is the slot's cache size AFTER the
+ * request — prompt and generated tokens together — so reading it as the reused
+ * prefix would report a number LARGER than the prompt on any second turn, which
+ * is a nonsense a reader has no way to spot.
+ *
+ * The OAI-compatible route answers in the other envelope entirely, with a
+ * `usage` block that names `prompt_tokens` and nothing about reuse; that arm is
+ * the second parameter's job and reports the total alone.
+ */
+function cacheUsageFrom(body: unknown): {
+	tokensPrompt?: number
+	tokensCached?: number
+	tokensCompletion?: number
+} {
+	const b: any = body
+	if (!b || typeof b !== "object") return {}
+	const num = (v: unknown) =>
+		typeof v === "number" && Number.isFinite(v) ? v : undefined
+	// `prompt_tokens` is the OAI-compat envelope's name for the same total.
+	const prompt = num(b.tokens_evaluated) ?? num(b.prompt_tokens)
+	const processed = num(b.timings?.prompt_n)
+	// Absent, never zero, when the server said nothing about what it processed
+	// — "did not report" and "reused nothing" are opposite findings.
+	const cached =
+		prompt !== undefined && processed !== undefined
+			? Math.max(0, prompt - processed)
+			: undefined
+	// `completion_tokens` is the OAI-compat envelope's name for what the native
+	// route calls `tokens_predicted`.
+	const completion = num(b.tokens_predicted) ?? num(b.completion_tokens)
+	return {
+		...(prompt !== undefined ? { tokensPrompt: prompt } : {}),
+		...(cached !== undefined ? { tokensCached: cached } : {}),
+		...(completion !== undefined ? { tokensCompletion: completion } : {})
+	}
+}
 
 // GET /health
 export type HealthResponse =
@@ -289,14 +339,64 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 		// llama.cpp has no field for.
 		for (const [key, value] of Object.entries(this.sampling)) {
 			if (llamaCppSamplingKeyMap[key]) {
+				// Both reasoning keys land on `reasoning_budget`, so neither
+				// can be copied: the level has to become a token count first,
+				// and a budget beside it has to win. See `reasoningParams`.
+				if (isReasoningKey(key)) continue
 				result[llamaCppSamplingKeyMap[key]] = value
 			}
 		}
 		return result
 	}
 
+	/**
+	 * llama-server's two reasoning fields, or nothing at all.
+	 *
+	 * Nothing at all when the sampler is switched off, which is what keeps a
+	 * request byte-identical to the one this adapter has always sent.
+	 *
+	 * Two fields because llama-server splits the question the way its own flags
+	 * do: `reasoning_budget` is a token count (`0` disables reasoning outright,
+	 * which is the `--reasoning-budget 0` flag as a per-request value), and
+	 * `chat_template_kwargs.enable_thinking` is the Jinja variable a model's
+	 * own chat template reads. Sending only one leaves a template that asks the
+	 * other question doing the opposite of what was chosen.
+	 *
+	 * The level becomes a number through the shared table unless the config set
+	 * `reasoningBudget` outright — a number somebody typed is a choice, and the
+	 * table is only the translation of a word.
+	 */
+	private reasoningParams(useSession: boolean): Record<string, unknown> {
+		const { level, budget } = reasoningOf(this.sampling)
+		if (!level) return {}
+		// ⚠ CHAT WIRE ONLY, and the reason is already written down two hundred
+		// lines below: `--reasoning-format` and `chat_template_kwargs` are
+		// `/v1/chat/completions` features, and `/completion` runs no chat
+		// template at all. Sending them on the native route is the same silent
+		// no-op KoboldCPP's top-level `enable_thinking` turned out to be — a
+		// control that stores a value nothing reads. A model's `<think>` tags
+		// still arrive inline in `content` there, which the shared parser
+		// handles; what cannot be done on that route is CHOOSING.
+		if (!useSession) {
+			this.noteIgnoredSampler("reasoning")
+			if (budget !== undefined) this.noteIgnoredSampler("reasoningBudget")
+			return {}
+		}
+		if (level === "off")
+			return {
+				reasoning_budget: 0,
+				chat_template_kwargs: { enable_thinking: false }
+			}
+		return {
+			reasoning_budget: reasoningBudgetFor(level, budget),
+			chat_template_kwargs: { enable_thinking: true }
+		}
+	}
+
 	async generateText(): Promise<TextGenResult> {
-		const stream = this.connection.extraJson?.stream || false
+		const stream = this.streamingOn(
+			this.connection.extraJson?.stream || false
+		)
 		/**
 		 * Which of llama-server's two endpoints this request goes to.
 		 *
@@ -376,6 +476,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 				// should win over a list composed for them.
 				...(stop.length ? { stop } : {}),
 				...this.mapSamplingConfig(),
+				...this.reasoningParams(true),
 				// The OpenAI-compatible mechanism rather than `grammar`, because
 				// this is the OpenAI-compatible route: llama-server implements
 				// `response_format` with both `json_object` and `json_schema`
@@ -417,6 +518,8 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 				stream,
 				stop,
 				...this.mapSamplingConfig(),
+				// Records what this route cannot carry; sends nothing.
+				...this.reasoningParams(false),
 				// `grammar` has been declared on CompletionRequest since this
 				// adapter was written and was never populated. llama.cpp applies it
 				// at the decoder, so non-JSON becomes unrepresentable rather than
@@ -433,6 +536,10 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 					: {})
 			} satisfies CompletionRequest
 		}
+
+		// The record the inspector reads instead of a proxy: the request as this
+		// adapter rendered it, filled in below as the response is read.
+		const wire = this.beginExchange({ url: endpoint, body: req })
 
 		if (stream) {
 			return {
@@ -498,7 +605,9 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 								)
 								break
 							}
-							buffer += chunk.toString()
+							const text = chunk.toString()
+							wire.frame(text)
+							buffer += text
 							let lines = buffer.split(/\r?\n/)
 							buffer = lines.pop() || ""
 							for (const line of lines) {
@@ -598,6 +707,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 					}
 				)
 				const result = response.data
+				wire.received(result, response.status)
 				// The chat route answers in OpenAI's envelope and carries the
 				// reasoning in its own field; the native route answers flat and
 				// carries it inline in `content`, which is the whole of the
@@ -625,7 +735,11 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 					completionResult: content,
 					compiledPrompt,
 					isAborted: this.isAborting,
-					...(thinkingContent ? { thinkingContent } : {})
+					...(thinkingContent ? { thinkingContent } : {}),
+					// Recorded, never acted on: see `TextGenResult.tokensCached`.
+					...cacheUsageFrom(
+						useSession ? (result as any)?.usage : result
+					)
 				}
 			} catch (e: any) {
 				// Only a genuine cancellation should report isAborted: true —
@@ -710,8 +824,7 @@ const exports: AdapterExports = {
 	Adapter: LlamaCppAdapter,
 	testConnection,
 	listModels,
-	connectionDefaults:
-		CONNECTION_DEFAULTS[CONNECTION_TYPE.LLAMACPP],
+	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.LLAMACPP],
 	samplingKeyMap: llamaCppSamplingKeyMap
 }
 

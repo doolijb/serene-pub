@@ -7,6 +7,12 @@
 	import PersonaUnsavedChangesModal from "../modals/PersonaUnsavedChangesModal.svelte"
 	import Avatar from "../Avatar.svelte"
 	import FileDropzone from "../FileDropzone.svelte"
+	import AvatarCropEditor from "../media/AvatarCropEditor.svelte"
+	import {
+		avatarFrameCommit,
+		type PendingAvatarFrame
+	} from "../media/avatarFrameCommit"
+	import type { MediaFrame } from "$lib/shared/media/frame"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { stableStringify } from "$lib/shared/utils/connectionDefaults"
 
@@ -184,6 +190,31 @@
 		}
 	}
 
+	/**
+	 * The crop editor's answer, held until the save comes back with a media id
+	 * to attach it to — the avatar is uploaded with the persona, so the file
+	 * does not exist before then. Null means "upload it as it is".
+	 */
+	let pendingFrame = $state<PendingAvatarFrame | null>(null)
+	let cropOpen = $state(false)
+	/** What the editor is measuring: an object URL for a chosen file, or the
+	 *  stored original. Object URLs are revoked when they are replaced. */
+	let cropSrc = $state("")
+	let cropObjectUrl: string | null = null
+	/** Null while cropping a file that has not been uploaded; the stored frame
+	 *  when adjusting an avatar that already exists. */
+	let cropFrame = $state<MediaFrame | null>(null)
+	/** The stored avatar's address and crop, for adjusting one that exists. */
+	let storedAvatar = $state<{
+		mediaId: number | null
+		media: Sockets.AvatarMedia | null
+	}>({ mediaId: null, media: null })
+
+	function releaseCropUrl() {
+		if (cropObjectUrl) URL.revokeObjectURL(cropObjectUrl)
+		cropObjectUrl = null
+	}
+
 	function handleAvatarChange(details: FileAcceptDetails) {
 		const file = details.files?.[0]
 		if (!file) return
@@ -195,6 +226,48 @@
 		previewReader.readAsDataURL(file)
 		// Store file for later upload
 		editPersonaData._avatarFile = file
+
+		// The editor measures the file itself, so the frame is in the pixels
+		// the server will store.
+		releaseCropUrl()
+		cropObjectUrl = URL.createObjectURL(file)
+		cropSrc = cropObjectUrl
+		cropFrame = null
+		pendingFrame = null
+		cropOpen = true
+	}
+
+	/** Re-crop an avatar that already exists: the file has an id, so the frame
+	 *  is sent now rather than held for the save. */
+	function adjustCrop() {
+		const media = storedAvatar.media
+		if (!media) return
+		releaseCropUrl()
+		cropSrc = `/media/${media.uuid}?v=original&r=${media.rev}`
+		cropFrame = media.frame ?? null
+		cropOpen = true
+	}
+
+	function onCropSaved(frame: MediaFrame | null) {
+		if (editPersonaData._avatarFile) {
+			pendingFrame = { frame }
+			// Held so reopening the editor before the save shows the crop that
+			// was just chosen rather than starting over at the default.
+			cropFrame = frame
+			return
+		}
+		const mediaId = storedAvatar.mediaId
+		if (!mediaId) return
+		socket.emit("media:setFrame", { mediaId, frame })
+		if (storedAvatar.media) storedAvatar.media.frame = frame
+		toaster.success({ title: "Crop updated" })
+	}
+
+	/** The crop the save just earned the right to store. */
+	function commitPendingFrame(avatarMediaId: number | null | undefined) {
+		const commit = avatarFrameCommit(pendingFrame, avatarMediaId)
+		pendingFrame = null
+		if (commit) socket.emit("media:setFrame", commit)
 	}
 
 	function onSave() {
@@ -307,8 +380,13 @@
 
 	// Define socket event handlers as named functions for proper cleanup
 	const handlePersonasCreate = (res: Sockets.Personas.Create.Response) => {
+		// personas:create is emitToUser, so another tab's create arrives here
+		// too. Only the form that is mid-save may attach its pending crop —
+		// otherwise this persona's crop would land on that one's avatar.
+		const mine = isSaving
 		isSaving = false
 		if (res.persona) {
+			if (mine) commitPendingFrame(res.persona.avatarMediaId)
 			validationErrors = {} // Clear any validation errors on success
 			toaster.success({
 				title: "Persona Created",
@@ -326,6 +404,7 @@
 		if (res.persona?.id !== personaId) return
 		isSaving = false
 		if (res.persona) {
+			commitPendingFrame(res.persona.avatarMediaId)
 			validationErrors = {} // Clear any validation errors on success
 			toaster.success({
 				title: "Persona Updated",
@@ -378,6 +457,10 @@
 				_avatar: "",
 				_avatarFile: undefined
 			}
+			storedAvatar = {
+				mediaId: p.avatarMediaId ?? null,
+				media: p.avatarMedia ?? null
+			}
 			originalPersonaData = $state.snapshot(editPersonaData)
 		}
 	}
@@ -417,6 +500,7 @@
 		// Remove keyboard event listener and clear timeout
 		document.removeEventListener("keydown", handleKeydown)
 		clearTimeout(validationTimeout)
+		releaseCropUrl()
 	})
 </script>
 
@@ -489,18 +573,40 @@
 						onFileAccept={handleAvatarChange}
 					/>
 				</div>
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-error mt-1"
-					onclick={() => {
-						editPersonaData._avatarFile = undefined
-						editPersonaData._avatar = ""
-					}}
-					disabled={!editPersonaData._avatarFile}
-					aria-label="Clear selected avatar image"
-				>
-					Clear Selection
-				</button>
+				<div class="mt-1 flex flex-wrap gap-2">
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-error"
+						onclick={() => {
+							editPersonaData._avatarFile = undefined
+							editPersonaData._avatar = ""
+							pendingFrame = null
+							releaseCropUrl()
+							// The editor is mounted whether or not it is open,
+							// so a revoked url left here is one it would try to
+							// load.
+							cropSrc = ""
+						}}
+						disabled={!editPersonaData._avatarFile}
+						aria-label="Clear selected avatar image"
+					>
+						Clear Selection
+					</button>
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal"
+						onclick={() =>
+							editPersonaData._avatarFile
+								? (cropOpen = true)
+								: adjustCrop()}
+						disabled={!editPersonaData._avatarFile &&
+							!storedAvatar.media}
+						aria-label="Adjust the avatar crop"
+					>
+						<Icons.Crop size={16} aria-hidden="true" />
+						Adjust crop
+					</button>
+				</div>
 			</div>
 		</fieldset>
 		<fieldset class="flex flex-col gap-1">
@@ -777,6 +883,18 @@
 	onOpenChange={handleCancelModalOnOpenChange}
 	onConfirm={handleCancelModalDiscard}
 	onCancel={handleCancelModalCancel}
+/>
+
+<!-- Mounted whether or not it is open: a dialog torn down mid-close leaves its
+     machine reading state that went with it. The source outlives the close
+     here, so it is `open` alone that opens and closes the editor. -->
+<AvatarCropEditor
+	open={cropOpen}
+	onOpenChange={(e) => (cropOpen = e.open)}
+	src={cropSrc}
+	frame={cropFrame}
+	subject={`${editPersonaData.name || "this"}'s avatar`}
+	onSave={onCropSaved}
 />
 
 <style>

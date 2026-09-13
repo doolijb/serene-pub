@@ -1,0 +1,87 @@
+-- The narrative graph becomes a retrieval mechanism (ruling 2026-09-10, Q1).
+--
+-- Relationships were the one thing a prompt is built from that no part of the
+-- retrieval surface reached. Lore is shared, ranked and allocated — a band, a
+-- share of the window, a score, and a line on the receipt for every entry that
+-- did or did not make it. The graph was a *dump*: `relationships-perspectives@1`
+-- and `relationships-known@1` hand three keyed sections to the template in
+-- whatever order the database returned the rows, outside the budget, with a
+-- ceiling as the only control and nothing anywhere saying which ties reached the
+-- model or why.
+--
+-- `core:query/relationship-search@1` reads the same three layers as candidates in
+-- the `relationships` band — the band `rank-hybrid`'s share control, entry cap
+-- and signal weights have all carried since they were written and nothing has
+-- ever put anything into — ordered scene presence → the speaker → recency.
+--
+-- ⚠ **One traversal, two projections.** The new query does not walk the graph a
+-- second way: `collectGraphLayers` in `graphContextFormatter.ts` is the single
+-- reading, and `buildGraphContextData` (the three sections) and
+-- `buildGraphRelationshipRows` (the flat rows) are both projections of it. A
+-- second walk would be two readings that agree until somebody edits one, which
+-- is what `host.ts` refuses a second derivation for in as many words.
+--
+-- ── There is ONE statement, and the absences are the ruling ────────────────
+--
+-- **No `pipeline_type_registry` delete.** `core:query/relationship-search@1` is a
+-- NEW type id that has never been published, so `syncTypeRegistry` inserts it
+-- and has nothing to conflict with. The two existing relationship types are
+-- untouched — the new query reuses their `relationshipSlots` declaration rather than
+-- widening either — and `boot/registryHashes.test.ts` records that: one new
+-- entry, zero moved hashes.
+--
+-- **No `pipeline_config_values` sweep.** 0110, 0111 and 0115 each ended with
+-- one because each moved a declared PARAMETER, and `reconcileConfigs` back-fills
+-- an author default once and never revisits an address that still exists. The
+-- new query declares no parameter that has ever been declared under this node key,
+-- so there is no stored copy of anything to clear. Its `maxEntries` carries no
+-- default — uncapped, exactly as on its two siblings — so `reconcileConfigs`
+-- writes no row for it either.
+--
+-- **Only `respond`.** The two narrate documents are not listed and must not be:
+-- graph context needs a speaker's perspective and a narrator has none, which is
+-- the reason `build-narrator-context@1` was split off in the first place and the
+-- reason the narrate specs have never wired the two relationship reads.
+--
+-- ── The published document ─────────────────────────────────────────────────
+--
+-- ⚠ **The half a fresh test database cannot see.** `respond`'s `gather` block
+-- gains a `relationships` branch and `loreLinked` concatenates its candidates.
+-- That is an edit to a published document under an unchanged version: the 0.6
+-- pre-release froze spec versions at a hard 1 until 0.7.0, so `1.20.0` stays.
+-- Seeding matches on (slug, semver) and, on a match, updates only the display
+-- name (`bootstrap.ts`: "spec publishing is idempotent by version"). The rewired
+-- document would therefore reach NO database that has already seeded — every
+-- developer machine and every upgrading install — and would be invisible on a
+-- fresh test database, where the row does not exist and the edit publishes
+-- normally. Deleting the version row is what makes boot republish it.
+--
+-- Precedent and terms: 0095, 0100, 0102, 0106, 0110, 0111 and 0113. Safe only
+-- while the 0.6 line is in preview and nothing outside this repo has pinned this
+-- version. `pipeline_nodes`, `pipeline_edges`, `pipeline_blocks`,
+-- `pipeline_includes`, `pipeline_event_subscriptions` and `pipeline_presets` all
+-- cascade from `pipeline_spec_versions`, so the old document goes cleanly. What
+-- is LOST with it, stated rather than discovered: the author presets shipped
+-- with this version, and any per-subscription `enabled` flag somebody had turned
+-- off. `pipeline_configs` hangs off `pipeline_specs` rather than off a version,
+-- so tuned configurations survive, and `reconcileConfigs` re-runs against the
+-- republished version on the same boot.
+-- `pipeline_specs.active_version_id` is not a foreign key; it dangles for
+-- exactly as long as it takes boot to republish and move the pointer, in the
+-- same startup that runs this file.
+--
+-- ⚠ **No prompt moves, and it is a default rather than a dead edge that makes
+-- that true.** `rank-hybrid`'s `share.relationships` is 0, which `select` reads
+-- as "leave this source out" — so every candidate it produces is excluded
+-- with `excluded_group_disabled`, spends no tokens, and renders nowhere. What
+-- fills in is the RECEIPT: the graph now appears in the retrieval explanation
+-- with a rank reason per tie, which it never has. An install that wants the
+-- graph to compete for the window drags that band, and the receipt already says
+-- which control it is.
+DELETE FROM "pipeline_spec_versions"
+WHERE "id" IN (
+	SELECT "v"."id"
+	FROM "pipeline_spec_versions" "v"
+	JOIN "pipeline_specs" "s" ON "s"."id" = "v"."spec_id"
+	WHERE "s"."slug" = 'core:spec/respond' AND "v"."semver" = '1.20.0'
+);

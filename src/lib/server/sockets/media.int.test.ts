@@ -331,6 +331,36 @@ describe("rev as the cache token", () => {
 		expect(after.uuid).toBe(row.uuid)
 	})
 
+	/**
+	 * A bump keeps the media id, so nothing about an avatar's identity changes
+	 * and no character or persona row is written. An open session is therefore
+	 * holding a correct `avatarMediaId` and stale pixels, and only a different
+	 * URL string dislodges them — which is what this event carries.
+	 */
+	test("a bump announces the new token so open views can re-address it", async () => {
+		const { mediaRegenerateThumbnail } = await import("./media")
+		const row = await makeImage(11, "announce.png")
+
+		const { emitted, emit } = captureEmits()
+		await mediaRegenerateThumbnail.handler(
+			fakeSocket(ownerId),
+			{ mediaId: row.id },
+			emit
+		)
+
+		const after = (await fileRow(row.id))!
+		const changed = emitted.filter((e) => e.event === "media:changed")
+		expect(changed).toHaveLength(1)
+		expect(changed[0].data).toEqual({
+			id: row.id,
+			uuid: after.uuid,
+			rev: after.rev,
+			// The crop travels with the revision: re-framing is one of the
+			// reasons the bytes behind a URL change.
+			frame: null
+		})
+	})
+
 	test("the list serves uuid URLs carrying rev, never row ids", async () => {
 		const { mediaList } = await import("./media")
 		const { emit } = captureEmits()

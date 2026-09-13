@@ -56,6 +56,23 @@ async function pending(limit: number) {
 }
 
 /**
+ * The longest edge a thumbnail of this file COULD have: the frame's, or the
+ * short side of the image when there is no frame, because an unframed thumbnail
+ * is the largest square (`$lib/shared/media/frame`).
+ *
+ * ⚠ It has to be the CUT's size, not the image's. Comparing against the image
+ * would call every non-square thumbnail under the target stale, re-cut it to
+ * the identical bytes and bump `rev` — on every sweep, forever.
+ */
+const AVAILABLE_EDGE = sql`COALESCE(
+	GREATEST(
+		(${schema.files.frame} ->> 'w')::int,
+		(${schema.files.frame} ->> 'h')::int
+	),
+	LEAST(${schema.files.width}, ${schema.files.height})
+)`
+
+/**
  * Thumbnails smaller than the current target whose source still has pixels to
  * give — i.e. generated under an older, smaller `THUMB_MAX_EDGE`.
  *
@@ -63,9 +80,6 @@ async function pending(limit: number) {
  * every existing character keeps a soft card image forever. Rows with unknown
  * dimensions are skipped rather than guessed at: a NULL width means the decode
  * failed, and re-running it every sweep would be a pointless loop.
- *
- * The source's dimensions are on the FILE row since 0182, so the parent alias
- * this used to self-join through is gone.
  */
 async function stale(limit: number) {
 	return db
@@ -80,9 +94,9 @@ async function stale(limit: number) {
 				isNotNull(schema.files.width),
 				isNotNull(schema.files.height),
 				sql`GREATEST(${schema.variants.width}, ${schema.variants.height}) < ${THUMB_MAX_EDGE}`,
-				// Only when the source is actually bigger than the thumb — a
-				// small image is already at its own maximum.
-				sql`GREATEST(${schema.files.width}, ${schema.files.height})
+				// Only when the cut is actually bigger than the thumb — a small
+				// image is already at its own maximum.
+				sql`${AVAILABLE_EDGE}
 					> GREATEST(${schema.variants.width}, ${schema.variants.height})`
 			)
 		)

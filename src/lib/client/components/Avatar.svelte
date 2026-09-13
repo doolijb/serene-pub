@@ -44,6 +44,11 @@
 			.join(" ")
 	)
 
+	// `object-top` matches the thumbnail rule (`$lib/shared/media/frame`): both
+	// keep the top of a portrait, so an image that still renders whole — a local
+	// preview, a URL that is not ours — is cropped the same way as one the
+	// server already cut.
+
 	// Determine if this is a character or persona
 	// Characters have specific fields that personas don't have like 'personality', 'scenario', 'firstMessage'
 	// Personas have 'isDefault' field that characters don't have
@@ -63,7 +68,7 @@
 				? char.nickname
 				: char.name!
 			: "Unknown"}
-		class="object-cover"
+		class="object-cover object-top"
 	/>
 	<!-- Fallback glyph scales with the avatar. It was a fixed size={36},
 	     which overflowed any avatar smaller than ~40px. -->

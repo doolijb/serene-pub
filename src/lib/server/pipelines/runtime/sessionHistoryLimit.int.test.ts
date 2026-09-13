@@ -29,7 +29,11 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { and, eq } from "drizzle-orm"
-import type { TestDb } from "$lib/server/utils/testDb"
+import {
+	clearConfigValue,
+	setConfigValue,
+	type TestDb
+} from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { run } from "@serene-pub/sdk"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
@@ -175,24 +179,36 @@ const selectedConfigId = async (slug: string, specId: number) => {
 	return selected!.configId
 }
 
+/**
+ * The address this file tunes, on whichever spec is asking.
+ *
+ * The narrator's history node is keyed `history` and the reply's
+ * `gather.history.read`, which is half of what these tests are for.
+ */
+const limitAt = (slug: string) => ({
+	nodeKey: HISTORY_NODE[slug as keyof typeof HISTORY_NODE],
+	slot: "params",
+	path: "limit"
+})
+
+/**
+ * ⚠ An upsert, not the `UPDATE` this used to be. A config stores **deviations**
+ * (ruled 2026-09-10), so at an address nobody has tuned there is no row to
+ * update: the old `UPDATE` matched nothing, the run went on resolving the
+ * declared 100, and the failure read as "the wiring regressed" rather than "the
+ * fixture stored nothing".
+ */
 const setLimit = async (slug: string, specId: number, value: number) =>
-	await db
-		.update(schema.pipelineConfigValues)
-		.set({ value })
-		.where(
-			and(
-				eq(
-					schema.pipelineConfigValues.configId,
-					await selectedConfigId(slug, specId)
-				),
-				eq(
-					schema.pipelineConfigValues.nodeKey,
-					HISTORY_NODE[slug as keyof typeof HISTORY_NODE]
-				),
-				eq(schema.pipelineConfigValues.slot, "params"),
-				eq(schema.pipelineConfigValues.path, "limit")
-			)
-		)
+	await setConfigValue(
+		db,
+		await selectedConfigId(slug, specId),
+		limitAt(slug),
+		value
+	)
+
+/** And the restore is a delete — back to inheriting, not pinned to today's number. */
+const resetLimit = async (slug: string, specId: number) =>
+	await clearConfigValue(db, await selectedConfigId(slug, specId), limitAt(slug))
 
 describe("the session history window reaches the query", () => {
 	// A liveness check, not the wiring guard — say so, because a shipped value
@@ -222,7 +238,7 @@ describe("the session history window reaches the query", () => {
 				MESSAGE_COUNT
 			)
 		} finally {
-			await setLimit(RESPOND_SPEC_ID, respondSpecRow.id, 100)
+			await resetLimit(RESPOND_SPEC_ID, respondSpecRow.id)
 		}
 	}, 60_000)
 
@@ -237,7 +253,7 @@ describe("the session history window reaches the query", () => {
 				NARROWED
 			)
 		} finally {
-			await setLimit(NARRATE_SPEC_ID, narrateSpecRow.id, 100)
+			await resetLimit(NARRATE_SPEC_ID, narrateSpecRow.id)
 		}
 	}, 60_000)
 })

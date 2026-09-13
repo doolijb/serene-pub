@@ -38,7 +38,7 @@ Two optional free-text fields, always visible on the full Persona Form (not hidd
 
 ### Avatar and Image Gallery
 
-An avatar image can be uploaded via a drag-and-drop dropzone (JPG, PNG, or GIF) directly in the persona form. The gallery of additional images is separate from the form, though — once a persona exists, open its **View** panel and switch to the **Gallery** tab to upload more images, click a thumbnail to open it in a lightbox, use its **⋮** menu to **Set as avatar** or **Delete** it, or drag thumbnails to reorder them. The currently active avatar is highlighted in the gallery grid.
+An avatar image can be uploaded via a drag-and-drop dropzone (JPG, PNG, or GIF) directly in the persona form. Choosing one opens the crop editor first, and an avatar you already have can be re-cropped with the **Adjust crop** button beside it; see [Cropping an Avatar](./characters.md#cropping-an-avatar), which works the same way for personas. The gallery of additional images is separate from the form, though — once a persona exists, open its **View** panel and switch to the **Gallery** tab to upload more images, click a thumbnail to open it in a lightbox, use its **⋮** menu to **Set as avatar** or **Delete** it, or drag thumbnails to reorder them. The currently active avatar is highlighted in the gallery grid.
 
 ### Default Persona Flag
 

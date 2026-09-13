@@ -72,11 +72,16 @@ function makeSession(): any {
 	}
 }
 
-function makeAdapter(connectionOverrides: Record<string, any> = {}) {
+function makeAdapter(
+	connectionOverrides: Record<string, any> = {},
+	// Already RESOLVED, the way an adapter receives it: a key being present is
+	// the switch being on.
+	sampling: Record<string, unknown> = {}
+) {
 	return new exportsDefault.Adapter({
 		connection: makeConnection(connectionOverrides),
 		// Empty is what "the context budget is switched off" resolves to now:
-		sampling: {},
+		sampling,
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "Test system prompt." } as any,
 		session: makeSession(),
@@ -188,7 +193,7 @@ describe("OllamaAdapter — generation writes nothing to the server log", () => 
 			})
 			const adapter = makeAdapter({
 				wireMode: "chat",
-				extraJson: { stream: false, think: true }
+				extraJson: { stream: false }
 			})
 			mockCompilePrompt(adapter)
 
@@ -213,7 +218,7 @@ describe("OllamaAdapter — generation writes nothing to the server log", () => 
 			)
 			const adapter = makeAdapter({
 				wireMode: "chat",
-				extraJson: { stream: true, think: true }
+				extraJson: { stream: true }
 			})
 			mockCompilePrompt(adapter)
 
@@ -334,5 +339,473 @@ describe("OllamaAdapter — raw mode and keep_alive on the wire", () => {
 			extraJson: { stream: false, keepAlive: "60s" }
 		})
 		expect(req.keep_alive).toBe("60s")
+	})
+})
+
+/**
+ * Native tool calling (20 §9). Ollama's tools ride `ollama.chat()` and nothing
+ * else — `ollama.generate()` takes a flat prompt and has no field for them, so
+ * a completion-wire request carrying tools is a wiring mistake `dispatch.ts`
+ * refuses rather than a request this adapter sends stripped.
+ */
+describe("OllamaAdapter — tools on the wire", () => {
+	const TOOLS = [
+		{
+			name: "grep_transcript",
+			description: "Find where a phrase was said.",
+			parameters: {
+				type: "object",
+				properties: { text: { type: "string" } }
+			}
+		}
+	]
+
+	/**
+	 * ⚠ `mockReset`, not `mockClear`.
+	 *
+	 * `requestFor` above queues a response on BOTH `chatMock` and
+	 * `generateMock` and consumes one, so the other stays queued — and
+	 * `mockClear` empties the call list while leaving that queue alone. A test
+	 * that only cleared would be handed an earlier test's leftover reply and
+	 * would be asserting about a response it never wrote.
+	 */
+	const primeChat = (response: unknown) => {
+		chatMock.mockReset()
+		chatMock.mockResolvedValue(response)
+	}
+
+	const chatAdapter = () => {
+		const adapter = makeAdapter({ wireMode: "chat" })
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [{ role: "user", content: "who leads them?" }],
+			meta: {} as any
+		} as any)
+		return adapter
+	}
+
+	test("sends the declarations on the chat request", async () => {
+		primeChat({ message: { content: "ok" } })
+		const adapter = chatAdapter()
+		adapter.withTools(TOOLS)
+		await adapter.generateText()
+
+		const req = chatMock.mock.calls[0]![0]
+		expect(req.tools).toEqual([
+			{
+				type: "function",
+				function: {
+					name: "grep_transcript",
+					description: "Find where a phrase was said.",
+					parameters: TOOLS[0]!.parameters
+				}
+			}
+		])
+	})
+
+	test("a request with no tools carries no tools key", async () => {
+		// Present-but-empty renders a tool preamble into the model's own
+		// template, which every non-tool pipeline would then pay for.
+		primeChat({ message: { content: "ok" } })
+		await chatAdapter().generateText()
+		expect("tools" in chatMock.mock.calls[0]![0]).toBe(false)
+	})
+
+	test("reads the returned call off message.tool_calls", async () => {
+		primeChat({
+			message: {
+				content: "Looking.",
+				tool_calls: [
+					{
+						function: {
+							name: "grep_transcript",
+							// Already an object on this SDK, unlike OpenAI's
+							// JSON string — the normalizer takes either.
+							arguments: { text: "ashguard" }
+						}
+					}
+				]
+			}
+		})
+		const adapter = chatAdapter()
+		adapter.withTools(TOOLS)
+		const result = await adapter.generateText()
+
+		expect(result.toolCall).toEqual({
+			tool: "grep_transcript",
+			args: { text: "ashguard" }
+		})
+		expect(result.completionResult).toBe("Looking.")
+	})
+
+	test("no call is null — the loop's predicate reads it", async () => {
+		chatMock.mockClear()
+		chatMock.mockResolvedValueOnce({
+			message: { content: "Captain Vell." }
+		})
+		const adapter = chatAdapter()
+		adapter.withTools(TOOLS)
+		expect((await adapter.generateText()).toolCall).toBeNull()
+	})
+})
+
+test("completion wire cannot carry tools, and says so rather than dropping them", () => {
+	// `ollama.generate()` has no tools field. Answering `true` here would let
+	// the dispatch's check pass and the declarations vanish one branch later.
+	const chat = makeAdapter({ wireMode: "chat" })
+	const completion = makeAdapter({ wireMode: "completion" })
+	expect(chat.consumesTools).toBe(true)
+	expect(completion.consumesTools).toBe(false)
+})
+
+/**
+ * The same call, off a STREAMING request (20 §9).
+ *
+ * A connection with `extraJson.stream` never reached the read above, so it
+ * surfaced no call, the loop's predicate never fired, and every tool loop ran to
+ * its ceiling. This SDK does not fragment its arguments the way OpenAI's does —
+ * they arrive as an object, in one part — but they arrive on a delta all the
+ * same, and the accumulated result must be the shape the non-streaming branch
+ * produces rather than a second spelling of it.
+ */
+describe("OllamaAdapter — tool calls off the stream", () => {
+	const TOOLS = [
+		{
+			name: "grep_transcript",
+			description: "Find where a phrase was said.",
+			parameters: {
+				type: "object",
+				properties: { text: { type: "string" } }
+			}
+		}
+	]
+
+	/** ⚠ `mockReset`, not `mockClear` — see `primeChat` above for why. */
+	const primeChatStream = (parts: any[]) => {
+		chatMock.mockReset()
+		chatMock.mockResolvedValue(
+			(async function* () {
+				for (const part of parts) yield part
+			})()
+		)
+	}
+
+	const streamingAdapter = () => {
+		const adapter = makeAdapter({
+			wireMode: "chat",
+			extraJson: { stream: true }
+		})
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [{ role: "user", content: "who leads them?" }],
+			meta: {} as any
+		} as any)
+		adapter.withTools(TOOLS)
+		return adapter
+	}
+
+	const drain = async (result: any) => {
+		let content = ""
+		await result.completionResult((chunk: string) => {
+			content += chunk
+		})
+		return content
+	}
+
+	test("reads the call off a message delta, keeping the prose that streamed with it", async () => {
+		primeChatStream([
+			{ message: { content: "Looking." } },
+			{
+				message: {
+					content: "",
+					tool_calls: [
+						{
+							function: {
+								name: "grep_transcript",
+								arguments: { text: "ashguard" }
+							}
+						}
+					]
+				}
+			},
+			{ message: { content: "" }, done: true }
+		])
+		const adapter = streamingAdapter()
+		const result = await adapter.generateText()
+		expect(await drain(result)).toBe("Looking.")
+		expect(adapter.streamedToolCall).toEqual({
+			tool: "grep_transcript",
+			args: { text: "ashguard" }
+		})
+	})
+
+	test("a stream that called nothing leaves it null, not undefined", async () => {
+		primeChatStream([{ message: { content: "Captain Vell." } }])
+		const adapter = streamingAdapter()
+		await drain(await adapter.generateText())
+		expect(adapter.streamedToolCall).toBeNull()
+	})
+})
+
+/**
+ * The prompt cache, recorded (ruled "later, non-disruptive").
+ *
+ * Ollama reports `prompt_eval_count` and NOTHING about reuse — it re-evaluates
+ * only what its own KV cache missed and never says how much that was. So the
+ * prompt total is recorded and the cached count stays absent, which is a
+ * different answer from zero and the only honest one available here.
+ */
+describe("OllamaAdapter — prompt cache accounting", () => {
+	const primeChat = (response: unknown) => {
+		chatMock.mockReset()
+		chatMock.mockResolvedValue(response)
+	}
+
+	const primed = () => {
+		const adapter = makeAdapter({ wireMode: "chat" })
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [{ role: "user", content: "hello" }],
+			meta: {} as any
+		} as any)
+		return adapter
+	}
+
+	test("records prompt_eval_count as the prompt total and claims nothing about reuse", async () => {
+		primeChat({ message: { content: "hi" }, prompt_eval_count: 512 })
+		const result = await primed().generateText()
+		expect(result.tokensPrompt).toBe(512)
+		expect(result.tokensCached).toBeUndefined()
+	})
+})
+
+/**
+ * The exchange, recorded for the run inspector.
+ *
+ * The receipt carries the assembled prompt and the stop record; what it cannot
+ * otherwise carry is what this adapter rendered that into and what came back
+ * before anything was parsed out of it. Both halves are asserted here because
+ * either alone leaves the reader reaching for a proxy.
+ */
+describe("OllamaAdapter — the exchange it records", () => {
+	const primed = (overrides: Record<string, any> = {}) => {
+		const adapter = makeAdapter({ wireMode: "chat", ...overrides })
+		adapter.withStops(
+			composeStops({
+				template: promptFormatOf("vicuna"),
+				characters: [],
+				personas: [],
+				currentCharacterId: null,
+				explicit: ["<<END>>"],
+				wire: "chat"
+			})
+		)
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [{ role: "user", content: "who leads them?" }],
+			meta: {} as any
+		} as any)
+		return adapter
+	}
+
+	test("a chat generation records the request it sent and the reply it read", async () => {
+		chatMock.mockReset()
+		chatMock.mockResolvedValue({ message: { content: "Captain Vell." } })
+		const adapter = primed()
+		await adapter.generateText()
+		const wire = adapter.lastExchange
+		expect(wire, "the adapter recorded no exchange").toBeTruthy()
+		expect(wire.request.url).toBe("http://localhost:11434/api/chat")
+		expect(wire.request.method).toBe("POST")
+		expect(wire.request.body.messages).toEqual([
+			{ role: "user", content: "who leads them?" }
+		])
+		expect(wire.request.body.options.stop).toEqual(["<<END>>"])
+		expect(wire.response.raw).toContain("Captain Vell.")
+		expect(wire.response.streamed).toBe(false)
+		expect(wire.response.truncated).toBeUndefined()
+	})
+
+	test("a streamed generation records every frame, in order", async () => {
+		chatMock.mockReset()
+		chatMock.mockResolvedValue(
+			(async function* () {
+				yield { message: { content: "Captain " } }
+				yield { message: { content: "Vell." } }
+			})()
+		)
+		const adapter = primed({ extraJson: { stream: true } })
+		const result = await adapter.generateText()
+		await result.completionResult(() => {})
+		const wire = adapter.lastExchange
+		expect(wire.response.streamed).toBe(true)
+		expect(wire.response.chunks).toBe(2)
+		expect(wire.response.raw).toContain("Captain ")
+		expect(wire.response.raw).toContain("Vell.")
+	})
+
+	test("a reply past the cap is kept to 64 KB and says so", async () => {
+		const { WIRE_RAW_LIMIT } = await import("./BaseConnectionAdapter")
+		chatMock.mockReset()
+		chatMock.mockResolvedValue({
+			message: { content: "y".repeat(70 * 1024) }
+		})
+		const adapter = primed()
+		await adapter.generateText()
+		expect(adapter.lastExchange.response.raw.length).toBe(WIRE_RAW_LIMIT)
+		expect(adapter.lastExchange.response.truncated).toBe(true)
+	})
+
+	test("a key on the connection reaches no part of the record", async () => {
+		chatMock.mockReset()
+		chatMock.mockResolvedValue({ message: { content: "hi" } })
+		const adapter = primed({
+			extraJson: { stream: false, apiKey: "sk-do-not-keep" }
+		})
+		await adapter.generateText()
+		expect(JSON.stringify(adapter.lastExchange)).not.toContain(
+			"sk-do-not-keep"
+		)
+	})
+})
+
+/**
+ * The node's `streaming` parameter, at the one line that reads it.
+ *
+ * `auto` must resolve to the CONNECTION's answer and nothing else: this
+ * adapter's default is `|| false`, and a parameter that widened an unset flag
+ * to true would change what every untouched Ollama connection sends. `off` is
+ * the only value that overrides, and what it overrides is the flag, not the
+ * shape of the reply — a non-streaming result is still a whole answer.
+ *
+ * Read off `completionResult`, because that is the fact the dispatch branches
+ * on: a function is a stream to drain, a string is an answer already in hand.
+ */
+describe("OllamaAdapter — the node's streaming parameter", () => {
+	const sendWith = async (stream: boolean, mode?: "auto" | "off") => {
+		chatMock.mockReset()
+		chatMock.mockResolvedValue({ message: { content: "ok" } })
+		const adapter = makeAdapter({
+			wireMode: "chat",
+			extraJson: { stream }
+		})
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [{ role: "user", content: "who leads them?" }],
+			meta: {} as any
+		} as any)
+		if (mode) adapter.withStreaming(mode)
+		const result = await adapter.generateText()
+		return typeof result.completionResult === "function"
+			? "streamed"
+			: "one request"
+	}
+
+	test("auto answers whatever the connection says, both ways", async () => {
+		expect(await sendWith(true, "auto")).toBe("streamed")
+		expect(await sendWith(false, "auto")).toBe("one request")
+	})
+
+	test("a node that hands nothing over is the same as auto", async () => {
+		expect(await sendWith(true)).toBe("streamed")
+		expect(await sendWith(false)).toBe("one request")
+	})
+
+	test("off sends one request even on a streaming connection", async () => {
+		expect(await sendWith(true, "off")).toBe("one request")
+	})
+})
+
+/**
+ * Reasoning, as a SAMPLING parameter (ruling 2026-09-12).
+ *
+ * `think` is the one field, and it takes a boolean on every model but the
+ * gpt-oss family, which takes the level word itself. What a level could not
+ * carry is recorded rather than lost, which is the half no request body can
+ * show: an absent field and a field that was never asked for look identical.
+ */
+describe("OllamaAdapter — reasoning on the wire", () => {
+	async function requestFor(
+		sampling: Record<string, unknown>,
+		connectionOverrides: Record<string, any> = {}
+	) {
+		chatMock.mockClear()
+		chatMock.mockResolvedValueOnce({ message: { content: "ok" } })
+		const adapter = makeAdapter(
+			{ wireMode: "chat", ...connectionOverrides },
+			sampling
+		)
+		adapter.withCompiledPrompt({
+			prompt: "hi",
+			messages: [{ role: "user", content: "hi" }],
+			meta: {} as any
+		} as any)
+		await adapter.generateText()
+		return { req: chatMock.mock.calls[0][0], adapter }
+	}
+
+	test("a config that never enabled it sends no `think` key at all", async () => {
+		// Not `think: false`. The field is a real instruction to a thinking
+		// model, so a config that did not ask has to leave the request silent
+		// on it. `extraJson.think`, which used to answer here, is read by
+		// nothing since the ruling of 2026-09-12.
+		const off = await requestFor({}, { extraJson: { stream: false } })
+		expect(off.req).not.toHaveProperty("think")
+		expect(off.adapter.ignoredSamplers).toEqual([])
+
+		const stale = await requestFor(
+			{},
+			{ extraJson: { stream: false, think: true } }
+		)
+		expect(stale.req).not.toHaveProperty("think")
+	})
+
+	test("off is asked for explicitly, and is the only way to get it", async () => {
+		const { req } = await requestFor(
+			{ reasoning: "off" },
+			{ extraJson: { stream: false, think: true } }
+		)
+		expect(req.think).toBe(false)
+	})
+
+	test("a level is a word on gpt-oss and a boolean everywhere else", async () => {
+		const oss = await requestFor(
+			{ reasoning: "high" },
+			{
+				model: "gpt-oss:20b"
+			}
+		)
+		expect(oss.req.think).toBe("high")
+		expect(oss.adapter.ignoredSamplers).toEqual([])
+
+		// A level sent to anything else is a 400, so it becomes plain "on" and
+		// the lost precision is recorded.
+		const llama = await requestFor(
+			{ reasoning: "low" },
+			{
+				model: "llama3"
+			}
+		)
+		expect(llama.req.think).toBe(true)
+		expect(llama.adapter.ignoredSamplers).toContain("reasoning")
+	})
+
+	test("a budget has no field here at all, and says so", async () => {
+		const { req, adapter } = await requestFor(
+			{ reasoning: "medium", reasoningBudget: 4096 },
+			{ model: "gpt-oss:20b" }
+		)
+		expect(req.think).toBe("medium")
+		expect(req).not.toHaveProperty("reasoning_budget")
+		expect(adapter.ignoredSamplers).toContain("reasoningBudget")
+	})
+
+	test("the sampler never reaches `options` — `think` is top-level", async () => {
+		const { req } = await requestFor({
+			reasoning: "off",
+			temperature: 0.4
+		})
+		expect(req.options).not.toHaveProperty("think")
+		expect(req.options.temperature).toBe(0.4)
 	})
 })

@@ -27,18 +27,6 @@ export type BindingWithRelations = SelectLorebookBinding & {
 	persona?: { name: string } | null
 }
 
-/** The eight orderings the two lore toolbars offer, in their order. */
-export const ENTRY_SORT_OPTIONS = [
-	{ value: "position-asc", label: "Position ↑" },
-	{ value: "position-desc", label: "Position ↓" },
-	{ value: "priority-desc", label: "Priority ↑" },
-	{ value: "priority-asc", label: "Priority ↓" },
-	{ value: "created-desc", label: "Date Created ↑" },
-	{ value: "created-asc", label: "Date Created ↓" },
-	{ value: "updated-desc", label: "Date Updated ↑" },
-	{ value: "updated-asc", label: "Date Updated ↓" }
-]
-
 type SortableEntry = {
 	constant?: boolean | null
 	priority?: number | null

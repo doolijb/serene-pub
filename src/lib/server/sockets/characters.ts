@@ -131,6 +131,9 @@ export const charactersList: Handler<
 				embeddingModel: true
 			},
 			with: {
+				avatarMedia: {
+					columns: { uuid: true, rev: true, frame: true }
+				},
 				characterTags: {
 					with: {
 						tag: true
@@ -166,6 +169,9 @@ export const charactersGet: Handler<
 				vectorizedAt: false
 			},
 			with: {
+				avatarMedia: {
+					columns: { uuid: true, rev: true, frame: true }
+				},
 				characterTags: {
 					with: {
 						tag: true
@@ -205,6 +211,32 @@ export const charactersGet: Handler<
 		emitToUser("characters:get", res)
 		return res
 	}
+}
+
+/**
+ * The character as a broadcast has to carry it: re-read AFTER every write the
+ * handler made, with the avatar file's address joined on.
+ *
+ * `.returning()` answers with the row its own statement wrote, and an avatar
+ * upload sets `avatarMediaId` in a separate statement afterwards — so a payload
+ * built from the returned row names the avatar the character wore before the
+ * save, and every open session applies that faithfully and keeps rendering the
+ * old face.
+ *
+ * `fallback` covers the row vanishing between the write and this read; the
+ * caller has already established it exists.
+ */
+async function characterForBroadcast(
+	id: number,
+	fallback: SelectCharacter
+): Promise<Sockets.Characters.Update.Response["character"]> {
+	const row = await db.query.characters.findFirst({
+		where: (c, { eq }) => eq(c.id, id),
+		with: {
+			avatarMedia: { columns: { uuid: true, rev: true, frame: true } }
+		}
+	})
+	return row ?? fallback
 }
 
 export const charactersCreate: Handler<
@@ -253,7 +285,9 @@ export const charactersCreate: Handler<
 			)
 			await charactersList.handler(socket, {}, emitToUser)
 
-			const res: Sockets.Characters.Create.Response = { character }
+			const res: Sockets.Characters.Create.Response = {
+				character: await characterForBroadcast(character.id, character)
+			}
 			emitToUser("characters:create", res)
 			return res
 		} catch (e: any) {
@@ -299,6 +333,10 @@ export const charactersUpdate: Handler<
 			// a user silently break their own import-dedup identity.
 			delete (data as any).lorebookId
 			delete (data as any).uuid
+			// A joined relation, not a column — the payload carries it so a
+			// client can build the avatar's real URL, and it has nowhere to go
+			// in an UPDATE.
+			delete (data as any).avatarMedia
 
 			const [updated] = await db
 				.update(schema.characters)
@@ -338,7 +376,7 @@ export const charactersUpdate: Handler<
 
 			autoEnqueueCharacter(id, updated.name).catch(console.error)
 			const res: Sockets.Characters.Update.Response = {
-				character: updated
+				character: await characterForBroadcast(id, updated)
 			}
 			await charactersList.handler(socket, {}, emitToUser)
 			emitToUser("characters:update", res)
@@ -1307,10 +1345,19 @@ export const charactersSetAvatar: Handler<
 			)
 			.returning()
 
+		const broadcast = await characterForBroadcast(
+			params.characterId,
+			updated
+		)
 		const res: Sockets.Characters.SetAvatar.Response = {
-			character: updated
+			character: broadcast
 		}
 		emitToUser("characters:setAvatar", res)
+		// The session views listen for `characters:update`, not for this
+		// event — and picking a gallery image changes the face they render.
+		emitToUser("characters:update", {
+			character: broadcast
+		} satisfies Sockets.Characters.Update.Response)
 		await charactersGet.handler(
 			socket,
 			{ id: params.characterId },

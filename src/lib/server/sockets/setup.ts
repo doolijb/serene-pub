@@ -4,9 +4,11 @@ import { eq } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 
 interface SetupData {
-	summarizationStepComplete: boolean
 	ragStepComplete: boolean
 }
+
+/** The wizard steps whose completion is the server's to remember. */
+type SetupStep = "rag"
 
 async function getOrCreate(userId: number): Promise<SetupData> {
 	const existing = await db.query.setup.findFirst({
@@ -27,7 +29,6 @@ export const setupGet: Handler<Record<string, never>, { setup: SetupData }> = {
 		const row = await getOrCreate(userId)
 		const res = {
 			setup: {
-				summarizationStepComplete: row.summarizationStepComplete,
 				ragStepComplete: row.ragStepComplete
 			}
 		}
@@ -37,22 +38,18 @@ export const setupGet: Handler<Record<string, never>, { setup: SetupData }> = {
 }
 
 export const setupMarkComplete: Handler<
-	{ step: "summarization" | "rag" },
+	{ step: SetupStep },
 	{ setup: SetupData }
 > = {
 	event: "setup:markComplete",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		// Anything other than the literal "summarization" fell into the else
-		// branch and silently set ragStepComplete instead — letting a client
-		// flip that flag without ever completing the rag step.
-		if (params.step !== "summarization" && params.step !== "rag") {
+		// An unrecognised step is refused, never taken for the one step there
+		// is: a forged value must not flip a flag whose step was never run.
+		if (params.step !== "rag") {
 			throw new Error("Invalid setup step.")
 		}
-		const updates =
-			params.step === "summarization"
-				? { summarizationStepComplete: true }
-				: { ragStepComplete: true }
+		const updates = { ragStepComplete: true }
 
 		await db
 			.insert(schema.setup)
@@ -65,7 +62,6 @@ export const setupMarkComplete: Handler<
 		const row = await getOrCreate(userId)
 		const res = {
 			setup: {
-				summarizationStepComplete: row.summarizationStepComplete,
 				ragStepComplete: row.ragStepComplete
 			}
 		}

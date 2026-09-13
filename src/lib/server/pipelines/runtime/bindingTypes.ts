@@ -19,82 +19,44 @@
  *    them. Nothing here re-declares one; `CoreQueryCtx` below narrows a single
  *    member of `QueryCtx` and inherits the rest, and the reason is written at
  *    it.
- *  - **`input`** is derived from `@serene-pub/contracts` — the node's own
- *    declared `ports.in`, read off the pinned descriptor's type, widened by the
- *    fixed slot vocabulary `CoreSlot` (see the note there for why the slots
- *    cannot be derived per node). There is no `InputOf` in the SDK or in
- *    contracts to import — a shape id is an opaque string, so no port *value*
- *    type can be derived — so `PortsIn` below is the one generic helper this
- *    app adds. It derives port **names**, which is the half that matters: a
- *    read of a name the contract does not declare is a type error, and every
- *    value stays `any`, so nothing about what a binding does with a port it
- *    legitimately has changes.
+ *  - **`input`** is **derived from the contract** — `InputOf` in the SDK
+ *    (`sdk/src/nodeInput.ts`), off the node's own `ports.in`, its declared slot
+ *    names, and its `params` slot's schema. This file adds nothing to that
+ *    derivation any more; it aliases it under the two words this file's call
+ *    sites already read by, and keeps the two categories countable.
+ *
+ * ## ⚠ What changed, and what it retired (ruling 2026-09-10)
+ *
+ * This file used to *build* the input type: a `PortsIn<P>` helper deriving port
+ * names, plus a hand-written `CoreSlot` union standing in for slots, and every
+ * value `any`. Two things were lost to that, and both are back:
+ *
+ *  1. **Parameters were never checked at all.** A `params` slot's schema keys
+ *     had nowhere to come from, because `describeQueryType` erased its slots
+ *     into `Record<string, SlotDecl>` — so `input.params.anything` was an `any`
+ *     lookup, which is exactly how `topK` and `limit` came to be read at a
+ *     spelling nothing supplies. The SDK's `describe*` now captures its slots
+ *     argument, so the schema survives into the type.
+ *  2. **Slots were a fixed vocabulary, not the node's own.** `CoreSlot` listed
+ *     eight words every node accepted; `input.template` on a node with no
+ *     template slot compiled and yielded `undefined`. Slot names are now
+ *     per-node.
+ *
+ * Parameter *values* are typed too — `params.limit` is a `number` because the
+ * declaration says `'integer'` — which is new. Port values stay `any`, and
+ * that is not laziness: `ports.in` maps a port to a `ShapeId`, a string id in a
+ * runtime registry with no TS payload behind it, so there is nothing to derive
+ * a value type from (see `shapes.ts`).
  */
 
 import type {
 	ConsumerCtx,
+	InputOf,
 	ProviderCtx,
 	QueryCtx,
+	SharedInput as ContractIntersection,
 	TaskCtx
 } from "@serene-pub/sdk"
-
-// ── The descriptor's declared surface ───────────────────────────────────────
-
-/** The descriptor behind a pinned contract — `typeof C.worldLore` → its type. */
-type DescriptorOf<P> = P extends { descriptor: infer D } ? D : never
-
-/**
- * A map's literal keys, or `never` when it widened to an index signature.
- *
- * The guard is load-bearing rather than defensive. `describeQueryType` infers
- * its port maps, and a type that declares no `in` at all infers the open
- * `PortDecl` — `{[port: string]: ShapeId}` — whose `keyof` is `string`. Without
- * this, such a node's input would accept *every* name and the whole exercise
- * would silently opt out on exactly the types that declare least.
- */
-type ClosedKeys<T> =
-	string extends Extract<keyof T, string> ? never : Extract<keyof T, string>
-
-/**
- * The in-port names a contract declares, as a union of literals.
- *
- * Names only. `ports.in` maps a port to a `ShapeId`, which is a string id in a
- * runtime registry with no TS payload attached, so there is nothing to derive a
- * value type *from* — see `shapes.ts`. Ports therefore carry `any`, and this
- * helper's entire job is that `input.topK` on a node whose ports are
- * `{vectors, scope}` does not compile.
- */
-export type PortsIn<P> =
-	DescriptorOf<P> extends { ports: { in?: infer I } }
-		? ClosedKeys<NonNullable<I>>
-		: never
-
-/**
- * The slot names a binding may read off its input.
- *
- * ⚠ A fixed vocabulary rather than a per-node derivation, and the attempt is
- * worth recording so nobody spends the afternoon again. `describeProvider` does
- * keep its slot literals — the `const S` that makes `ctx.can()` narrow — but it
- * returns them as an *intersection* with the base `Descriptor`, whose own
- * `slots` is the open `Record<string, SlotDecl>`; inferring or indexing through
- * that intersection yields `string` for `keyof` either way, so the literals are
- * unreachable from here. Every other `describe*` widens outright.
- *
- * A closed list still catches the whole population that matters: a slot name is
- * a fixed word in the executor's `resolveSlot`, so `input.promptConfig` and
- * `input.narratorName` — two dead reads this file was carrying — fail against
- * it. What is lost is only per-node precision: reading `input.template` on a
- * node that declares no template slot compiles, and yields `undefined`.
- */
-type CoreSlot =
-	| "params"
-	| "connection"
-	| "sampling"
-	| "prompts"
-	| "variables"
-	| "template"
-	| "scripts"
-	| "castScripts"
 
 // ── Keys the contract does not declare ──────────────────────────────────────
 //
@@ -133,15 +95,18 @@ type CoreSlot =
  * and `messages` on `core:task/assemble@2`, the two relationship reads and the
  * two side-character speaker fields on `core:task/build-template-context@1`, and
  * `loreType` on the three summarize Providers. Each one is now a real in-port,
- * so each read is typed by `PortsIn` and no longer needs naming here.
+ * so each read is typed by the contract and no longer needs naming here.
  *
  * The alias is kept rather than deleted. It is the word the next such finding is
  * written under, and an empty population is a *result* — it says every key a
  * handler is really given is now something the contract declares — where a
  * missing alias would only say nobody had looked. `grep -c 'Supplied<'` reading
  * zero is the fact; the day it reads one, that one is a finding.
+ *
+ * @typeParam Why A sentence naming what supplies the key. Required for the same
+ * reason `Unsupplied`'s is — see there.
  */
-export type Supplied<K extends string> = K
+export type Supplied<K extends string, Why extends string> = K
 
 /**
  * A key **nothing supplies today** — a fallback branch that cannot fire.
@@ -152,19 +117,81 @@ export type Supplied<K extends string> = K
  * still carry the key. Removing the read would change what that install
  * retrieves, silently, in a lane whose whole contract is that behaviour does not
  * move. Reported instead, with the site named.
+ *
+ * @typeParam Why Why this exemption exists, written at the site.
+ *
+ * ⚠ **Required, and that is the point of the second parameter.** An exemption
+ * with no stated reason is indistinguishable from one nobody re-examined, and
+ * this list is meant to shrink: the sentence is what a later reader needs to
+ * decide whether the key can now go. The parameter is phantom — the type is
+ * still just `K` — so it costs a run nothing and cannot be forgotten.
  */
-export type Unsupplied<K extends string> = K
+export type Unsupplied<K extends string, Why extends string> = K
 
 /**
- * A binding's `input`: the node's declared in-ports and slots, plus whatever
- * undeclared keys the handler has been shown to legitimately receive.
+ * A **parameter** name the contract's `params` schema does not declare.
  *
- * Every value is `any` on purpose — see `PortsIn`. This type constrains the set
- * of **names**, which is where both known defects lived.
+ * The same category as `Unsupplied` one level down, and it needs its own word
+ * because the derivation now reaches that far: `input.params` is typed from the
+ * declared schema, so a read of a name the schema does not carry is a type
+ * error rather than an `any` lookup. That is the half the two shipped defects
+ * lived in, so the exemption for it is deliberately narrow and deliberately
+ * countable:
+ *
+ *     grep -c 'UnsuppliedParam<' bindings.ts
+ *
+ * @typeParam Why Required, for `Unsupplied`'s reason — see there.
  */
-export type NodeInput<P, Extra extends string = never> = Partial<
-	Record<PortsIn<P> | CoreSlot | Extra, any>
->
+export type UnsuppliedParam<K extends string, Why extends string> = K
+
+/**
+ * A binding's `input`: whatever its contract declares, plus whatever undeclared
+ * keys the handler has been shown to legitimately receive.
+ *
+ * `InputOf` does the work — see the file header. `Extra` and `ExtraParams` are
+ * the escape hatches, and every use of either is spelled `Unsupplied<…>`,
+ * `UnsuppliedParam<…>` or `Supplied<…>` so the populations stay countable by
+ * `grep`.
+ */
+export type NodeInput<
+	P,
+	Extra extends string = never,
+	ExtraParams extends string = never
+> = InputOf<P> &
+	Partial<Record<Extra, any>> &
+	([ExtraParams] extends [never]
+		? unknown
+		: { params?: Partial<Record<ExtraParams, any>> })
+
+/**
+ * One handler, several node types.
+ *
+ * Its input is the **intersection** of what those contracts supply: it may read
+ * only what *every* one of them declares. That is what makes binding one
+ * function to three type ids sound — whichever the run resolved, every name the
+ * handler touches is declared by it — and it is the compile-time half of the
+ * rule `structuralCompat` enforces at run time for a plugin binding to somebody
+ * else's type.
+ *
+ * ```ts
+ * // the three lore lanes are one scan filtered three ways
+ * function loreFor(
+ *   source: string,
+ *   input: SharedInput<[typeof C.worldLore, typeof C.characterLore, typeof C.historyEntries]>,
+ *   ctx: CoreQueryCtx
+ * ) { … }
+ * ```
+ *
+ * ⚠ Not `NodeInput<typeof C.worldLore>` with the other two assumed to match.
+ * That is what the three lore lanes and the three summarize Providers were
+ * doing, and it is only ever right by coincidence: the day one lane declares a
+ * port the others do not, the handler reads `undefined` on two of them with
+ * nothing failing anywhere.
+ */
+export type SharedInput<
+	Ps extends readonly unknown[],
+	Extra extends string = never
+> = ContractIntersection<Ps> & Partial<Record<Extra, any>>
 
 // ── The per-kind contexts ───────────────────────────────────────────────────
 
@@ -184,12 +211,16 @@ export type HostTable =
 	| "lorebook_entries"
 	| "session_cast"
 	| "graph_scenes"
+	| "session_state"
 	| "graph_context"
+	| "graph_relationships"
+	| "graph_entry_links"
 	| "embedding_status"
 	| "vector_search"
 	| "entity_annotations"
 	| "mention_spans"
 	| "entity_link"
+	| "available_tools"
 
 /**
  * A Query's context: the SDK's `QueryCtx` with one member narrowed.

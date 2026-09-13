@@ -25,6 +25,13 @@
 		anchor?: GsAnchor
 		/** Tab-group membership: cards sharing a group id render as one tab set. */
 		group?: string
+		/**
+		 * Docked in a side column (ruled 2026-09-10). ABSENT MEANS PINNED — the
+		 * only value ever written is the explicit `false`, so an arrangement
+		 * saved before the field existed reads as everything pinned, which is
+		 * exactly what it used to do. See `itemPinned` / `withPins`.
+		 */
+		pinned?: boolean
 	}
 	export interface GsPos {
 		id: string
@@ -34,6 +41,8 @@
 		h: number
 		anchor?: GsAnchor
 		group?: string
+		/** See `GsItem.pinned`: absent means pinned, `false` is the only write. */
+		pinned?: boolean
 	}
 	/** A zone's captured arrangement: its cell grid dims + the items' cells. */
 	export interface GsLayout {
@@ -138,7 +147,10 @@
 	// members (deterministic — no Date.now/random), and colored by a hue hash so
 	// grouped cards are identifiable at a glance.
 	let selected = new SvelteSet<string>()
-	let gridMeta: Map<string, { anchor: GsAnchor; group?: string }> | null = null
+	let gridMeta: Map<
+		string,
+		{ anchor: GsAnchor; group?: string; pinned?: boolean }
+	> | null = null
 	let gridEmit: (() => void) | null = null
 	let selectionHasGroup = $derived(
 		[...selected].some((id) => !!gridMeta?.get(id)?.group)
@@ -279,7 +291,8 @@
 	function cardHtml(
 		it: GsItem,
 		a: GsAnchor = it.anchor ?? {},
-		group = it.group
+		group = it.group,
+		groupPinned = it.pinned
 	): string {
 		const rm = it.locked
 			? ""
@@ -298,7 +311,13 @@
 		// The group id is stamped as a data-attr (not just the hue) so a card
 		// dragged into another zone can recover its group there (see `dropped`).
 		const gdata = group ? ` data-group="${esc(group)}"` : ""
-		return `<div class="gsc ${anchorClasses(a)}${gcls}"${gstyle}${gdata}><span class="gsc-title">${esc(it.title)}</span><span class="gsc-ctrls">${ctrls}${rm}</span></div>`
+		// The GROUP's pin (ruled 2026-09-10) — not the zone's, which is the
+		// button in `ctrls`. It is toggled on the Move tab's rail preview, never
+		// here, so it is stamped only so a card dragged into another zone can
+		// recover it there (see `dropped`). Absent means pinned, so the only
+		// value worth carrying is the explicit `false`.
+		const pdata = groupPinned === false ? ` data-pinned="false"` : ""
+		return `<div class="gsc ${anchorClasses(a)}${gcls}"${gstyle}${gdata}${pdata}><span class="gsc-title">${esc(it.title)}</span><span class="gsc-ctrls">${ctrls}${rm}</span></div>`
 	}
 
 	// Whole cells that fit a measured length (partials culled, not drawn).
@@ -408,10 +427,16 @@
 		// zone is a faithful restore and has nothing of its own to report.
 		const restoring = frameCovers(init, seedFrame)
 		// Editor-only per-widget metadata gridstack doesn't model (anchored edges,
-		// tab-group membership). Tracked here keyed by id, mutated by the anchor
-		// toggles / grouping, and reported back through `emit` so the captured
-		// arrangement carries it.
-		const meta = new Map<string, { anchor: GsAnchor; group?: string }>()
+		// tab-group membership, the group's pin). Tracked here keyed by id,
+		// mutated by the anchor toggles / grouping, and reported back through
+		// `emit` so the captured arrangement carries it. The PIN is never edited
+		// here — it is the Move tab's rail preview's, written straight into the
+		// working arrangement — but it has to be carried, or the next emit this
+		// zone makes would drop it.
+		const meta = new Map<
+			string,
+			{ anchor: GsAnchor; group?: string; pinned?: boolean }
+		>()
 		const anyAnchor = (a: GsAnchor) =>
 			!!(a.top || a.right || a.bottom || a.left)
 		grid!.batchUpdate()
@@ -421,7 +446,11 @@
 		const placed = new Map(seeded.map((p) => [p.id, p]))
 		init.forEach((it) => {
 			const p = placed.get(it.id)!
-			meta.set(it.id, { anchor: { ...(it.anchor ?? {}) }, group: it.group })
+			meta.set(it.id, {
+				anchor: { ...(it.anchor ?? {}) },
+				group: it.group,
+				pinned: it.pinned
+			})
 			// NB: not gridstack-`locked` — a required widget (chat) is still fully
 			// draggable/resizable; `locked` in GsItem only hides its remove button.
 			grid!.addWidget({
@@ -430,7 +459,7 @@
 				y: p.y,
 				w: p.w,
 				h: p.h,
-				content: cardHtml(it, meta.get(it.id)!.anchor, it.group)
+				content: cardHtml(it, meta.get(it.id)!.anchor, it.group, it.pinned)
 			})
 		})
 		grid!.batchUpdate(false)
@@ -482,7 +511,8 @@
 						w: n.w ?? 1,
 						h: n.h ?? 1,
 						...(m && anyAnchor(m.anchor) ? { anchor: m.anchor } : {}),
-						...(m?.group ? { group: m.group } : {})
+						...(m?.group ? { group: m.group } : {}),
+						...(m?.pinned === false ? { pinned: false } : {})
 					}
 				})
 			}
@@ -530,7 +560,8 @@
 				if (gsc?.classList.contains(`anch-${e}`)) anchor[e] = true
 			meta.set(String(node.id), {
 				anchor,
-				group: gsc?.dataset.group || undefined
+				group: gsc?.dataset.group || undefined,
+				pinned: gsc?.dataset.pinned === "false" ? false : undefined
 			})
 			emit()
 		}) as any)

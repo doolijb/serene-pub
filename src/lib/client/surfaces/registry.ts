@@ -12,6 +12,9 @@ import type { Component } from "svelte"
 import ScenePortraitsPanel from "$lib/client/components/surfaces/panels/ScenePortraitsPanel.svelte"
 import MapPanel from "$lib/client/components/surfaces/panels/MapPanel.svelte"
 import NotesPanel from "$lib/client/components/surfaces/panels/NotesPanel.svelte"
+import StatsPanel from "$lib/client/components/surfaces/panels/StatsPanel.svelte"
+import InventoryPanel from "$lib/client/components/surfaces/panels/InventoryPanel.svelte"
+import WorldStatePanel from "$lib/client/components/surfaces/panels/WorldStatePanel.svelte"
 
 /** Props every native panel component receives. */
 export interface NativePanelProps {
@@ -22,11 +25,13 @@ export interface NativePanelProps {
 	channels: string[]
 }
 
-export const NATIVE_SURFACES: Record<
-	string,
-	Component<NativePanelProps>
-> = {
+export const NATIVE_SURFACES: Record<string, Component<NativePanelProps>> = {
 	"scene-portraits": ScenePortraitsPanel as Component<NativePanelProps>,
+	// The three session surfaces over stats, states and possessions
+	// (docs/stats-and-states.md). Each reads the one resolved session state.
+	stats: StatsPanel as Component<NativePanelProps>,
+	inventory: InventoryPanel as Component<NativePanelProps>,
+	"world-state": WorldStatePanel as Component<NativePanelProps>,
 	// Temporary test artifacts (plan 21) — demonstrate the framework end to end.
 	"sample-map": MapPanel as Component<NativePanelProps>,
 	"sample-notes": NotesPanel as Component<NativePanelProps>

@@ -28,8 +28,14 @@ export interface ConnectionServiceItem {
 	presetSlug?: string
 	difficulty: string
 	description: string
-	/** Model modality — drives the picker's Text/Image button-group filter. */
-	modality: "text-gen" | "image-gen"
+	/**
+	 * Model modality — drives the picker's modality button-group filter.
+	 *
+	 * An OPEN string, like `connections.modality` and `CONNECTION_TYPE.options`
+	 * are: the group is built from `CONNECTION_SECTIONS`, so a new modality is
+	 * one entry there and nothing here.
+	 */
+	modality: string
 }
 
 /**
@@ -127,10 +133,10 @@ export function buildConnectionServiceItems(): ConnectionServiceItem[] {
 	return items
 }
 
-/** Keep only the items for one modality — the picker's Text/Image toggle. */
+/** Keep only the items for one modality — the picker's section toggle. */
 export function filterConnectionServiceItemsByModality(
 	items: ConnectionServiceItem[],
-	modality: "text-gen" | "image-gen"
+	modality: string
 ): ConnectionServiceItem[] {
 	return items.filter((i) => i.modality === modality)
 }

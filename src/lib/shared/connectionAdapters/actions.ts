@@ -75,6 +75,7 @@ export type ActionName =
 	| "generateImage"
 	| "editImage"
 	| "embedText"
+	| "extractEntities"
 	| "transcribeAudio"
 	| "synthesizeSpeech"
 
@@ -109,6 +110,8 @@ export const ACTION_TRANSFORM = {
 	editImage: "text+image->image",
 	/** Turn text into vectors. Batched in, batched out — every backend batches. */
 	embedText: "text->embedding",
+	/** Read the names out of a passage: one span per mention, with its label. */
+	extractEntities: "text->entities",
 	/** Speech in, text out. */
 	transcribeAudio: "audio->text",
 	/** Text in, speech out. */
@@ -182,6 +185,7 @@ export const ACTION_FEATURES = {
 	generateImage: [],
 	editImage: [],
 	embedText: [],
+	extractEntities: [],
 	transcribeAudio: [],
 	synthesizeSpeech: []
 } as const satisfies Record<ActionName, readonly FeatureId[]>

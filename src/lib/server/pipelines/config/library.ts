@@ -46,6 +46,7 @@ import {
 	CORE_TEMPLATE_ENGINE,
 	knownEngines
 } from "$lib/server/pipelines/prompt/renderers"
+import { acceptedEngines } from "$lib/shared/pipelines/templateEngines"
 
 /**
  * An engine id as the name of a language, for a heading.
@@ -265,10 +266,11 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			).length
 
 			for (const d of await declarations(db, version.id)) {
-				// A slot that declares no engine renders in core's — which is
-				// what the column default says, and what every core slot but
-				// the two unbound jinja2 ones does.
-				const engine = d.engine ?? CORE_TEMPLATE_ENGINE
+				// Every language the slot accepts, so a slot declaring two gets
+				// a heading per pool and the empty one is somewhere to write
+				// the first row. A slot that declares nothing renders in
+				// core's, which is what the column default says.
+				const engines = acceptedEngines(d)
 				if (d.control === "prompts-ref") {
 					promptSlots.add(d.slot)
 					if (d.nodeTypeId)
@@ -283,17 +285,19 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 				}
 				if (d.control === "variable-template-ref" && d.variableId) {
 					variableSlots.add(d.slot)
-					variableLabels.set(
-						`${d.variableId}#${engine}`,
-						`${d.label ?? d.variableId} · ${languageOf(engine)}`
-					)
+					for (const engine of engines)
+						variableLabels.set(
+							`${d.variableId}#${engine}`,
+							`${d.label ?? d.variableId} · ${languageOf(engine)}`
+						)
 				}
 				if (d.control === "context-template-ref" && d.nodeTypeId) {
 					templateSlots.add(d.slot)
-					nodeTypeLabels.set(
-						contextPoolKeyFor(d.nodeTypeId, engine),
-						`${humanizeTypeId(d.nodeTypeId)} · ${languageOf(engine)}`
-					)
+					for (const engine of engines)
+						nodeTypeLabels.set(
+							contextPoolKeyFor(d.nodeTypeId, engine),
+							`${humanizeTypeId(d.nodeTypeId)} · ${languageOf(engine)}`
+						)
 				}
 			}
 		}

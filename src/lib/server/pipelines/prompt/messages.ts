@@ -27,6 +27,7 @@
  */
 
 import { SessionMessageProcessor } from "$lib/server/pipelines/prompt/contentProcessors"
+import { stripJsonBlocks } from "$lib/server/pipelines/prompt/jsonBlocks"
 import { InterpolationEngine } from "$lib/server/utils/interpolation/InterpolationEngine"
 import type { ProcessedSessionMessage } from "$lib/server/pipelines/prompt/contentProcessors"
 
@@ -52,6 +53,24 @@ export interface ProcessMessagesInput {
 	seedName?: string
 	/** Text an in-progress continuation has already produced. */
 	continuationPrefill?: string
+	/**
+	 * Whether the list ends with the line the model continues from.
+	 *
+	 * Default true, which is every reply pipeline: the seed is a real element of
+	 * the prompt and the last line is what tells a model whose turn it is. A
+	 * step that is ASKING rather than answering passes false — a prompt ending
+	 * `Verity:` requests Verity's next paragraph however plainly the
+	 * instructions asked for something else.
+	 */
+	seed?: boolean
+	/**
+	 * Cut JSON blocks out of what the cast said, on the way into this prompt.
+	 *
+	 * A reply that carried a document teaches the next turn's planner its own
+	 * schema and the keeper somebody else's. Never applied to the stored row —
+	 * see `jsonBlocks.ts` — and never to a player's own line, which is theirs.
+	 */
+	plainProse?: boolean
 	/** Everything else `{{char}}`-style macros in a message body resolve against. */
 	interpolationContext?: Record<string, unknown>
 }
@@ -98,31 +117,43 @@ export function processMessages(
 		// the ruling is already stored padded. The template renders
 		// `{{{name}}}: {{{message}}}` per line, so edge whitespace here is a
 		// gap after the colon or a blank line before the next speaker.
-		if (one)
-			processed.push(
-				typeof one.message === "string"
-					? { ...one, message: one.message.trim() }
-					: one
-			)
+		if (!one) continue
+		let line =
+			typeof one.message === "string"
+				? { ...one, message: one.message.trim() }
+				: one
+		if (input.plainProse && one.role !== "user") {
+			const prose =
+				typeof line.message === "string"
+					? stripJsonBlocks(line.message)
+					: line.message
+			// A line that was NOTHING but a block has no prose in it, and a
+			// blank turn in a transcript renders as a name and a colon — which
+			// is an invitation to continue it.
+			if (typeof prose === "string" && !prose) continue
+			line = { ...line, message: prose }
+		}
+		processed.push(line)
 	}
 
-	processed.push({
-		id: SEED_MESSAGE_ID,
-		role: "assistant",
-		name: input.seedName || input.charName,
-		/**
-		 * ⚠ The seed's trim is load-bearing, not tidiness.
-		 *
-		 * This is the one block in the whole prompt rendered *open* on the
-		 * completion path — `contextHandlebarsHelpers.ts` keys `includeClose:
-		 * false` on the `-2` id — so the prompt ends with this text and nothing
-		 * after it. A trailing space on the partial therefore lands *inside*
-		 * the open assistant block, which is exactly the mid-word continue
-		 * (`"the sto"` + `"re."`) that cannot be detected downstream; and the
-		 * Anthropic path rejects a prefill ending in whitespace outright.
-		 */
-		message: (input.continuationPrefill ?? "").trim()
-	})
+	if (input.seed !== false)
+		processed.push({
+			id: SEED_MESSAGE_ID,
+			role: "assistant",
+			name: input.seedName || input.charName,
+			/**
+			 * ⚠ The seed's trim is load-bearing, not tidiness.
+			 *
+			 * This is the one block in the whole prompt rendered *open* on the
+			 * completion path — `contextHandlebarsHelpers.ts` keys `includeClose:
+			 * false` on the `-2` id — so the prompt ends with this text and nothing
+			 * after it. A trailing space on the partial therefore lands *inside*
+			 * the open assistant block, which is exactly the mid-word continue
+			 * (`"the sto"` + `"re."`) that cannot be detected downstream; and the
+			 * Anthropic path rejects a prefill ending in whitespace outright.
+			 */
+			message: (input.continuationPrefill ?? "").trim()
+		})
 
 	return {
 		messages: processed,

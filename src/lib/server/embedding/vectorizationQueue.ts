@@ -47,6 +47,7 @@ import {
 	sql
 } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { castEdgeOnly, isCastEdge } from "$lib/server/utils/narrativeEdges"
 import {
 	CHARACTER_LORE_TYPE_ID,
 	DEFAULT_VECTOR_NAME,
@@ -62,6 +63,7 @@ import {
 	getConfiguredModelId,
 	getConfiguredEmbeddingTarget
 } from "./index"
+import { embeddingsEnabled } from "./target"
 import {
 	IndexingLane,
 	registerLane,
@@ -220,7 +222,8 @@ export const embeddingBroker: LaneModelBroker = {
 	},
 	async request(opts): Promise<ModelLease> {
 		const loaded = getLoadedModelId()
-		if (isModelReady() && loaded) return { kind: "resident", modelId: loaded }
+		if (isModelReady() && loaded)
+			return { kind: "resident", modelId: loaded }
 
 		if (!opts?.wait) {
 			/**
@@ -246,10 +249,10 @@ export const embeddingBroker: LaneModelBroker = {
 		}
 
 		try {
-			// Mode-aware: branches on vectorizationConfigs.mode to load the
-			// local pipeline or activate the API backend, and sets the TTL
-			// from the persisted config before loading so the idle timer
-			// starts correctly.
+			// Branches on the starred connection's TYPE to load the local
+			// pipeline or activate the right host adapter, and sets the TTL
+			// from the connection before loading so the idle timer starts
+			// correctly.
 			await loadConfiguredEmbeddingModel()
 		} catch (err) {
 			return {
@@ -342,17 +345,15 @@ const embeddingWork: LaneWorkSource = {
 /**
  * Whether the embedding lane indexes at all.
  *
- * ⚠ Deliberately still `system_settings.vectorization_enabled` and not a new
- * per-lane column. That switch is what every existing surface writes, and a
- * second stored copy of one boolean is the dual-source drift this codebase has
- * already recorded twice. A lane's settings live where that lane's settings
- * already live; what is per-lane is *that they are asked for separately*.
+ * ⚠ **The star IS the switch.** Embeddings are on when something is registered
+ * for `text->embedding` in `connection_defaults`, and off when nothing is — one
+ * fact, one row, so unstarring or deleting the connection turns the lane off by
+ * itself. A stored boolean beside it would be "on" and "which endpoint" as two
+ * values that can contradict each other, which every handler would then have to
+ * keep in step.
  */
 async function isVectorizationEnabled(): Promise<boolean> {
-	const settings = await db.query.systemSettings.findFirst({
-		columns: { vectorizationEnabled: true }
-	})
-	return settings?.vectorizationEnabled ?? false
+	return embeddingsEnabled(db)
 }
 
 export const embeddingLane = registerLane(
@@ -465,10 +466,7 @@ export function startPeriodicVectorizationScan() {
 	if (scanTimer) return
 	const tick = async () => {
 		try {
-			const settings = await db.query.systemSettings.findFirst({
-				columns: { vectorizationEnabled: true }
-			})
-			if (settings?.vectorizationEnabled) {
+			if (await embeddingsEnabled(db)) {
 				void refreshEmbeddingLaneTtl()
 				await startVectorizationQueue()
 			}
@@ -1327,6 +1325,10 @@ async function pickNarrativeRelationship(
 			? eq(schema.narrativeRelationships.lorebookId, lorebookId)
 			: undefined,
 		onlyId ? eq(schema.narrativeRelationships.id, onlyId) : undefined,
+		// Cast edges only: the text embedded here is two binding names either
+		// side of a type, which an edge with an entry end has no second name
+		// for. Entry edges reach retrieval through the link hop instead.
+		castEdgeOnly,
 		staleness
 	)
 
@@ -1346,6 +1348,9 @@ async function pickNarrativeRelationship(
 		.limit(1)
 
 	if (!rows.length) return null
+	// `castEdgeOnly` above already excluded the entry-endpoint rows; this is the
+	// same rule at the type level, so the two ids below are ids.
+	if (!isCastEdge(rows[0])) return null
 	const {
 		id,
 		fromNodeId,

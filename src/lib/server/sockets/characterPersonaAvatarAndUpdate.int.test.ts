@@ -15,6 +15,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
+import { PNG } from "pngjs"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -54,6 +55,17 @@ function fakeSocket(userId: number) {
 }
 
 const noopEmit = () => {}
+
+/** A real, CRC-valid PNG. `seed` varies the pixel so two calls produce
+ *  genuinely different bytes, and therefore two different media rows. */
+function makeTestPngBuffer(seed = 255): Buffer {
+	const png = new PNG({ width: 1, height: 1 })
+	png.data[0] = seed
+	png.data[1] = 255
+	png.data[2] = 255
+	png.data[3] = 255
+	return PNG.sync.write(png)
+}
 
 async function makeCharacter(userId: number, name = "Char") {
 	const [character] = await testDb
@@ -209,5 +221,159 @@ describe("characters:update / personas:update — lorebookId/uuid stripped (PGli
 
 		expect(res.persona?.name).toBe("Updated Persona")
 		expect(res.persona?.lorebookId).toBeNull()
+	})
+})
+
+/**
+ * What the broadcast has to say after an avatar upload.
+ *
+ * `.returning()` answers with the row as the UPDATE statement left it, and the
+ * avatar upload writes `avatarMediaId` in a statement of its own afterwards —
+ * so a broadcast built from the returned row names the avatar the character
+ * wore before the save. Every open session applies that faithfully and keeps
+ * rendering the old face until a reload.
+ *
+ * The joined `avatarMedia` is the second half: a by-id URL cannot be busted
+ * when a media row changes in place, so the payload carries the uuid and the
+ * cache token the immutable URL is built from.
+ */
+describe("characters:update / personas:update — the avatar on the wire", () => {
+	function captureEmits() {
+		const emitted: { event: string; data: any }[] = []
+		return {
+			emitted,
+			emit: (event: string, data: any) => emitted.push({ event, data })
+		}
+	}
+
+	function lastOf(
+		emitted: { event: string; data: any }[],
+		event: string
+	): any {
+		return emitted.filter((e) => e.event === event).at(-1)?.data
+	}
+
+	async function fileOf(id: number) {
+		return testDb.query.files.findFirst({
+			where: (f, { eq }) => eq(f.id, id)
+		})
+	}
+
+	test("a second upload broadcasts the NEW avatar, with its uuid and rev", async () => {
+		const { charactersUpdate } = await import("./characters")
+		const user = await makeUser("char-avatar-broadcast")
+		const character = await makeCharacter(user.id, "Verity")
+
+		await charactersUpdate.handler(
+			fakeSocket(user.id),
+			{
+				character: { id: character.id, name: "Verity" },
+				avatarFile: makeTestPngBuffer(10)
+			} as any,
+			noopEmit
+		)
+		const afterFirst = await testDb.query.characters.findFirst({
+			where: (c, { eq }) => eq(c.id, character.id)
+		})
+		const firstAvatarId = afterFirst!.avatarMediaId
+		expect(firstAvatarId).toBeTruthy()
+
+		const capture = captureEmits()
+		await charactersUpdate.handler(
+			fakeSocket(user.id),
+			{
+				character: { id: character.id, name: "Verity" },
+				avatarFile: makeTestPngBuffer(200)
+			} as any,
+			capture.emit
+		)
+
+		const stored = await testDb.query.characters.findFirst({
+			where: (c, { eq }) => eq(c.id, character.id)
+		})
+		expect(stored!.avatarMediaId).not.toBe(firstAvatarId)
+
+		const broadcast = lastOf(capture.emitted, "characters:update")
+		expect(broadcast.character.avatarMediaId).toBe(stored!.avatarMediaId)
+
+		const file = await fileOf(stored!.avatarMediaId!)
+		expect(broadcast.character.avatarMedia).toEqual({
+			uuid: file!.uuid,
+			rev: file!.rev,
+			// Joined alongside the address so "adjust crop" opens on the stored
+			// crop rather than on the default rule.
+			frame: file!.frame
+		})
+	})
+
+	test("a persona's second upload does the same", async () => {
+		const { personasUpdate } = await import("./personas")
+		const user = await makeUser("persona-avatar-broadcast")
+		const persona = await makePersona(user.id, "Jody")
+
+		await personasUpdate.handler(
+			fakeSocket(user.id),
+			{
+				persona: { id: persona.id, name: "Jody" },
+				avatarFile: makeTestPngBuffer(10)
+			} as any,
+			noopEmit
+		)
+		const afterFirst = await testDb.query.personas.findFirst({
+			where: (p, { eq }) => eq(p.id, persona.id)
+		})
+		const firstAvatarId = afterFirst!.avatarMediaId
+		expect(firstAvatarId).toBeTruthy()
+
+		const capture = captureEmits()
+		await personasUpdate.handler(
+			fakeSocket(user.id),
+			{
+				persona: { id: persona.id, name: "Jody" },
+				avatarFile: makeTestPngBuffer(200)
+			} as any,
+			capture.emit
+		)
+
+		const stored = await testDb.query.personas.findFirst({
+			where: (p, { eq }) => eq(p.id, persona.id)
+		})
+		expect(stored!.avatarMediaId).not.toBe(firstAvatarId)
+
+		const broadcast = lastOf(capture.emitted, "personas:update")
+		expect(broadcast.persona.avatarMediaId).toBe(stored!.avatarMediaId)
+
+		const file = await fileOf(stored!.avatarMediaId!)
+		expect(broadcast.persona.avatarMedia).toEqual({
+			uuid: file!.uuid,
+			rev: file!.rev,
+			// Joined alongside the address so "adjust crop" opens on the stored
+			// crop rather than on the default rule.
+			frame: file!.frame
+		})
+	})
+
+	test("picking a gallery image as the avatar reaches open sessions too", async () => {
+		const { charactersSetAvatar } = await import("./characters")
+		const user = await makeUser("char-setavatar-broadcast")
+		const character = await makeCharacter(user.id, "Verity")
+		const media = await makeMedia(user.id, { characterId: character.id })
+
+		const capture = captureEmits()
+		await charactersSetAvatar.handler(
+			fakeSocket(user.id),
+			{ characterId: character.id, mediaId: media.id } as any,
+			capture.emit
+		)
+
+		const broadcast = lastOf(capture.emitted, "characters:update")
+		expect(broadcast.character.avatarMediaId).toBe(media.id)
+		expect(broadcast.character.avatarMedia).toEqual({
+			uuid: media.uuid,
+			rev: media.rev,
+			// Joined alongside the address so "adjust crop" opens on the stored
+			// crop rather than on the default rule.
+			frame: media.frame
+		})
 	})
 })

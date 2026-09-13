@@ -8,7 +8,7 @@ The **Prompts** sidebar (opened from the main navigation) is a management screen
 
 - **Session Prompts** (shown in the sidebar as **Session Prompts: Character**) — the system instructions injected into every session's generation request. This is what most people mean by "prompt config."
 - **Session Prompts: Narrator** — the system instructions used for a manually-triggered **Narrator** response (narration as the environment itself, rather than as a character). See [Sessions](./sessions.md) for how to trigger one.
-- **World Lore Summarization**, **Character Lore Summarization**, and **Scene Summarization** — separate templates that drive the automated summarization pipeline described in [Lorebooks](./lorebooks.md) and [Summarization](./summarization.md). These three cards only appear in the Prompts sidebar when the **Summarization Enabled** (or "Enable Summarization") switch on the [System Settings](./system-settings.md) tab is turned on. Session Prompts and Session Prompts: Narrator are always shown regardless of that setting, since neither is part of the summarization pipeline.
+- **World Lore Summarization**, **Character Lore Summarization**, and **Scene Summarization** — separate templates that drive the automated summarization pipeline described in [Lorebooks](./lorebooks.md) and [Summarization](./summarization.md). All five cards are always shown.
 
 Opening the sidebar shows an index of cards, one per config type, each with an icon, a one-line description, and — once a config is active — the active config's name next to a green checkmark. Clicking a card drills into a dedicated editor for that type, with a back button to return to the index.
 

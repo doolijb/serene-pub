@@ -30,20 +30,20 @@ import {
 	nextPosition,
 	toEntryRow
 } from "$lib/server/utils/lorebookEntries"
-import {
-	entryDeclaration,
-	bandOfType
-} from "$lib/server/entries/declarations"
+import { entryDeclaration, bandOfType } from "$lib/server/entries/declarations"
 import {
 	MENTION_EXTRACTOR_VERSION,
 	extractMentions
 } from "$lib/server/pipelines/ranking/mentions"
 import { buildScanWindow } from "$lib/server/pipelines/ranking/signals"
 import type { HostServices, MediaRef, NodeRef } from "@serene-pub/sdk"
+import type { ToolDeclaration } from "$lib/server/adapters/actions"
 import { slotRef } from "@serene-pub/sdk"
+import { slotModelId } from "$lib/shared/connections/slotRef"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import type { RunArtifact } from "$lib/server/pipelines/runtime/receipts"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
+import { streamingModeFrom } from "$lib/server/connections/streaming"
 import {
 	DEFAULT_CHANNEL,
 	DEFAULT_LANE,
@@ -152,6 +152,27 @@ export interface HostScope {
 	 * bookkeeping with no reader. `runSpec` always supplies one.
 	 */
 	artifacts?: RunArtifact[]
+	/**
+	 * The message row this run was started to fill in, when one already exists.
+	 *
+	 * The reply path's row is created by the TRIGGER, before the run: it is what
+	 * the composer's placeholder is, what Stop cancels, and what a swipe or a
+	 * regenerate later rewrites. A spec that runs to completion writes its reply
+	 * through `create-message`, so without this the turn would end with two rows
+	 * — an empty one the client is still showing as generating, and a second one
+	 * carrying the text.
+	 *
+	 * ⚠ **The id comes from OUTSIDE the run, which is the only case this is
+	 * for.** A spec may not create a message and then fill it: that is a create →
+	 * update pair in one document, and `create-message`'s contract refuses it
+	 * because under async review the created row may never exist. Nothing here
+	 * lets a spec do that — the caller names a row that already exists, and the
+	 * first `create-message` in the run lands in it.
+	 *
+	 * Spent once. A second write in the same run inserts, exactly as it always
+	 * did, and a row that has since been deleted falls back to an insert too.
+	 */
+	fillMessageId?: number
 }
 
 /**
@@ -177,6 +198,18 @@ const STEP_TYPES = new Set(STEP_TYPE_LIST)
 
 /** Exported under a test-only name so a suite can check the set is complete. */
 export const STEP_TYPES_FOR_TEST = STEP_TYPE_LIST
+
+/**
+ * How long an extension's tool hook may take.
+ *
+ * Shorter than a plugin *node*'s thirty seconds, and deliberately: a node runs
+ * once on the spine, while a tool runs once per iteration of a loop bounded at
+ * eight or more — so the same number would be a turn a person waits four
+ * minutes for. The node's own `timeoutMs` (`core:provider/run-tool@1`) bounds
+ * the whole invocation on top of this; this is the inner deadline the sandbox
+ * enforces.
+ */
+const TOOL_HOOK_TIMEOUT_MS = 15_000
 
 /**
  * A slot reference's row id.
@@ -406,6 +439,13 @@ const embeddingApi = () => (embeddingModule ??= import("$lib/server/embedding"))
 
 export function createHost(db: Db, scope: HostScope = {}): HostServices {
 	/**
+	 * The row the caller named, until it has been used — see
+	 * `HostScope.fillMessageId`. Local to the host, so two runs sharing a scope
+	 * object could not spend each other's.
+	 */
+	let fillMessageId = scope.fillMessageId
+
+	/**
 	 * Write down a row this run just made.
 	 *
 	 * Called at the write, by the code that did it — never reconstructed
@@ -424,7 +464,14 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 		scope.artifacts.push({ kind, entityId, action, nodeKey: node.key })
 	}
 
-	return {
+	/**
+	 * Named rather than returned as a literal, because one branch of `call`
+	 * needs a read: a core tool sees the session through the host's own
+	 * enumerated seam (see `ToolContext`), and the alternative — a second
+	 * copy of those queries beside the switch — is the drift this file's
+	 * whole shape exists to prevent.
+	 */
+	const host: HostServices = {
 		async read(table, query, node) {
 			const q = (query ?? {}) as Record<string, any>
 
@@ -1128,6 +1175,32 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					}
 				}
 
+				case "session_state": {
+					/**
+					 * The session's resolved stats, states and possessions.
+					 *
+					 * Through the read seam like every other Query, so a
+					 * scoping refusal names the node that asked and a spec
+					 * cannot reach another session's state by supplying an id.
+					 * The resolution itself is `$lib/server/state` — imported
+					 * here rather than in the binding, which is what keeps the
+					 * binding module free of a database handle.
+					 */
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined)
+						return {
+							world: {},
+							cast: {},
+							possessions: {},
+							slots: []
+						}
+					const { stateFor } = await import(
+						"$lib/server/state/resolve"
+					)
+					return await stateFor(db, sessionId)
+				}
+
 				case "graph_scenes": {
 					// Scenes with their messages, in order. The graph builder
 					// walks them one at a time and each step reads the same
@@ -1188,6 +1261,116 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							db
 						})) ?? null
 					)
+				}
+
+				case "graph_relationships": {
+					/**
+					 * The same graph, one row per tie, ranked elsewhere.
+					 *
+					 * ⚠ **One traversal, two projections**, which is the same
+					 * rule the case above states: a second walk written for
+					 * `core:query/relationship-search@1` would be two readings
+					 * of one graph that agree until somebody edits one. `buildGraphRelationshipRows` and
+					 * `buildGraphContextData` are two projections of
+					 * `collectGraphLayers`, so the visibility rules, the alias
+					 * suppression and the participant scope cannot diverge
+					 * between what the prompt renders and what the budget
+					 * ranks.
+					 *
+					 * `null` on the same three conditions — no session, no
+					 * lorebook, no bound speaker node — and an empty array when
+					 * the graph is simply empty. The query reads the difference:
+					 * one is "there is no graph here", the other is "there is,
+					 * and it has nothing to say about this speaker".
+					 */
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return null
+
+					const [session] = await db
+						.select({ lorebookId: schema.sessions.lorebookId })
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
+						.limit(1)
+					if (!session?.lorebookId) return null
+
+					const { buildGraphRelationshipRows } = await import(
+						"$lib/server/utils/graphContextFormatter"
+					)
+					return (
+						(await buildGraphRelationshipRows({
+							sessionId,
+							lorebookId: session.lorebookId,
+							speakerCharacterId: q.currentCharacterId ?? null,
+							speakerPersonaId: null,
+							db
+						})) ?? null
+					)
+				}
+
+				case "graph_entry_links": {
+					/**
+					 * The edges the cast traversal cannot see.
+					 *
+					 * A separate read rather than more rows on
+					 * `graph_relationships`, and the reason is the one stated
+					 * on that case: it is a projection of `collectGraphLayers`,
+					 * which walks outward from the speaker's node. An edge
+					 * between two places has no speaker to walk from, so it is
+					 * not a row that traversal left out — it is a different
+					 * question, asked once, by the link hop alone.
+					 *
+					 * `null` on no session and no lorebook, `[]` on a lorebook
+					 * whose entries are not linked to anything — which is every
+					 * book until somebody draws a road.
+					 */
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return null
+
+					const { readGraphEntryLinks } = await import(
+						"$lib/server/utils/graphEntryLinks"
+					)
+					return await readGraphEntryLinks(db, sessionId)
+				}
+
+				case "available_tools": {
+					/**
+					 * What tools this session can call, right now.
+					 *
+					 * Instance state like `embedding_status` next door, and for
+					 * the same reason it is a read rather than config: which
+					 * extensions are installed and enabled is a fact about this
+					 * moment, and a spec resolved before an admin enabled one
+					 * would advertise a list that is already wrong.
+					 *
+					 * Declarations only — a name, a sentence and a JSON Schema.
+					 * Nothing here can run anything; `core:provider/run-tool@1`
+					 * does that, and resolves the same list again through the
+					 * same module so the advertisement and the dispatch cannot
+					 * disagree.
+					 */
+					const { toolProviders } = await import(
+						"$lib/server/pipelines/runtime/tools/resolve"
+					)
+					const providers = await toolProviders(db, {
+						plugins: q.plugins !== false
+					})
+					const include: string[] = Array.isArray(q.include)
+						? q.include.filter(
+								(n: unknown) => typeof n === "string"
+							)
+						: []
+					const declared = providers.map((t) => t.declaration)
+					// The author's order, not the registry's: `include` is a
+					// list a spec wrote, and the order tools are advertised in
+					// is one of the few things an author can use to steer which
+					// one a model reaches for first.
+					return include.length
+						? include
+								.map((n) => declared.find((d) => d.name === n))
+								.filter((d): d is NonNullable<typeof d> => !!d)
+						: declared
 				}
 
 				case "embedding_status": {
@@ -1638,7 +1821,10 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						)
 						.orderBy(desc(schema.sessionMessages.id))
 						.limit(scanDepth)
-					const window = buildScanWindow(rows.reverse(), scanDepth).raw
+					const window = buildScanWindow(
+						rows.reverse(),
+						scanDepth
+					).raw
 
 					const all = extractMentions(window, vocabulary.gazetteer)
 					const limit = Math.max(0, Number(q.limit) || 0)
@@ -1720,7 +1906,8 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						.limit(1)
 					if (!session) return empty
 
-					const { getLoadedModelId, batchEmbed } = await embeddingApi()
+					const { getLoadedModelId, batchEmbed } =
+						await embeddingApi()
 					const modelId = getLoadedModelId()
 					if (!modelId) return empty
 
@@ -1841,6 +2028,18 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					return { vectors, vector: vectors[0] }
 				}
 
+				/**
+				 * All three generate nodes, through one dispatcher (20 §9).
+				 *
+				 * `generate-with-tools` is `generate-text` with a `tools`
+				 * in-port and a `toolCall` out-port; `generate-json` is the same
+				 * request asking for a shape instead of a turn. Both are
+				 * separate pins only because the first is published and frozen.
+				 * Three cases would be three copies of a fifty-line forward,
+				 * which is how they would come to differ about a stop sequence.
+				 */
+				case "core:provider/generate-json":
+				case "core:provider/generate-with-tools":
 				case "core:provider/generate-text": {
 					/**
 					 * The generation itself, through the existing adapters.
@@ -1887,6 +2086,11 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						// Omitting them was why the panel's Connection and
 						// Sampling pickers on the reply step did nothing.
 						connectionId: refId(p.connection),
+						// The MODEL half of the same slot (0114). A slot
+						// authored before the split carries none, which means
+						// the endpoint's default — so nothing stored needs
+						// migrating and nothing already configured changes.
+						connectionModelId: slotModelId(p.connection),
 						samplingId: refId(p.sampling),
 						// The author's own stop sequences, off the node's
 						// `params` slot (ruling 2026-09-10). Forwarded, never
@@ -1896,6 +2100,32 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						stopSequences: Array.isArray(p.stopSequences)
 							? (p.stopSequences as string[])
 							: undefined,
+						// The author's send shape, off the same `params` slot.
+						// Forwarded, never interpreted: which wire `auto`
+						// resolves to needs the connection, and the connection
+						// is resolved one layer down.
+						streaming: streamingModeFrom(p.streaming),
+						// The `tools` in-port — `advertise-tools`' `native`
+						// door, forwarded verbatim. Empty on `generate-text`,
+						// which declares no such port, so that node's requests
+						// are byte-identical to what they always were.
+						tools: Array.isArray(p.tools)
+							? (p.tools as ToolDeclaration[])
+							: undefined,
+						/**
+						 * The structured-output ask — `generate-json`'s and
+						 * nobody else's.
+						 *
+						 * Forwarded as a REQUEST, never as an answer: which
+						 * door it actually goes out through needs the
+						 * connection, and the connection is resolved one layer
+						 * down. Absent on the other two pins, so their requests
+						 * are byte-identical to what they always were.
+						 */
+						structured:
+							node.typeId === "core:provider/generate-json"
+								? { schema: p.schema ?? undefined }
+								: undefined,
 						onChunk: scope.sink?.onChunk,
 						onThinking: scope.sink?.onThinking,
 						signal: scope.signal
@@ -1923,6 +2153,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 								: String(p.negative),
 						prompts: p.prompts ?? null,
 						connectionId: refId(p.connection),
+						connectionModelId: slotModelId(p.connection),
 						samplingId: refId(p.sampling),
 						sessionId: scope.sessionId ?? null,
 						userId: scope.userId ?? null,
@@ -1939,6 +2170,10 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						artifacts: scope.artifacts,
 						nodeKey: node.key,
 						signal: scope.signal,
+						// The author's send shape. On a render `off` is what
+						// stops the progress poll and the previews, so it is
+						// read where `onProgress` is decided rather than here.
+						streaming: streamingModeFrom(p.streaming),
 						// Forwarded only when somebody is listening AND the run
 						// can be named. The first half is so an adapter that can
 						// report progress does not pay to compute it for a run
@@ -1962,6 +2197,164 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					})
 				}
 
+				case "core:provider/run-tool": {
+					/**
+					 * The one node that runs a tool (20 §9).
+					 *
+					 * Behind `call` rather than `read` because a tool is not a
+					 * read: the canonical one is an extension's sandboxed hook,
+					 * which may reach the network under its own grants, and the
+					 * outward calls of a run all live behind this seam.
+					 *
+					 * ⚠ **A failing tool returns, it does not throw.** The model
+					 * asked for something; "there is no such entry" is an answer
+					 * it can act on, and a throw would end the turn at the one
+					 * moment the agent could have recovered. Only an internal
+					 * fault — a bug in this host — escapes, and `run-tool`'s
+					 * binding turns even that into a result the loop can carry.
+					 */
+					const name = String(p.tool ?? "")
+					const args =
+						p.args &&
+						typeof p.args === "object" &&
+						!Array.isArray(p.args)
+							? (p.args as Record<string, unknown>)
+							: {}
+
+					const { resolveTool } = await import(
+						"$lib/server/pipelines/runtime/tools/resolve"
+					)
+					const provider = await resolveTool(db, name)
+					if (!provider)
+						return {
+							tool: name,
+							error: `there is no tool called '${name}'.`
+						}
+
+					try {
+						if (provider.kind === "core") {
+							const { ToolError } = await import(
+								"$lib/server/pipelines/runtime/tools"
+							)
+							try {
+								const result = await provider.tool.run(args, {
+									// The host's own read, handed to the tool:
+									// one enumerated seam, so a tool inherits
+									// the hidden-message convention and the
+									// character-lore privacy gate without
+									// knowing they exist. `node` travels with
+									// it so a scoping refusal names the node
+									// that asked.
+									// `read` is optional on `HostServices` —
+									// a host may implement none, and a tool
+									// asking one of those sees an empty
+									// session rather than a crash. The same
+									// shape the executor uses for the same
+									// reason.
+									read: async (
+										table: any,
+										query?: unknown
+									) =>
+										host.read
+											? await host.read(
+													table,
+													query,
+													node
+												)
+											: [],
+									sessionId: scope.sessionId,
+									currentCharacterId:
+										scope.currentCharacterId ?? null,
+									signal: scope.signal,
+									// The state tools' one door. Granted only
+									// where there is a session to propose
+									// against; absent, they refuse by name.
+									propose: scope.sessionId
+										? async (change: unknown) => {
+												const { proposeChange } =
+													await import(
+														"$lib/server/state/write"
+													)
+												return await proposeChange(
+													db,
+													{
+														sessionId:
+															scope.sessionId!,
+														updatedBy: `run:${scope.runId ?? "unknown"}`
+													},
+													change as never
+												)
+											}
+										: undefined
+								})
+								return { tool: name, result }
+							} catch (e) {
+								if (e instanceof ToolError)
+									return { tool: name, error: e.message }
+								throw e
+							}
+						}
+
+						/**
+						 * An extension's tool, through the hook dispatch that
+						 * already exists — permissions, deadline, seeded RNG and
+						 * the invocation log all apply because none of them is
+						 * reimplemented here.
+						 *
+						 * The seed label carries the tool name and the run, so
+						 * two calls to one tool in a single loop roll
+						 * differently and a replay with the recorded seed rolls
+						 * the same. Dark when the plugin subsystem is off, which
+						 * is where `toolProviders` finds no enabled rows at all
+						 * — so this branch is unreachable rather than guarded
+						 * twice.
+						 */
+						const { pluginsEnabled } = await import(
+							"$lib/server/plugins/flag"
+						)
+						const { getManager } = await import(
+							"$lib/server/plugins"
+						)
+						if (!pluginsEnabled())
+							return {
+								tool: name,
+								error: `'${name}' is provided by an extension, and extensions are switched off on this instance.`
+							}
+						const manager = getManager()
+						const r = await manager.callHook(
+							provider.binding.pluginId,
+							provider.binding.hook,
+							{ input: { tool: name, args } },
+							{
+								timeoutMs: TOOL_HOOK_TIMEOUT_MS,
+								seedLabel: `${scope.runId ?? "run"}:tool:${name}`,
+								user:
+									scope.userId != null
+										? String(scope.userId)
+										: undefined,
+								runId: scope.runId
+							}
+						)
+						return r.ok
+							? { tool: name, result: r.value }
+							: {
+									tool: name,
+									error:
+										r.reason ??
+										`the extension providing '${name}' could not answer.`
+								}
+					} catch (e) {
+						// The internal fault. Reported as a result rather than
+						// thrown for the same reason the tool's own failure is:
+						// a loop that ends on a host bug loses the whole turn,
+						// and the receipt records this node's output either way.
+						return {
+							tool: name,
+							error: `'${name}' failed: ${(e as Error).message}`
+						}
+					}
+				}
+
 				default: {
 					/**
 					 * Every summarize and graph step, through one dispatcher.
@@ -1979,6 +2372,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							systemPrompt: String(p.systemPrompt ?? ""),
 							userPrompt: stepUserPrompt(p),
 							connectionId: refId(p.connection),
+							connectionModelId: slotModelId(p.connection),
 							samplingId: refId(p.sampling),
 							label: p.label,
 							signal: scope.signal
@@ -2037,22 +2431,56 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					if (refusal)
 						throw new HostScopeError(`${node.key}: ${refusal}`)
 
-					const { insertLegacy } = await import(
+					const { insertLegacy, updateLegacy } = await import(
 						"$lib/server/messages/store"
 					)
-					const row = await insertLegacy(db, {
-						sessionId,
-						userId: p.userId ?? scope.userId ?? null,
-						characterId: p.characterId ?? null,
-						personaId: p.personaId ?? null,
-						role: p.role ?? "assistant",
-						// Canonical, so `text-messages:1` and `text-messages`
-						// cannot land in the column as two lanes.
-						channel: canonicalChannel(p.channel),
-						content: String(p.text ?? ""),
-						metadata: p.metadata ?? {},
-						isGenerating: false
-					})
+					/**
+					 * The caller's row, spent — see `HostScope.fillMessageId`.
+					 *
+					 * Only what this node PRODUCED is written: the text, the
+					 * flags that end the generation, and a channel the spec
+					 * actually named. The identity columns stay as the trigger
+					 * set them, because the trigger is what decided whose turn
+					 * this was, and `create-message`'s payload carries no
+					 * opinion about it on the reply path.
+					 */
+					const filled =
+						fillMessageId != null
+							? await updateLegacy(db, fillMessageId, {
+									content: String(p.text ?? ""),
+									isGenerating: false,
+									generationStage: null,
+									queueItemId: null,
+									error: null,
+									...(p.channel !== undefined
+										? {
+												channel: canonicalChannel(
+													p.channel
+												)
+											}
+										: {}),
+									...(p.metadata
+										? { metadata: p.metadata }
+										: {})
+								})
+							: undefined
+					fillMessageId = undefined
+
+					const row =
+						filled ??
+						(await insertLegacy(db, {
+							sessionId,
+							userId: p.userId ?? scope.userId ?? null,
+							characterId: p.characterId ?? null,
+							personaId: p.personaId ?? null,
+							role: p.role ?? "assistant",
+							// Canonical, so `text-messages:1` and `text-messages`
+							// cannot land in the column as two lanes.
+							channel: canonicalChannel(p.channel),
+							content: String(p.text ?? ""),
+							metadata: p.metadata ?? {},
+							isGenerating: false
+						}))
 
 					record(node, "message", row.id, "created")
 
@@ -2412,6 +2840,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 			}
 		}
 	}
+	return host
 }
 
 /**

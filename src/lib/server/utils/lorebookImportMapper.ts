@@ -226,6 +226,66 @@ export function resolveParentNodeLinks(
 	return links
 }
 
+/**
+ * How deep an imported nesting may go, and the ceiling that ends a walk over a
+ * chain that turns out to contain a cycle. Matches `assertAnchorEntry`'s limit,
+ * which is the same rule for a single re-parent: a tree deeper than this is not
+ * a tree anybody is reading, and refusing at the ceiling is the same answer as
+ * refusing a cycle.
+ */
+const MAX_ANCHOR_DEPTH = 32
+
+/**
+ * Resolves each imported entry's `anchorEntryId` from the local ids its file
+ * states, refusing the links the app's own re-parent refuses.
+ *
+ * Three are dropped rather than written: a parent this import never inserted,
+ * an entry filed under itself, and a link whose chain of parents leads back to
+ * the entry being filed — a cycle, which the column itself does not prevent and
+ * which hangs any walk over the tree. A cycle drops every link in it, because
+ * none of them is the one that is right.
+ *
+ * `localId` is null for an entry the document points at from nowhere: such an
+ * entry cannot be a link in a cycle, since every member of one is some other
+ * member's parent. Pure/DB-free so this is unit testable without a database —
+ * `insertLorebookEntries` (lorebooks.ts) does the per-link update.
+ */
+export function resolveAnchorEntryLinks(
+	pending: Array<{
+		realId: number
+		localId: number | null
+		anchorLocalId: number
+	}>,
+	entryLocalIdToRealId: Map<number, number>
+): Array<{ realId: number; anchorRealId: number }> {
+	const anchorLocalIdByLocalId = new Map<number, number>()
+	for (const { localId, anchorLocalId } of pending)
+		if (localId !== null) anchorLocalIdByLocalId.set(localId, anchorLocalId)
+
+	const links: Array<{ realId: number; anchorRealId: number }> = []
+	for (const { realId, localId, anchorLocalId } of pending) {
+		const anchorRealId = entryLocalIdToRealId.get(anchorLocalId)
+		if (anchorRealId === undefined || anchorRealId === realId) continue
+
+		let cursor: number | undefined = anchorLocalId
+		for (
+			let depth = 0;
+			cursor !== undefined && depth < MAX_ANCHOR_DEPTH;
+			depth++
+		) {
+			if (cursor === localId) break
+			cursor = anchorLocalIdByLocalId.get(cursor)
+		}
+		// A walk that reaches a root leaves nothing in hand. Anything else
+		// stopped on the entry itself or ran past the ceiling, and a chain that
+		// does either is not one this entry may join.
+		if (cursor !== undefined) continue
+
+		links.push({ realId, anchorRealId })
+	}
+	return links
+}
+
 export interface LorebookEntryLike {
 	keys: string[]
 	content: string

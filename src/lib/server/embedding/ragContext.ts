@@ -23,6 +23,7 @@ import {
 } from "drizzle-orm"
 import type { PgTable } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
+import { castEdgeOnly, isCastEdge } from "$lib/server/utils/narrativeEdges"
 import {
 	CHARACTER_LORE_TYPE_ID,
 	DEFAULT_VECTOR_NAME,
@@ -410,10 +411,7 @@ export async function fetchScopedCandidates(
 				.from(schema.sessionMessages)
 				.where(
 					and(
-						eq(
-							schema.sessionMessages.sessionId,
-							context.sessionId
-						),
+						eq(schema.sessionMessages.sessionId, context.sessionId),
 						messageChannel
 					)
 				)
@@ -637,6 +635,7 @@ export async function fetchScopedCandidates(
 					schema.narrativeRelationships.lorebookId,
 					context.allLorebookIds
 				),
+				castEdgeOnly,
 				isNotNull(schema.narrativeRelationships.embedding),
 				eq(schema.narrativeRelationships.embeddingModel, modelId)
 			)
@@ -668,7 +667,7 @@ export async function fetchScopedCandidates(
 			)
 
 			for (const rel of rels) {
-				if (!rel.embedding) continue
+				if (!rel.embedding || !isCastEdge(rel)) continue
 				candidates.push({
 					source: "narrativeRelationship",
 					lorebookId: rel.lorebookId,

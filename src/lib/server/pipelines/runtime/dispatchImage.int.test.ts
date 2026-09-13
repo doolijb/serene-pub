@@ -50,7 +50,19 @@ const imageSampling = {
 }
 
 /** What the fake adapter saw, so a test can assert on it afterwards. */
-let seen: { req?: any; constructedWith?: any } = {}
+let seen: {
+	req?: any
+	constructedWith?: any
+	/**
+	 * Whether a progress callback was handed over at all.
+	 *
+	 * Recorded rather than inferred from the events, because the two answers
+	 * differ in what they cost: an adapter given no callback runs no poll and
+	 * decodes no preview, while one given a callback nobody listens to pays for
+	 * both. `streaming: off` is asking for the first.
+	 */
+	progressCallback?: unknown
+} = {}
 /** Renders currently inside `generateImage`, to prove they do not overlap. */
 let concurrent = 0
 let maxConcurrent = 0
@@ -69,6 +81,7 @@ class FakeAdapter {
 	// end if the fakes move with it.
 	async generateImage(req: any, opts: any = {}) {
 		seen.req = req
+		seen.progressCallback = opts.onProgress
 		preflightLog.push("render")
 		concurrent++
 		maxConcurrent = Math.max(maxConcurrent, concurrent)
@@ -550,6 +563,34 @@ describe("dispatchImage — progress and cancellation", () => {
 		expect(events).toContainEqual({ stage: "sampling", percent: 50 })
 	})
 
+	/**
+	 * The node's `streaming` parameter on a render.
+	 *
+	 * There is no token stream here, so what `off` turns off is the PROGRESS:
+	 * the poll an adapter runs beside the render and the preview frames it
+	 * decodes. Withheld rather than ignored — an adapter handed a callback it
+	 * must not call still pays for both and throws the answers away.
+	 */
+	it("hands no progress callback over when the node says off", async () => {
+		const events: any[] = []
+		await dispatch({
+			streaming: "off",
+			onProgress: (e: any) => events.push(e)
+		})
+		expect(seen.progressCallback).toBeUndefined()
+		expect(events).toEqual([])
+	})
+
+	it("hands it over at auto, which is what a render has always done", async () => {
+		const events: any[] = []
+		await dispatch({
+			streaming: "auto",
+			onProgress: (e: any) => events.push(e)
+		})
+		expect(typeof seen.progressCallback).toBe("function")
+		expect(events).toContainEqual({ stage: "sampling", percent: 50 })
+	})
+
 	it("an aborted render returns isAborted and writes nothing", async () => {
 		mode = "abort"
 		const out = await dispatch()
@@ -728,6 +769,58 @@ describe("dispatchImage — reached through the host", () => {
 			nodeKey: "render",
 			stage: "sampling"
 		})
+	})
+
+	it("carries the node's `streaming: off` through to the render", async () => {
+		// The host is where the parameter and the sink meet: a run with a
+		// listening sink AND a nameable run is exactly the case `off` has to
+		// override, because everything else already withholds the callback for
+		// reasons of its own.
+		const events: any[] = []
+		await callHost(
+			{
+				runId: "run-9f2",
+				sessionId: 3,
+				userId: 7,
+				sink: { onProgress: (e: any) => events.push(e) }
+			},
+			{ streaming: "off" }
+		)
+		expect(seen.progressCallback).toBeUndefined()
+		expect(events).toEqual([])
+	})
+
+	it("reads `off` off the node's own params slot", async () => {
+		// The binding half of the same road. The host takes `p.streaming`, and
+		// `p` is `resolveInput`'s output — so without this line the panel's
+		// picker stores a value that reaches the render as `undefined`.
+		const { coreBindings } = await import("./bindings")
+		const { createHost } = await import("./host")
+		const events: any[] = []
+		const host = createHost(
+			fakeDb as any,
+			{
+				runId: "run-9f2",
+				sessionId: 3,
+				userId: 7,
+				sink: { onProgress: (e: any) => events.push(e) }
+			} as any
+		)
+		const result = await coreBindings()["core:provider/generate-image@1"]!(
+			{
+				prompt: "a knight at dusk",
+				params: { streaming: "off" }
+			} as any,
+			{
+				call: (payload: unknown) => host.call!(payload, node as any),
+				signal: new AbortController().signal,
+				progress: () => {},
+				log: () => {}
+			} as any
+		)
+		expect((result as any).kind).toBe("ok")
+		expect(seen.progressCallback).toBeUndefined()
+		expect(events).toEqual([])
 	})
 
 	it("sends no progress at all when the host cannot name the run", async () => {

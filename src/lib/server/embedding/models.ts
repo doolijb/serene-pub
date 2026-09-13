@@ -61,3 +61,50 @@ export const EMBEDDING_MODELS: EmbeddingModelDef[] = [
 export function findModel(id: string): EmbeddingModelDef | undefined {
 	return EMBEDDING_MODELS.find((m) => m.id === id)
 }
+
+/**
+ * Does the LOCAL MODEL REGISTRY know this id?
+ *
+ * The catalogue above is three curated models; `local_models` is whatever the
+ * user actually downloaded, and its `modality` column is the one place that says
+ * an `.onnx` file is an embedding model rather than a generator (`kind` cannot —
+ * the GGUF header sniff files a BERT as `text`, which is why the two columns
+ * exist separately).
+ *
+ * Its own function rather than folded into `findModel`, for two reasons.
+ * `findModel` is synchronous and called from `EmbeddingModelDef`-shaped code
+ * that wants a `dtype`; a registry row has no tier, no dimensions and no dtype,
+ * so it cannot answer as one without inventing three fields. And this reads the
+ * database, so the caller decides when to pay for it — `loadEmbeddingModel`
+ * consults it only when the catalogue misses.
+ *
+ * Answers false rather than throwing when the database is unreachable: the
+ * caller's next step is a refusal naming the model, which is a better sentence
+ * than a database error in a path about loading a model.
+ */
+export async function isRegisteredLocalEmbeddingModel(
+	id: string
+): Promise<boolean> {
+	if (!id) return false
+	try {
+		const { db } = await import("$lib/server/db")
+		const schema = await import("$lib/server/db/schema")
+		const { and, eq, or } = await import("drizzle-orm")
+		const [row] = await db
+			.select({ id: schema.localModels.id })
+			.from(schema.localModels)
+			.where(
+				and(
+					eq(schema.localModels.modality, "embeddings"),
+					or(
+						eq(schema.localModels.modelName, id),
+						eq(schema.localModels.filename, id)
+					)
+				)
+			)
+			.limit(1)
+		return !!row
+	} catch {
+		return false
+	}
+}

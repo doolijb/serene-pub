@@ -14,6 +14,7 @@
  */
 
 import * as schema from "$lib/server/db/schema"
+import { isCastEdge } from "$lib/server/utils/narrativeEdges"
 import { eq } from "drizzle-orm"
 import { collectAliases, namesMatch } from "./summarizer/availableSceneCast"
 
@@ -68,7 +69,11 @@ export async function findDuplicateCandidates(
 		dismissed.map((d) => pairKey(d.bindingIdA, d.bindingIdB))
 	)
 	const relatedKeys = new Set(
-		relationships.map((r) => pairKey(r.fromNodeId, r.toNodeId))
+		// Two cast rows already joined by an edge are not duplicates of each
+		// other; an edge with an entry end says nothing about any pair.
+		relationships
+			.filter(isCastEdge)
+			.map((r) => pairKey(r.fromNodeId, r.toNodeId))
 	)
 
 	const candidates: DuplicateCandidate[] = []

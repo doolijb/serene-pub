@@ -172,13 +172,13 @@ async function syncManager(pluginId: string): Promise<void> {
 
 /**
  * Reconcile the manifest-declared registries with the enabled set: template
- * engines, and event subscriptions.
+ * engines, event subscriptions, and session presets.
  *
- * Both are projections of the `plugins` table, so both are stale the moment a
- * plugin is enabled, disabled, uninstalled or has a permission denied — and the
- * event half is the one where staleness has teeth, because an admin denying an
- * `event:` permission has to actually stop the subscription rather than only
- * change what the audit screen says.
+ * All three are projections of the `plugins` table, so all three are stale the
+ * moment a plugin is enabled, disabled, uninstalled or has a permission denied —
+ * and the event half is the one where staleness has teeth, because an admin
+ * denying an `event:` permission has to actually stop the subscription rather
+ * than only change what the audit screen says.
  */
 async function syncDeclarations(): Promise<void> {
 	try {
@@ -196,6 +196,18 @@ async function syncDeclarations(): Promise<void> {
 		await syncPluginEventHooks(db)
 	} catch (e) {
 		console.warn("[plugins] event-subscription sync failed:", e)
+	}
+	try {
+		// A package's `preset()` declarations reached no row at all until this
+		// (24 §10). They arrive disabled and an administrator enables them;
+		// disabling the plugin marks them withdrawn rather than deleting, since
+		// a session names its preset. See `syncPluginPresets`.
+		const { syncPluginPresets } = await import(
+			"$lib/server/pipelines/boot/registrySync"
+		)
+		await syncPluginPresets(db)
+	} catch (e) {
+		console.warn("[plugins] session-preset sync failed:", e)
 	}
 }
 

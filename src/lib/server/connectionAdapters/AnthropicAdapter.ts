@@ -10,10 +10,57 @@ import type { CompiledPrompt } from "./types"
 import type { TextGenResult } from "$lib/server/adapters/actions"
 import type { PreparedAttachment } from "$lib/server/adapters/attachments"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-import { anthropicSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
+import {
+	anthropicSamplingKeyMap,
+	isReasoningKey,
+	reasoningBudgetFor,
+	reasoningOf
+} from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
+import { ToolUseBlockAccumulator } from "./streamingToolCalls"
+
+/**
+ * The prompt-cache halves of an Anthropic `usage` block.
+ *
+ * ⚠ **`input_tokens` is not the prompt total here.** This is the one service
+ * that reports the three parts of a prompt separately — what it read fresh, what
+ * it read from the cache, and what it wrote to the cache — so the total is their
+ * sum. Forwarding `input_tokens` under `tokensPrompt` would report a 4,000-token
+ * prompt as 120 the moment caching started working, which is the reading exactly
+ * backwards.
+ *
+ * Each field is checked rather than read: absent stays absent, so a model that
+ * reports no reuse is never written down as having reused nothing (see
+ * `TextGenResult.tokensCached`).
+ */
+function cacheUsageFrom(usage: unknown): {
+	tokensPrompt?: number
+	tokensCached?: number
+	tokensCacheWrite?: number
+	tokensCompletion?: number
+} {
+	const u: any = usage
+	if (!u || typeof u !== "object") return {}
+	const num = (v: unknown) =>
+		typeof v === "number" && Number.isFinite(v) ? v : undefined
+	const input = num(u.input_tokens)
+	const read = num(u.cache_read_input_tokens)
+	const write = num(u.cache_creation_input_tokens)
+	const parts = [input, read, write].filter(
+		(n) => n !== undefined
+	) as number[]
+	const output = num(u.output_tokens)
+	return {
+		...(parts.length
+			? { tokensPrompt: parts.reduce((a, b) => a + b, 0) }
+			: {}),
+		...(read !== undefined ? { tokensCached: read } : {}),
+		...(write !== undefined ? { tokensCacheWrite: write } : {}),
+		...(output !== undefined ? { tokensCompletion: output } : {})
+	}
+}
 
 // Known Claude models for listModels
 const ANTHROPIC_MODELS = [
@@ -251,10 +298,43 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		// present IS the switch being on, so the key map is the only filter left.
 		for (const [key, value] of Object.entries(this.sampling)) {
 			if (anthropicSamplingKeyMap[key]) {
+				// Both reasoning keys land on `thinking`, which is an object
+				// rather than a value — built by `thinkingParam` below.
+				if (isReasoningKey(key)) continue
 				result[anthropicSamplingKeyMap[key]] = value
 			}
 		}
 		return result
+	}
+
+	/**
+	 * `thinking`, as the Messages API takes it — or nothing at all.
+	 *
+	 * ⚠ **This read `extraJson.thinking` and `extraJson.thinkingBudget` until
+	 * the ruling of 2026-09-12.** Reasoning effort is a sampling parameter
+	 * chosen per stage, not a property of the compute: with the toggle on the
+	 * connection, every stage sharing one Anthropic row thought exactly as hard
+	 * as every other, and the only way to split them was a second connection
+	 * carrying the same key. Stale `thinking`/`thinkingBudget` keys left in an
+	 * existing row's `extraJson` are read by nothing now — `extraJson` is jsonb
+	 * and an unread key costs nothing, which is why no migration clears them.
+	 *
+	 * Nothing at all when the sampler is switched off, which keeps a request
+	 * byte-identical to the one this adapter has always sent for a connection
+	 * that never turned thinking on.
+	 *
+	 * `budget_tokens` comes from the config's own `reasoningBudget` when it set
+	 * one, and from the shared level table otherwise — a number somebody typed
+	 * is a choice; the table is only the translation of a word.
+	 */
+	private thinkingParam(): Anthropic.ThinkingConfigParam | undefined {
+		const { level, budget } = reasoningOf(this.sampling)
+		if (!level) return undefined
+		if (level === "off") return { type: "disabled" }
+		return {
+			type: "enabled",
+			budget_tokens: reasoningBudgetFor(level, budget)
+		}
 	}
 
 	/**
@@ -369,6 +449,15 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 	}
 
 	/**
+	 * The Messages API takes `tools` and answers with `tool_use` content
+	 * blocks, both of which this class handles — which is all this property
+	 * claims. See `consumesTools` on the base class.
+	 */
+	override get consumesTools(): boolean {
+		return true
+	}
+
+	/**
 	 * The request's files, negotiated, capped and encoded — or a throw carrying
 	 * the engine's own sentence.
 	 *
@@ -411,9 +500,9 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 
 	async generateText(): Promise<TextGenResult> {
 		const model = this.connection.model || "claude-sonnet-4-5"
-		const stream = this.connection.extraJson?.stream ?? true
-		const useThinking = this.connection.extraJson?.thinking ?? false
-		const thinkingBudget = this.connection.extraJson?.thinkingBudget ?? 8000
+		const stream = this.streamingOn(
+			this.connection.extraJson?.stream ?? true
+		)
 
 		// No `useSessionFormat` argument, and its removal is the fix rather than a
 		// tidy-up. It was read inside `compilePrompt(args)` — which the pipeline
@@ -458,12 +547,23 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 			samplingConfig.max_tokens || this.sampling.responseTokens || 1024
 
 		// Extended thinking: requires betas header and disables temperature/top_p/top_k
-		const thinkingParam: Anthropic.ThinkingConfigParam | undefined =
-			useThinking
-				? { type: "enabled", budget_tokens: thinkingBudget }
-				: undefined
+		const thinkingParam = this.thinkingParam()
+		const useThinking = thinkingParam?.type === "enabled"
 
-		// When thinking is enabled, sampling params are restricted
+		// When thinking is enabled, sampling params are restricted — the
+		// service refuses the request outright if they are present, so this is
+		// not a preference.
+		//
+		// ⚠ Each one is RECORDED as ignored on the way out. A temperature a
+		// person set, on a request that could not carry it, is exactly the
+		// silent gap `ignoredSamplers` exists to close: without it the only
+		// evidence is an absence in the request body, and "I set temperature
+		// and nothing changed" has no answer anywhere on the screen.
+		if (useThinking)
+			for (const key of ["temperature", "topP", "topK"] as const)
+				if (this.sampling[key] !== undefined)
+					this.noteIgnoredSampler(key)
+
 		const allowedSampling = useThinking
 			? {} // temperature/top_p/top_k not allowed with extended thinking
 			: {
@@ -488,6 +588,25 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 			// else — the Messages API takes exactly that as `stop_sequences`.
 			// Omitted when empty rather than sent as `[]`.
 			...(this.stops.length ? { stop_sequences: this.stops } : {}),
+			/**
+			 * The tools, in the field the Messages API calls them (20 §9).
+			 *
+			 * `input_schema`, not `parameters` — the one place this format
+			 * differs from OpenAI's in more than a wrapper. Omitted when empty
+			 * rather than sent as `[]`, like `stop_sequences` above: a request
+			 * that declares no tools and one that declares none *available* are
+			 * different requests, and the second costs a tool-use system
+			 * preamble the model then reads on every turn.
+			 */
+			...(this.tools.length
+				? {
+						tools: this.tools.map((t) => ({
+							name: t.name,
+							description: t.description,
+							input_schema: t.parameters
+						}))
+					}
+				: {}),
 			...(system ? { system } : {}),
 			...(thinkingParam ? { thinking: thinkingParam } : {}),
 			...allowedSampling
@@ -504,6 +623,25 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 					messages: withAttachmentBlocks(messages, attachmentContent)
 				}
 			: textOnlyParams
+
+		// The request as it goes out, named once because both branches send it
+		// and the record below describes it.
+		const sentParams = {
+			...baseParams,
+			// The beta header rides an ENABLED thinking block only: `disabled`
+			// is an ordinary request that happens to say so out loud.
+			...(useThinking
+				? { betas: ["interleaved-thinking-2025-05-14"] }
+				: {})
+		}
+
+		// The record the inspector reads instead of a proxy: this format's own
+		// rendering of the request, filled in below as the response is read.
+		// Headers stay out of it — the key travels in one.
+		const wire = this.beginExchange({
+			url: `${normalizeBaseUrl(this.connection.baseUrl) || "https://api.anthropic.com"}/v1/messages`,
+			body: sentParams
+		})
 
 		const client = this.getClient()
 		// A fresh controller per generation — abort() below fires this, and the
@@ -523,16 +661,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 						if (this.isAborting) return
 
 						const streamResp = await client.messages.stream(
-							{
-								...baseParams,
-								...(thinkingParam
-									? {
-											betas: [
-												"interleaved-thinking-2025-05-14"
-											]
-										}
-									: {})
-							} as any,
+							sentParams as any,
 							{ signal: this.abortController?.signal }
 						)
 
@@ -540,12 +669,41 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 						// emitted, so it doesn't glue onto the end of a
 						// sentence the model actually wrote.
 						let thoughtSomething = false
+						/**
+						 * The call, assembled from its content block (20 §9).
+						 *
+						 * Declared for every streaming request rather than only
+						 * a tool-carrying one, so `streamedToolCall` below is
+						 * `null` ("nothing was called") rather than `undefined`
+						 * ("this adapter did not look") on both.
+						 */
+						const calls = new ToolUseBlockAccumulator()
 
 						for await (const event of streamResp) {
+							wire.frame(event)
 							if (this.isAborting) {
 								streamResp.controller.abort()
 								return
 							}
+
+							/**
+							 * The input accounting, which this service sends
+							 * unasked — both cache halves included.
+							 *
+							 * ⚠ `message_start` ONLY. `message_delta` carries a
+							 * usage block too, and which of the four fields are
+							 * on it varies by API version: one naming
+							 * `input_tokens` without the cache halves beside it
+							 * would re-sum the prompt from a third of its parts
+							 * and report it shrinking as caching improved.
+							 */
+							if (event.type === "message_start")
+								this.recordStreamedUsage(
+									cacheUsageFrom(
+										(event as any).message?.usage
+									)
+								)
+							calls.push(event)
 
 							// ⚠ A redacted block has NO delta — checked against
 							// the installed SDK: `RawContentBlockDelta` is
@@ -584,6 +742,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 								}
 							}
 						}
+						this.streamedToolCall = calls.first()
 					} catch (e: any) {
 						// An intentional abort throws too (the SDK rejects the
 						// aborted request) — don't surface that as an error,
@@ -606,17 +765,15 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 				}
 
 				const response = await client.messages.create(
-					{
-						...baseParams,
-						...(thinkingParam
-							? { betas: ["interleaved-thinking-2025-05-14"] }
-							: {})
-					} as any,
+					sentParams as any,
 					{ signal: this.abortController?.signal }
 				)
+				wire.received(response)
 
 				let content = ""
 				let thinking = ""
+				let toolCall: ReturnType<AnthropicAdapter["toolCallFrom"]> =
+					null
 
 				for (const block of response.content) {
 					if ((block as any).type === "thinking") {
@@ -628,6 +785,18 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 							(thinking ? "\n" : "") + REDACTED_THINKING_NOTICE
 					} else if (block.type === "text") {
 						content += block.text
+					} else if (
+						(block as any).type === "tool_use" &&
+						!toolCall
+					) {
+						// A content BLOCK on this format, interleaved with the
+						// prose rather than beside it — which is why the prose
+						// above keeps accumulating past it. The first call only,
+						// see `TextGenResult.toolCall`.
+						toolCall = this.toolCallFrom(
+							(block as any).name,
+							(block as any).input
+						)
 					}
 				}
 
@@ -635,7 +804,10 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 					completionResult: content,
 					compiledPrompt,
 					isAborted: this.isAborting,
-					thinkingContent: thinking || undefined
+					thinkingContent: thinking || undefined,
+					toolCall,
+					// Recorded, never acted on: see `TextGenResult.tokensCached`.
+					...cacheUsageFrom((response as any).usage)
 				}
 			} catch (e: any) {
 				if (this.isAborting) {

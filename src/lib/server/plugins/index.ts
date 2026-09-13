@@ -103,6 +103,18 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 		} catch (e) {
 			console.warn("[plugins] event-subscription sync failed:", e)
 		}
+		// Manifest-declared session presets, projected into the rows an
+		// administrator enables from (24 §10). Best-effort for the same reason
+		// as the two above, and at boot as well as on enable because a preset
+		// withdrawn while the app was down has to come back when it starts.
+		try {
+			const { syncPluginPresets } = await import(
+				"$lib/server/pipelines/boot/registrySync"
+			)
+			await syncPluginPresets(db)
+		} catch (e) {
+			console.warn("[plugins] session-preset sync failed:", e)
+		}
 	}
 
 	mgr.markReady()

@@ -22,9 +22,14 @@ import * as schema from "$lib/server/db/schema"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 import { storedCapabilities } from "$lib/server/pipelines/runtime/capabilityGuard"
 import {
-	CORE_TEMPLATE_ENGINE,
-	contextPoolKeyFor
-} from "$lib/shared/pipelines/poolKey"
+	connectionModels as listConnectionModels,
+	defaultModelsByConnection
+} from "$lib/server/connections/models"
+import { contextPoolKeyFor } from "$lib/shared/pipelines/poolKey"
+import {
+	acceptedEngines,
+	languageOf
+} from "$lib/shared/pipelines/templateEngines"
 import { type Decl } from "$lib/server/pipelines/config/panel/types"
 
 /** Exported for `judgeAgainst`'s callers — see the ⚠ on it. */
@@ -36,6 +41,18 @@ export type ChoiceList = Array<{
 	disabled?: boolean
 	/** Why — in a person's words, never a raw capability id. */
 	reason?: string
+	/**
+	 * For a connection choice: the MODELS on that endpoint (0114) — the second
+	 * half of the pair the slot stores. Absent for every other kind of choice,
+	 * and for an endpoint that has none. See `ConfigOption.choices`.
+	 */
+	models?: Array<{
+		id: number
+		name: string
+		model: string
+		enabled: boolean
+		isDefault: boolean
+	}>
 }>
 
 /**
@@ -63,6 +80,38 @@ export async function choiceSets(db: Db, specId: number) {
 		.select()
 		.from(schema.connections)
 		.orderBy(asc(schema.connections.id))
+
+	// Which model each endpoint means when nobody has said (0114). One query for
+	// the whole instance, because this set is built once and read against every
+	// slot in the panel — the same reason the capability cache exists.
+	const defaultModels = await defaultModelsByConnection(db)
+	// And ALL of them, grouped, for the pair picker that sits beside the
+	// connection select. One query for the instance rather than one per
+	// connection, and the same ride-along argument `prompt` makes on
+	// `ConfigOption`: the second half of the pair a round trip away from every
+	// selection means the model picker renders empty on every change.
+	const modelsByConnection = new Map<
+		number,
+		NonNullable<ChoiceList[number]["models"]>
+	>()
+	for (const m of await db
+		.select()
+		.from(schema.connectionModels)
+		.orderBy(
+			asc(schema.connectionModels.sortOrder),
+			asc(schema.connectionModels.name),
+			asc(schema.connectionModels.id)
+		)) {
+		const list = modelsByConnection.get(m.connectionId) ?? []
+		list.push({
+			id: m.id,
+			name: m.name,
+			model: m.model,
+			enabled: m.enabled,
+			isDefault: m.isDefault
+		})
+		modelsByConnection.set(m.connectionId, list)
+	}
 
 	const sampling = await db
 		.select()
@@ -266,7 +315,19 @@ export async function choiceSets(db: Db, specId: number) {
 			// the run then refuses it, and nothing on screen explains why the
 			// two disagreed. One reader, one answer.
 			capabilities: storedCapabilities(c),
-			...(c.model ? { description: c.model } : {})
+			// The DEFAULT MODEL's display name, from `connection_models` and no
+			// longer from the endpoint's legacy mirror (0114). The subtitle's
+			// job is unchanged — two rows both called "Ollama" are otherwise
+			// indistinguishable — but what identifies a connection now is the
+			// model it resolves to, and the name is what a person chose to call
+			// it rather than the identifier it happens to send.
+			...(defaultModels.get(c.id)
+				? { description: defaultModels.get(c.id)!.name }
+				: {}),
+			// The pair's second half, carried rather than fetched on selection.
+			...(modelsByConnection.get(c.id)
+				? { models: modelsByConnection.get(c.id)! }
+				: {})
 		})) as ChoiceList,
 		sampling: (sampling as any[]).map((s) => ({
 			id: s.id,
@@ -291,6 +352,49 @@ export async function choiceSets(db: Db, specId: number) {
 		/** Type display info, for the chain entries' labels and badges. */
 		scriptTypeMeta
 	}
+}
+
+/**
+ * One slot's template choices, gathered across every language it accepts.
+ *
+ * Re-sorted as one list rather than concatenated pool by pool: the groups mean
+ * "written here / shipped / also fits", and a reader scanning for the one they
+ * wrote would otherwise have to find `usedHere` once per language.
+ *
+ * The language is written into the subtitle only when the slot accepts more
+ * than one — on a single-language slot it is a constant, and a constant in
+ * every row of a dropdown is noise that displaces the subtitle that says
+ * something (`from <pipeline>`).
+ */
+function contextChoices(
+	sets: { contextTemplatesBy: Map<string, ChoiceList> },
+	d: Decl,
+	nodeTypeId: string
+): ChoiceList {
+	const engines = acceptedEngines(d)
+	const POOL_ORDER = { usedHere: 0, shipped: 1, alsoFits: 2 } as const
+	const rank = (g: unknown) =>
+		POOL_ORDER[g as keyof typeof POOL_ORDER] ?? POOL_ORDER.alsoFits
+	const out = engines.flatMap((engine) =>
+		(
+			sets.contextTemplatesBy.get(
+				contextPoolKeyFor(nodeTypeId, engine)
+			) ?? []
+		).map((c) =>
+			engines.length > 1
+				? {
+						...c,
+						description: c.description
+							? `${languageOf(engine)} · ${c.description}`
+							: languageOf(engine)
+					}
+				: c
+		)
+	)
+	return out.sort(
+		(a: any, b: any) =>
+			rank(a.group) - rank(b.group) || a.label.localeCompare(b.label)
+	) as ChoiceList
 }
 
 /**
@@ -397,15 +501,13 @@ export const choicesFor = (
 		return d.variableId
 			? (sets.variableTemplatesBy.get(d.variableId) ?? [])
 			: []
+	// The union of the accepted pools, not one of them. The pool is still
+	// `(node type, engine)` and rows never mix inside it; what a slot declaring
+	// several languages changes is how many pools feed this one picker. Each
+	// row keeps saying which language it is in, because "Default" twice in a
+	// list is the ambiguity the engine half of the pool exists to prevent.
 	if (d.control === "context-template-ref")
-		return d.nodeTypeId
-			? (sets.contextTemplatesBy.get(
-					contextPoolKeyFor(
-						d.nodeTypeId,
-						d.engine ?? CORE_TEMPLATE_ENGINE
-					)
-				) ?? [])
-			: []
+		return d.nodeTypeId ? contextChoices(sets, d, d.nodeTypeId) : []
 	// The union of the hook's accepted types, in declaration order — which is
 	// the attachment rule made visible: nothing outside `accepts` is offered,
 	// and the write path refuses whatever a stale client offers anyway.

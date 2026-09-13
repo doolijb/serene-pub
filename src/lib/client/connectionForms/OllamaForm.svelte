@@ -18,16 +18,22 @@
 		{ value: "h", label: "h" }
 	]
 
+	/**
+	 * ⚠ `think` is gone from this form (ruling 2026-09-12): reasoning is a
+	 * SAMPLING parameter now, chosen per stage on the sampling config rather
+	 * than once for every stage this connection serves. Stale keys in an
+	 * existing row's `extraJson` are read by nothing: the column is jsonb, so
+	 * an unread key costs nothing and no migration clears them. Do not re-add
+	 * the toggle here.
+	 */
 	interface ExtraFieldData {
 		stream: boolean
-		think: boolean
 		keepAliveNumber: number
 		keepAliveUnit: string
 	}
 
 	interface ExtraJson {
 		stream?: boolean
-		think?: boolean
 		keepAlive?: string
 	}
 
@@ -154,7 +160,6 @@
 	function extraJsonToExtraFields(extraJson: ExtraJson): ExtraFieldData {
 		return {
 			stream: extraJson.stream || false,
-			think: extraJson.think || false,
 			keepAliveNumber: extraJson.keepAlive
 				? parseInt(extraJson.keepAlive) || 300
 				: 300,
@@ -167,7 +172,6 @@
 	function extraFieldsToExtraJson(fields: ExtraFieldData): ExtraJson {
 		return {
 			stream: fields.stream,
-			think: fields.think,
 			keepAlive: `${fields.keepAliveNumber}${fields.keepAliveUnit}`
 		}
 	}
@@ -322,20 +326,6 @@
 					class="flex items-center justify-between gap-4"
 				>
 					<Switch.Label class="font-semibold">Stream</Switch.Label>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
-				<Switch
-					name="think"
-					checked={ollamaFields.think}
-					onCheckedChange={(e) => (ollamaFields!.think = e.checked)}
-					class="flex items-center justify-between gap-4"
-				>
-					<Switch.Label class="font-semibold">Think</Switch.Label>
 					<Switch.Control
 						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>

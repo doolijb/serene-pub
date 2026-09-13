@@ -109,13 +109,30 @@ export global {
 		typeof schema.completionTemplates.$inferSelect
 	export type InsertCompletionTemplate =
 		typeof schema.completionTemplates.$inferInsert
-	export type UpdateCompletionTemplate =
-		Partial<SelectCompletionTemplate> & { id: number }
+	export type UpdateCompletionTemplate = Partial<SelectCompletionTemplate> & {
+		id: number
+	}
 
 	// Connection types
 	export type SelectConnection = typeof schema.connections.$inferSelect
 	export type InsertConnection = typeof schema.connections.$inferInsert
 	export type UpdateConnection = Partial<SelectConnection> & { id: number }
+
+	/**
+	 * One MODEL on an endpoint (0114) — the second half of the pair.
+	 *
+	 * Global, like the connection row types above it: `connections/models.ts`
+	 * merges one onto a connection, four socket handlers write them, and the
+	 * pickers name them, so the alternative is five files importing a row type
+	 * for a table whose name they already say out loud.
+	 */
+	export type SelectConnectionModel =
+		typeof schema.connectionModels.$inferSelect
+	export type InsertConnectionModel =
+		typeof schema.connectionModels.$inferInsert
+	export type UpdateConnectionModel = Partial<SelectConnectionModel> & {
+		id: number
+	}
 	/**
 	 * A connection AS AN ADAPTER RECEIVES IT: the row, plus the
 	 * `completion_templates` row its `prompt_format` names, already
@@ -144,6 +161,26 @@ export global {
 	 * back to exactly what the renderer falls back to for that case.
 	 */
 	export type AdapterConnection = SelectConnection & {
+		/**
+		 * Which `connection_models` row this connection was MERGED with (0114),
+		 * or null for an endpoint that has none.
+		 *
+		 * ⚠ The merge is why every adapter still reads `this.connection.model`
+		 * and still gets the right string: `mergeEndpointModel` substitutes the
+		 * model's identifier, template, tokenizer and capability layers INTO the
+		 * row before it travels, so the adapters did not move. These three
+		 * fields are what the endpoint has no column for, carried so a queue
+		 * label, a receipt and `dispatchStep`'s token budget can name the model
+		 * rather than the endpoint.
+		 *
+		 * ⚠ OPTIONAL, for the reason `completionTemplate` and `wireMode` below
+		 * are: a hand-built connection (a unit test, `connections:test` on
+		 * unsaved form state) has never been through the merge.
+		 */
+		connectionModelId?: number | null
+		connectionModelName?: string | null
+		/** The model's own context window, or null for "the sampling config decides". */
+		contextWindow?: number | null
 		completionTemplate?: CompletionTemplate | null
 		/**
 		 * Which METHOD this connection wants to be called by — `chat`

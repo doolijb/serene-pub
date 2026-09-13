@@ -58,6 +58,19 @@ vi.mock(
 	"$lib/server/imageAdapters/KoboldCppManagedImageAdapter",
 	stub("KoboldCppManagedImage")
 )
+vi.mock(
+	"$lib/server/embeddingAdapters/LocalOnnxEmbeddingAdapter",
+	stub("LocalOnnxEmbedding")
+)
+vi.mock(
+	"$lib/server/embeddingAdapters/OpenAIEmbeddingAdapter",
+	stub("OpenAIEmbedding")
+)
+vi.mock(
+	"$lib/server/embeddingAdapters/OllamaEmbeddingAdapter",
+	stub("OllamaEmbedding")
+)
+vi.mock("$lib/server/nerAdapters/LocalOnnxNerAdapter", stub("LocalOnnxNer"))
 
 describe("ADAPTER_REGISTRY", () => {
 	/**
@@ -91,7 +104,15 @@ describe("ADAPTER_REGISTRY", () => {
 		// nothing anywhere saying why.
 		const { ADAPTER_REGISTRY } = await import("./registry")
 		for (const [type, modules] of Object.entries(ADAPTER_REGISTRY))
-			expect({ type, has: !!(modules.text || modules.image) }).toEqual({
+			expect({
+				type,
+				has: !!(
+					modules.text ||
+					modules.image ||
+					modules.embedding ||
+					modules.ner
+				)
+			}).toEqual({
 				type,
 				has: true
 			})
@@ -99,12 +120,16 @@ describe("ADAPTER_REGISTRY", () => {
 })
 
 describe("the loaders", () => {
-	it("route exactly what the registry says, both families", async () => {
+	it("route exactly what the registry says, all four families", async () => {
 		const { ADAPTER_REGISTRY } = await import("./registry")
 		const { getConnectionAdapter } = await import(
 			"../utils/getConnectionAdapter"
 		)
 		const { getImageAdapter } = await import("../utils/getImageAdapter")
+		const { getEmbeddingAdapter } = await import(
+			"../utils/getEmbeddingAdapter"
+		)
+		const { getNerAdapter } = await import("../utils/getNerAdapter")
 
 		for (const [type, modules] of Object.entries(ADAPTER_REGISTRY)) {
 			// `.then(() => true, () => false)` rather than rejects.toThrow in a
@@ -119,10 +144,20 @@ describe("the loaders", () => {
 				() => true,
 				() => false
 			)
-			expect({ type, text, image }).toEqual({
+			const embedding = await getEmbeddingAdapter(type).then(
+				() => true,
+				() => false
+			)
+			const ner = await getNerAdapter(type).then(
+				() => true,
+				() => false
+			)
+			expect({ type, text, image, embedding, ner }).toEqual({
 				type,
 				text: !!modules.text,
-				image: !!modules.image
+				image: !!modules.image,
+				embedding: !!modules.embedding,
+				ner: !!modules.ner
 			})
 		}
 
@@ -142,11 +177,21 @@ describe("the loaders", () => {
 			"../utils/getConnectionAdapter"
 		)
 		const { getImageAdapter } = await import("../utils/getImageAdapter")
+		const { getEmbeddingAdapter } = await import(
+			"../utils/getEmbeddingAdapter"
+		)
 		await expect(getConnectionAdapter("not-a-type")).rejects.toThrow(
 			/Unsupported connection type/
 		)
 		await expect(getImageAdapter("not-a-type")).rejects.toThrow(
 			/No image adapter/
+		)
+		await expect(getEmbeddingAdapter("not-a-type")).rejects.toThrow(
+			/No embedding adapter/
+		)
+		const { getNerAdapter } = await import("../utils/getNerAdapter")
+		await expect(getNerAdapter("not-a-type")).rejects.toThrow(
+			/No NER adapter/
 		)
 	})
 })

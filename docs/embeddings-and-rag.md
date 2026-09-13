@@ -2,7 +2,7 @@
 
 Serene Pub can quietly turn your characters, personas, and lorebook content into searchable embeddings, then pull the most relevant pieces back into the prompt as a conversation grows.
 
-This is a separate system from [Summarization](./summarization.md), which condenses session messages into permanent lorebook entries — the two are related (summarization output gets embedded too) but independently enabled and configured.
+This is a separate system from [Summarization](./summarization.md), which condenses session messages into permanent lorebook entries — the two are related (summarization output gets embedded too) but configured separately; only RAG has a switch.
 
 ## Overview
 
@@ -13,7 +13,7 @@ As a session gets long, older messages and related lore don't just disappear fro
 
 ### How retrieval fits into a generated reply
 
-When you send a message, Serene Pub's prompt builder checks whether embeddings are enabled and ready. If so, it runs a semantic search scoped to the current session: the session's own messages plus the content of the session's own lorebook only — deliberately *not* a linked character's or persona's own separate lorebook, and not messages from other sessions, even ones sharing the same lorebook and cast. RAG only ever draws on the story world the session itself is scoped to, never on an unrelated lorebook a cast member happens to also be attached to elsewhere. Results are ranked by similarity, boosted slightly for recency, and capped per content type (a handful of messages, world lore entries, character lore entries, history entries, and narrative-graph relationships) so retrieved context doesn't crowd out the guaranteed recent messages. If embeddings are off or the model isn't ready, prompt building falls back to non-semantic (keyword/recency-based) content selection instead.
+When you send a message, Serene Pub's prompt builder checks whether embeddings are enabled and ready. If so, it runs a semantic search scoped to the current session: the session's own messages plus the content of the session's own lorebook only — deliberately _not_ a linked character's or persona's own separate lorebook, and not messages from other sessions, even ones sharing the same lorebook and cast. RAG only ever draws on the story world the session itself is scoped to, never on an unrelated lorebook a cast member happens to also be attached to elsewhere. Results are ranked by similarity, boosted slightly for recency, and capped per content type (a handful of messages, world lore entries, character lore entries, history entries, and narrative-graph relationships) so retrieved context doesn't crowd out the guaranteed recent messages. If embeddings are off or the model isn't ready, prompt building falls back to non-semantic (keyword/recency-based) content selection instead.
 
 ### What gets embedded
 
@@ -25,61 +25,56 @@ Narrative graph **nodes** are embedded and tracked for staleness like everything
 
 RAG scoring only ever considers messages _older_ than the most recent ten in a session — those ten are always included in the prompt directly, so there's nothing for retrieval to add. This also means sessions with ten or fewer messages are treated as not applicable for RAG at all: there's no [RAG notice](#understanding-rag-notices), and nothing gets prioritized in the queue for them, because everything already fits in the guaranteed window.
 
-## Enabling Embeddings
+## Embedding connections
 
-Embeddings don't have their own left-navigation icon. They're configured from an **Embedding** card inside the **Connections** sidebar (the `Icons.Cable`-icon nav entry) — and that card is itself hidden until an admin has already turned embeddings on. The actual first-time entry point is the **Enable Embeddings** toggle on the [System Settings](./system-settings.md) tab (or the onboarding wizard's Embeddings/RAG step, which does the same thing) — either one jumps you straight into the Connections sidebar with the now-visible Embedding card open. Once configured, the card shows a two-card chooser the first time it has nothing set up yet:
+Embeddings are a section of the **Connections** sidebar, beside LLMs and Image. An embedding connection is a connection like any other: a service, a base URL and key where the service needs them, a model, and an idle TTL. Three services are offered:
 
-- **Local Model** — runs a small embedding model on this device; one-time download, then works fully offline with no per-request cost. Not offered on Android (see below).
-- **External API** — points at any OpenAI-compatible `/embeddings` endpoint: OpenAI itself, or a self-hosted Ollama/LM Studio/llama.cpp server elsewhere on your network. The base URL, API key, and model name are tested against a real embed call before anything is saved.
+- **Local ONNX** runs a model on this device: one download, then fully offline with no per-request cost. Not offered where the native runtime is unavailable (Android).
+- **OpenAI-compatible** points at any `/embeddings` endpoint: OpenAI, or a self-hosted LM Studio or llama.cpp server on your network.
+- **Ollama** uses Ollama's own embed endpoint with any embedding model it has pulled.
 
-Once configured, the panel switches to its normal Queue/Settings view (below), and the Settings tab gains **Switch to Local Model** / **Switch to External API** actions for reconfiguring later, plus a **Disable Embeddings** action (RAG then falls back to keyword search, and the panel returns to the chooser).
+One embedding connection is starred, **Use for embeddings**, and that star is what turns retrieval by meaning on. With no star, retrieval runs on keywords alone. There is no separate switch.
 
-The onboarding wizard's Embeddings/RAG step doesn't duplicate this setup UI — its **Open Embeddings Settings** button opens this same panel and the wizard waits for it to report ready before letting you continue, the same pattern used for the Ollama/KoboldCPP "Easy Setup" steps. A **Disable & Skip** button is offered if you change your mind mid-wizard after already enabling something.
-
-**On Android**, only External API is offered — on-device embedding models depend on a native library (`onnxruntime-node`) that can't run in the Android app's Bionic-based runtime. This is actually a general capability check, not an Android-only special case: Serene Pub probes whether the local embedding engine can load at all on the current system, and Android is just a fast, always-true instance of that check — the same "Local Model not supported here" path would kick in on any other platform where that native library doesn't ship a working build (Intel Macs have hit this in the past, for example). See [Android App](./android.md) for the full list of Android-specific limitations.
+The onboarding wizard's Embeddings/RAG step explains this and offers **Open Embedding Connections**; the wizard waits for a starred connection before treating the step as done.
 
 ### Choosing a local embedding model
 
-If you choose Local Model, you pick from three tiers, each trading speed for retrieval quality:
+Local ONNX offers three tiers, each trading speed for retrieval quality:
 
-| Tier     | Model               | Dimensions | Size    | Notes                                                                                                                                                                                                             |
-| -------- | ------------------- | ---------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Fast     | all-MiniLM-L6-v2    | 384        | ~80 MB  | Lightweight; good for shorter lorebook entries and fact-style lore; best if RAM is limited or you want to get started immediately.                                                                                |
-| Balanced | EmbeddingGemma-300M | 768        | ~300 MB | Google's current-generation embedding model; multilingual, with strong semantic understanding of longer prose and character descriptions; a good default for most setups.                                         |
-| Best     | bge-m3              | 1024       | ~570 MB | Top-tier, multilingual retrieval quality with an 8192-token context window — 16x the reach of the previous best-tier model, useful for long character and lorebook entries; recommended if you have the hardware. |
+| Tier     | Model               | Dimensions | Size    | Notes                                                                                                                                                                     |
+| -------- | ------------------- | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fast     | all-MiniLM-L6-v2    | 384        | ~80 MB  | Lightweight; good for shorter lorebook entries and fact-style lore; best if RAM is limited or you want to get started immediately.                                        |
+| Balanced | EmbeddingGemma-300M | 768        | ~300 MB | Google's current-generation embedding model; multilingual, with strong semantic understanding of longer prose and character descriptions; a good default for most setups. |
+| Best     | bge-m3              | 1024       | ~570 MB | Top-tier, multilingual retrieval quality with an 8192-token context window, useful for long character and lorebook entries; recommended if you have the RAM.              |
 
-All three run fully locally via an ONNX-based embedding runtime — nothing is sent to an external API. Balanced and Best load int8-quantized weights (a small quality tradeoff for a much smaller download than full precision); Fast already downloads a small enough model that quantizing it further isn't worthwhile. Models are downloaded once and cached; switching models later re-downloads only if the new one isn't cached yet.
+Models you have placed under the local models folder with the embeddings modality are offered beside these.
 
-### Changing models or backends later invalidates existing embeddings
+### Moving the star re-indexes everything
 
-Every embedded row stores which model (and, for External API, which endpoint) produced it. If you switch — via **Switch to Local Model**/**Switch to External API**, the **Change Model** button, or by reconfiguring the API's model field — **all existing embeddings become "stale"**: they were produced by a source that's no longer active, so they're excluded from RAG search and automatically re-queued for re-embedding. Content also becomes stale automatically whenever its underlying text is edited after being embedded (its "updated" timestamp moves past its "last vectorized" timestamp).
+Every embedded row records which model and endpoint produced it. Starring a different embedding connection asks you to confirm and names the cost: "Every embedded row is re-indexed against the new model: N rows". On confirm the old vectors are deleted and the queue starts from the beginning against the new model. Starring a second connection that names the same endpoint and model is a no-op. Unstarring stops the queue and keeps the vectors.
 
-### Model Idle TTL
+### Model idle TTL
 
-On the Settings tab (Local Model mode only): **Model Idle TTL**, a number-of-minutes field with a description of "Unload the embedding model after this many minutes of inactivity. Set to 0 to keep it loaded indefinitely." This frees up RAM when embedding work has been idle for a while, at the cost of a short reload delay the next time it resumes. Not applicable in External API mode — there's no local model to unload.
+On a Local ONNX connection, **Idle TTL** unloads the model after that many minutes of inactivity, freeing RAM between bursts of embedding work. 0 keeps it loaded.
 
-## The Embeddings Sidebar
+## Named entity connections
 
-Once configured, the Embeddings Sidebar has two tabs: **Queue** and **Settings**.
+Named entities are a fourth Connections section. One local service is offered (ONNX, token classification) with two catalogue models: bert-base-NER (English; people, places, organisations, other; about 109 MB) and distilbert multilingual NER (ten languages; people, places, organisations, dates; about 135 MB). The form has no base URL or key, only an idle TTL.
 
-### The Queue tab
+Starring one, **Use for entity extraction**, adds a tier to name extraction: the spans the model finds are stored beside the names the lorebook already knows, so an entry can be matched by what a scene calls it even in lower case. With no star the extraction lane runs on the lorebook's own names and capitalised words, which is a working state rather than an off one. A starred model that fails to load falls back to that state and says so.
 
-The Queue tab shows:
+Starring a different entity model asks first and names the cost: "Every annotated row is re-scanned against the new model: N rows". On confirm every annotation is dropped and rebuilt through the background lane. A second connection naming the same model is a no-op; unstarring keeps what has been scanned.
 
-- A **status card** at the top (Running / Paused / Idle) with a Start or Stop button, plus a live "Completed" and "Queued" counter. While running, it shows the label of the item currently being embedded (e.g. a specific session message, character, or lorebook entry).
-- A **Queue** list of pending "priority groups" — each group bundles one session together with its lorebook, linked characters, and linked personas, so a session's content is embedded as a unit rather than getting interleaved with unrelated content. Each queued group shows its label, owner, and a short summary (e.g. "2 chars · 1 persona · 1 lorebook"). Groups can be reordered with up/down arrows or removed from the queue entirely with the X button.
-- A **Recent** history list of the last completed groups, each with a relative "time ago" timestamp, kept for reference after they finish.
+## The starred connection's detail panel
 
-Within a group, content is embedded in a fixed order: session messages first, then lorebook content (world lore → character lore → history entries → narrative graph nodes → narrative graph relationships), then characters, then personas. Once the priority queue is empty, the queue falls back to a global sweep that finds any other unembedded or stale content anywhere in the database, so nothing is left behind indefinitely.
+The starred embedding connection shows its queue:
 
-### The Settings tab
+- A **status card** (Running / Paused / Idle) with Start or Stop, live Completed and Queued counters, and the label of the item being embedded.
+- A **Queue** of pending priority groups: one session together with its lorebook, linked characters and linked personas, so a session's content is embedded as a unit.
+- A **Recent** list of completed groups.
+- A **Load now** action and a download bar when the local model is not in memory, for example after a server restart.
 
-The Settings tab surfaces:
-
-- A **warning banner** if a local embedding model isn't currently loaded in memory — for example after a server restart, or if the cached model files are missing — with a "Reload Model" / "Re-download Model" button.
-- A card showing the active model/API's name, dimensions, and (for local models) tier badge, size, and description, plus a "Ready" / "Not ready" status pill.
-- The **Model Idle TTL** control described above (local mode only).
-- **Switch to Local Model** / **Switch to External API** and **Disable Embeddings** actions.
+Within a group, content is embedded in a fixed order: session messages first, then lorebook content (world lore, character lore, history entries, narrative graph nodes, narrative graph relationships), then characters, then personas.
 
 ### Understanding queue states
 
@@ -91,7 +86,7 @@ The queue has three states, shown by both the sidebar's status card and the head
 
 ### Troubleshooting a stuck or empty queue
 
-If the queue looks stuck at "Idle" with items still needing embeddings, check the Settings tab first — the queue silently stops (and logs a warning server-side) if embeddings are disabled, if a local model fails to auto-load (most commonly because it isn't cached and can't be re-downloaded, or the server restarted and the model needs to be reloaded), or if an External API config has stopped validating. Reloading or re-downloading the model from the warning banner, then pressing Start on the Queue tab, resolves most local-mode cases. If a specific session's content never seems to finish indexing, the RAG notice inside that session has a "Prioritize in queue" button that jumps its content to the very front of the queue.
+If the queue looks stuck at "Idle" with items still needing embeddings, check the starred connection's detail panel first — the queue silently stops (and logs a warning server-side) if embeddings are disabled, if a local model fails to auto-load (most commonly because it isn't cached and can't be re-downloaded, or the server restarted and the model needs to be reloaded), or if an External API config has stopped validating. Reloading or re-downloading the model from the warning banner, then pressing Start on the Queue tab, resolves most local-mode cases. If a specific session's content never seems to finish indexing, the RAG notice inside that session has a "Prioritize in queue" button that jumps its content to the very front of the queue.
 
 ## Understanding RAG Notices
 
@@ -120,6 +115,24 @@ Rather than a single similarity search, retrieval runs two passes: a "current" q
 Each of the two passes (current and recent) actually embeds every message in its query window individually, runs a separate similarity search per message-embedding, and combines those per-message result lists with Reciprocal Rank Fusion (an item's position in each list counts more than its raw score) before re-ranking with Maximal Marginal Relevance, which intentionally trades a little relevance for diversity so the retrieved set doesn't fill up with five near-duplicate restatements of the same fact — all of this RRF+MMR work happens _within_ a single pass. The current-pass and recent-pass results are then combined by simple de-duplication (the current pass's items win; the recent pass only contributes items not already seen), not by a second round of RRF across passes. A small recency boost is also applied to message scores, and only results that clear an adaptive similarity threshold are kept.
 
 One consequence worth knowing: the per-content-type budget described below is enforced separately inside each of the two passes, not globally across both. If the current and recent passes surface mostly disjoint items, the effective number of results for a given content type in one generation can end up close to double the stated per-pass budget, not capped at it.
+
+### Relationships from the narrative graph
+
+Relationships are retrieved the same way lore is. Serene Pub walks the narrative graph from whoever is speaking — what they think of the others, what the others think of them, and any figures the whole world knows of — and offers each individual relationship as a candidate that competes for the context window, rather than pasting the whole graph in.
+
+They are ordered by three things, in this order:
+
+1. **Who is in the scene.** A relationship with someone in this chat's cast outranks one with a character who is only in the lorebook.
+2. **Whose relationship it is.** A tie the speaking character is party to outranks one between two other people.
+3. **What changed most recently.** Among relationships that tie on the first two, the ones edited most recently come first.
+
+The order is strict: presence beats everything under it, and being the speaker's own beats recency. A relationship the scene is present for is never pushed down by one that was merely edited a minute ago.
+
+**Relationships get no share of the context window until you give them one.** Under **Context split** on the ranking step, the Relationships band starts at zero, which leaves the whole graph out of the budget — so the retrieval panel lists every relationship as _Left out — Relationships is switched off: its share is zero_, and nothing is spent. Drag that band above zero and relationships start competing for room like world lore and history do.
+
+The band is also what the prompt's relationship sections are written from. While it has no share, nothing is selected and those sections carry the narrative-graph block they always have — every relationship the walk reached, in whatever order the rows came back, governed only by the **Most relationships** ceiling on the two relationship steps. Give the band a share and the same sections are rebuilt from what ranking actually chose: the relationships that were selected, in the order above, and only as many as the band's slice of the window and its **Most entries per source** ceiling had room for. Nothing else about them changes — the same headings, the same layout, the same **Relationship perspectives** and **Known relationships** blocks — so raising the share narrows the graph in the prompt to the part of it that earned the room, and lowering it back to zero restores the full block.
+
+Every relationship that is considered shows up in the retrieval explanation with its reasons written out — _someone on this tie is in the cast_, _the speaking character is party to it_, _2nd most recently changed of 6_ — so an absent relationship has an answer rather than a shrug. See [Lorebooks](./lorebooks.md) for how relationships are created and edited.
 
 ### Always-included content
 

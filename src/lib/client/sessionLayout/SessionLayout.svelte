@@ -45,7 +45,10 @@
 	// take no layout space at all and are reached only as an overlay, opened
 	// from a two-button group the app header renders. This module is the bridge
 	// — the header is a sibling of the routed page, so context cannot reach it.
-	import { mobileSidePanels } from "./mobileSidePanels.svelte"
+	import {
+		mobileSidePanels,
+		type MobileGroup
+	} from "./mobileSidePanels.svelte"
 	// PLAN 25: the chat middle is a widget grid. Messages (GROW) + Composer
 	// (FIXED, bottom) are two required widgets that fall out of the model — no
 	// bespoke center layout. The surrounding zones stay the interim system for
@@ -75,7 +78,8 @@
 		GS_CELL_PX,
 		type GsAnchor,
 		type GsItem,
-		type GsLayout
+		type GsLayout,
+		type GsPos
 	} from "./GridStackZone.svelte"
 	// The saved-arrangement round trip (rehydrate → lay over the editor's items
 	// → re-express in the zone as measured now), pure and tested away from the
@@ -83,18 +87,37 @@
 	import {
 		arrangementIsEmpty,
 		loadArranged,
+		seedPositions,
+		showZonePin,
+		unitPinned,
 		withGeometry,
+		withPins,
 		type Arranged
 	} from "./arrangedGeometry"
 	// The Move tab's screen-size simulator: the ONE implementation of the
 	// editor's ¼ | ½ | ¼ split, called with the real width or a tier's width.
 	import {
+		SIM_HEIGHT_PX,
 		SIM_OPTIONS,
+		mobileEditing,
+		narrowWidth,
 		simulatedGeometry,
 		simulationExit,
 		type SimGeometry,
 		type SimTier
 	} from "./simulator"
+	// The phone editor's model (ruled 2026-09-10): below the breakpoint the
+	// layout is an ordered list per zone, not a grid, and these are the only
+	// edits it may make to the one arrangement. See ./mobileEdit.
+	import {
+		mobileRows,
+		moveMember,
+		moveRow,
+		moveRowTo,
+		restackZone,
+		setRowPinned,
+		type MobileRow
+	} from "./mobileEdit"
 	import { unitsOf, type RenderUnit } from "./tabGroups"
 	import {
 		inlineSideWidths,
@@ -102,6 +125,26 @@
 		sideSlot,
 		type SideSlot
 	} from "./sideSlot"
+	// The side column's RAIL MODEL (ruled 2026-09-10): each docked widget group
+	// in a side column is its own toggling panel — expanded in the column, an
+	// icon in the slim rail at its outer edge, or (when it cannot fit beside the
+	// pinned ones) a flyout over the session. The decision and its unit tests
+	// are ./sideRail; this file only measures the column, draws the answer, and
+	// holds the transient open/pin state — nothing about it is persisted.
+	// The same module also owns the COLUMN COLLAPSE (ruled 2026-09-10): a layout
+	// made at 4K has to translate to a phone, so side-by-side placements become
+	// rows when the column cannot hold them — always below the breakpoint, and
+	// on the desktop whenever the column is narrower than the widgets sharing a
+	// row need. Anchors survive that as ORDER, which is all a single column can
+	// honour.
+	import {
+		MIN_WIDGET_PX,
+		collapseColumn,
+		collapsedOrder,
+		resolveRailColumn,
+		type RailPlacement,
+		type RailState
+	} from "./sideRail"
 	// Per-widget styling (PLAN 25) is NOT a panel any more (ruled 2026-09-09):
 	// each widget wears its own hover overlay, mounted by WidgetHost. All this
 	// file still owns is turning that mode on and persisting the pins.
@@ -113,11 +156,27 @@
 		widgetStylesStore
 	} from "$lib/client/stores/widgetStyles.svelte"
 	import type { WidgetStyleRef } from "$lib/shared/widgets/types"
+	// Per-widget settings (PLAN 25, ruled 2026-09-10) reach the overlays the same
+	// way the style pins do: this file is the one component that sees every
+	// widget on screen, so it pushes the declarations the panel renders from.
+	import {
+		setWidgetSettingDecls,
+		widgetSettingValues
+	} from "$lib/client/stores/widgetSettings.svelte"
+	import {
+		resolveWidgetInstance,
+		type WidgetSettingsDecl
+	} from "$lib/shared/widgets/settings"
+	import { CORE_WIDGETS } from "$lib/shared/widgets/types"
 	import { legacyLayoutAttr } from "$lib/shared/widgets/corePresets"
 	// The per-widget context + skin wrapper. Messages and Composer wear one for
 	// the same reason every other widget does (ruled 2026-08-30): it is what
 	// injects their style and what grows their Style-mode overlay.
 	import WidgetHost from "./WidgetHost.svelte"
+	// The same per-widget style controls, in the sheet a touch screen gets:
+	// there is no hover there, so the phone editor opens them full-screen
+	// instead of growing them on the widget.
+	import WidgetStyleOverlay from "./WidgetStyleOverlay.svelte"
 	// The Presets tab's picture — a pure blob → geometry translation, never a
 	// live mount (see presetPreview.ts for why that limit is deliberate).
 	import { previewOf } from "./presetPreview"
@@ -213,6 +272,15 @@
 	function commitGrid(next: GridLayout) {
 		manager.setWidgetGrid(next)
 	}
+	/**
+	 * The ids the middle widget grid places. The zone template covers the sides
+	 * and never names the middle, so every "is this widget placed?" question has
+	 * to union the two or a middle-zone widget reads as unplaced and the tray
+	 * offers it again.
+	 */
+	let middleGridIds = $derived(
+		new Set<string>(widgetsInZone(chatGrid, "middle").map((w) => w.id))
+	)
 
 	// ── middle-zone widget editing (PLAN 25 §9, structural controls) ──────
 	// The composer's minimum height, in cells. "Auto" = content-sized (fixed);
@@ -496,9 +564,12 @@
 			mq.removeEventListener("change", onMq)
 			window.removeEventListener("resize", onWin)
 			window.removeEventListener("scroll", onWin, true)
-			// The header's L/R group is app-wide state; leaving the session has
-			// to retract it, or it would follow the user onto every other page.
+			// The header's panels button is app-wide state; leaving the session
+			// has to retract it, or it would follow the user onto every other
+			// page — the menu it opens with it.
 			mobileSidePanels.setSides(false, 0, 0)
+			mobileSidePanels.setGroups([])
+			mobileSidePanels.menuOpen = false
 		}
 	})
 
@@ -522,9 +593,12 @@
 		normalizeZoneLayout(manager.effectiveZoneLayout, activeSecondaryIds)
 	)
 	// Widgets activated after the template was saved (channel intents, the old
-	// grid menu) still need a home: append them to the first side zone.
+	// grid menu) still need a home: append them to the first side zone. A widget
+	// the MIDDLE grid places is already at home — the zone template does not name
+	// the middle, so without this a preset's own strip lands in a side rail as
+	// well and renders twice.
 	let layout = $derived.by((): ZoneLayout => {
-		const placed = new Set(placedWidgetIds(saved))
+		const placed = new Set([...placedWidgetIds(saved), ...middleGridIds])
 		const extras = activeSecondaryIds.filter((id) => !placed.has(id))
 		if (!extras.length) return saved
 		const host =
@@ -578,10 +652,11 @@
 		setLegacyStylePacks(layout.styles ?? null)
 		return () => setLegacyStylePacks(null)
 	})
-	// Called for the subscription, not the value — the same contract WidgetHost
-	// keeps: it starts the one fetch, and the deriveds below read the same
-	// module state, so they re-run when the rows or the pins land.
-	widgetStylesStore()
+	// Called for the subscription, and for the arm/disarm the phone editor's
+	// style sheet spends — the same contract WidgetHost keeps: it starts the
+	// one fetch, and the deriveds below read the same module state, so they
+	// re-run when the rows or the pins land.
+	const sheetStyles = widgetStylesStore()
 	let msgLayoutAttr = $derived(
 		legacyLayoutAttr("messages", resolveWidgetStyle("messages")?.slug)
 	)
@@ -701,6 +776,13 @@
 	// `editing`, which the derived reads where it is written.)
 	let editing = $state(false)
 	let editArranged = $state<Arranged>({})
+	/**
+	 * The zones' membership as the editor opened, and the whole of what Cancel
+	 * can put back: adding or removing a widget writes straight through to the
+	 * layout, so an editor that could only restore the arrangement would leave
+	 * a cancelled add behind.
+	 */
+	let editZonesSnapshot = $state<ZoneLayout | null>(null)
 	let arranged = $derived<Arranged>(
 		editing ? editArranged : loadArranged(manager.effectiveArrangedGrid)
 	)
@@ -713,13 +795,23 @@
 		withGeometry(
 			widgetsInZone(chatGrid, "middle").map((w) => ({
 				id: w.id,
-				title: middleWidgetLabel(w.id),
-				locked: true,
-				// The chat's bound default: messages fills, composer docks to the
-				// bottom as a fixed 3-cell strip — both full-width.
-				...(w.id === "composer"
-					? { place: "bottom" as const, h: 3 }
-					: { place: "fill" as const })
+				title: widgetLabel(w.id),
+				// Locked hides the remove button, which is the anchor
+				// guarantee: messages and composer are movable and never
+				// removable. Anything else a layout puts in the middle is an
+				// ordinary widget and comes out again.
+				locked: !!w.required,
+				// The chat's bound default, read off the widget rather than its
+				// name: a GROW height fills what is left, a FIXED one docks three
+				// cells deep against the edge it anchors to. Both full-width.
+				...(w.size.h === "grow"
+					? { place: "fill" as const }
+					: {
+							place: (w.anchor.bottom
+								? "bottom"
+								: "top") as GsItem["place"],
+							h: 3
+						})
 			})),
 			editArranged.middle
 		)
@@ -774,9 +866,54 @@
 	function setActiveTab(key: string, id: string) {
 		activeTabs = { ...activeTabs, [key]: id }
 	}
+	/* ── per-widget settings (PLAN 25, ruled 2026-09-10) ────────────────────
+	 * Every widget on screen is either a panel instance or one of the two
+	 * primaries, which are snippets rather than instances — so this is the one
+	 * place that can name them all. The declarations go to the store the
+	 * overlays read, and `resolvedWidget` is what every mount and label here
+	 * threads: the title override, the lane, and the settings themselves. */
+	function widgetDeclOf(id: string): WidgetSettingsDecl {
+		const p = inst(id)
+		if (p && p.role !== "primary")
+			return {
+				id,
+				title: p.title,
+				channels: p.channels,
+				settings: p.settings
+			}
+		const core = CORE_WIDGETS.find((w) => w.id === id)
+		return {
+			id,
+			title: core?.title ?? middleWidgetLabel(id),
+			channels: core?.channels,
+			settings: core?.settings
+		}
+	}
+	function resolvedWidget(id: string) {
+		return resolveWidgetInstance(widgetDeclOf(id), widgetSettingValues(id))
+	}
+	$effect(() => {
+		const out: Record<string, WidgetSettingsDecl> = {}
+		for (const w of CORE_WIDGETS)
+			out[w.id] = {
+				id: w.id,
+				title: w.title,
+				channels: w.channels,
+				settings: w.settings
+			}
+		for (const p of manager.instances)
+			if (p.role !== "primary")
+				out[p.id] = {
+					id: p.id,
+					title: p.title,
+					channels: p.channels,
+					settings: p.settings
+				}
+		setWidgetSettingDecls(out)
+	})
+
 	function widgetLabel(id: string): string {
-		if (id === "messages" || id === "composer") return middleWidgetLabel(id)
-		return inst(id)?.title ?? id
+		return resolvedWidget(id).title
 	}
 
 	/* ── real placement for the arranged renderers (PLAN 25) ───────────────
@@ -1006,6 +1143,64 @@
 		const r = rightWidgetCount
 		untrack(() => mobileSidePanels.setSides(n, l, r))
 	})
+	/* The panels menu's list (ruled 2026-09-10). The two per-side buttons are
+	 * gone; one button in the header opens a sheet listing the side groups, and
+	 * this is what it lists. An arranged side lists its render units — the same
+	 * groups the rail draws — and a side with no arrangement yet lists its zone
+	 * widgets, so the menu is never empty while the button is showing.
+	 *
+	 * `untrack` for the same reason `setSides` needs it: publishing is a write
+	 * to shared state this effect must not then depend on. */
+	function mobileGroupsOf(side: "left" | "right"): MobileGroup[] {
+		const units = side === "left" ? leftUnits : rightUnits
+		if (units.length)
+			return units.map((u) => ({
+				side,
+				key: u.key,
+				title: groupTitle(u),
+				icon: groupIconName(u),
+				pinned: groupPinned(u)
+			}))
+		const zones = side === "left" ? mobileLeftZones : mobileRightZones
+		return zones.flatMap((z) =>
+			widgetsOf(z).map((p) => ({
+				side,
+				key: p.id,
+				title: p.title,
+				icon: p.icon || "LayoutPanelTop",
+				pinned: zonePinned(side)
+			}))
+		)
+	}
+	$effect(() => {
+		const groups = isNarrow
+			? [...mobileGroupsOf("left"), ...mobileGroupsOf("right")]
+			: []
+		untrack(() => mobileSidePanels.setGroups(groups))
+	})
+	/**
+	 * A group tapped in the menu: its side's sheet is already opening (the store
+	 * set `open`), so all that is left is to make sure the group itself is not
+	 * folded, and to bring it into view. Taken exactly once — a pending value is
+	 * a request, not a state.
+	 */
+	$effect(() => {
+		if (!mobileSidePanels.pending) return
+		untrack(() => {
+			const p = mobileSidePanels.takePending()
+			if (!p) return
+			groupOpen[groupKey(p.side, p.key)] = true
+			groupFocus[p.side] = p.key
+			requestAnimationFrame(() =>
+				rootEl
+					?.querySelector(
+						`.slot-overlay [data-group-key="${CSS.escape(p.key)}"]`
+					)
+					?.scrollIntoView({ block: "nearest" })
+			)
+		})
+	})
+
 	// Crossing INTO mobile retires any desktop pop-over, so coming back out does
 	// not re-reveal a flyout the user left open on a wider screen.
 	$effect(() => {
@@ -1111,6 +1306,594 @@
 		})
 	)
 
+	/* ── the side rail model (ruled 2026-09-10) ─────────────────────────────
+	 * The idea this replaces was a parent side panel that arbitrated the
+	 * column's space for everything in it. Instead each docked widget GROUP —
+	 * a tab group, or a lone widget, which is a group of one — is its own
+	 * toggling panel, and the column is a stack of them plus a slim rail of
+	 * icons at its outer edge:
+	 *
+	 *   (a) a group is EXPANDED in the column or COLLAPSED to a rail icon, so
+	 *       enabling more widgets only ever adds icons;
+	 *   (b) PINNED groups are expanded by default and KEEP their height when a
+	 *       sibling expands;
+	 *   (c) a group with no room left beside them opens as a FLYOUT over the
+	 *       session at full column height rather than squeezing the column, and
+	 *       closes on outside click, Escape or its own rail icon.
+	 *
+	 * ./sideRail is all three, pure and tested. Of the two inputs it takes,
+	 * exactly one is persisted (ruled 2026-09-10): a group's `pinned` is a field
+	 * on the arranged ITEMS it is made of (see `unitPinned` / `withPins` in
+	 * ./arrangedGeometry), written by the Move tab and saved with the preset,
+	 * while `open` — which unpinned groups the user has out right now — is
+	 * transient per session view and defaults to exactly `pinned`. So a reload
+	 * lands back on the docked layout the user arranged, with nothing else out.
+	 */
+	/** Measured height of each side's column of groups (0 = not laid out yet). */
+	let columnPx = $state<Record<"left" | "right", number>>({ left: 0, right: 0 })
+	/** And its width, which is what decides whether widgets still fit side by side. */
+	let columnWPx = $state<Record<"left" | "right", number>>({
+		left: 0,
+		right: 0
+	})
+	/** Transient per-group open state, keyed `side:groupKey`. Default: pinned. */
+	let groupOpen = $state<Record<string, boolean>>({})
+	/** The group opened last, per side — the only one allowed to fly out. */
+	let groupFocus = $state<Record<"left" | "right", string | null>>({
+		left: null,
+		right: null
+	})
+
+	function zonePinned(side: "left" | "right"): boolean {
+		const id = side === "left" ? leftZoneId : rightZoneId
+		return id ? layout.zones[id]?.pinned !== false : true
+	}
+	function groupKey(side: "left" | "right", key: string): string {
+		return `${side}:${key}`
+	}
+	/**
+	 * A group's pin, read off the arrangement it is made of.
+	 *
+	 * NOT the zone's pin any more. That one is still the un-arranged rail's
+	 * (docked rail vs icon strip — `zonePinned` above, and `setPinned`); an
+	 * ARRANGED side has a pin per group instead, and an arrangement that
+	 * carries none reads as all pinned, which is what such a side already drew.
+	 */
+	function groupPinned(u: RenderUnit): boolean {
+		return unitPinned(u.members)
+	}
+	function groupIsOpen(side: "left" | "right", u: RenderUnit): boolean {
+		return groupOpen[groupKey(side, u.key)] ?? groupPinned(u)
+	}
+	/**
+	 * The column's groups, top to bottom. Sorted by the arrangement's own cells
+	 * — a pure function of the saved geometry, so the order never changes as
+	 * groups open and close. It must not: a keyed `{#each}` MOVES its nodes to
+	 * follow a reorder, and moving an iframe reloads it.
+	 */
+	function columnUnits(items: GsPos[]): RenderUnit[] {
+		return unitsOf(items).sort(
+			(a, b) => a.box.y - b.box.y || a.box.x - b.box.x
+		)
+	}
+	/** A group's icon: its widget's, or the stacked one for a tab group. */
+	function groupIcon(u: RenderUnit) {
+		if (u.members.length > 1) return Icons.Layers
+		const id = u.members[0].id
+		if (id === "messages" || id === "composer") return middleWidgetIcon(id)
+		const p = inst(id)
+		return p ? iconOf(p) : Icons.LayoutPanelTop
+	}
+	/**
+	 * The same icon as a NAME, for the panels menu — that list crosses a module
+	 * bridge to the header, and a component reference is a thing to draw with,
+	 * not a thing to publish.
+	 */
+	function groupIconName(u: RenderUnit): string {
+		if (u.members.length > 1) return "Layers"
+		const id = u.members[0].id
+		if (id === "messages") return "MessagesSquare"
+		if (id === "composer") return "PanelBottom"
+		return inst(id)?.icon || "LayoutPanelTop"
+	}
+	/** A group's tooltip: every title in it, which is what opening it opens. */
+	function groupTitle(u: RenderUnit): string {
+		return u.members.map((m) => widgetLabel(m.id)).join(" · ")
+	}
+
+	/**
+	 * A column's BANDS: the units that share a row of it, read off the
+	 * arrangement's own cells. A pure function of the geometry, so a band never
+	 * changes as groups open and close — and a band, not a widget, is what the
+	 * rail model sizes: two widgets side by side are one row of the column.
+	 */
+	function bandsOf(units: RenderUnit[]): RenderUnit[][] {
+		const bands: RenderUnit[][] = []
+		for (const u of units) {
+			const last = bands[bands.length - 1]
+			if (last?.some((v) => u.box.y < v.box.y + v.box.h)) last.push(u)
+			else bands.push([u])
+		}
+		return bands
+	}
+	function bandRows(b: RenderUnit[]): number {
+		return (
+			Math.max(...b.map((u) => u.box.y + u.box.h)) -
+			Math.min(...b.map((u) => u.box.y))
+		)
+	}
+	/** How a cell is drawn: the rail's three, plus the sheet's folded title bar. */
+	type CellState = RailState | "folded"
+	interface ColumnLayout {
+		/** Where each unit is drawn, by unit key. */
+		state: Record<string, CellState>
+		/** Each unit's grid row (1-based) and its place in the collapsed order. */
+		row: Record<string, number>
+		order: Record<string, number>
+		/** `grid-template-rows` for the rows that are actually drawn. */
+		rows: string
+		/** One column: what shared a row is drawn one under the other. */
+		collapsed: boolean
+		/** The one unit currently OVER the session, if any. */
+		flyout: string | null
+	}
+	/**
+	 * Resolve a whole side column: the rail model over its bands, plus the
+	 * collapse and the order a collapsed column draws in.
+	 *
+	 * Collapsing gives every unit its OWN band — that is what "side by side
+	 * becomes rows" means — and the bands are then taken in the collapsed order,
+	 * so a top-anchored widget is first and a bottom-anchored one last. The
+	 * order is spent as an explicit `grid-row` (and a CSS `order` for the sheet,
+	 * which is a flex column): re-sorting the `{#each}` instead would MOVE the
+	 * nodes, and moving an iframe reloads it.
+	 */
+	interface ColumnMeasure {
+		/** The mobile sheet: the side's panels listed, not a column of them. */
+		sheet: boolean
+		/** Below the app's 1024px breakpoint (or previewing a width that is). */
+		narrow: boolean
+		heightPx: number
+		widthPx: number
+	}
+	function columnLayout(
+		side: "left" | "right",
+		units: RenderUnit[],
+		totalRows: number,
+		m: ColumnMeasure
+	): ColumnLayout {
+		const sheet = m.sheet
+		const natural = bandsOf(units)
+		const collapsed = collapseColumn({
+			columnPx: m.widthPx,
+			// One minimum per widget in the widest row: what has to fit side by
+			// side is what decides whether it can.
+			minWidthPx: Array(
+				Math.max(1, ...natural.map((b) => b.length))
+			).fill(MIN_WIDGET_PX),
+			narrow: m.narrow
+		})
+		const orderKeys = collapsedOrder(
+			units.map((u) => ({
+				key: u.key,
+				box: u.box,
+				anchor: u.members[0]?.anchor
+			}))
+		)
+		const order: Record<string, number> = {}
+		orderKeys.forEach((k, i) => (order[k] = i))
+		const byKey = new Map(units.map((u) => [u.key, u]))
+		const bands = collapsed
+			? orderKeys.map((k) => [byKey.get(k)!]).filter((b) => !!b[0])
+			: natural
+		const focus = bands.findIndex((b) =>
+			b.some((u) => u.key === groupFocus[side])
+		)
+		// The SHEET is not a column — it is the side's panels, listed — so
+		// nothing in it competes for height and nothing flies out of it.
+		const place: RailPlacement[] = sheet
+			? bands.map((_, i) => ({
+					key: `b${i}`,
+					state: "expanded" as const,
+					heightPx: 0
+				}))
+			: resolveRailColumn({
+					columnPx: m.heightPx,
+					totalRows,
+					groups: bands.map((b, i) => ({
+						key: `b${i}`,
+						rows: bandRows(b),
+						pinned: b.some((u) => groupPinned(u)),
+						open: b.some((u) => groupIsOpen(side, u))
+					})),
+					focusKey: focus >= 0 ? `b${focus}` : null,
+					narrow: m.narrow
+				})
+		const state: Record<string, CellState> = {}
+		const row: Record<string, number> = {}
+		const heights: number[] = []
+		bands.forEach((b, i) => {
+			const p = place[i]
+			const drawn = p.state !== "collapsed"
+			if (drawn && p.state !== "flyout") heights.push(p.heightPx)
+			const r = Math.max(1, heights.length)
+			// A band that flies out flies out ONCE: two members positioned over
+			// the session at the same edge would sit on top of each other, so
+			// the one the user asked for goes and the rest stay icons.
+			let flownHere = false
+			for (const u of b) {
+				const open = groupIsOpen(side, u)
+				const mine =
+					p.state !== "flyout" ||
+					(!flownHere &&
+						(groupFocus[side] === u.key ||
+							b.every((v) => groupFocus[side] !== v.key)))
+				if (p.state === "flyout" && mine && open) flownHere = true
+				row[u.key] = r
+				state[u.key] = sheet
+					? // Ruled 2026-09-10: the pinned / expanded state carries
+						// over, and a group that is not open arrives folded to
+						// its title bar rather than gone.
+						open
+						? "expanded"
+						: "folded"
+					: drawn && open && mine
+						? p.state
+						: "collapsed"
+			}
+		})
+		return {
+			state,
+			row,
+			order,
+			collapsed,
+			flyout:
+				Object.entries(state).find(
+					([, v]) => v === "flyout"
+				)?.[0] ?? null,
+			// A band with a height of its own gets it; 0 is the unmeasured
+			// column, where flex/grid sharing them out is the better guess.
+			rows: heights.map((h) => (h > 0 ? `${h}px` : "1fr")).join(" ")
+		}
+	}
+
+	/* ── the MIDDLE zone's collapse (ruled 2026-09-10) ──────────────────────
+	 * The same rule, in the zone that is not a rail: below the breakpoint there
+	 * are no side-by-side placements anywhere, and above it the middle collapses
+	 * when it is narrower than the widgets sharing a row need. The order is the
+	 * collapsed one — top-anchored first, bottom-anchored last — and it is spent
+	 * as an explicit grid row, never as a re-sorted `{#each}`: the middle is
+	 * where Messages and Composer live, and moving those is the reload the whole
+	 * layout is built to avoid.
+	 *
+	 * The row heights stay PROPORTIONAL (`<rows>fr` each), so a collapsed middle
+	 * is the arrangement stacked, not the arrangement forgotten. */
+	let middleWPx = $state(0)
+	let middleCol = $derived.by(() => {
+		const arr = arranged.middle
+		const units = arr ? columnUnits(arr.items) : []
+		const bands = bandsOf(units)
+		const collapsed = collapseColumn({
+			columnPx: middleWPx,
+			minWidthPx: Array(
+				Math.max(1, ...bands.map((b) => b.length))
+			).fill(MIN_WIDGET_PX),
+			narrow: isNarrow
+		})
+		const keys = collapsedOrder(
+			units.map((u) => ({
+				key: u.key,
+				box: u.box,
+				anchor: u.members[0]?.anchor
+			}))
+		)
+		const row: Record<string, number> = {}
+		keys.forEach((k, i) => (row[k] = i + 1))
+		const byKey = new Map(units.map((u) => [u.key, u]))
+		return {
+			collapsed,
+			row,
+			rows: keys
+				.map((k) => `${Math.max(1, byKey.get(k)?.box.h ?? 1)}fr`)
+				.join(" ")
+		}
+	})
+
+	let leftUnits = $derived(
+		arranged.left ? columnUnits(arranged.left.items) : []
+	)
+	let rightUnits = $derived(
+		arranged.right ? columnUnits(arranged.right.items) : []
+	)
+	let leftCol = $derived(
+		columnLayout("left", leftUnits, arranged.left?.rows ?? 1, {
+			sheet: leftSlot === "overlay",
+			narrow: isNarrow,
+			heightPx: columnPx.left,
+			widthPx: columnWPx.left
+		})
+	)
+	let rightCol = $derived(
+		columnLayout("right", rightUnits, arranged.right?.rows ?? 1, {
+			sheet: rightSlot === "overlay",
+			narrow: isNarrow,
+			heightPx: columnPx.right,
+			widthPx: columnWPx.right
+		})
+	)
+
+	/* ── the Move tab's rail preview ────────────────────────────────────────
+	 * The same model, drawn from the EDITOR's working arrangement so the rail
+	 * can be played with at every screen size before it is lived with: toggle a
+	 * group, pin or unpin one, and watch (b) and (c) happen at Compact through
+	 * Ultrawide. The cards here are titles, not live panels — a second mount of
+	 * a real panel is exactly what the no-reload law forbids, and the editor has
+	 * never drawn one.
+	 */
+	/** Move tab: draw the side columns as rails instead of the editor's grids. */
+	let railPreview = $state(false)
+	/**
+	 * Move tab: while a phone width is previewed, draw the GRID rather than the
+	 * row editor that width really gets. A desktop-only escape — a real narrow
+	 * window has no zones to drag in (see `mobileEditing`).
+	 */
+	let simGrid = $state(false)
+	/** Measured height and width of each preview column. */
+	let previewPx = $state<Record<"left" | "right", number>>({
+		left: 0,
+		right: 0
+	})
+	let previewWPx = $state<Record<"left" | "right", number>>({
+		left: 0,
+		right: 0
+	})
+	/**
+	 * The previewed device's height. The tier table's, not the window's: the
+	 * rail model is decided against the COLUMN's height, so previewing five
+	 * tiers in this window would answer it with this monitor's number five
+	 * times (see SIM_HEIGHT_PX). Capped by what the frame actually has.
+	 */
+	let simHeight = $derived(simTier ? SIM_HEIGHT_PX[simTier] : 0)
+	/** Is the previewed width below the app's breakpoint? */
+	let simNarrow = $derived(narrowWidth(simWidth ?? vw))
+
+	/** The three keys an arrangement is stored under. */
+	type ZoneKey = "left" | "middle" | "right"
+
+	/**
+	 * The cell rows an UN-arranged middle is read at: the composer's 3-cell
+	 * strip against the messages that fill what is left. A stated choice, not a
+	 * measured one — the grid editor measures its own zone, and this is for the
+	 * editor that has no grid to measure.
+	 */
+	const MIDDLE_SEED_ROWS = 12
+
+	function previewColumn(side: ZoneKey): {
+		/**
+		 * The arrangement the preview is a view of. It IS `editArranged[side]`
+		 * when there is one; without one it is the default placement resolved
+		 * for this side, which is what the gridstack zone would have reported
+		 * the moment it mounted. Either way it is a frame the pin toggle can
+		 * write into (see `toggleGroupPin`).
+		 */
+		frame: GsLayout
+		units: RenderUnit[]
+	} {
+		const items =
+			side === "left"
+				? leftGsItems
+				: side === "right"
+					? rightGsItems
+					: middleGsItems
+		const frame = editArranged[side]
+		const cols = frame?.cols ?? 1
+		// No frame yet (a layout never arranged): the items' own default
+		// placement is the arrangement, and its rows are what they stack to.
+		// The middle is the exception — its messages widget FILLS, so its rows
+		// are a proportion rather than a sum, and summing them would hand the
+		// composer half the chat.
+		const rows =
+			frame?.rows ??
+			(side === "middle"
+				? MIDDLE_SEED_ROWS
+				: Math.max(
+						1,
+						items.reduce((n, it) => n + (it.h ?? 3), 0)
+					))
+		const meta = new Map(items.map((it) => [it.id, it]))
+		// `seedPositions` reads cells and returns cells; group, anchor and the
+		// group's pin ride on the ITEMS, so they are laid back over its answer.
+		const pos: GsPos[] = seedPositions(items, cols, rows, frame).map((c) => {
+			const m = meta.get(c.id)
+			return {
+				...c,
+				...(m?.group ? { group: m.group } : {}),
+				...(m?.anchor ? { anchor: m.anchor } : {}),
+				...(m?.pinned === false ? { pinned: false } : {})
+			}
+		})
+		return { frame: { cols, rows, items: pos }, units: columnUnits(pos) }
+	}
+	let leftPreview = $derived(previewColumn("left"))
+	let rightPreview = $derived(previewColumn("right"))
+	let middlePreview = $derived(previewColumn("middle"))
+	function previewRail(
+		side: "left" | "right",
+		p: { frame: GsLayout; units: RenderUnit[] }
+	): ColumnLayout {
+		// The same call the live column makes, over the previewed device's
+		// numbers: below 1024 a side takes no layout space at all, so the
+		// preview shows what that device does — icons, and the tapped group as
+		// a sheet. One decision, never a second model.
+		return columnLayout(side, p.units, p.frame.rows, {
+			sheet: false,
+			narrow: simNarrow,
+			heightPx: previewPx[side],
+			widthPx: previewWPx[side]
+		})
+	}
+	let leftPreviewCol = $derived(previewRail("left", leftPreview))
+	let rightPreviewCol = $derived(previewRail("right", rightPreview))
+
+	function toggleGroup(side: "left" | "right", u: RenderUnit) {
+		const open = !groupIsOpen(side, u)
+		groupOpen[groupKey(side, u.key)] = open
+		// Only the group the user just asked for may fly out (see ./sideRail),
+		// so closing one hands the focus back rather than leaving it pointing at
+		// a group that is now an icon.
+		groupFocus[side] = open ? u.key : null
+	}
+	/**
+	 * Pin / unpin one group (ruled 2026-09-10) — the Move tab's toggle, and a
+	 * real persisted decision: it is written onto the arranged ITEMS the group
+	 * is made of, so Done commits it with the rest of the arrangement and a
+	 * preset saved from it carries it.
+	 *
+	 * Deliberately NOT `markSimDirty`. A pin moves no cell, so it must not make
+	 * a previewed width's clamp count as an arrangement the user made — the
+	 * same reading the zone pin already gets. But `exitSimulation` puts the
+	 * pre-preview arrangement back, which would take the pin with it, so the pin
+	 * is written into that snapshot too: it survives the restore without
+	 * rescuing the clamp.
+	 */
+	function toggleGroupPin(side: "left" | "right", u: RenderUnit) {
+		const next = !groupPinned(u)
+		const ids = u.members.map((m) => m.id)
+		const saved = editArranged[side]
+		// The frame to write into. Normally the working arrangement itself —
+		// but the preview can show a group that arrangement has not caught up
+		// with (a side with none yet, or a widget enabled since it was last
+		// reported), and a pin written into a frame missing that id would be
+		// dropped on the floor. The preview's own frame always contains it, and
+		// is that same arrangement with the newcomer placed by default: what the
+		// gridstack zone would report the moment it mounted.
+		const base =
+			saved && ids.every((id) => saved.items.some((i) => i.id === id))
+				? saved
+				: (side === "left" ? leftPreview : rightPreview).frame
+		editArranged[side] = withPins(base, ids, next)
+		if (simTier !== null && simSnapshot)
+			simSnapshot[side] = withPins(simSnapshot[side] ?? base, ids, next)
+		// "Pinned" IS "expanded by default", so saying it opens the group; and
+		// unpinning hands it back to the rail.
+		groupOpen[groupKey(side, u.key)] = next
+		if (!next && groupFocus[side] === u.key) groupFocus[side] = null
+	}
+	/** alt+[ / alt+]: expand everything that fits, or send it all to the rail. */
+	function setAllGroups(open: boolean) {
+		for (const side of ["left", "right"] as const) {
+			const units = side === "left" ? leftUnits : rightUnits
+			for (const u of units) groupOpen[groupKey(side, u.key)] = open
+			// No focus, so nothing flies out: "expand everything" fills the
+			// column and leaves what does not fit as icons.
+			groupFocus[side] = null
+		}
+	}
+	$effect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (!e.altKey || e.ctrlKey || e.metaKey) return
+			if (e.key !== "[" && e.key !== "]") return
+			const t = e.target as HTMLElement | null
+			// Never steal the bracket from someone writing a message.
+			if (
+				t?.isContentEditable ||
+				(t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))
+			)
+				return
+			e.preventDefault()
+			setAllGroups(e.key === "[")
+		}
+		document.addEventListener("keydown", onKey)
+		return () => document.removeEventListener("keydown", onKey)
+	})
+
+	/**
+	 * The one group per side that is currently OVER the session, if any — read
+	 * off whichever column is on screen, since the editor's preview replaces
+	 * the live one rather than sitting beside it.
+	 */
+	let flyoutKey = $derived({
+		left: (editing && railPreview ? leftPreviewCol : leftCol).flyout,
+		right: (editing && railPreview ? rightPreviewCol : rightCol).flyout
+	})
+	/**
+	 * A flyout closes on outside click and Escape, exactly like the unpinned
+	 * rail's pop-over — `data-pop-keep` marks what is inside it (the flyout
+	 * itself, the rail that opened it, and the editor's zones). Only armed while
+	 * something is actually flying: an EXPANDED group is part of the layout and
+	 * clicking the chat must not put it away.
+	 */
+	$effect(() => {
+		if (!mobileSidePanels.menuOpen) return
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") mobileSidePanels.closeMenu()
+		}
+		document.addEventListener("keydown", onKey)
+		return () => document.removeEventListener("keydown", onKey)
+	})
+
+	$effect(() => {
+		if (!flyoutKey.left && !flyoutKey.right) return
+		const shut = () => {
+			for (const side of ["left", "right"] as const) {
+				const k = flyoutKey[side]
+				if (!k) continue
+				groupOpen[groupKey(side, k)] = false
+				groupFocus[side] = null
+			}
+		}
+		const onDown = (e: PointerEvent) => {
+			if ((e.target as HTMLElement | null)?.closest("[data-pop-keep]"))
+				return
+			shut()
+		}
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") shut()
+		}
+		document.addEventListener("pointerdown", onDown, true)
+		document.addEventListener("keydown", onKey)
+		return () => {
+			document.removeEventListener("pointerdown", onDown, true)
+			document.removeEventListener("keydown", onKey)
+		}
+	})
+
+	/**
+	 * A group's box in the column. The height is the grid's (`col.rows`), so all
+	 * this places is WHICH row — and, when the column is collapsed, that it has
+	 * a column of its own. `order` rides along for the mobile sheet, which is a
+	 * flex column and so cannot read an explicit grid row; in the grid it is
+	 * inert, because every cell there is placed explicitly.
+	 */
+	function cellGridStyle(
+		u: RenderUnit,
+		col: ColumnLayout,
+		state: CellState
+	): string {
+		if (state === "collapsed") return "display:none;"
+		const order = `order:${col.order[u.key] ?? 0};`
+		// A flyout is out of flow entirely (see `flyoutStyle`).
+		if (state === "flyout") return order
+		const row = col.row[u.key] ?? 1
+		return col.collapsed
+			? `grid-column:1;grid-row:${row};${order}`
+			: `grid-column:${u.box.x + 1} / span ${u.box.w};grid-row:${row};${order}`
+	}
+	/**
+	 * Rule (c)'s box: over the session, at the column's full height, on the edge
+	 * the column is already on. `position: fixed` rather than absolute because
+	 * the margin layer it may sit in is a scrolling box — a fixed element is not
+	 * clipped by an ancestor's overflow, and there is no transformed ancestor in
+	 * the live render to re-anchor it. In the reclaimed margin the column is at
+	 * the viewport edge; in the flow it is at the session root's edge, which is
+	 * what `mLeft` / `mRight` already measure.
+	 */
+	function flyoutStyle(side: "left" | "right", slot: SideSlot): string {
+		const edge = slot === "margin" ? 0 : side === "left" ? mLeft : mRight
+		const start = side === "left" ? "inset-inline-start" : "inset-inline-end"
+		return `position:fixed;z-index:30;inset-block-start:${mTop}px;inset-block-end:0;${start}:${edge}px;inline-size:min(22rem,86vw);`
+	}
+
 	/**
 	 * Below the breakpoint a side takes no layout space, so there is no rail
 	 * for an unpinned zone to collapse INTO: the icon strip has nothing to open
@@ -1200,7 +1983,9 @@
 	let tabActive = $state(false)
 	let tabRevealed = $state(false)
 	$effect(() => {
-		if (navHover.over || tabActive) {
+		// A touch screen has no hover to reveal it with, and this tab is the
+		// only way into the editor, so below the breakpoint it simply stays.
+		if (isNarrow || navHover.over || tabActive) {
 			tabRevealed = true
 			return
 		}
@@ -1215,15 +2000,22 @@
 	// Editor tabs (PLAN 25 redesign):
 	//   Presets — pick the genre default or one of your saved layouts, and save
 	//             the current arrangement as a new one.
-	//   Style   — per-widget styling, which is a hover gesture on each widget in
-	//             the live preview rather than a list in the panel. The
-	//             message/composer packs are widget styles too now, so the
-	//             panel itself holds nothing but the line that says so.
+	//   Settings — per-widget settings and styling, both a hover gesture on each
+	//             widget in the live preview rather than a list in the panel, so
+	//             the panel itself holds nothing but the line that says so.
 	//   Move    — drag + anchor/pin/group + the screen-size simulator.
 	// Only Move lights up the structural drag affordances, so the other two
 	// stay clean live previews.
-	let editTab = $state<"presets" | "style" | "move">("move")
+	let editTab = $state<"presets" | "settings" | "move">("move")
 	let placing = $derived(editing && editTab === "move")
+	/**
+	 * A phone has no tab strip: presets are a sheet, settings and style are the
+	 * sheet a row's own button opens, so the tabs collapse to the one the row
+	 * list is.
+	 */
+	$effect(() => {
+		if (editing && mobileEdit) editTab = "move"
+	})
 
 	/* ── per-widget styling (PLAN 25, ruled 2026-09-09) ─────────────────
 	 * Two things cross from here to the overlays, and both go through the
@@ -1236,7 +2028,22 @@
 	 * one anyway — but style mode ending is what disarms and drops any
 	 * half-typed draft, so it must end when the tab changes. */
 	$effect(() => {
-		setWidgetStyleMode(editing && editTab === "style")
+		// The phone editor has no hover, so its style sheet turns the same mode
+		// on for the one widget it holds.
+		setWidgetStyleMode(
+			editing && (editTab === "settings" || styleSheetId !== null)
+		)
+	})
+	/**
+	 * The sheet's widget is armed for as long as the sheet is open: `armed` is
+	 * what makes the overlay visible without a pointer on the widget, and only
+	 * one widget may hold it.
+	 */
+	$effect(() => {
+		const id = styleSheetId
+		if (!id) return
+		sheetStyles.arm(id)
+		return () => sheetStyles.disarm(id)
 	})
 	$effect(() => {
 		// Re-registered whenever the blob or the setter changes, so the write
@@ -1270,7 +2077,13 @@
 	let dragOverZone = $state<string | null>(null)
 
 	let paletteWidgets = $derived.by(() => {
-		const placed = new Set(placedWidgetIds(layout))
+		// The middle is the ARRANGED zone once there is an arrangement and the
+		// widget grid until then — the same precedence the live view draws on,
+		// so a widget taken out of the middle is offered here again.
+		const middle = arranged.middle
+			? arranged.middle.items.map((i) => i.id)
+			: [...middleGridIds]
+		const placed = new Set([...placedWidgetIds(layout), ...middle])
 		return manager.instances.filter(
 			(p) => p.role !== "primary" && !placed.has(p.id)
 		)
@@ -1329,6 +2142,226 @@
 		editArranged = loadArranged(manager.effectiveArrangedGrid)
 		popId = null
 	}
+
+	/* ── the PHONE editor (ruled 2026-09-10) ───────────────────────────────
+	 * Below the breakpoint the layout is an ordered list per zone, because that
+	 * is what the session draws there — no side-by-side placements, anchors
+	 * reduced to order, each side group a panel that is either open or an icon.
+	 * The editor edits exactly those three facts, through ./mobileEdit, into the
+	 * SAME `editArranged` the grid writes and the same commit on Done. There is
+	 * no mobile layout blob and no mobile preset.
+	 */
+	/** The editor draws rows, not a grid. */
+	let mobileEdit = $derived(
+		mobileEditing({ narrow: isNarrow, simNarrow, grid: simGrid })
+	)
+	/** The zone a widget is being added to, if the picker sheet is open. */
+	let pickerTarget = $state<{ zone: ZoneKey; id: string } | null>(null)
+	/** The widget whose style sheet is open. */
+	let styleSheetId = $state<string | null>(null)
+	/** The presets sheet is open. */
+	let presetSheet = $state(false)
+	/** The group a drag handle is carrying, for the row's own styling. */
+	let dragRowKey = $state<string | null>(null)
+
+	/** The frame the phone editor writes into — the working one, or the default. */
+	function editFrame(zone: ZoneKey): GsLayout {
+		return (
+			zone === "left"
+				? leftPreview
+				: zone === "right"
+					? rightPreview
+					: middlePreview
+		).frame
+	}
+	/**
+	 * Store one zone's re-ordered arrangement.
+	 *
+	 * Written into a simulated tier's snapshot as well, for the reason a pin is
+	 * (see `toggleGroupPin`): leaving the preview restores that snapshot, and an
+	 * order the user stated must survive it without also rescuing the clamp a
+	 * narrow preview made of everything else.
+	 */
+	function writeZone(zone: ZoneKey, next: GsLayout) {
+		if (next === editFrame(zone)) return
+		editArranged[zone] = next
+		if (simTier !== null && simSnapshot) simSnapshot[zone] = next
+	}
+	function moveRowIn(zone: ZoneKey, key: string, delta: number) {
+		writeZone(zone, moveRow(editFrame(zone), key, delta))
+	}
+	function moveMemberIn(
+		zone: ZoneKey,
+		key: string,
+		id: string,
+		delta: number
+	) {
+		writeZone(zone, moveMember(editFrame(zone), key, id, delta))
+	}
+	/**
+	 * Add or remove a widget from the phone editor, cells and all.
+	 *
+	 * The grid editor lets gridstack seed a newcomer and report the result back;
+	 * with no grid mounted the arrangement has to be written here, or Done would
+	 * commit a frame that does not name the widget just added — and the side
+	 * would draw everything except it. Removal closes the row it leaves behind.
+	 */
+	function addWidgetTo(zone: ZoneKey, zoneId: string, widgetId: string) {
+		// Read the frame BEFORE the placement: `place` rewrites the zone's
+		// widget list, which is what `editFrame` is derived from.
+		const frame = editFrame(zone)
+		const foot = frame.items.length
+			? Math.max(...frame.items.map((i) => i.y + i.h))
+			: 0
+		const h = 3
+		place(zoneId, widgetId)
+		writeZone(zone, {
+			cols: frame.cols,
+			rows: Math.max(frame.rows, foot + h),
+			items: [
+				...frame.items,
+				{ id: widgetId, x: 0, y: foot, w: frame.cols, h }
+			]
+		})
+	}
+	function removeWidgetFrom(zone: ZoneKey, widgetId: string) {
+		const frame = editFrame(zone)
+		removeWidget(widgetId)
+		writeZone(
+			zone,
+			restackZone({
+				...frame,
+				items: frame.items.filter((i) => i.id !== widgetId)
+			})
+		)
+	}
+	function setRowPin(zone: ZoneKey, key: string, pinned: boolean) {
+		writeZone(zone, setRowPinned(editFrame(zone), key, pinned))
+		// "Pinned" IS "expanded by default", so the live column follows.
+		if (zone !== "middle") groupOpen[groupKey(zone, key)] = pinned
+	}
+
+	/** The zones the phone editor lists, chat first. */
+	let mobileZones = $derived(
+		(
+			[
+				["middle", "Middle", Icons.MessageSquare, null],
+				["left", "Left", Icons.PanelLeft, leftZoneId],
+				["right", "Right", Icons.PanelRight, rightZoneId]
+			] as const
+		)
+			.filter(([key, , , zoneId]) => key === "middle" || !!zoneId)
+			.map(([key, label, icon, zoneId]) => ({
+				key,
+				label,
+				icon,
+				zoneId,
+				rows: mobileRows(editFrame(key))
+			}))
+	)
+	function rowIcon(row: MobileRow) {
+		if (row.members.length > 1) return Icons.Layers
+		const id = row.members[0]
+		if (id === "messages" || id === "composer") return middleWidgetIcon(id)
+		const p = inst(id)
+		return p ? iconOf(p) : Icons.LayoutPanelTop
+	}
+	function rowTitle(row: MobileRow): string {
+		return row.members.map(widgetLabel).join(" · ")
+	}
+
+	/* ── the drag handle ────────────────────────────────────────────────────
+	 * A touch reorder, spent as the same single steps the arrow buttons are: a
+	 * pointer that has travelled a whole row's height asks for the next index,
+	 * and `moveRowTo` decides whether the arrangement can express it. Pointer
+	 * events rather than HTML drag-and-drop, which no mobile browser fires.
+	 */
+	let dragZone: ZoneKey | null = null
+	let dragIndex = 0
+	let dragOriginY = 0
+	let dragStepPx = 44
+
+	function startRowDrag(
+		e: PointerEvent,
+		zone: ZoneKey,
+		key: string,
+		index: number
+	) {
+		const grip = e.currentTarget as HTMLElement
+		const row = grip.closest("li") as HTMLElement | null
+		if (!row) return
+		e.preventDefault()
+		grip.setPointerCapture(e.pointerId)
+		dragZone = zone
+		dragRowKey = key
+		dragIndex = index
+		dragOriginY = e.clientY
+		dragStepPx = Math.max(24, row.offsetHeight)
+	}
+	function dragRow(e: PointerEvent) {
+		if (!dragRowKey || !dragZone) return
+		const steps = Math.trunc((e.clientY - dragOriginY) / dragStepPx)
+		if (!steps) return
+		const zone = dragZone
+		const key = dragRowKey
+		const before = editFrame(zone)
+		const next = moveRowTo(before, key, dragIndex + steps)
+		writeZone(zone, next)
+		dragOriginY += steps * dragStepPx
+		const at = mobileRows(next).findIndex((r) => r.key === key)
+		if (at >= 0) dragIndex = at
+	}
+	function endRowDrag(e: PointerEvent) {
+		const grip = e.currentTarget as HTMLElement
+		if (grip.hasPointerCapture(e.pointerId))
+			grip.releasePointerCapture(e.pointerId)
+		dragRowKey = null
+		dragZone = null
+	}
+
+	/** Leave the editor, keeping everything — the desktop Done, and the bar's. */
+	function finishEditing() {
+		// Commit FIRST: the save reads the arrangement this writes, so a preset
+		// saved on Done captures what was just arranged.
+		commitArrangement()
+		savePreset()
+		closeEditor()
+	}
+	/**
+	 * Leave the editor, keeping nothing: the arrangement goes back to what is
+	 * persisted and the zones' membership to what it held when the editor
+	 * opened, since adding and removing a widget writes straight through.
+	 */
+	function cancelEditing() {
+		exitSimulation()
+		const zones = editZonesSnapshot
+		if (zones) commit(zones)
+		editArranged = loadArranged(manager.effectiveArrangedGrid)
+		presetName = ""
+		closeEditor()
+	}
+	function closeEditor() {
+		editing = false
+		armedId = null
+		editZonesSnapshot = null
+		pickerTarget = null
+		styleSheetId = null
+		presetSheet = false
+	}
+	/** Escape closes the topmost sheet, innermost first. */
+	$effect(() => {
+		if (!pickerTarget && !presetSheet && !styleSheetId) return
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape") return
+			// The style sheet holds an editor of its own that answers Escape
+			// first; this only sees the key once that has let it through.
+			if (styleSheetId) styleSheetId = null
+			else if (pickerTarget) pickerTarget = null
+			else presetSheet = false
+		}
+		document.addEventListener("keydown", onKey)
+		return () => document.removeEventListener("keydown", onKey)
+	})
 
 	/* ── presets (PLAN 25 redesign) ─────────────────────────────────────
 	 * The tab lists the genre default plus this user's saved layouts. The page
@@ -1499,17 +2532,19 @@
 		     declaration is exactly what `scopeMessages` reads as "all of it".
 		     A session-less mount has nothing to project, so it renders bare,
 		     exactly as Panel's native branch does. -->
+		{@const r = resolvedWidget(id)}
 		{#if session}
 			<WidgetHost
 				widget={{
 					id,
 					instanceId: id,
-					title: middleWidgetLabel(id)
+					title: r.title
 				}}
 				session={session as any}
 				messages={((session as any)?.sessionMessages ?? []) as any}
 				channels={ALL_CHANNELS}
-				props={{ widgetId: id, title: middleWidgetLabel(id) }}
+				props={{ widgetId: id, title: r.title }}
+				settings={r.settings}
 				{placement}
 				source={manager}
 				onAction={onFrameAction}
@@ -1808,7 +2843,7 @@
 {#snippet editCard({ id }: { id: string })}
 	{@const mid = id === "messages" || id === "composer"}
 	{@const p = mid ? undefined : inst(id)}
-	{@const title = mid ? middleWidgetLabel(id) : (p?.title ?? id)}
+	{@const title = widgetLabel(id)}
 	{@const IconCmp = mid
 		? middleWidgetIcon(id)
 		: p
@@ -1899,13 +2934,88 @@
 				<GridStackZone
 					items={gsItems}
 					{frame}
-					pinned={zoneId ? layout.zones[zoneId]?.pinned !== false : undefined}
-					onTogglePin={zoneId ? () => toggleZonePin(zoneId) : undefined}
+					pinned={zoneId && showZonePin(frame)
+						? layout.zones[zoneId]?.pinned !== false
+						: undefined}
+					onTogglePin={zoneId && showZonePin(frame)
+						? () => toggleZonePin(zoneId)
+						: undefined}
 					{onChange}
 					onRemove={(id) => removeWidget(id)}
 					onGesture={markSimDirty}
 				/>
 			{/key}
+		</div>
+	</section>
+{/snippet}
+
+<!-- The Move tab's RAIL PREVIEW: a side column drawn the way a session draws
+     it — pinned groups docked at their share of the column, the rest icons in
+     the rail, and whatever cannot fit opening over the session. The cards are
+     titles, not live panels: the editor has never mounted a real panel a second
+     time, and this is not the place to start.
+
+     It replaces that side's gridstack zone while it is on (there is one saved
+     arrangement and both are views of it), so arranging is the toggle away. -->
+{#snippet railPreviewPanel(side: "left" | "right", label: string, HeadIcon: any)}
+	{@const prev = side === "left" ? leftPreview : rightPreview}
+	{@const col = side === "left" ? leftPreviewCol : rightPreviewCol}
+	<section class="zgrid zgrid-rail" data-pop-keep>
+		<header class="zgrid-head">
+			<HeadIcon size={13} />
+			{label}
+			<span class="flex-1"></span>
+			<span class="zgrid-note">
+				{simNarrow ? "sheet" : "rail"}{simHeight ? ` · ${simHeight}px` : ""}
+			</span>
+		</header>
+		<div
+			class="zgrid-body rail-preview"
+			style={simHeight ? `block-size:min(${simHeight}px,100%);` : ""}
+		>
+			<div class="side-column" class:col-left={side === "left"}>
+				<div
+					class="prev-stack"
+					class:one-column={col.collapsed}
+					bind:clientHeight={previewPx[side]}
+					bind:clientWidth={previewWPx[side]}
+					style="grid-template-rows:{col.rows || '1fr'};"
+				>
+					{#each prev.units as u (u.key)}
+						{@const st = col.state[u.key] ?? "collapsed"}
+						{@const Icon = groupIcon(u)}
+						<div
+							class="prev-card card-{st}"
+							class:from-left={side === "left"}
+							style={cellGridStyle(u, col, st)}
+						>
+							<div class="prev-head">
+								<Icon size={12} />
+								<span class="prev-title">{groupTitle(u)}</span>
+								<button
+									class="prev-pin"
+									class:on={groupPinned(u)}
+									title={groupPinned(u)
+										? "Unpin — hand this group back to the rail"
+										: "Pin — expanded by default, and it keeps its height"}
+									aria-label="Pin {groupTitle(u)}"
+									aria-pressed={groupPinned(u)}
+									onclick={() => toggleGroupPin(side, u)}
+								>
+									<Icons.Pin size={11} />
+								</button>
+							</div>
+							<div class="prev-body"></div>
+						</div>
+					{/each}
+					{#if !prev.units.length}
+						<span class="palette-empty">No widgets on this side.</span>
+					{/if}
+				</div>
+				{#if prev.units.length}
+					{@render groupRail(side, prev.units, col, true)}
+				{/if}
+			</div>
 		</div>
 	</section>
 {/snippet}
@@ -1949,14 +3059,18 @@
 				? 0
 				: mTop}px; inline-size:{editGeom.left}px;"
 		>
-			{@render editZonePanel(
-				leftZoneId,
-				"Left",
-				Icons.PanelLeft,
-				leftGsItems,
-				false,
-				(l) => (editArranged.left = l)
-			)}
+			{#if railPreview}
+				{@render railPreviewPanel("left", "Left", Icons.PanelLeft)}
+			{:else}
+				{@render editZonePanel(
+					leftZoneId,
+					"Left",
+					Icons.PanelLeft,
+					leftGsItems,
+					false,
+					(l) => (editArranged.left = l)
+				)}
+			{/if}
 		</div>
 	{/if}
 	{#if rightZoneId && editGeom.right > 0}
@@ -1966,14 +3080,18 @@
 				? 0
 				: mTop}px; inline-size:{editGeom.right}px;"
 		>
-			{@render editZonePanel(
-				rightZoneId,
-				"Right",
-				Icons.PanelRight,
-				rightGsItems,
-				false,
-				(l) => (editArranged.right = l)
-			)}
+			{#if railPreview}
+				{@render railPreviewPanel("right", "Right", Icons.PanelRight)}
+			{:else}
+				{@render editZonePanel(
+					rightZoneId,
+					"Right",
+					Icons.PanelRight,
+					rightGsItems,
+					false,
+					(l) => (editArranged.right = l)
+				)}
+			{/if}
 		</div>
 	{/if}
 {/snippet}
@@ -2028,42 +3146,130 @@
      is not (the margin slot sizes itself from the measured margin; a stowed
      one has no box). Without it the grid was `inline-size: 100%` of
      `.layout-body` — see `sideWidths` / ./sideSlot's `inlineSideWidths`. -->
-{#snippet arrangedSide(side: "left" | "right", flowPx: number)}
+{#snippet groupRail(
+	side: "left" | "right",
+	units: RenderUnit[],
+	col: ColumnLayout,
+	markPinned: boolean
+)}
+	<!-- The slim rail (a): one icon per group, at the column's OUTER edge (the
+	     `.side-column` reverses its row for a left column, so one DOM order
+	     serves both sides). This is the ONLY thing more enabled widgets adds —
+	     an icon, never more chrome. `data-pop-keep` so clicking the rail that
+	     opened a flyout is not "outside" it. -->
+	<div class="side-rail" data-pop-keep>
+		{#each units as u (u.key)}
+			{@const st = col.state[u.key] ?? "collapsed"}
+			{@const Icon = groupIcon(u)}
+			{@const title = groupTitle(u)}
+			<button
+				class="icon-btn rail-btn"
+				class:active={st !== "collapsed"}
+				class:pinned={markPinned && groupPinned(u)}
+				title={title}
+				aria-label={title}
+				aria-pressed={st !== "collapsed"}
+				onclick={() => toggleGroup(side, u)}
+			>
+				<Icon size={16} />
+			</button>
+		{/each}
+	</div>
+{/snippet}
+
+{#snippet arrangedSide(side: "left" | "right", flowPx: number, slot: SideSlot)}
 	{@const arr = side === "left" ? arranged.left : arranged.right}
 	{#if arr}
+		{@const units = side === "left" ? leftUnits : rightUnits}
+		{@const col = side === "left" ? leftCol : rightCol}
+		{@const sheet = slot === "overlay"}
+		<!-- The column and its rail. The stack is still a grid, but its ROWS are
+		     the rail model's answer rather than the arrangement's own
+		     `repeat(rows,1fr)`: a group that collapses has to give its height
+		     BACK to the column, and an empty track of a fixed template gives
+		     nothing back. The arrangement still decides the order and each
+		     group's share — see `columnUnits` / `columnLayout` / ./sideRail. -->
 		<div
-			class="live-side"
-			style="grid-template-columns:repeat({arr.cols},1fr); grid-template-rows:repeat({arr.rows},1fr);{flowPx >
-			0
-				? ` flex:0 0 ${flowPx}px; inline-size:${flowPx}px;`
-				: ''}"
+			class="side-column"
+			class:col-left={side === "left"}
+			style={flowPx > 0
+				? `flex:0 0 ${flowPx}px; inline-size:${flowPx}px;`
+				: ""}
 		>
-			{#each unitsOf(arr.items) as u (u.key)}
-				<!-- The cell's own measured width is the widget's tier: a rail
-				     widget is `compact` however wide the window is, which is what
-				     it has to reflow against (PLAN 25). Bound per cell rather
-				     than divided out of the zone, because a `1fr` track's real
-				     size is the browser's answer, not ours. -->
-				{@const widthPx = cellWidths[`${side}:${u.key}`] ?? 0}
-				<div
-					class="live-side-cell"
-					bind:clientWidth={cellWidths[`${side}:${u.key}`]}
-					style="grid-column:{u.box.x + 1} / span {u.box
-						.w}; grid-row:{u.box.y + 1} / span {u.box.h};{u.members
-						.length === 1
-						? anchorCellStyle(u.members[0].anchor)
-						: ''}"
-				>
-					{#if u.members.length === 1}
-						{@render middleWidget({
-							id: u.members[0].id,
-							placement: unitPlacement(arr, u, widthPx, u.members[0].id)
-						})}
-					{:else}
-						{@render tabGroup(u, { zone: arr, widthPx })}
-					{/if}
-				</div>
-			{/each}
+			<!-- One grid. Not collapsed it is the arrangement's own columns with
+			     a row per band, at the heights the rail model resolved; collapsed
+			     it is ONE column and a row per group, in the collapsed order —
+			     which is where a top/bottom anchor ends up meaning first and
+			     last. Either way the cells are placed explicitly, so nothing in
+			     the `{#each}` ever has to be re-sorted to reorder the column. -->
+			<div
+				class="live-side"
+				class:sheet
+				class:one-column={col.collapsed}
+				bind:clientHeight={columnPx[side]}
+				bind:clientWidth={columnWPx[side]}
+				style="grid-template-columns:repeat({col.collapsed
+					? 1
+					: arr.cols},1fr);grid-template-rows:{col.rows || '1fr'};"
+			>
+				{#each units as u (u.key)}
+					<!-- The cell's own measured width is the widget's tier: a rail
+					     widget is `compact` however wide the window is, which is what
+					     it has to reflow against (PLAN 25). Bound per cell rather
+					     than divided out of the zone, because a flex item's real
+					     size is the browser's answer, not ours. -->
+					{@const widthPx = cellWidths[`${side}:${u.key}`] ?? 0}
+					{@const st = col.state[u.key] ?? "expanded"}
+					<!-- ONE cell per group, whatever it is doing: expanded is a
+					     row, collapsed is a display:none, folded is its title bar
+					     and a hidden body, and a flyout is the same box
+					     positioned over the session. Four containers, one mount —
+					     a second call site for any of them would reload every
+					     iframe in it. -->
+					<div
+						class="live-side-cell cell-{st}"
+						class:from-left={side === "left"}
+						data-group-key={u.key}
+						data-pop-keep={st === "flyout" ? "" : undefined}
+						bind:clientWidth={cellWidths[`${side}:${u.key}`]}
+						style="{cellGridStyle(u, col, st)}{st === 'flyout'
+							? flyoutStyle(side, slot)
+							: ''}{u.members.length === 1 && !col.collapsed
+							? anchorCellStyle(u.members[0].anchor)
+							: ''}"
+					>
+						{#if st === "folded"}
+							<!-- Ruled 2026-09-10: on a phone a tap on the header
+							     folds a widget to a title bar. Its own nodes,
+							     added at their anchor — the widget below never
+							     moves, which is the whole point. -->
+							{@const FoldIcon = groupIcon(u)}
+							<button
+								class="fold-bar"
+								aria-expanded="false"
+								onclick={() => toggleGroup(side, u)}
+							>
+								<FoldIcon size={14} />
+								<span class="fold-title">{groupTitle(u)}</span>
+								<Icons.ChevronDown size={14} />
+							</button>
+						{/if}
+						{#if u.members.length === 1}
+							{@render middleWidget({
+								id: u.members[0].id,
+								placement: unitPlacement(arr, u, widthPx, u.members[0].id)
+							})}
+						{:else}
+							{@render tabGroup(u, { zone: arr, widthPx })}
+						{/if}
+					</div>
+				{/each}
+			</div>
+			<!-- No groups, no rail. In the mobile SHEET there is no rail either:
+			     the sheet IS the side, opened from the header's own control. -->
+			{#if units.length && !sheet}
+				{@render groupRail(side, units, col, false)}
+			{/if}
 		</div>
 	{/if}
 {/snippet}
@@ -2137,13 +3343,360 @@
 			</div>
 		{/if}
 		{#if arr}
-			{@render arrangedSide(side, flowPx)}
+			{@render arrangedSide(side, flowPx, slot)}
 		{:else}
 			{#each zones as z (z.id)}
 				{@render sideZone(isNarrow ? dockedZone(z) : z)}
 			{/each}
 		{/if}
 	</div>
+{/snippet}
+
+<!-- The PHONE editor (ruled 2026-09-10). A screen this narrow draws no
+     side-by-side widgets and no rail, so the editor is what the session is: an
+     ordered list per zone, a pin per group, and sheets for everything that a
+     desktop hovers for. It writes the same arrangement the grid does — see
+     ./mobileEdit — and commits down the same path.
+
+     It sits OVER the live session rather than replacing it, so nothing in the
+     session reloads while the order is edited. -->
+{#snippet mobileRowItem(
+	zone: ZoneKey,
+	zoneId: string | null,
+	rows: MobileRow[],
+	row: MobileRow,
+	index: number
+)}
+	{@const Icon = rowIcon(row)}
+	{@const title = rowTitle(row)}
+	<li class="medit-row" class:dragging={dragRowKey === row.key}>
+		<div class="medit-line">
+			<!-- The drag handle. `touch-action: none` (in CSS) is what stops the
+			     page scrolling under a finger that is reordering. -->
+			<button
+				class="medit-grip"
+				aria-label="Reorder {title}"
+				onpointerdown={(e) => startRowDrag(e, zone, row.key, index)}
+				onpointermove={dragRow}
+				onpointerup={endRowDrag}
+				onpointercancel={endRowDrag}
+			>
+				<Icons.GripVertical size={16} />
+			</button>
+			<Icon size={16} />
+			<span class="medit-name">{title}</span>
+			{#if row.rank !== 1}
+				<span class="medit-badge">
+					{row.rank === 0 ? "First" : "Last"}
+				</span>
+			{/if}
+		</div>
+		<div class="medit-acts">
+			<button
+				class="medit-btn"
+				disabled={index === 0}
+				aria-label="Move {title} up"
+				onclick={() => moveRowIn(zone, row.key, -1)}
+			>
+				<Icons.ChevronUp size={15} />
+			</button>
+			<button
+				class="medit-btn"
+				disabled={index === rows.length - 1}
+				aria-label="Move {title} down"
+				onclick={() => moveRowIn(zone, row.key, 1)}
+			>
+				<Icons.ChevronDown size={15} />
+			</button>
+			{#if zone !== "middle"}
+				<!-- The per-group pin, the arrangement's own field: pinned it is
+				     open from the start and keeps its height, unpinned it waits
+				     as an entry in the panels menu. -->
+				<button
+					class="medit-btn"
+					class:on={row.pinned}
+					aria-pressed={row.pinned}
+					aria-label={row.pinned
+						? `Unpin ${title}`
+						: `Pin ${title}`}
+					onclick={() => setRowPin(zone, row.key, !row.pinned)}
+				>
+					<Icons.Pin size={15} />
+				</button>
+			{/if}
+			<button
+				class="medit-btn"
+				aria-label="Settings and style for {title}"
+				onclick={() => (styleSheetId = row.members[0])}
+			>
+				<Icons.Palette size={15} />
+			</button>
+			{#if zoneId && row.members.length === 1}
+				<button
+					class="medit-btn"
+					aria-label="Remove {title}"
+					onclick={() => removeWidgetFrom(zone, row.members[0])}
+				>
+					<Icons.X size={15} />
+				</button>
+			{/if}
+		</div>
+		{#if row.members.length > 1}
+			<!-- A tab group's own order: which tab comes first. -->
+			<ul class="medit-members">
+				{#each row.members as id, m (id)}
+					<li class="medit-member">
+						<span class="medit-name">{widgetLabel(id)}</span>
+						<button
+							class="medit-btn"
+							disabled={m === 0}
+							aria-label="Move {widgetLabel(id)} earlier"
+							onclick={() => moveMemberIn(zone, row.key, id, -1)}
+						>
+							<Icons.ChevronUp size={14} />
+						</button>
+						<button
+							class="medit-btn"
+							disabled={m === row.members.length - 1}
+							aria-label="Move {widgetLabel(id)} later"
+							onclick={() => moveMemberIn(zone, row.key, id, 1)}
+						>
+							<Icons.ChevronDown size={14} />
+						</button>
+						<button
+							class="medit-btn"
+							aria-label="Settings and style for {widgetLabel(id)}"
+							onclick={() => (styleSheetId = id)}
+						>
+							<Icons.Palette size={14} />
+						</button>
+						{#if zoneId}
+							<button
+								class="medit-btn"
+								aria-label="Remove {widgetLabel(id)}"
+								onclick={() => removeWidgetFrom(zone, id)}
+							>
+								<Icons.X size={14} />
+							</button>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</li>
+{/snippet}
+
+{#snippet mobileEditor()}
+	<div class="medit" role="dialog" aria-label="Layout" data-pop-keep>
+		<header class="medit-head">
+			<Icons.LayoutDashboard size={15} />
+			<span class="medit-heading">Layout</span>
+			<span class="flex-1"></span>
+			{#if simTier !== null}
+				<span class="medit-note">Previewing {simWidth} px</span>
+			{/if}
+		</header>
+		<div class="medit-body">
+			<p class="medit-note">
+				A screen this narrow draws one widget under the next. Drag a
+				handle, or use the arrows, to change the order.
+			</p>
+			{#each mobileZones as z (z.key)}
+				{@const ZoneIcon = z.icon}
+				<section class="medit-zone">
+					<header class="medit-zone-head">
+						<ZoneIcon size={13} />
+						{z.label}
+						<span class="flex-1"></span>
+						{#if z.zoneId}
+							<button
+								class="medit-chip"
+								onclick={() =>
+									(pickerTarget = z.zoneId
+										? { zone: z.key, id: z.zoneId }
+										: null)}
+							>
+								<Icons.Plus size={13} />
+								Add
+							</button>
+						{/if}
+					</header>
+					<ul class="medit-list">
+						{#each z.rows as row, i (row.key)}
+							{@render mobileRowItem(
+								z.key,
+								z.zoneId,
+								z.rows,
+								row,
+								i
+							)}
+						{/each}
+						{#if !z.rows.length}
+							<li class="medit-empty">Nothing here yet.</li>
+						{/if}
+					</ul>
+				</section>
+			{/each}
+		</div>
+		<!-- The sticky bar is the toolbar down here: commit, cancel and restore
+		     without a row of tabs a thumb cannot reach. -->
+		<div class="medit-bar">
+			<button class="medit-chip" onclick={() => (presetSheet = true)}>
+				<Icons.LayoutTemplate size={14} />
+				Presets
+			</button>
+			<button
+				class="medit-chip"
+				title="Drop this session's own arrangement"
+				aria-label="Reset to default"
+				onclick={resetLayout}
+			>
+				<Icons.RotateCcw size={14} />
+			</button>
+			<span class="flex-1"></span>
+			<button class="medit-chip" onclick={cancelEditing}>Cancel</button>
+			<button class="medit-chip primary" onclick={finishEditing}>
+				<Icons.Check size={14} />
+				Done
+			</button>
+		</div>
+	</div>
+
+	{#if pickerTarget}
+		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+		<div class="msheet-scrim" onclick={() => (pickerTarget = null)}></div>
+		<div class="msheet" role="dialog" aria-label="Add a widget" data-pop-keep>
+			<header class="msheet-head">
+				<Icons.Plus size={14} />
+				<span>Add a widget</span>
+				<span class="flex-1"></span>
+				<button
+					class="medit-btn"
+					aria-label="Close"
+					onclick={() => (pickerTarget = null)}
+				>
+					<Icons.X size={16} />
+				</button>
+			</header>
+			<div class="msheet-body">
+				{#each paletteWidgets as p (p.id)}
+					{@const IconCmp = iconOf(p)}
+					<button
+						class="msheet-item"
+						onclick={() => {
+							const target = pickerTarget
+							pickerTarget = null
+							if (target)
+								addWidgetTo(target.zone, target.id, p.id)
+						}}
+					>
+						<IconCmp size={18} />
+						<span>{p.title}</span>
+					</button>
+				{:else}
+					<p class="medit-note">All widgets are placed.</p>
+				{/each}
+			</div>
+		</div>
+	{/if}
+
+	{#if presetSheet}
+		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+		<div class="msheet-scrim" onclick={() => (presetSheet = false)}></div>
+		<div class="msheet" role="dialog" aria-label="Layouts" data-pop-keep>
+			<header class="msheet-head">
+				<Icons.LayoutTemplate size={14} />
+				<span>Layouts</span>
+				<span class="flex-1"></span>
+				<button
+					class="medit-btn"
+					aria-label="Close"
+					onclick={() => (presetSheet = false)}
+				>
+					<Icons.X size={16} />
+				</button>
+			</header>
+			<div class="msheet-body">
+				{#each presets as p (p.id)}
+					<button
+						class="msheet-item"
+						class:on={activePreset?.id === p.id}
+						aria-pressed={activePreset?.id === p.id}
+						onclick={() => {
+							applyPreset(p.id)
+							presetSheet = false
+						}}
+					>
+						{@render presetPicture(p.layout)}
+						<span>{p.name}</span>
+					</button>
+				{/each}
+				<div class="msheet-save">
+					<input
+						class="preset-input"
+						type="text"
+						placeholder="Name this layout"
+						maxlength="80"
+						aria-label="Name this layout"
+						bind:value={presetName}
+					/>
+					<button
+						class="medit-chip primary"
+						disabled={!presetName.trim()}
+						onclick={() => {
+							savePreset()
+							presetSheet = false
+						}}
+					>
+						Save
+					</button>
+				</div>
+				<button
+					class="medit-chip"
+					onclick={() => {
+						resetLayout()
+						presetSheet = false
+					}}
+				>
+					<Icons.RotateCcw size={14} />
+					Reset to default
+				</button>
+			</div>
+		</div>
+	{/if}
+
+	{#if styleSheetId}
+		<!-- The per-widget controls, full screen: there is no hover on a touch
+		     screen, so the overlay is armed for this one widget and given a box
+		     of its own to fill instead of a widget to sit on. -->
+		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+		<div class="msheet-scrim" onclick={() => (styleSheetId = null)}></div>
+		<div
+			class="msheet msheet-full"
+			role="dialog"
+			aria-label="Settings for {widgetLabel(styleSheetId)}"
+			data-pop-keep
+		>
+			<header class="msheet-head">
+				<Icons.Palette size={14} />
+				<span>{widgetLabel(styleSheetId)}</span>
+				<span class="flex-1"></span>
+				<button
+					class="medit-btn"
+					aria-label="Close"
+					onclick={() => (styleSheetId = null)}
+				>
+					<Icons.X size={16} />
+				</button>
+			</header>
+			<div class="msheet-stage">
+				<WidgetStyleOverlay
+					widgetId={styleSheetId}
+					label={widgetLabel(styleSheetId)}
+				/>
+			</div>
+		</div>
+	{/if}
 {/snippet}
 
 <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
@@ -2166,6 +3719,11 @@
 				// slot empty, and reading that empty slot opened the editor on
 				// nothing and then wrote that nothing back over the preset.
 				editArranged = loadArranged(manager.effectiveArrangedGrid)
+				// What Cancel puts back; the arrangement's own restore is the
+				// reseed above.
+				editZonesSnapshot = JSON.parse(
+					JSON.stringify(layout)
+				) as ZoneLayout
 				editing = true
 			}}
 			onmouseenter={() => (tabActive = true)}
@@ -2179,7 +3737,11 @@
 			<span>Layout</span>
 		</button>
 	{/if}
-	{#if editing}
+	<!-- The toolbar is the DESKTOP's, and it survives a previewed phone width:
+	     the tier buttons and the grid escape live in it, so hiding it with the
+	     grid would strand the preview it started. A real narrow window has no
+	     toolbar at all — the sticky bar at the foot of the row editor is it. -->
+	{#if editing && !isNarrow}
 		<!-- The layout editor: a tabbed toolbar over the chat. Presets picks a
 		     saved layout (and saves the current one); Style picks the
 		     message/composer packs (live preview); Move places and arranges
@@ -2203,13 +3765,13 @@
 					</button>
 					<button
 						class="editor-tab"
-						class:active={editTab === "style"}
+						class:active={editTab === "settings"}
 						role="tab"
-						aria-selected={editTab === "style"}
-						onclick={() => (editTab = "style")}
+						aria-selected={editTab === "settings"}
+						onclick={() => (editTab = "settings")}
 					>
-						<Icons.Palette size={13} />
-						Style
+						<Icons.SlidersHorizontal size={13} />
+						Settings
 					</button>
 					<button
 						class="editor-tab"
@@ -2223,18 +3785,7 @@
 					</button>
 				</div>
 				<span class="flex-1"></span>
-				<button
-					class="tool-btn primary"
-					onclick={() => {
-						// Commit FIRST: the save reads the arrangement this
-						// writes, so a preset saved on Done captures what you
-						// just arranged rather than what you started with.
-						commitArrangement()
-						savePreset()
-						editing = false
-						armedId = null
-					}}
-				>
+				<button class="tool-btn primary" onclick={finishEditing}>
 					<Icons.Check size={14} />
 					<span>Done</span>
 				</button>
@@ -2384,19 +3935,16 @@
 							Saving also happens on Done while a name is typed.
 						</span>
 					</div>
-				{:else if editTab === "style"}
-					<!-- The whole panel, deliberately. The message and composer
-					     packs were the last controls here; they are per-widget
-					     styles now (ruled 2026-08-30), so Messages and Composer
-					     are picked from their own hover overlay like every other
-					     widget — including the New / Edit / Clone path, which the
-					     segmented rows never had. -->
+				{:else if editTab === "settings"}
+					<!-- One line, because the controls are on the widgets: every
+					     widget on screen wears its own settings overlay while
+					     this tab is open, with Style as one of its sections. -->
 					<p class="pack-hint">
 						{#if styleableWidgets.length}
-							Hover a widget to style it.
+							Hover a widget to change its settings.
 						{:else}
 							Put a widget in the layout on the Move tab, then
-							hover it to style it.
+							hover it to change its settings.
 						{/if}
 					</p>
 				{:else if editTab === "move"}
@@ -2506,6 +4054,41 @@
 								</button>
 							{/each}
 						</div>
+						<!-- The rail model (ruled 2026-09-10), on the SAME
+						     arrangement: each group in a side column is its own
+						     toggling panel, so this draws the sides the way a
+						     session draws them — docked, or an icon in the rail,
+						     or opened over the chat when the column has no room.
+						     A lens like the width presets, and nothing it does is
+						     persisted: pin and open live for the page. -->
+						<button
+							class="move-sim-btn move-sim-rails"
+							class:active={railPreview}
+							aria-pressed={railPreview}
+							title="Draw the side columns as rails — toggle a group, pin one, and watch what does not fit fly out"
+							onclick={() => (railPreview = !railPreview)}
+						>
+							<Icons.PanelLeftClose size={12} />
+							Rails
+						</button>
+						<!-- The MOBILE-EDIT mode (ruled 2026-09-10): a previewed
+						     width below the breakpoint draws the row editor that
+						     width really gets, so it can be checked without a
+						     phone. This is the way back to the grid, and it is
+						     offered only here — a real narrow window has no zones
+						     to drag in. -->
+						{#if simNarrow}
+							<button
+								class="move-sim-btn move-sim-rails"
+								class:active={simGrid}
+								aria-pressed={simGrid}
+								title="Draw the grid at this width instead of the row editor a screen this narrow gets"
+								onclick={() => (simGrid = !simGrid)}
+							>
+								<Icons.Grid2x2 size={12} />
+								Grid
+							</button>
+						{/if}
 					</div>
 					<!-- Says out loud what the guard enforces: looking at a tier
 					     changes nothing, but ARRANGING at one is an edit to the
@@ -2518,12 +4101,24 @@
 							size.
 						</span>
 					{/if}
+					{#if railPreview}
+						<span class="palette-hint">
+							Click a rail icon to open or close a group; the pin
+							keeps one open at its own height. Alt+[ expands
+							every group that fits, Alt+] sends them all to the
+							rail.
+						</span>
+					{/if}
 				{/if}
 			</div>
 		</div>
 	{/if}
 
-	{#if placing}
+	<!-- A width below the breakpoint gets the ROW editor instead of the grid
+	     (ruled 2026-09-10) — see the `mobileEditor` snippet. The live session
+	     stays mounted underneath it rather than being swapped for a canvas, so
+	     nothing in it reloads while the order is edited. -->
+	{#if placing && !mobileEdit}
 		<!-- The Widgets tab is the visual grid editor: each zone is drawn as its
 		     own square-cell grid, IN PLACE — Left and Right ride in the site's
 		     margins (where they live in a session), Middle in the centre. Cards
@@ -2556,6 +4151,26 @@
 		{:else}
 			{@render editCanvas(false)}
 		{/if}
+	{:else if placing && simWidth != null}
+		<!-- A phone width previewed from a desktop: the row editor drawn in the
+		     same frame the grid preview uses, at that device's width and height.
+		     The frame's `transform` is what its fixed boxes — the editor and its
+		     sheets — anchor to, so the preview is a phone rather than a takeover
+		     of the whole window. -->
+		<div class="edit-scrim"></div>
+		<div class="sim-stage">
+			<div class="sim-label">
+				Previewing at {simWidth} px{simPct < 100
+					? ` · shown at ${simPct}%`
+					: ""}
+			</div>
+			<div
+				class="sim-frame"
+				style="inline-size:{simWidth}px; max-block-size:{simHeight}px; transform:scale({editGeom.scale});"
+			>
+				{@render mobileEditor()}
+			</div>
+		</div>
 	{:else}
 	<div class="layout-body" class:margin-mode={marginMode}>
 		<!-- The left side, mounted ONCE. `leftSlot` says whether it is drawn in
@@ -2591,16 +4206,23 @@
 					     (which was silently repopulating the chat). -->
 					<div
 						class="chat-arranged"
-						style="grid-template-columns:repeat({arranged.middle.cols},1fr); grid-template-rows:repeat({arranged.middle.rows},1fr);"
+						class:one-column={middleCol.collapsed}
+						bind:clientWidth={middleWPx}
+						style="grid-template-columns:repeat({middleCol.collapsed
+							? 1
+							: arranged.middle.cols},1fr); grid-template-rows:{middleCol.collapsed
+							? middleCol.rows || '1fr'
+							: `repeat(${arranged.middle.rows},1fr)`};"
 					>
 						{#each unitsOf(arranged.middle.items) as u (u.key)}
 							{@const widthPx = cellWidths[`middle:${u.key}`] ?? 0}
 							<div
 								class="chat-arranged-cell"
 								bind:clientWidth={cellWidths[`middle:${u.key}`]}
-								style="grid-column:{u.box.x + 1} / span {u.box
-									.w}; grid-row:{u.box.y + 1} / span {u.box
-									.h};{u.members.length === 1
+								style="{middleCol.collapsed
+									? `grid-column:1; grid-row:${middleCol.row[u.key] ?? 1};`
+									: `grid-column:${u.box.x + 1} / span ${u.box.w}; grid-row:${u.box.y + 1} / span ${u.box.h};`}{u
+									.members.length === 1 && !middleCol.collapsed
 									? anchorCellStyle(u.members[0].anchor)
 									: ''}"
 							>
@@ -2695,7 +4317,70 @@
 			<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 			<div class="pop-scrim" onclick={closeMobilePanels}></div>
 		{/if}
+
+		<!-- The panels menu (ruled 2026-09-10): the sheet the header's one
+		     panels button opens. It LISTS the side groups — icon, title, which
+		     side, and which are pinned — and tapping one opens that side's
+		     overlay showing it. The list is what scales: another widget is
+		     another line here, where it used to have to be another button in the
+		     header. Nothing is mounted by it, so it is an ordinary `{#if}`. -->
+		{#if mobileSidePanels.menuOpen}
+			<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+			<div
+				class="pop-scrim"
+				onclick={() => mobileSidePanels.closeMenu()}
+			></div>
+			<div
+				class="panels-menu"
+				role="dialog"
+				aria-modal="true"
+				aria-label="Session panels"
+				data-pop-keep
+			>
+				<div class="zone-head">
+					<span class="zone-label always">Panels</span>
+					<span class="flex-1"></span>
+					<button
+						class="zone-head-btn"
+						title="Close"
+						aria-label="Close panels menu"
+						onclick={() => mobileSidePanels.closeMenu()}
+					>
+						<Icons.X size={16} />
+					</button>
+				</div>
+				<ul class="panels-menu-list">
+					{#each mobileSidePanels.groups as g (`${g.side}:${g.key}`)}
+						{@const GroupIcon =
+							(Icons as any)[g.icon] || Icons.LayoutPanelTop}
+						<li>
+							<button
+								class="panels-menu-item"
+								onclick={() =>
+									mobileSidePanels.openGroup(g.side, g.key)}
+							>
+								<GroupIcon size={18} />
+								<span class="pm-title">{g.title}</span>
+								{#if g.pinned}
+									<Icons.Pin size={12} />
+								{/if}
+								<span class="pm-side">
+									{g.side === "left" ? "Left" : "Right"}
+								</span>
+							</button>
+						</li>
+					{/each}
+				</ul>
+			</div>
+		{/if}
 	</div>
+	{/if}
+
+	<!-- The row editor at the REAL width, over the live session: everything in
+	     the session stays mounted while the order is edited. A previewed one is
+	     drawn in the simulator's frame instead (above). -->
+	{#if editing && mobileEdit && simWidth == null}
+		{@render mobileEditor()}
 	{/if}
 </div>
 
@@ -2745,7 +4430,7 @@
 		max-inline-size: none;
 		flex: 1;
 	}
-	.side-slot.slot-overlay > :global(.live-side) {
+	.side-slot.slot-overlay > :global(.side-column) {
 		flex: 1;
 		min-block-size: 0;
 	}
@@ -2779,6 +4464,14 @@
 	/* Pinned rails fill the margin; icon strips hug the outer edge. */
 	.margin-rail :global(.zone-rail) {
 		inline-size: 100% !important;
+	}
+	/* The arranged path's column is one box, so it takes the margin whole —
+	   `.margin-rail` aligns its children to the outer edge, which would
+	   otherwise shrink the column to its content. */
+	.margin-rail > .side-column {
+		flex: 1;
+		inline-size: 100%;
+		min-block-size: 0;
 	}
 	.layout-center {
 		display: flex;
@@ -2838,12 +4531,78 @@
 	   so filling it is right. In the flow there is nothing definite to be 100%
 	   OF — `.layout-body` is the whole session — so the snippet writes an
 	   inline `flex: 0 0 <ladder>px` there instead (see `sideWidths`). */
-	.live-side {
+	/* ── the side rail model (ruled 2026-09-10) ───────────────────────────
+	   A side column is a stack of toggling group panels plus a slim rail of
+	   icons at its OUTER edge. `row-reverse` on a left column puts the rail on
+	   the left and the stack on the right from the SAME dom order the right
+	   column uses — one markup, both sides, and no reordering to move an
+	   iframe. `position: relative` is the preview's flyout anchor; the live
+	   flyout is fixed (see `flyoutStyle`). */
+	.side-column {
+		position: relative;
+		display: flex;
+		flex-direction: row;
+		gap: 0.25rem;
 		block-size: 100%;
 		inline-size: 100%;
+		min-inline-size: 0;
 		min-block-size: 0;
+	}
+	.side-column.col-left {
+		flex-direction: row-reverse;
+	}
+	/* The stack. Still a grid, but its ROWS are the rail model's answer rather
+	   than the arrangement's `repeat(rows,1fr)`: a collapsed group has to give
+	   its height BACK, and an empty track of a fixed template gives nothing
+	   back. Both templates are written inline, per column. `overflow: hidden`
+	   keeps the measured column height — which the model is decided against —
+	   from being the sum of what is in it. */
+	.live-side {
+		flex: 1;
 		display: grid;
 		gap: 0.4rem;
+		block-size: 100%;
+		min-inline-size: 0;
+		min-block-size: 0;
+		overflow: hidden;
+	}
+	/* The mobile sheet (ruled 2026-09-10): the side's panels LISTED, not a
+	   column of them competing for height. Each is its content height, capped
+	   at what the sheet has, and the list scrolls. A flex column, so the cells'
+	   explicit grid rows go quiet and their `order` — the collapsed order —
+	   is what the list follows. */
+	.live-side.sheet {
+		display: flex;
+		flex-direction: column;
+		overflow-y: auto;
+	}
+	.live-side.sheet > .live-side-cell {
+		flex: 0 0 auto;
+		max-block-size: 100%;
+	}
+	.side-rail {
+		flex: none;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.25rem;
+		inline-size: 2.25rem;
+		padding-block: 0.375rem;
+	}
+	.rail-btn {
+		position: relative;
+	}
+	/* Pinned, where that is worth saying: the preview and the mobile sheet,
+	   both of which are lists of groups you are choosing between. */
+	.rail-btn.pinned::after {
+		content: "";
+		position: absolute;
+		inset-block-start: 0.15rem;
+		inset-inline-end: 0.15rem;
+		inline-size: 0.3rem;
+		block-size: 0.3rem;
+		border-radius: 50%;
+		background: var(--color-primary-500);
 	}
 	.live-side-cell {
 		/* Same containing-block job as `.chat-arranged-cell` above. */
@@ -2857,6 +4616,73 @@
 	.live-side-cell > :global(*) {
 		flex: 1;
 		min-block-size: 0;
+	}
+	/* Folded (mobile): the title bar stays, the widget stays MOUNTED and is
+	   hidden — the fold is a display, not an unmount, or folding a panel would
+	   cost it its state and reload its iframe. */
+	.live-side-cell.cell-folded {
+		overflow: hidden;
+	}
+	.live-side-cell.cell-folded > :global(*) {
+		display: none;
+	}
+	.fold-bar {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		inline-size: 100%;
+		min-block-size: 2.75rem;
+		padding-inline: 0.6rem;
+		border-radius: 0.5rem;
+		text-align: start;
+		color: var(--color-surface-600-400);
+		background: color-mix(
+			in oklab,
+			var(--color-surface-500) 12%,
+			transparent
+		);
+	}
+	.live-side-cell.cell-folded > .fold-bar {
+		display: flex;
+	}
+	.fold-title {
+		flex: 1;
+		min-inline-size: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 0.8rem;
+		font-weight: 650;
+	}
+
+	/* Rule (c): the group could not fit beside the pinned ones, so it is over
+	   the session at the column's full height instead of squeezing it. The box
+	   is the desktop pop-over's — same surface, same shadow, same slide — since
+	   it is the same gesture the unpinned rails have always had. */
+	.live-side-cell.cell-flyout {
+		padding: 0.4rem;
+		border-radius: 0.6rem 0 0 0.6rem;
+		background: var(--color-surface-50);
+		border-inline-start: 1px solid
+			color-mix(in oklab, var(--color-surface-300) 60%, transparent);
+		box-shadow: -10px 0 28px rgba(0, 0, 0, 0.22);
+		animation: fly-in-right 200ms cubic-bezier(0.22, 1, 0.36, 1);
+	}
+	.live-side-cell.cell-flyout.from-left {
+		border-radius: 0 0.6rem 0.6rem 0;
+		border-inline-start: none;
+		border-inline-end: 1px solid
+			color-mix(in oklab, var(--color-surface-300) 60%, transparent);
+		box-shadow: 10px 0 28px rgba(0, 0, 0, 0.22);
+		animation-name: fly-in-left;
+	}
+	:global([data-mode="dark"]) .live-side-cell.cell-flyout {
+		background: var(--color-surface-950);
+		border-color: color-mix(
+			in oklab,
+			var(--color-surface-700) 60%,
+			transparent
+		);
 	}
 
 	/* Live tab group: grouped widgets share one cell — a tab bar plus one active
@@ -2959,6 +4785,122 @@
 	}
 	.edit-margin-right {
 		inset-inline-end: 0;
+	}
+
+	/* ── the Move tab's rail preview ──────────────────────────────────────
+	   A side column drawn as a session draws it. The cards are titles only —
+	   the editor never mounts a live panel a second time — so everything here
+	   is chrome; the behaviour it shows is ./sideRail's, the same call the live
+	   column makes. */
+	.zgrid-rail {
+		overflow: visible; /* the flyout card reaches across the chat */
+	}
+	.zgrid-note {
+		font-size: 0.6rem;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: none;
+		opacity: 0.75;
+	}
+	.rail-preview {
+		display: flex;
+		flex-direction: column;
+		min-block-size: 0;
+	}
+	.prev-stack {
+		flex: 1;
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 0.25rem;
+		min-inline-size: 0;
+		min-block-size: 0;
+		overflow: hidden;
+	}
+	.prev-card {
+		display: flex;
+		flex-direction: column;
+		min-block-size: 0;
+		border-radius: 0.5rem;
+		border: 1px solid
+			color-mix(in oklab, var(--color-surface-400) 45%, transparent);
+		background: var(--color-surface-50);
+		overflow: hidden;
+	}
+	:global([data-mode="dark"]) .prev-card {
+		background: var(--color-surface-950);
+		border-color: color-mix(
+			in oklab,
+			var(--color-surface-600) 45%,
+			transparent
+		);
+	}
+	.prev-head {
+		flex: none;
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
+		padding: 0.2rem 0.3rem;
+		font-size: 0.66rem;
+		font-weight: 650;
+		color: var(--color-surface-600-400);
+		background: color-mix(
+			in oklab,
+			var(--color-primary-500) 10%,
+			transparent
+		);
+	}
+	.prev-title {
+		flex: 1;
+		min-inline-size: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.prev-pin {
+		flex: none;
+		display: flex;
+		border-radius: 0.3rem;
+		padding: 0.1rem;
+		opacity: 0.45;
+	}
+	.prev-pin.on {
+		opacity: 1;
+		color: var(--color-primary-600);
+	}
+	.prev-body {
+		flex: 1;
+		min-block-size: 0;
+		background: repeating-linear-gradient(
+			-45deg,
+			color-mix(in oklab, var(--color-surface-500) 9%, transparent) 0 5px,
+			transparent 5px 10px
+		);
+	}
+	/* Rule (c) in the preview: the card is over the session at the column's
+	   full height. Absolute (not fixed) because the editor's margins are fixed
+	   layers already, and the anchor is the column it left. */
+	.prev-card.card-flyout {
+		position: absolute;
+		inset-block: 0;
+		inset-inline-end: 0;
+		inline-size: min(15rem, 300%);
+		z-index: 5;
+		box-shadow: -10px 0 28px rgba(0, 0, 0, 0.28);
+		animation: fly-in-right 200ms cubic-bezier(0.22, 1, 0.36, 1);
+	}
+	.prev-card.card-flyout.from-left {
+		inset-inline-end: auto;
+		inset-inline-start: 0;
+		box-shadow: 10px 0 28px rgba(0, 0, 0, 0.28);
+		animation-name: fly-in-left;
+	}
+	/* The Rails toggle sits beside the width presets and is a lens like them,
+	   so it wears the same button — with its icon on the leading edge. */
+	.move-sim-rails {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		margin-inline-start: 0.35rem;
 	}
 
 	/* ── the screen-size simulator's frame ─────────────────────────────────
@@ -3376,6 +5318,76 @@
 		inset: 0;
 		z-index: 25;
 		background: rgba(0, 0, 0, 0.32);
+	}
+
+	/* The panels menu: a sheet from the top, under the header the button is in,
+	   so it reads as that button's menu rather than as a page of its own. */
+	.panels-menu {
+		position: absolute;
+		inset-block-start: 0;
+		inset-inline: 0;
+		z-index: 30;
+		max-block-size: 70%;
+		display: flex;
+		flex-direction: column;
+		padding: 0.4rem 0.5rem 0.6rem;
+		border-radius: 0 0 0.8rem 0.8rem;
+		background: var(--color-surface-50);
+		box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+		animation: fly-in-menu 180ms cubic-bezier(0.22, 1, 0.36, 1);
+	}
+	:global([data-mode="dark"]) .panels-menu {
+		background: var(--color-surface-950);
+	}
+	@keyframes fly-in-menu {
+		from {
+			transform: translateY(-8px);
+			opacity: 0;
+		}
+	}
+	.panels-menu-list {
+		flex: 1;
+		min-block-size: 0;
+		overflow-y: auto;
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+	}
+	.panels-menu-item {
+		inline-size: 100%;
+		min-block-size: 2.75rem;
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding-inline: 0.5rem;
+		border-radius: 0.5rem;
+		text-align: start;
+		color: inherit;
+	}
+	.panels-menu-item:hover,
+	.panels-menu-item:focus-visible {
+		background: color-mix(
+			in oklab,
+			var(--color-primary-500) 12%,
+			transparent
+		);
+	}
+	.pm-title {
+		flex: 1;
+		min-inline-size: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 0.85rem;
+		font-weight: 600;
+	}
+	.pm-side {
+		flex: none;
+		font-size: 0.65rem;
+		font-weight: 700;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		color: var(--color-surface-500);
 	}
 
 	/* ── tools + palette + edit mode ───────────────────────────────── */
@@ -4036,5 +6048,271 @@
 		.zone-flyout.mobile.from-left {
 			animation: none;
 		}
+	}
+
+	/* ── the phone editor ──────────────────────────────────────────────────
+	   Fixed over the session, which stays mounted underneath: a full-height
+	   column of head / scrolling list / sticky bar, so the commit controls are
+	   at the thumb end whatever the list does. */
+	.medit {
+		position: fixed;
+		inset: 0;
+		z-index: 40;
+		display: flex;
+		flex-direction: column;
+		background: var(--color-surface-50);
+		color: var(--color-surface-contrast-50);
+	}
+	:global([data-mode="dark"]) .medit {
+		background: var(--color-surface-950);
+		color: var(--color-surface-contrast-950);
+	}
+	.medit-head,
+	.medit-bar {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		padding: 0.5rem 0.75rem;
+		border-block-end: 1px solid
+			color-mix(in oklab, currentColor 14%, transparent);
+	}
+	.medit-bar {
+		border-block-end: none;
+		border-block-start: 1px solid
+			color-mix(in oklab, currentColor 14%, transparent);
+		/* The home indicator on a phone sits over the last few pixels. */
+		padding-block-end: max(0.5rem, env(safe-area-inset-bottom));
+	}
+	.medit-heading {
+		font-weight: 600;
+	}
+	.medit-body {
+		flex: 1;
+		min-block-size: 0;
+		overflow-y: auto;
+		padding: 0.75rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+	.medit-note {
+		font-size: 0.75rem;
+		opacity: 0.7;
+		margin: 0;
+	}
+	.medit-zone {
+		border: 1px solid color-mix(in oklab, currentColor 14%, transparent);
+		border-radius: 0.5rem;
+		overflow: hidden;
+	}
+	.medit-zone-head {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		padding: 0.4rem 0.5rem;
+		font-size: 0.75rem;
+		font-weight: 600;
+		background: color-mix(in oklab, currentColor 6%, transparent);
+	}
+	.medit-list,
+	.medit-members {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+	.medit-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.25rem 0.4rem;
+		padding: 0.4rem 0.5rem;
+		border-block-start: 1px solid
+			color-mix(in oklab, currentColor 10%, transparent);
+	}
+	.medit-row.dragging {
+		background: color-mix(in oklab, var(--color-primary-500) 14%, transparent);
+	}
+	.medit-line {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		flex: 1 1 10rem;
+		min-inline-size: 0;
+	}
+	.medit-name {
+		flex: 1;
+		min-inline-size: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 0.85rem;
+	}
+	.medit-badge {
+		font-size: 0.65rem;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		padding: 0.1rem 0.3rem;
+		border-radius: 0.25rem;
+		background: color-mix(in oklab, currentColor 12%, transparent);
+	}
+	.medit-acts {
+		display: flex;
+		align-items: center;
+		gap: 0.2rem;
+	}
+	/* A touch target, not an icon: 2.25rem is the smallest square a thumb hits
+	   reliably, and every control in this editor is one. */
+	.medit-btn,
+	.medit-grip {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		inline-size: 2.25rem;
+		block-size: 2.25rem;
+		border-radius: 0.4rem;
+		border: 1px solid transparent;
+		background: transparent;
+		color: inherit;
+		cursor: pointer;
+	}
+	.medit-grip {
+		/* The page must not scroll under a finger that is reordering. */
+		touch-action: none;
+		cursor: grab;
+	}
+	.medit-btn:disabled {
+		opacity: 0.3;
+		cursor: default;
+	}
+	.medit-btn.on {
+		color: var(--color-primary-500);
+		border-color: color-mix(in oklab, var(--color-primary-500) 40%, transparent);
+	}
+	.medit-members {
+		flex-basis: 100%;
+		padding-inline-start: 2.25rem;
+	}
+	.medit-member {
+		display: flex;
+		align-items: center;
+		gap: 0.2rem;
+		font-size: 0.8rem;
+		opacity: 0.85;
+	}
+	.medit-empty {
+		padding: 0.5rem;
+		font-size: 0.75rem;
+		opacity: 0.6;
+	}
+	.medit-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.3rem;
+		padding: 0.4rem 0.7rem;
+		min-block-size: 2.25rem;
+		border-radius: 0.4rem;
+		border: 1px solid color-mix(in oklab, currentColor 22%, transparent);
+		background: transparent;
+		color: inherit;
+		font-size: 0.8rem;
+		cursor: pointer;
+	}
+	.medit-chip.primary {
+		background: var(--color-primary-500);
+		color: var(--color-primary-contrast-500);
+		border-color: transparent;
+	}
+	.medit-chip:disabled {
+		opacity: 0.4;
+		cursor: default;
+	}
+
+	/* ── the sheets ────────────────────────────────────────────────────────
+	   A picker, the layouts and one widget's settings each arrive over the
+	   editor rather than inside it: on a screen this narrow there is no room
+	   beside the list, and a hover overlay has nothing to hover. */
+	.msheet-scrim {
+		position: fixed;
+		inset: 0;
+		z-index: 41;
+		background: rgba(0, 0, 0, 0.4);
+	}
+	.msheet {
+		position: fixed;
+		inset-inline: 0;
+		inset-block-end: 0;
+		z-index: 42;
+		display: flex;
+		flex-direction: column;
+		max-block-size: 85dvh;
+		border-start-start-radius: 0.75rem;
+		border-start-end-radius: 0.75rem;
+		background: var(--color-surface-50);
+		color: var(--color-surface-contrast-50);
+		box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.3);
+	}
+	:global([data-mode="dark"]) .msheet {
+		background: var(--color-surface-950);
+		color: var(--color-surface-contrast-950);
+	}
+	/* The style controls need the whole screen: the widget they edit is not on
+	   it, so the sheet is the only thing they have to fill. */
+	.msheet-full {
+		inset-block: 0;
+		max-block-size: none;
+		border-radius: 0;
+	}
+	.msheet-head {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		padding: 0.5rem 0.75rem;
+		font-weight: 600;
+		font-size: 0.85rem;
+		border-block-end: 1px solid
+			color-mix(in oklab, currentColor 14%, transparent);
+	}
+	.msheet-body {
+		flex: 1;
+		min-block-size: 0;
+		overflow-y: auto;
+		padding: 0.75rem;
+		padding-block-end: max(0.75rem, env(safe-area-inset-bottom));
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+	}
+	.msheet-item {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.5rem;
+		min-block-size: 2.75rem;
+		border-radius: 0.4rem;
+		border: 1px solid color-mix(in oklab, currentColor 16%, transparent);
+		background: transparent;
+		color: inherit;
+		font-size: 0.85rem;
+		text-align: start;
+		cursor: pointer;
+	}
+	.msheet-item.on {
+		border-color: var(--color-primary-500);
+	}
+	.msheet-save {
+		display: flex;
+		gap: 0.4rem;
+		align-items: center;
+	}
+	.msheet-save .preset-input {
+		flex: 1;
+		min-inline-size: 0;
+	}
+	/* The containing block for the style overlay, which is `position: absolute;
+	   inset: 0` against the card it normally sits on. */
+	.msheet-stage {
+		position: relative;
+		flex: 1;
+		min-block-size: 0;
 	}
 </style>

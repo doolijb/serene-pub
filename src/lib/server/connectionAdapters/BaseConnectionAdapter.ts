@@ -3,8 +3,11 @@ import type { TokenCounters } from "../utils/TokenCounterManager"
 import type { JsonSchemaNode } from "./jsonSchemaToGbnf"
 import type {
 	AdapterActions,
-	TextGenResult
+	TextGenResult,
+	ToolCall,
+	ToolDeclaration
 } from "$lib/server/adapters/actions"
+import { normalizeToolCall } from "./streamingToolCalls"
 import {
 	prepareAttachments,
 	type AttachmentInput,
@@ -16,6 +19,7 @@ import type { AdapterIo } from "$lib/shared/connectionAdapters/io"
 import { SessionTypes } from "$lib/shared/constants/SessionTypes"
 import { PromptBlockFormatter } from "$lib/shared/utils/PromptBlockFormatter"
 import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
+import { getSupportedSamplers } from "$lib/shared/utils/samplerMappings"
 import {
 	completionTemplateOf,
 	type CompletionTemplate
@@ -26,6 +30,7 @@ import {
 } from "$lib/shared/connectionAdapters/wireMode"
 import { continueWireRefusal } from "$lib/shared/connectionAdapters/continueReply"
 import type { ComposedStops } from "$lib/server/connections/stops"
+import type { StreamingMode } from "$lib/server/connections/streaming"
 
 export interface BasePromptSession extends SelectSession {
 	sessionCharacters?: (SelectSessionCharacter & {
@@ -105,6 +110,221 @@ export type ContinuationRoute =
 	| { kind: "openBlock" }
 	| { kind: "prefill" }
 	| { kind: "none"; reason: string }
+
+/**
+ * One exchange with a model service: what this adapter put on the wire, and
+ * what came back.
+ *
+ * The receipt already carries the ASSEMBLED prompt and the stop record. What
+ * neither can answer is what a given adapter rendered that into — prompt
+ * format, role mapping, `options`, `format`/`response_format`, `stop`, `tools`
+ * — and what the service replied before anything was parsed out of it. Both
+ * are here, which is the difference between reading a run and running a proxy
+ * in front of it.
+ */
+export interface WireExchange {
+	request: {
+		url: string
+		/** The HTTP method, or the SDK call for a transport that is not HTTP. */
+		method: string
+		/** The body as the adapter built it, credentials replaced. */
+		body: unknown
+	}
+	response: {
+		status?: number
+		/** The response text or the concatenated frames, up to the cap. */
+		raw: string
+		streamed: boolean
+		/** How many frames a streamed response arrived in. */
+		chunks?: number
+		durationMs: number
+		/** The cap took the rest of it. */
+		truncated?: true
+	}
+	/** Every field this record replaced, by path. */
+	redacted: string[]
+}
+
+/** What a raw response may hold before the rest is dropped. */
+export const WIRE_RAW_LIMIT = 64 * 1024
+
+/** What a credential is replaced with, wherever one is found. */
+export const WIRE_REDACTED = "<redacted>"
+
+/**
+ * A field name that means a credential, anywhere in a body or a query string.
+ *
+ * Matched on the WHOLE name, so a sampler called `max_tokens` and KoboldCPP's
+ * `genkey` — an id a later abort quotes back, not a secret — are untouched.
+ */
+const CREDENTIAL_KEY =
+	/^(authorization|api[-_]?key|x[-_]api[-_]key|access[-_]?token|auth[-_]?token|token|secret|password|passwd|bearer|credential)s?$/i
+
+/**
+ * A value that is FILE BYTES rather than text — an attachment, base64'd into
+ * the turn it belongs to.
+ *
+ * ⚠ **Bytes never enter a receipt.** That is `media.ts`'s rule and this record
+ * is subject to it like everything else on a node output: a file travels as a
+ * reference precisely so it is not copied into the receipt, the review payload
+ * and every node in between. So an image in a body is replaced by a note of
+ * its size.
+ *
+ * Told apart by ALPHABET, not by key name: four request formats spell the
+ * field four ways (`data`, `images[]`, `image_url.url`, `b64_json`), and a
+ * name list would be extended by whoever adds the fifth. Prose carries spaces
+ * and punctuation, so a long run of base64 characters alone is not a prompt.
+ */
+const isEncodedBytes = (value: string): boolean =>
+	value.length > 4096 &&
+	(value.startsWith("data:") || /^[A-Za-z0-9+/]+={0,2}$/.test(value))
+
+/** That note, in the units a reader thinks in. */
+const elidedBytes = (value: string): string =>
+	`<${Math.round(value.length / 1024)} KB of encoded bytes, not stored>`
+
+/**
+ * Copy a request body, replacing every credential with a placeholder and
+ * naming what was replaced.
+ *
+ * A copy rather than a walk in place: the object handed here is the one about
+ * to be sent, and a record that edited it would change the request it claims
+ * to describe. A value that is not a plain object or array is kept as it is —
+ * a `Buffer`, a `Date` and a class instance are values, not containers.
+ */
+function redactBody(
+	value: unknown,
+	path: string,
+	redacted: string[],
+	seen: WeakSet<object>
+): unknown {
+	if (typeof value === "string" && isEncodedBytes(value)) {
+		redacted.push(path)
+		return elidedBytes(value)
+	}
+	if (Array.isArray(value)) {
+		if (seen.has(value)) return "<cycle>"
+		seen.add(value)
+		return value.map((v, i) =>
+			redactBody(v, `${path}[${i}]`, redacted, seen)
+		)
+	}
+	if (
+		!value ||
+		typeof value !== "object" ||
+		Object.getPrototypeOf(value) !== Object.prototype
+	)
+		return value
+	if (seen.has(value)) return "<cycle>"
+	seen.add(value)
+	const out: Record<string, unknown> = {}
+	for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+		const at = `${path}.${key}`
+		if (CREDENTIAL_KEY.test(key)) {
+			out[key] = WIRE_REDACTED
+			redacted.push(at)
+			continue
+		}
+		out[key] = redactBody(v, at, redacted, seen)
+	}
+	return out
+}
+
+/**
+ * The URL with any credential in it replaced — a query parameter, or the
+ * user:password some endpoints take in the authority.
+ *
+ * A URL this cannot parse is kept verbatim: a base URL somebody typed is not
+ * always a URL, and a record that dropped it would lose the one fact a reader
+ * opens this for.
+ */
+function redactUrl(url: string, redacted: string[]): string {
+	let parsed: URL
+	try {
+		parsed = new URL(url)
+	} catch {
+		return url
+	}
+	if (parsed.username || parsed.password) {
+		parsed.username = ""
+		parsed.password = ""
+		redacted.push("url.userinfo")
+	}
+	for (const [key] of [...parsed.searchParams]) {
+		if (!CREDENTIAL_KEY.test(key)) continue
+		parsed.searchParams.set(key, WIRE_REDACTED)
+		redacted.push(`url.${key}`)
+	}
+	return parsed.toString()
+}
+
+/**
+ * The record for one request, filled as the response is read.
+ *
+ * Exported so a test's stand-in adapter records the same shape the real ones
+ * do rather than a literal of its own.
+ */
+export class WireRecorder {
+	readonly exchange: WireExchange
+	private readonly startedAt = Date.now()
+
+	constructor(request: { url: string; method?: string; body: unknown }) {
+		const redacted: string[] = []
+		this.exchange = {
+			request: {
+				url: redactUrl(request.url, redacted),
+				method: request.method ?? "POST",
+				body: redactBody(request.body, "body", redacted, new WeakSet())
+			},
+			response: { raw: "", streamed: false, durationMs: 0 },
+			redacted
+		}
+	}
+
+	/** The status line, where the transport exposes one. */
+	status(code: number): void {
+		this.exchange.response.status = code
+	}
+
+	/** One streamed frame, as it is read. */
+	frame(part: unknown): void {
+		const response = this.exchange.response
+		response.streamed = true
+		response.chunks = (response.chunks ?? 0) + 1
+		this.append(typeof part === "string" ? part : `${stringify(part)}\n`)
+	}
+
+	/** The whole response, in one piece. */
+	received(body: unknown, status?: number): void {
+		if (typeof status === "number") this.status(status)
+		this.append(typeof body === "string" ? body : stringify(body))
+	}
+
+	private append(text: string): void {
+		const response = this.exchange.response
+		response.durationMs = Date.now() - this.startedAt
+		const room = WIRE_RAW_LIMIT - response.raw.length
+		if (room <= 0) {
+			response.truncated = true
+			return
+		}
+		if (text.length <= room) {
+			response.raw += text
+			return
+		}
+		response.raw += text.slice(0, room)
+		response.truncated = true
+	}
+}
+
+/** A frame as text, whatever it turned out to be. */
+function stringify(value: unknown): string {
+	try {
+		return JSON.stringify(value) ?? String(value)
+	} catch {
+		return String(value)
+	}
+}
 
 // Generic interface for constructor parameters
 export interface BaseConnectionAdapterParams {
@@ -452,10 +672,16 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * own, and the five disagreed about the one thing that matters — whether a
 	 * completion template's delimiters belong on a chat request. They do not, and
 	 * Ollama sent them anyway. The composition is `connections/stops.ts` now
-	 * (ruling 2026-09-10), called at the two places an adapter is constructed
-	 * (`pipelines/runtime/dispatch.ts` and `utils/generateResponse.ts`), and an
-	 * adapter's whole remaining job is to put `this.stops` in whatever its
-	 * service calls the field.
+	 * (ruling 2026-09-10), called at each of the FIVE places this app constructs
+	 * a text adapter — `pipelines/runtime/dispatch.ts`, `utils/generateResponse.ts`,
+	 * `utils/summarizer/index.ts`, `utils/graphBuilder.ts` and
+	 * `pipelines/runtime/dispatchStep.ts` — and an adapter's whole remaining job
+	 * is to put `this.stops` in whatever its service calls the field.
+	 *
+	 * ⚠ A site that forgets `withStops` sends NO stop sequences, and nothing
+	 * errors: the model simply runs on. `connections/stopsWiring.test.ts` reads
+	 * the tree and fails on a construction site that never hands one over, which
+	 * is the guard that makes this arrangement safe to have.
 	 *
 	 * Set through a `withX` seam rather than a constructor param, deliberately:
 	 * every subclass declares its own inline destructured param list, so a field
@@ -491,6 +717,50 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 		return this.suppliedStops
 	}
 
+	// ── Streaming (not an action either) ────────────────────────────────────
+
+	/**
+	 * The node's own answer to whether this request streams — `auto | off`, off
+	 * the provider node's `params` slot.
+	 *
+	 * `auto` by default, and `auto` means **this adapter decides as it always
+	 * did**: the connection's `extraJson.stream`, whose default differs per
+	 * service. So an adapter consults `streamingOn()` rather than reading the
+	 * flag directly, and a caller that hands nothing over gets the wire it got
+	 * before the parameter existed.
+	 *
+	 * Set through a `withX` seam for the reason `withStops` is — every subclass
+	 * declares its own inline destructured parameter list, so a field added to
+	 * `BaseConnectionAdapterParams` reaches none of them and TypeScript says
+	 * nothing.
+	 */
+	private streamingMode: StreamingMode = "auto"
+
+	/**
+	 * Hand over the node's mode. Returns the adapter so a construction site
+	 * reads as one expression, like `withStops` and `withCompiledPrompt`.
+	 *
+	 * ⚠ Called by a dispatch only for `off`. `auto` IS this adapter's own
+	 * answer, so a second way to spell "leave it alone" would be a second place
+	 * for the two to disagree.
+	 */
+	withStreaming(mode: StreamingMode): this {
+		this.streamingMode = mode
+		return this
+	}
+
+	/**
+	 * Does this request stream, given what the CONNECTION says?
+	 *
+	 * The one expression each adapter's `const stream = …` line calls, so the
+	 * per-service default stays in the adapter that owns it and the override
+	 * cannot be applied six different ways. `off` wins; `auto` returns the
+	 * connection's answer untouched, never widening it to true.
+	 */
+	protected streamingOn(fromConnection: boolean): boolean {
+		return this.streamingMode === "off" ? false : fromConnection
+	}
+
 	/**
 	 * Which stop sequence the service says it actually matched, when it says.
 	 *
@@ -505,6 +775,127 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * rather than being filled with something that is not a stop sequence.
 	 */
 	stopHit?: string
+
+	/**
+	 * What the service said ended the generation, in the service's own word:
+	 * `done_reason`, `finish_reason`, a stop-reason enum.
+	 *
+	 * A property rather than a field on `TextGenResult`, for the reason
+	 * `stopHit` is one — a stream reports it on its last frame, long after
+	 * `generateText()` returned. It is the answer to "was that the whole reply
+	 * or did it hit the length cap", and it names the SERVICE's category rather
+	 * than a stop sequence, so the two never stand in for each other.
+	 *
+	 * Undefined on a service that says nothing, which is a different finding
+	 * from a reply that ran to a natural stop.
+	 */
+	finishReason?: string
+
+	// ── What this request could not carry ───────────────────────────────────
+
+	/**
+	 * Samplers the config switched ON that this request left out, by their
+	 * vocabulary name.
+	 *
+	 * ⚠ **Per REQUEST, and that is why the key maps are not enough.** The
+	 * config panel's "not sent to this backend" note reads
+	 * `getSupportedSamplers`, which answers a question about a connection TYPE
+	 * — a fact a form can know before anything is sent. These are the ones only
+	 * the send knows: a reasoning level a model does not take in words, a
+	 * reasoning budget on a service that counts in words, temperature on an
+	 * Anthropic request that turned thinking on. Every one of them is a control
+	 * a person set and a request that does not carry it, which is the failure
+	 * this whole area exists to stop being silent.
+	 *
+	 * Reaches the receipt through `ctx.reportSampling` — the same channel image
+	 * renders already report `applied`/`ignored` on — so `samplingIgnored` says
+	 * it beside the exchange that proves it.
+	 */
+	private readonly samplersIgnored = new Set<string>()
+
+	/** Say that this request left a switched-on sampler out. Idempotent. */
+	protected noteIgnoredSampler(...keys: readonly string[]): void {
+		for (const key of keys) this.samplersIgnored.add(key)
+	}
+
+	/** What was left out, in the order it was noted. */
+	get ignoredSamplers(): string[] {
+		return [...this.samplersIgnored]
+	}
+
+	/**
+	 * What this request carried and what it could not — the pair
+	 * `ProviderCtx.reportSampling` takes.
+	 *
+	 * `applied` is read through the key map rather than accumulated at each
+	 * assignment: the map IS this app's answer to "which of the vocabulary's
+	 * names does this backend honour", and a second, hand-maintained answer
+	 * would be the one that drifts.
+	 */
+	get samplingReport(): {
+		applied: Record<string, unknown>
+		ignored: string[]
+	} {
+		const supported = getSupportedSamplers(this.connection.type)
+		const applied: Record<string, unknown> = {}
+		for (const [key, value] of Object.entries(this.sampling))
+			if (supported.has(key) && !this.samplersIgnored.has(key))
+				applied[key] = value
+		return { applied, ignored: this.ignoredSamplers }
+	}
+
+	// ── The wire (not an action either) ─────────────────────────────────────
+
+	/**
+	 * Every exchange this adapter has made, in the order it made them.
+	 *
+	 * One per call an adapter sends, so a class that makes two reaches its
+	 * caller as two — `dispatch.ts` publishes them as `wire.calls[]` rather
+	 * than keeping the last and dropping the rest.
+	 */
+	private readonly wireCalls: WireExchange[] = []
+
+	/** What this adapter put on the wire, in order. */
+	get exchanges(): readonly WireExchange[] {
+		return this.wireCalls
+	}
+
+	/**
+	 * The most recent exchange: the request as this class rendered it, and the
+	 * response as it arrived.
+	 *
+	 * ⚠ **Connection material by construction.** A request cannot be described
+	 * without naming where it went, so this carries the base URL, the model id
+	 * and the body. It rides to a receipt under the key `wire`, which
+	 * `withoutConnectionIdentity` removes at every egress for anyone who is not
+	 * an administrator — the same arrangement the node output's `connection`
+	 * key has. Nothing here is a declared out-port.
+	 *
+	 * Headers are never stored: an `Authorization` header is where most of
+	 * these services carry their credential, and a record that could hold one
+	 * is a record that will.
+	 */
+	get lastExchange(): WireExchange | undefined {
+		return this.wireCalls[this.wireCalls.length - 1]
+	}
+
+	/**
+	 * Open a record for the request about to go out, and keep it filled as the
+	 * response is read.
+	 *
+	 * The one helper every adapter calls, so six classes differ only in where
+	 * the call goes: the redaction, the cap and the timing are decided here and
+	 * cannot be six different answers.
+	 */
+	protected beginExchange(request: {
+		url: string
+		method?: string
+		body: unknown
+	}): WireRecorder {
+		const recorder = new WireRecorder(request)
+		this.wireCalls.push(recorder.exchange)
+		return recorder
+	}
 
 	/**
 	 * Does THIS CLASS have code that puts attachments on the wire?
@@ -527,6 +918,125 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 */
 	get consumesAttachments(): boolean {
 		return false
+	}
+
+	// ── Tools (20 §9) ───────────────────────────────────────────────────────
+
+	/**
+	 * The tool declarations this request offers the model, already normalized
+	 * by `advertise-tools` to `{ name, description, parameters }`.
+	 *
+	 * Set through a `withX` seam for the same reason `withStops` is — a field
+	 * added to `BaseConnectionAdapterParams` reaches none of the subclasses'
+	 * inline destructured parameter lists, and TypeScript says nothing.
+	 *
+	 * Empty is the overwhelming case and means the request carries no tools at
+	 * all, which is what every pipeline that is not a tool loop sends.
+	 */
+	private suppliedTools: readonly ToolDeclaration[] = []
+
+	/** Hand over what this request offers. Returns the adapter, like its siblings. */
+	withTools(tools: readonly ToolDeclaration[]): this {
+		this.suppliedTools = tools
+		return this
+	}
+
+	/** What was handed over, in the order it will be advertised. */
+	protected get tools(): readonly ToolDeclaration[] {
+		return this.suppliedTools
+	}
+
+	/**
+	 * Does THIS CLASS have code that puts tools on the wire?
+	 *
+	 * The exact twin of `consumesAttachments`, and it carries the same warning:
+	 * **not a capability claim**. Whether a connection may use tools is `tools`
+	 * in the manifest, resolved through the four layers and gradeable as
+	 * `emulated` — which is the prompt door, a thing this app supplies over a
+	 * backend that never heard of tools, and needs no adapter code at all.
+	 * This answers the narrower mechanical question a dispatch must ask before
+	 * handing declarations over: is there anything in here that would send
+	 * them?
+	 *
+	 * `dispatch.ts` refuses on a false rather than sending a request that has
+	 * quietly lost its tools, because a model that was never offered one and a
+	 * model that declined one return the same empty answer.
+	 */
+	get consumesTools(): boolean {
+		return false
+	}
+
+	/**
+	 * Normalize whatever a service called its tool call into the one shape the
+	 * pipeline speaks — `{ tool, args }`, the same `parse-tool-call` publishes.
+	 *
+	 * Here rather than three times over because the three services differ only
+	 * in where the name and the arguments sit, and one of them (OpenAI) sends
+	 * the arguments as a JSON **string**. An adapter that forgot to parse that
+	 * would hand a tool its own arguments as one long string parameter, which
+	 * looks like a model mistake.
+	 */
+	protected toolCallFrom(name: unknown, args: unknown): ToolCall | null {
+		return normalizeToolCall(name, args)
+	}
+
+	/**
+	 * The tool call a STREAMING request produced, once the stream has been
+	 * drained.
+	 *
+	 * Set by the adapter while the caller runs the stream, read by the dispatch
+	 * afterwards — a property rather than a field on `TextGenResult` for exactly
+	 * the reason `stopHit` above is one: the result object was returned before
+	 * the first delta arrived, so it cannot carry a fact that does not exist
+	 * yet. Without it a connection with `extraJson.stream` surfaced no call, a
+	 * tool loop's predicate never fired, and the loop ran to its ceiling.
+	 *
+	 * `null` after a stream that called nothing, and `undefined` on an adapter
+	 * with no streaming tool code at all — the same distinction
+	 * `TextGenResult.toolCall` draws, so `?? null` at the read site is correct
+	 * for both.
+	 */
+	streamedToolCall?: ToolCall | null
+
+	/**
+	 * Token accounting a STREAMING request reported, once the stream has been
+	 * drained — the twin of `streamedToolCall`, for the same reason.
+	 *
+	 * Absent on every stream that reported nothing, which is most of them: the
+	 * OpenAI envelope carries `usage` on a stream only when the request asked
+	 * for it (`stream_options.include_usage`, which this app does not send), so
+	 * this fills from a proxy that volunteers it and from Anthropic, whose
+	 * `message_start` carries both cache halves unasked.
+	 */
+	streamedUsage?: {
+		tokensPrompt?: number
+		tokensCached?: number
+		tokensCacheWrite?: number
+		tokensCompletion?: number
+		/** The reasoning half of the completion count — see `TextGenResult`. */
+		tokensReasoning?: number
+	}
+
+	/**
+	 * Merge one chunk's worth of accounting in, keeping what was already said.
+	 *
+	 * ⚠ Merged rather than assigned: the two halves arrive on DIFFERENT events
+	 * on Anthropic — the read count on `message_start`, the write count possibly
+	 * later — and an assignment would drop whichever came first.
+	 */
+	protected recordStreamedUsage(usage: {
+		tokensPrompt?: number
+		tokensCached?: number
+		tokensCacheWrite?: number
+		tokensCompletion?: number
+		tokensReasoning?: number
+	}): void {
+		const given = Object.entries(usage).filter(([, v]) => v !== undefined)
+		if (!given.length) return
+		this.streamedUsage = {
+			...(this.streamedUsage ?? {}),
+			...Object.fromEntries(given)
+		}
 	}
 
 	/**

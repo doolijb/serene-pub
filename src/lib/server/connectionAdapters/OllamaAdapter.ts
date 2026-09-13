@@ -11,7 +11,11 @@ import {
 import { type CompiledPrompt } from "./types"
 import type { TextGenResult } from "$lib/server/adapters/actions"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-import { ollamaSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
+import {
+	isReasoningKey,
+	ollamaSamplingKeyMap,
+	reasoningOf
+} from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import {
@@ -19,8 +23,66 @@ import {
 	LLM_IDLE_TIMEOUT_MS,
 	LLM_NONSTREAMING_TIMEOUT_MS
 } from "./idleTimeout"
+import { ToolCallDeltaAccumulator } from "./streamingToolCalls"
+
+/**
+ * What this service says a call cost: two counts and nothing else.
+ *
+ * ⚠ **No cached count, deliberately.** Ollama re-evaluates only what its own KV
+ * cache missed and never reports how much that was: `prompt_eval_count` is the
+ * whole prompt either way. So the totals are recorded and reuse stays ABSENT,
+ * which is a different answer from zero and the only true one available here
+ * (see `TextGenResult.tokensCached`).
+ */
+function usageFrom(response: unknown): {
+	tokensPrompt?: number
+	tokensCompletion?: number
+} {
+	const num = (value: unknown) =>
+		typeof value === "number" && Number.isFinite(value) ? value : undefined
+	const prompt = num((response as any)?.prompt_eval_count)
+	// Ollama's name for what the model wrote. Both counts ride the final frame
+	// of a stream and the whole body of a non-streamed reply.
+	const completion = num((response as any)?.eval_count)
+	return {
+		...(prompt !== undefined ? { tokensPrompt: prompt } : {}),
+		...(completion !== undefined ? { tokensCompletion: completion } : {})
+	}
+}
+
+/**
+ * The models whose `think` field takes a LEVEL rather than a boolean.
+ *
+ * gpt-oss is the only family that does, and Ollama answers a level sent to
+ * anything else with a 400. Kept as a name test rather than a capability read:
+ * the alternative is an `/api/show` round trip before every generation, and the
+ * cost of being wrong here is one request, not a wrong reply.
+ */
+const OLLAMA_LEVEL_MODELS = /gpt[-_]?oss/i
+
+/** The service's own word for what ended the generation, where it gave one. */
+function doneReasonFrom(response: unknown): string | undefined {
+	const reason = (response as any)?.done_reason
+	return typeof reason === "string" && reason ? reason : undefined
+}
 
 class OllamaAdapter extends BaseConnectionAdapter {
+	/**
+	 * `ollama.chat()` takes `tools` and answers with `tool_calls`, so this
+	 * class sends them — **on the chat wire and only there**.
+	 *
+	 * `ollama.generate()` takes one flat prompt and has no tools field at all,
+	 * so a completion-wire connection cannot carry them. Answering `true`
+	 * regardless would let `dispatch.ts` clear its check and this adapter drop
+	 * the declarations one branch later, in silence — which is the exact
+	 * failure both guards exist to prevent, since a model that was never
+	 * offered a tool answers like one that declined. Reading the wire mode here
+	 * is what turns that into a refusal naming the adapter.
+	 */
+	get consumesTools(): boolean {
+		return this.isChatWire
+	}
+
 	private _client?: Ollama
 	private _tokenCounter?: TokenCounters
 
@@ -78,10 +140,52 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		for (const [key, value] of Object.entries(this.sampling)) {
 			if (ollamaSamplingKeyMap[key]) {
 				if (key === "streaming") continue
+				// `think` is a TOP-LEVEL field on both Ollama routes, not a
+				// sampler inside `options` — see `thinkFor` below, which is
+				// also where the level is translated.
+				if (isReasoningKey(key)) continue
 				result[ollamaSamplingKeyMap[key]] = value
 			}
 		}
 		return result
+	}
+
+	/**
+	 * What this request's `think` field carries. `undefined` means "say
+	 * nothing", which omits the field entirely.
+	 *
+	 * ⚠ **This read `extraJson.think` until the ruling of 2026-09-12.**
+	 * Reasoning effort is a sampling parameter chosen per stage, not a property
+	 * of the compute: with the flag on the connection, every stage sharing one
+	 * Ollama row thought exactly as hard as every other, and the only way to
+	 * split them was a second connection to the same server. A stale `think`
+	 * key left in an existing row's `extraJson` is read by nothing now. That is
+	 * harmless, since the column is jsonb and unread keys cost nothing, which
+	 * is why no migration clears it. Anthropic and KoboldCPP lost the same
+	 * connection-level answer on the same terms.
+	 *
+	 * Saying nothing rather than `think: false` is what "the config did not ask"
+	 * has to mean: `false` is a real instruction to a thinking model, and
+	 * sending it for every config that never enabled the sampler would switch
+	 * reasoning off across the product from a slot nobody set.
+	 *
+	 * Only the gpt-oss family takes a LEVEL: on every other model `think` is a
+	 * boolean, and sending it the word "high" is a request the server rejects.
+	 * Matched by model name because that is the only thing this adapter knows
+	 * about the weights — Ollama's `/api/show` would say more, at the cost of a
+	 * round trip before every generation.
+	 */
+	private thinkFor(model: string): boolean | string | undefined {
+		const { level, budget } = reasoningOf(this.sampling)
+		if (!level) return undefined
+		// Ollama has no budget field at all, on either route.
+		if (budget !== undefined) this.noteIgnoredSampler("reasoningBudget")
+		if (level === "off") return false
+		if (OLLAMA_LEVEL_MODELS.test(model)) return level
+		// The level was honoured as "on" and nothing else: the word could not
+		// travel, so a reader is told rather than left to compare two requests.
+		this.noteIgnoredSampler("reasoning")
+		return true
 	}
 
 	getClient() {
@@ -114,8 +218,9 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		const model =
 			this.connection.model ??
 			CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].baseUrl
-		const stream = this.connection!.extraJson?.stream || false
-		const think = this.connection!.extraJson?.think || false
+		const stream = this.streamingOn(
+			this.connection!.extraJson?.stream || false
+		)
 		// Ollama's OWN default, and deliberately not a shorter one. This read
 		// `|| "300ms"`, so a connection that had never opened the form unloaded
 		// the weights a third of a second after each turn — measured against a
@@ -125,6 +230,9 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		const keep_alive = this.connection!.extraJson?.keepAlive || "5m"
 		if (typeof model !== "string")
 			throw new Error("OllamaAdapter: model must be a string")
+		// After the check, because the level is decided by the model NAME and a
+		// family test against a non-string would coerce rather than refuse.
+		const think = this.thinkFor(model)
 
 		// The stop sequences this request will send — composed by
 		// `connections/stops.ts` and handed over at construction, never built
@@ -185,7 +293,9 @@ class OllamaAdapter extends BaseConnectionAdapter {
 				model,
 				messages: compiledPrompt.messages,
 				stream,
-				think,
+				// Omitted rather than sent as `false` when no config asked:
+				// see `thinkFor`, where the difference is a real instruction.
+				...(think !== undefined ? { think } : {}),
 				keep_alive,
 				options: {
 					...this.mapSamplingConfig(),
@@ -199,6 +309,32 @@ class OllamaAdapter extends BaseConnectionAdapter {
 				// literal (structured outputs, Ollama >= 0.5).
 				...(this.responseFormat === "json"
 					? { format: this.responseSchema ?? "json" }
+					: {}),
+				/**
+				 * The tools, in the field `/api/chat` calls them (20 §9).
+				 *
+				 * ⚠ **This branch only.** `/api/generate` takes a flat prompt
+				 * and has no tools field at all, so a connection in completion
+				 * wire mode cannot send them — `dispatch.ts` refuses such a
+				 * request rather than sending it stripped, because a model that
+				 * was never offered a tool answers exactly like one that
+				 * declined.
+				 *
+				 * Omitted when empty rather than sent as `[]`: Ollama renders a
+				 * tool preamble into the model's own template when the key is
+				 * present, which every non-tool pipeline would then pay for.
+				 */
+				...(this.tools.length
+					? {
+							tools: this.tools.map((t) => ({
+								type: "function" as const,
+								function: {
+									name: t.name,
+									description: t.description,
+									parameters: t.parameters
+								}
+							}))
+						}
 					: {})
 			} as ChatRequest
 		} else {
@@ -224,7 +360,8 @@ class OllamaAdapter extends BaseConnectionAdapter {
 				// of that wire — `raw` there would be a request to send nothing.
 				raw: true,
 				stream,
-				think,
+				// Omitted rather than sent as `false`, as above.
+				...(think !== undefined ? { think } : {}),
 				keep_alive,
 				options: {
 					...this.mapSamplingConfig(),
@@ -237,6 +374,14 @@ class OllamaAdapter extends BaseConnectionAdapter {
 			} as GenerateRequest
 		}
 
+		// The record the inspector reads instead of a proxy: the request as this
+		// adapter rendered it, filled in below as the response is read. The host
+		// is the same one `getClient` resolves, so the URL names where this went.
+		const wire = this.beginExchange({
+			url: `${normalizeBaseUrl(this.connection.baseUrl) || CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].baseUrl}${useSession ? "/api/chat" : "/api/generate"}`,
+			body: req
+		})
+
 		if (stream) {
 			return {
 				completionResult: async (
@@ -246,6 +391,16 @@ class OllamaAdapter extends BaseConnectionAdapter {
 					let content = ""
 					let idleTimedOut = false
 					const ollama = this.getClient()
+					/**
+					 * The call, assembled from the message deltas (20 §9).
+					 *
+					 * This SDK does not fragment its arguments the way OpenAI's
+					 * does — they arrive as an object, in one part — but they
+					 * arrive on a delta all the same, and the shared accumulator
+					 * takes either so the two adapters cannot come to disagree
+					 * about the shape they publish.
+					 */
+					const calls = new ToolCallDeltaAccumulator()
 					const idle = createIdleWatchdog(LLM_IDLE_TIMEOUT_MS, () => {
 						idleTimedOut = true
 						ollama.abort()
@@ -264,10 +419,14 @@ class OllamaAdapter extends BaseConnectionAdapter {
 							}
 							for await (const part of result) {
 								idle.poke()
+								wire.frame(part)
 								if (this.isAborting) {
 									ollama.abort()
 									return
 								}
+								this.recordStreamedUsage(usageFrom(part))
+								this.finishReason =
+									doneReasonFrom(part) ?? this.finishReason
 								if (part.message) {
 									// Forward thinking chunks before content starts
 									if (part.message.thinking) {
@@ -277,6 +436,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 										content += part.message.content
 										contentCb(part.message.content)
 									}
+									calls.push((part.message as any).tool_calls)
 								}
 							}
 						} else {
@@ -292,10 +452,14 @@ class OllamaAdapter extends BaseConnectionAdapter {
 							}
 							for await (const part of result) {
 								idle.poke()
+								wire.frame(part)
 								if (this.isAborting) {
 									ollama.abort()
 									return
 								}
+								this.recordStreamedUsage(usageFrom(part))
+								this.finishReason =
+									doneReasonFrom(part) ?? this.finishReason
 								if (part.thinking) {
 									thinkingCb?.(part.thinking)
 								}
@@ -306,6 +470,11 @@ class OllamaAdapter extends BaseConnectionAdapter {
 							}
 						}
 						// No need to apply stop strings here, Ollama will handle it
+
+						// `ollama.generate()` has no tools field, so a
+						// completion-wire stream leaves this null — the same
+						// answer `consumesTools` gives that route up front.
+						this.streamedToolCall = calls.first()
 					} catch (e: any) {
 						if (idleTimedOut) {
 							throw new Error(
@@ -350,6 +519,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 							...(req as ChatRequest),
 							stream: false
 						})
+						wire.received(res)
 						if (this.isAborting) {
 							return { content: undefined, thinking: undefined }
 						}
@@ -360,7 +530,20 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						) {
 							return {
 								content: res.message.content || "",
-								thinking: res.message.thinking
+								thinking: res.message.thinking,
+								usage: usageFrom(res),
+								finishReason: doneReasonFrom(res),
+								// The first call only — see
+								// `TextGenResult.toolCall`. `arguments` is
+								// already an object on this SDK, unlike
+								// OpenAI's JSON string; the normalizer takes
+								// either.
+								toolCall: this.toolCallFrom(
+									(res.message as any).tool_calls?.[0]
+										?.function?.name,
+									(res.message as any).tool_calls?.[0]
+										?.function?.arguments
+								)
 							}
 						} else {
 							throw new Error("Unexpected Ollama result type")
@@ -370,6 +553,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 							...(req as GenerateRequest),
 							stream: false
 						})
+						wire.received(res)
 						if (this.isAborting) {
 							return { content: undefined, thinking: undefined }
 						}
@@ -380,7 +564,9 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						) {
 							return {
 								content: res.response || "",
-								thinking: res.thinking
+								thinking: res.thinking,
+								usage: usageFrom(res),
+								finishReason: doneReasonFrom(res)
 							}
 						} else {
 							throw new Error("Unexpected Ollama result type")
@@ -400,11 +586,24 @@ class OllamaAdapter extends BaseConnectionAdapter {
 					clearTimeout(idleTimer)
 				}
 			})()
+			this.finishReason =
+				(result as { finishReason?: string }).finishReason ??
+				this.finishReason
 			return {
 				completionResult: result.content ?? "",
 				compiledPrompt,
 				isAborted: this.isAborting,
-				thinkingContent: result.thinking || undefined
+				thinkingContent: result.thinking || undefined,
+				toolCall: (result as { toolCall?: any }).toolCall ?? null,
+				// Recorded, never acted on: see `TextGenResult.tokensCached`.
+				...((
+					result as {
+						usage?: {
+							tokensPrompt?: number
+							tokensCompletion?: number
+						}
+					}
+				).usage ?? {})
 			}
 		}
 	}

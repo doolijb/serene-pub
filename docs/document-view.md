@@ -70,7 +70,7 @@ List, create, edit, and set-default for AI service connections, plus the same do
 
 ### System Settings (Admin Only)
 
-Covers the Ollama Manager and KoboldCPP Manager toggles and URLs, Summarization, Context Debugging, and CharaVault connection — see [System Settings](./system-settings.md) for what each of these does. Embeddings/RAG setup isn't available here (it requires choosing a model, which doesn't yet have a Document View page) — a status line shows whether it's enabled and points you to the standard site to configure it.
+Covers the Ollama Manager and KoboldCPP Manager toggles and URLs, Context Debugging, and CharaVault connection — see [System Settings](./system-settings.md) for what each of these does. Embeddings/RAG setup isn't available here (it requires choosing a model, which doesn't yet have a Document View page) — a status line shows whether it's enabled and points you to the standard site to configure it.
 
 **Enabling User Accounts** works a little differently than the standard site's toggle: it's presented as one-way-on rather than a switch, since turning it on immediately requires everyone — including you — to start logging in. Before you can enable it, you need a passphrase set on your own account; the page shows your username plainly and asks you to make a note of it, since you'll need both it and your new passphrase to log back in once accounts are required. Turning accounts back **off** isn't available from Document View — use the standard site's System Settings if you need to. See [Users & Accounts](./users-and-accounts.md).
 

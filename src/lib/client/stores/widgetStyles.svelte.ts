@@ -849,7 +849,7 @@ let pinOnCreate: string | null = null
  * legacy choice can never leak into the next.
  */
 let legacyPacks = $state<LegacyStylePacks | null>(null)
-/** Is the editor's Style tab open? Gates the per-widget hover overlays. */
+/** Is the editor's Settings tab open? Gates the per-widget hover overlays. */
 let styleMode = $state(false)
 /** Which widget's overlay is pinned open (see `nextArmed`). */
 let armed = $state<string | null>(null)

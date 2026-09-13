@@ -2,7 +2,7 @@
  * The Move tab's ARRANGEMENT GEOMETRY — pure, and the one place the editor's
  * saved-arrangement maths lives.
  *
- * Three jobs, all of them about the same round trip (persisted blob → the
+ * Four jobs, all of them about the same round trip (persisted blob → the
  * editor's gridstack zones → back to the blob):
  *
  *   1. `loadArranged` / `withGeometry` — rehydrate the verbatim blob and lay it
@@ -15,6 +15,9 @@
  *   3. `frameCovers` — whether a saved frame accounts for exactly the items on
  *      screen, i.e. whether this zone is a faithful RESTORE (nothing added,
  *      nothing removed) and so has nothing of its own to report yet.
+ *   4. `itemPinned` / `unitPinned` / `withPins` — the per-group PIN, which is a
+ *      field on the arranged items rather than geometry, and the one rule the
+ *      whole blob's forward compatibility hangs on (absent means pinned).
  *
  * They were extracted from SessionLayout.svelte / GridStackZone.svelte so the
  * round trip can be tested without a browser, a gridstack, or a window size.
@@ -99,10 +102,90 @@ export function withGeometry(
 					w: p.w,
 					h: p.h,
 					...(p.anchor ? { anchor: p.anchor } : {}),
-					...(p.group ? { group: p.group } : {})
+					...(p.group ? { group: p.group } : {}),
+					...(p.pinned === false ? { pinned: false } : {})
 				}
 			: it
 	})
+}
+
+/* ── the per-group pin (ruled 2026-09-10) ───────────────────────────────
+ *
+ * A side column's groups each toggle on their own, and which of them are
+ * PINNED — expanded by default, keeping their height when a sibling expands
+ * (./sideRail rule (b)) — is the user's decision and has to survive a reload.
+ * It used to be the ZONE's single pin, so every group in a column shared it and
+ * the Move tab's per-group toggle died with the page.
+ *
+ * It lives on the arranged ITEM, beside `anchor` and `group`, for the same
+ * reason those do: it is a fact about that widget in that arrangement, so it
+ * rides along through a preset, a cross-zone drag and a re-group without a
+ * second store to keep in step. A GROUP's pin is its members' — the writer
+ * always sets all of them at once — and a tab group re-formed out of a pinned
+ * widget and an unpinned one reads as pinned, which is the same answer the
+ * default gives.
+ *
+ * ABSENT MEANS PINNED, and `true` is never written. That is the whole
+ * compatibility guarantee: every arrangement saved before the field existed
+ * reads as all groups pinned, which is exactly what it rendered as, so nothing
+ * changes for a saved layout until someone toggles a pin.
+ */
+
+/** Is this arranged item pinned? Absent means pinned — see above. */
+export function itemPinned(p: { pinned?: boolean }): boolean {
+	return p.pinned !== false
+}
+
+/**
+ * Is a render unit pinned — a tab group's members, or a lone widget's one?
+ *
+ * Pinned unless EVERY member says otherwise, so the default survives a group
+ * formed out of a mix. An empty list is pinned, for the same reason.
+ */
+export function unitPinned(members: readonly { pinned?: boolean }[]): boolean {
+	return members.length ? members.some(itemPinned) : true
+}
+
+/**
+ * Write one group's pin onto the items it is made of, immutably.
+ *
+ * Pinning DELETES the field rather than storing `true` — absent is the value,
+ * so a pinned arrangement is byte-identical to one saved before the field
+ * existed. Items not named are returned by reference, untouched.
+ */
+export function withPins(
+	zone: GsLayout,
+	ids: Iterable<string>,
+	pinned: boolean
+): GsLayout {
+	const set = new Set(ids)
+	return {
+		...zone,
+		items: zone.items.map((it) => {
+			if (!set.has(it.id)) return it
+			const { pinned: _was, ...rest } = it
+			return pinned ? rest : { ...rest, pinned: false }
+		})
+	}
+}
+
+/**
+ * Should the layout editor's ZONE-wide pin control (the card-toolbar button
+ * that flips `layout.zones[id].pinned`) show for this side?
+ *
+ * That control only ever governed the UN-arranged rail — docked rail vs icon
+ * strip. Once a side has a saved frame, the live view renders it with
+ * `arrangedSide` instead, which reads the per-group pin (`itemPinned` /
+ * `unitPinned`, carried on the arrangement itself) and never looks at the
+ * zone's pin at all. Showing the button there would be a control with no
+ * visible effect, so it hides instead of being left to do nothing.
+ *
+ * `frame` is the same per-side slice of `Arranged` the live view keys its own
+ * arranged/unarranged branch on, so this mirrors that branch rather than
+ * inventing a second definition of "arranged".
+ */
+export function showZonePin(frame: GsLayout | undefined): boolean {
+	return !frame
 }
 
 /**
@@ -139,6 +222,37 @@ function mapEdge(v: number, scale: number): number {
 }
 
 /**
+ * Resolve one EXPLICITLY placed item's final cells, mirroring exactly what
+ * the seeding loop below does for it. Used only to find where the
+ * already-placed items land, before any default-placed item is seeded.
+ */
+function resolveExplicit(
+	it: GsItem,
+	cols: number,
+	rows: number,
+	scaleX: number,
+	scaleY: number
+): GsPos {
+	let x = it.x ?? 0
+	let y = it.y ?? 0
+	let w = it.w ?? cols
+	let h = it.h ?? 3
+	if (scaleX !== 1 || scaleY !== 1) {
+		const x0 = mapEdge(x, scaleX)
+		const y0 = mapEdge(y, scaleY)
+		w = Math.max(1, mapEdge(x + w, scaleX) - x0)
+		h = Math.max(1, mapEdge(y + h, scaleY) - y0)
+		x = x0
+		y = y0
+	}
+	w = Math.min(w, cols)
+	h = Math.min(h, rows)
+	x = Math.min(Math.max(0, x), Math.max(0, cols - w))
+	y = Math.min(Math.max(0, y), Math.max(0, rows - h))
+	return { id: it.id, x, y, w, h }
+}
+
+/**
  * Resolve each item's cells for a zone measured at `cols` × `rows`.
  *
  * Items with no saved geometry take their DEFAULT placement: bottom-docked
@@ -169,7 +283,15 @@ export function seedPositions(
 	const bottomReserve = items
 		.filter((it) => it.place === "bottom")
 		.reduce((s, it) => s + (it.h ?? 3), 0)
-	let topY = 0
+	// An explicitly placed item never touches topY/bottomY below, so a
+	// default-placed item seeded from y=0 would land on top of one that is
+	// already there. Start below the lowest explicit item in the same column
+	// band (x=0 — where every default item lands) instead.
+	let topY = items.reduce((max, it) => {
+		if (it.x == null && it.y == null) return max
+		const p = resolveExplicit(it, cols, rows, scaleX, scaleY)
+		return p.x === 0 ? Math.max(max, p.y + p.h) : max
+	}, 0)
 	let bottomY = rows
 	const out: GsPos[] = []
 	for (const it of items) {

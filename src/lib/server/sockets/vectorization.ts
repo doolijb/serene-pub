@@ -14,24 +14,14 @@ import {
 	type SQL
 } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
-import { EMBEDDING_MODELS, findModel } from "$lib/server/embedding/models"
 import {
-	loadEmbeddingModel,
-	activateApiEmbedding,
-	buildApiModelId,
-	unloadEmbeddingModel,
-	getLoadedModelId,
 	isModelReady,
 	isModelCached,
 	getLoadError,
-	getLocalEmbeddingUnsupportedReason,
-	resolveVectorizationApiKey
+	loadConfiguredEmbeddingModel
 } from "$lib/server/embedding/index"
-import {
-	encryptToken,
-	VECTORIZATION_API_KEY_INFO
-} from "$lib/server/utils/tokenCrypto"
-import { systemSettingsGet } from "./systemSettings"
+import { resolveEmbeddingTarget } from "$lib/server/embedding/target"
+import { embeddingReindexCost } from "$lib/server/embedding/reindex"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import {
 	startVectorizationQueue,
@@ -68,6 +58,25 @@ function needsEmbedding(
 // Handlers
 // ---------------------------------------------------------------------------
 
+/**
+ * What the embedding section shows: the catalogue, plus the state of whatever is
+ * starred.
+ *
+ * ⚠ It no longer carries `vectorizationEnabled`, `mode`, `apiBaseUrl`,
+ * `apiKey`, `apiModel` or `apiDimensions`. Those were the singleton's endpoint
+ * halves, echoed to the client so a bespoke panel could edit them — the API key
+ * IN PLAINTEXT, which the old comment defended as "admin-only exposure over the
+ * wire, already an accepted tradeoff". An embedding endpoint is an ordinary
+ * connection now, so its fields are edited through `connections:*` like every
+ * other, and nothing has to put a secret on this event at all.
+ *
+ * What is left is exactly what only the SERVER knows: whether the backend is up.
+ * The local catalogue is not here either — a local model is picked through
+ * `ConnectionModels` like every other connection's, from the adapter's own
+ * `listModels`. `activeConnectionId` is the star, so the client can tell "no
+ * embeddings configured" from "configured and not loaded" without a second round
+ * trip.
+ */
 export const vectorizationListModels: Handler<
 	Sockets.Vectorization.ListModels.Params,
 	Sockets.Vectorization.ListModels.Response
@@ -75,307 +84,95 @@ export const vectorizationListModels: Handler<
 	event: "vectorization:listModels",
 	handler: async (socket, _params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		const settings = await db.query.systemSettings.findFirst({
-			where: eq(schema.systemSettings.id, 1),
-			columns: {
-				vectorizationEnabled: true,
-				embeddingModelName: true
-			}
-		})
-		const vecConfig = await db.query.vectorizationConfigs.findFirst({
-			where: eq(schema.vectorizationConfigs.id, 1),
-			columns: {
-				mode: true,
-				apiBaseUrl: true,
-				apiKey: true,
-				apiKeyIv: true,
-				apiKeyAuthTag: true,
-				apiModel: true,
-				apiDimensions: true
-			}
-		})
-
-		const activeModelName = settings?.embeddingModelName ?? null
-		const mode = (vecConfig?.mode as "local" | "api" | undefined) ?? "local"
-		// isModelCached() only makes sense for local HF models — API mode has
-		// nothing cached on disk, readiness there comes entirely from isModelReady().
+		const target = await resolveEmbeddingTarget(db)
+		const activeModelName = target?.modelId ?? null
+		// `isModelCached` only means anything for a local HF model — a host has
+		// nothing cached on disk, and readiness there comes entirely from
+		// `isModelReady`.
 		const cached =
-			mode === "local" && activeModelName
-				? await isModelCached(activeModelName)
+			target?.mode === "local" && target.localModelName
+				? await isModelCached(target.localModelName)
 				: false
 
 		const res: Sockets.Vectorization.ListModels.Response = {
-			models: EMBEDDING_MODELS,
+			activeConnectionId: target?.connectionId ?? null,
 			activeModelName,
-			vectorizationEnabled: settings?.vectorizationEnabled ?? false,
 			modelReady: isModelReady(),
 			modelCached: cached,
-			loadError: getLoadError(),
-			mode,
-			apiBaseUrl: vecConfig?.apiBaseUrl ?? null,
-			// Decrypted here, not switched to a masked/boolean field —
-			// EmbeddingConnectionPanel.svelte binds this straight into an
-			// editable input to populate the edit form (the same "load the
-			// real value back on edit" pattern connections:get already uses),
-			// so the client genuinely needs the plaintext value. Admin-only
-			// exposure over the wire was already an accepted tradeoff before
-			// this fix; what changes here is that the DB row is no longer
-			// stored in plaintext, not who gets to see it decrypted.
-			apiKey: vecConfig ? resolveVectorizationApiKey(vecConfig) : null,
-			apiModel: vecConfig?.apiModel ?? null,
-			apiDimensions: vecConfig?.apiDimensions ?? null
+			loadError: getLoadError()
 		}
 		emitToUser("vectorization:listModels", res)
 		return res
 	}
 }
 
-export const vectorizationEnableVectorization: Handler<
-	Sockets.Vectorization.EnableVectorization.Params,
-	Sockets.Vectorization.EnableVectorization.Response
+/**
+ * Bring the starred backend up now.
+ *
+ * The one verb that survives from the four this file used to have
+ * (`enable`/`disable`/`setModel`/`setApiConfig`), and it is not a
+ * CONFIGURATION verb — it configures nothing. Those four each wrote a column
+ * and then loaded; choosing an endpoint is `connections:create`/`update` and
+ * choosing WHICH one is `connections:setDefault`, so all that is left is
+ * "the server restarted, load it again", which is the button the detail tab
+ * shows when the model is not resident.
+ */
+export const vectorizationLoadModel: Handler<
+	Sockets.Vectorization.LoadModel.Params,
+	Sockets.Vectorization.LoadModel.Response
 > = {
-	event: "vectorization:enable",
-	handler: async (socket, params, emitToUser) => {
+	event: "vectorization:loadModel",
+	handler: async (socket, _params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		const unsupportedReason = await getLocalEmbeddingUnsupportedReason()
-		if (unsupportedReason) {
-			emitToUser("vectorization:enable:error", {
-				error: unsupportedReason
-			})
-			throw new Error(unsupportedReason)
-		}
-		const modelDef = findModel(params.modelName)
-		if (!modelDef) {
-			emitToUser("vectorization:enable:error", {
-				error: `Unknown model: ${params.modelName}`
-			})
-			throw new Error(`Unknown model: ${params.modelName}`)
-		}
-
-		if (getLoadedModelId() !== params.modelName) {
-			await loadEmbeddingModel(params.modelName, (progress) => {
+		try {
+			// The download bar. A first local load pulls several hundred
+			// megabytes, so the progress the loader already emits is forwarded
+			// rather than dropped.
+			await loadConfiguredEmbeddingModel((progress) => {
 				emitToUser("vectorization:modelDownloadProgress", {
 					modelId: progress.modelId,
 					status: progress.status,
 					percent: progress.percent
 				} satisfies Sockets.Vectorization.ModelDownloadProgress.Response)
 			})
-		}
-
-		await db
-			.update(schema.systemSettings)
-			.set({
-				vectorizationEnabled: true,
-				embeddingModelName: params.modelName,
-				embeddingModelDimensions: modelDef.dimensions
-			})
-			.where(eq(schema.systemSettings.id, 1))
-		// Keep vectorizationConfigs.mode in sync — without this, switching back
-		// to local mode after having used the API backend would leave mode
-		// stuck at "api", and the next server restart's boot-resume logic would
-		// incorrectly try to reactivate the stale API config instead.
-		await db
-			.update(schema.vectorizationConfigs)
-			.set({ mode: "local" })
-			.where(eq(schema.vectorizationConfigs.id, 1))
-
-		if (params.startNow) {
-			startVectorizationQueue({ startFromBeginning: true })
-		}
-
-		const res: Sockets.Vectorization.EnableVectorization.Response = {
-			success: true,
-			vectorizationEnabled: true
-		}
-		emitToUser("vectorization:enable", res)
-		await systemSettingsGet.handler(socket, {}, emitToUser)
-		return res
-	}
-}
-
-export const vectorizationSetApiConfig: Handler<
-	Sockets.Vectorization.SetApiConfig.Params,
-	Sockets.Vectorization.SetApiConfig.Response
-> = {
-	event: "vectorization:setApiConfig",
-	handler: async (socket, params, emitToUser) => {
-		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		if (!params.baseUrl || !params.model) {
-			const res: Sockets.Vectorization.SetApiConfig.Response = {
-				success: false,
-				error: "Base URL and model are required"
-			}
-			emitToUser("vectorization:setApiConfig", res)
-			return res
-		}
-
-		// Validates via a real test embed call before anything is persisted —
-		// a config that fails here never reaches an "enabled" state. Returned
-		// as a normal response (not thrown), matching connections:test's
-		// convention for user-facing validation failures the UI should show
-		// inline rather than treat as an unexpected error.
-		let dimensions: number
-		try {
-			;({ dimensions } = await activateApiEmbedding({
-				baseUrl: params.baseUrl,
-				apiKey: params.apiKey,
-				model: params.model
-			}))
 		} catch (err: any) {
-			const res: Sockets.Vectorization.SetApiConfig.Response = {
+			const res: Sockets.Vectorization.LoadModel.Response = {
 				success: false,
-				error: err?.message ?? "Failed to validate the embeddings API"
+				error: err?.message ?? "Failed to load the embedding model"
 			}
-			emitToUser("vectorization:setApiConfig", res)
+			emitToUser("vectorization:loadModel", res)
 			return res
 		}
-
-		const modelId = buildApiModelId(params.baseUrl, params.model)
-
-		// Encrypted at rest (tokenCrypto.ts) — stored plaintext before this
-		// fix. Omitting apiKey/apiKeyIv/apiKeyAuthTag entirely when no key was
-		// supplied leaves any previously-saved key (iv/authTag included)
-		// untouched rather than clobbering it with nulls.
-		const apiKeyColumns = params.apiKey
-			? (() => {
-					const enc = encryptToken(
-						params.apiKey!,
-						VECTORIZATION_API_KEY_INFO
-					)
-					return {
-						apiKey: enc.ciphertext,
-						apiKeyIv: enc.iv,
-						apiKeyAuthTag: enc.authTag
-					}
-				})()
-			: {}
-
-		await db
-			.update(schema.vectorizationConfigs)
-			.set({
-				mode: "api",
-				apiBaseUrl: params.baseUrl,
-				...apiKeyColumns,
-				apiModel: params.model,
-				apiDimensions: dimensions
-			})
-			.where(eq(schema.vectorizationConfigs.id, 1))
-
-		await db
-			.update(schema.systemSettings)
-			.set({
-				vectorizationEnabled: true,
-				embeddingModelName: modelId,
-				embeddingModelDimensions: dimensions
-			})
-			.where(eq(schema.systemSettings.id, 1))
-
-		// A corrected config might be exactly what fixes an item that was
-		// previously failing — don't leave it excluded from picking until
-		// the next full queue restart.
-		clearVectorizationFailureTracking()
-		// Same reasoning for inline embedding's own wedged-backend cooldown
-		// (vectorizationQueue.ts's ensureSessionMessageEmbedded).
-		clearInlineEmbedCooldown()
-
-		if (params.startNow) {
-			startVectorizationQueue({ startFromBeginning: true })
-		}
-
-		const res: Sockets.Vectorization.SetApiConfig.Response = {
-			success: true,
-			modelName: modelId,
-			dimensions
-		}
-		emitToUser("vectorization:setApiConfig", res)
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		const res: Sockets.Vectorization.LoadModel.Response = { success: true }
+		emitToUser("vectorization:loadModel", res)
+		await vectorizationListModels.handler(socket, {}, emitToUser)
 		return res
 	}
 }
 
-export const vectorizationDisableVectorization: Handler<
-	Sockets.Vectorization.DisableVectorization.Params,
-	Sockets.Vectorization.DisableVectorization.Response
+/**
+ * What switching the embedding star would cost, so the client can say it before
+ * asking for a confirmation.
+ *
+ * A number the SERVER has to produce: it is a count across six stores, and the
+ * client has no way to ask for it otherwise. Read on demand rather than ridden
+ * along on `listModels`, because it is a count query and that event is polled.
+ *
+ * ⚠ No rate estimate rides with it. Nothing in the queue measures throughput —
+ * there is no rolling rate anywhere in `vectorizationQueue` — and a
+ * "roughly N minutes" invented here would be the one number on a
+ * cost-disclosure screen that was made up.
+ */
+export const vectorizationReindexCost: Handler<
+	Sockets.Vectorization.ReindexCost.Params,
+	Sockets.Vectorization.ReindexCost.Response
 > = {
-	event: "vectorization:disable",
+	event: "vectorization:reindexCost",
 	handler: async (socket, _params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		stopVectorization()
-		unloadEmbeddingModel()
-
-		await db
-			.update(schema.systemSettings)
-			.set({ vectorizationEnabled: false })
-			.where(eq(schema.systemSettings.id, 1))
-
-		const res: Sockets.Vectorization.DisableVectorization.Response = {
-			success: true
-		}
-		emitToUser("vectorization:disable", res)
-		await systemSettingsGet.handler(socket, {}, emitToUser)
-		return res
-	}
-}
-
-export const vectorizationSetModel: Handler<
-	Sockets.Vectorization.SetModel.Params,
-	Sockets.Vectorization.SetModel.Response
-> = {
-	event: "vectorization:setModel",
-	handler: async (socket, params, emitToUser) => {
-		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		const unsupportedReason = await getLocalEmbeddingUnsupportedReason()
-		if (unsupportedReason) {
-			emitToUser("vectorization:setModel:error", {
-				error: unsupportedReason
-			})
-			throw new Error(unsupportedReason)
-		}
-		const modelDef = findModel(params.modelName)
-		if (!modelDef) {
-			emitToUser("vectorization:setModel:error", {
-				error: `Unknown model: ${params.modelName}`
-			})
-			throw new Error(`Unknown model: ${params.modelName}`)
-		}
-
-		stopVectorization()
-		unloadEmbeddingModel()
-
-		await loadEmbeddingModel(params.modelName, (progress) => {
-			emitToUser("vectorization:modelDownloadProgress", {
-				modelId: progress.modelId,
-				status: progress.status,
-				percent: progress.percent
-			} satisfies Sockets.Vectorization.ModelDownloadProgress.Response)
-		})
-
-		await db
-			.update(schema.systemSettings)
-			.set({
-				embeddingModelName: params.modelName,
-				embeddingModelDimensions: modelDef.dimensions
-			})
-			.where(eq(schema.systemSettings.id, 1))
-		// See vectorizationEnableVectorization — keep boot-resume mode in sync.
-		await db
-			.update(schema.vectorizationConfigs)
-			.set({ mode: "local" })
-			.where(eq(schema.vectorizationConfigs.id, 1))
-		// A model switch might be exactly what fixes an item that was
-		// previously failing (e.g. dimension mismatch) — don't leave it
-		// excluded from picking until the next full queue restart.
-		clearVectorizationFailureTracking()
-		// Same reasoning for inline embedding's own wedged-backend cooldown
-		// (vectorizationQueue.ts's ensureSessionMessageEmbedded).
-		clearInlineEmbedCooldown()
-
-		const res: Sockets.Vectorization.SetModel.Response = {
-			success: true,
-			modelName: params.modelName,
-			dimensions: modelDef.dimensions
-		}
-		emitToUser("vectorization:setModel", res)
+		const res: Sockets.Vectorization.ReindexCost.Response =
+			await embeddingReindexCost(db)
+		emitToUser("vectorization:reindexCost", res)
 		return res
 	}
 }
@@ -527,13 +324,11 @@ export const vectorizationCheckRagStatus: Handler<
 			)
 		}
 
-		const settings = await db.query.systemSettings.findFirst({
-			where: eq(schema.systemSettings.id, 1),
-			columns: { vectorizationEnabled: true, embeddingModelName: true }
-		})
-
-		const vectorizationEnabled = settings?.vectorizationEnabled ?? false
-		const activeModelName = settings?.embeddingModelName ?? null
+		// The star, which is both halves of what this used to ask two columns:
+		// whether embeddings are on at all, and which model identity a row's
+		// `embedding_model` has to equal to count as current.
+		const target = await resolveEmbeddingTarget(db)
+		const activeModelName = target?.modelId ?? null
 
 		const empty: Sockets.Vectorization.RagTypeCounts = {
 			total: 0,
@@ -542,7 +337,7 @@ export const vectorizationCheckRagStatus: Handler<
 			readyCount: 0
 		}
 
-		if (!vectorizationEnabled || !activeModelName) {
+		if (!activeModelName) {
 			const res: Sockets.Vectorization.CheckRagStatus.Response = {
 				applicable: false,
 				messages: empty,
@@ -916,10 +711,8 @@ export function registerVectorizationHandlers(
 	) => void
 ) {
 	register(socket, vectorizationListModels, emitToUser)
-	register(socket, vectorizationEnableVectorization, emitToUser)
-	register(socket, vectorizationSetApiConfig, emitToUser)
-	register(socket, vectorizationDisableVectorization, emitToUser)
-	register(socket, vectorizationSetModel, emitToUser)
+	register(socket, vectorizationLoadModel, emitToUser)
+	register(socket, vectorizationReindexCost, emitToUser)
 	register(socket, vectorizationStartQueue, emitToUser)
 	register(socket, vectorizationStopQueue, emitToUser)
 	register(socket, vectorizationGetQueue, emitToUser)

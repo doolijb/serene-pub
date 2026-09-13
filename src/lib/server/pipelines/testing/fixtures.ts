@@ -153,11 +153,16 @@ export function worldLoreEntry(
 		// Null, not zero: an entry nobody has ruled on defers to the node.
 		recursionDepth: null,
 		caseSensitive: false,
+		// A fixture entry is a root; the `parent` role is what a test sets.
+		anchorEntryId: null,
 		matchMode: null,
 		content: "Some world lore content.",
 		priority: 1,
 		constant: false,
 		enabled: true,
+		// A fixture row is one a person wrote and has not shelved.
+		archived: false,
+		provenance: "human",
 		extraJson: {},
 		createdAt: new Date() as any,
 		updatedAt: new Date() as any,
@@ -188,11 +193,16 @@ export function characterLoreEntry(
 		// Null, not zero: an entry nobody has ruled on defers to the node.
 		recursionDepth: null,
 		caseSensitive: false,
+		// A fixture entry is a root; the `parent` role is what a test sets.
+		anchorEntryId: null,
 		matchMode: null,
 		content: "Some character lore content.",
 		priority: 1,
 		constant: false,
 		enabled: true,
+		// A fixture row is one a person wrote and has not shelved.
+		archived: false,
+		provenance: "human",
 		extraJson: {},
 		createdAt: new Date() as any,
 		updatedAt: new Date() as any,
@@ -226,10 +236,15 @@ export function historyEntry(
 		// Null, not zero: an entry nobody has ruled on defers to the node.
 		recursionDepth: null,
 		caseSensitive: false,
+		// A fixture entry is a root; the `parent` role is what a test sets.
+		anchorEntryId: null,
 		matchMode: null,
 		content: "Some history content.",
 		constant: false,
 		enabled: true,
+		// A fixture row is one a person wrote and has not shelved.
+		archived: false,
+		provenance: "human",
 		extraJson: {},
 		createdAt: new Date() as any,
 		updatedAt: new Date() as any,
@@ -425,7 +440,11 @@ export async function insertLorebook(
 ) {
 	const [row] = await db
 		.insert(schema.lorebooks)
-		.values({ name: "Test Lorebook", userId, ...overrides })
+		.values({
+			name: "Test Lorebook",
+			userId,
+			...overrides
+		})
 		.returning()
 	return row
 }

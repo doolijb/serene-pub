@@ -6,6 +6,8 @@ import { userSettingsGet } from "./userSettings"
 import { systemSettingsGet } from "./systemSettings"
 import { getConnectionAdapter } from "../utils/getConnectionAdapter"
 import { getImageAdapter } from "../utils/getImageAdapter"
+import { getEmbeddingAdapter } from "../utils/getEmbeddingAdapter"
+import { getNerAdapter } from "../utils/getNerAdapter"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import {
 	withConnectionDefaults,
@@ -13,15 +15,29 @@ import {
 } from "$lib/shared/utils/connectionDefaults"
 
 /**
- * Resolve a connection's test/list functions, picking the adapter FAMILY by
- * modality: image-gen types route to the image adapters, everything else to the
- * text adapters. Both families export `testConnection`/`listModels` with the
- * same call shape, so callers destructure the two the same way.
+ * Resolve a connection's test/list functions, picking the adapter FAMILY by the
+ * type's declared modality.
+ *
+ * All three families export `testConnection`/`listModels` with the same call
+ * shape, which is what lets every caller destructure the two the same way and is
+ * why this is one switch rather than a branch at each call site.
+ *
+ * ⚠ Keyed on `modalityOf`, not on a chain of `isImage`-shaped predicates. The
+ * old form was `isImage(type) ? image : text`, which files an embeddings type as
+ * TEXT — so `connections:test` on an embedding endpoint would load
+ * `OpenAIChatAdapter` and probe `/v1/models` for a chat model.
  */
 async function adapterIO(type: string) {
-	return CONNECTION_TYPE.isImage(type)
-		? await getImageAdapter(type)
-		: await getConnectionAdapter(type)
+	switch (CONNECTION_TYPE.modalityOf(type)) {
+		case "image-gen":
+			return await getImageAdapter(type)
+		case "embeddings":
+			return await getEmbeddingAdapter(type)
+		case "ner":
+			return await getNerAdapter(type)
+		default:
+			return await getConnectionAdapter(type)
+	}
 }
 import type { Handler } from "$lib/shared/events"
 import { capabilityLabel, gradeOf } from "@serene-pub/sdk"
@@ -40,6 +56,23 @@ import {
 	resolveConnectionCapabilities
 } from "$lib/server/connections/resolve"
 import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
+import { EMBEDDING_CAPABILITY } from "$lib/server/embedding/target"
+import {
+	applyEmbeddingStarChange,
+	currentEmbeddingModelId
+} from "$lib/server/embedding/reindex"
+import { NER_CAPABILITY } from "$lib/shared/constants/ner"
+import { applyNerStarChange, currentNerModelId } from "$lib/server/ner/reindex"
+import {
+	connectionModelById,
+	connectionModels as listConnectionModels,
+	defaultConnectionModel,
+	ensureDefaultModel,
+	importProbedModels,
+	mergeEndpointModel,
+	mirrorDefaultModel,
+	setDefaultConnectionModel
+} from "$lib/server/connections/models"
 import { loginRateLimit } from "$lib/server/services/loginRateLimit"
 import {
 	encryptApiKeyField,
@@ -156,6 +189,14 @@ export const connectionsGet: Handler<
 				.where(eq(schema.connections.id, params.id))
 				.returning()
 			connection = updated
+			// The backfill above can INTRODUCE a model where the column was
+			// empty — `CONNECTION_DEFAULTS` names one for KoboldCPP and for
+			// Anthropic — so the pair has to follow it (0114). Without this,
+			// opening an Anthropic connection for the first time would write
+			// "claude-sonnet-4-5" into the legacy mirror and leave the endpoint
+			// with no model row at all: configured-looking in the editor, and
+			// refused by the resolver on the next send.
+			await ensureDefaultModel(db, params.id, updated.model)
 		}
 
 		// The edit form loads the real key back into its input on edit (same
@@ -232,6 +273,14 @@ export const connectionsCreate: Handler<
 			.insert(schema.connections)
 			.values(data)
 			.returning()
+		// FORM COMPATIBILITY, and the whole reason `connections.model` is still
+		// accepted here (0114). All nine connection forms send a `model` field,
+		// and after the split a string in that column is not a usable
+		// connection — a pair naming only the endpoint resolves to its DEFAULT
+		// MODEL, and without this there would not be one. `ensureDefaultModel`
+		// writes the mirror too, so the column the insert above set stays in
+		// step rather than becoming the only copy.
+		await ensureDefaultModel(db, conn.id, (data as any).model)
 		// ⚠ Saving a connection does NOT make it the default. Anything.
 		//
 		// This used to auto-star the first connection ever saved — "only when no
@@ -318,6 +367,24 @@ export const connectionsUpdate: Handler<
 			.set(updateData)
 			.where(eq(schema.connections.id, id))
 			.returning()
+		// The form's `model` field, promoted to a real model row (0114) — the
+		// same form-compatibility move create makes, and only when the payload
+		// actually carried the field. A partial update that says nothing about
+		// the model must not touch the star: `ensureDefaultModel` would promote
+		// whatever string it was handed, and handing it `undefined` is how a
+		// rename of the connection would silently restar a model.
+		if (updated && "model" in editable) {
+			await ensureDefaultModel(db, id, editable.model as string | null)
+			// ⚠ And re-mirror unconditionally, because `ensureDefaultModel` is a
+			// no-op on a BLANK model and the write above has already put that
+			// blank in the column. Clearing the legacy field on a connection
+			// that has model rows would otherwise leave the mirror saying `""`
+			// while the rows still name a default — the two-spellings state this
+			// column exists in order not to be in. Re-mirroring makes the field
+			// spring back to the default model, which is the honest answer: the
+			// Models section is where a model is removed, not this box.
+			await mirrorDefaultModel(db, id)
+		}
 		// Re-resolved because an edit can change the type or the preset, and
 		// from the row that came back rather than from the payload: a partial
 		// update need not have carried either field, and resolving without them
@@ -608,6 +675,10 @@ export const connectionsSetDefault: Handler<
 					id: true,
 					name: true,
 					type: true,
+					// The merge resolves capabilities through the preset too, so
+					// the pair is judged in the same key space the picker greyed
+					// the row in.
+					preset: true,
 					capabilities: true
 				}
 			})
@@ -616,8 +687,32 @@ export const connectionsSetDefault: Handler<
 				emitToUser("error", res)
 				throw new Error("Connection not found.")
 			}
+			// The MODEL half, validated before anything is stored: a
+			// registration whose two halves name different connections is a pair
+			// no picker can display and no run can resolve.
+			const model =
+				params.modelId != null
+					? await connectionModelById(db, params.modelId)
+					: await defaultConnectionModel(db, params.id)
+			if (params.modelId != null) {
+				const bad = !model
+					? "That model no longer exists."
+					: model.connectionId !== params.id
+						? "That model is not on the connection you chose."
+						: !model.enabled
+							? "That model is switched off. Switch it on, or choose another."
+							: null
+				if (bad) {
+					emitToUser("error", { error: bad })
+					throw new Error(bad)
+				}
+			}
+			// Judged as the PAIR (0114): one host serves a vision checkpoint and
+			// a text-only one at the same base URL, so judging the bare endpoint
+			// would star the text-only one for vision and fail at the first
+			// image.
 			const refusal = capabilityRefusal(
-				row,
+				mergeEndpointModel(row as any, model) as any,
 				params.capability as CapabilityId
 			)
 			if (refusal) {
@@ -627,9 +722,59 @@ export const connectionsSetDefault: Handler<
 			}
 		}
 
+		// What the embedding star resolved to BEFORE the write — the comparison
+		// that decides whether the index has to be rebuilt. Read here rather
+		// than inside the helper, because after `setCapabilityDefault` the old
+		// answer is gone.
+		const embeddingBefore =
+			params.capability === EMBEDDING_CAPABILITY
+				? await currentEmbeddingModelId(db)
+				: null
+		// The same read for the entity star, for the same reason: after
+		// `setCapabilityDefault` the old answer is gone, and the comparison
+		// against it is the whole of the decision to re-annotate.
+		const nerBefore =
+			params.capability === NER_CAPABILITY
+				? await currentNerModelId(db)
+				: null
+
 		await setCapabilityDefault(db, params.capability, {
-			connectionId: params.id ?? null
+			connectionId: params.id ?? null,
+			// The model half rides with it (0114). Absent means "that endpoint's
+			// default model", which is what the one-click paths mean: they have
+			// just made the model they are connecting the endpoint's default.
+			connectionModelId:
+				params.id == null ? null : (params.modelId ?? null)
 		})
+
+		/**
+		 * The embedding star's consequence.
+		 *
+		 * ⚠ A modality-specific branch in a generic handler, and it belongs
+		 * here rather than in the screens that press the button. Every stored
+		 * vector came from the model this star named a moment ago, so "the
+		 * embedding target changed" has to trigger the rebuild whatever moved
+		 * it — the sidebar, Admin → Defaults, or a future one-click path. In a
+		 * client it would be a rule three screens each have to remember; in
+		 * `setCapabilityDefault` it would be a consequence inside the storage
+		 * boundary, which that file's header rules out.
+		 *
+		 * Nothing happens unless the model IDENTITY moved, so pressing the star
+		 * twice, or starring a second row naming the same endpoint and model,
+		 * costs nothing.
+		 */
+		if (params.capability === EMBEDDING_CAPABILITY)
+			await applyEmbeddingStarChange(db, embeddingBefore)
+
+		/**
+		 * The entity star's consequence, and it belongs here for the reason the
+		 * embedding one above does: every stored annotation was written by
+		 * whichever extractor was in force when the lane reached that row, so
+		 * "the entity model changed" has to clear them whatever moved the star.
+		 * Nothing happens unless the model IDENTITY moved.
+		 */
+		if (params.capability === NER_CAPABILITY)
+			await applyNerStarChange(db, nerBefore)
 
 		if (params.id)
 			await connectionsGet.handler(socket, { id: params.id }, emitToUser)
@@ -637,7 +782,8 @@ export const connectionsSetDefault: Handler<
 		const res: Sockets.Connections.SetDefault.Response = {
 			ok: true,
 			capability: params.capability,
-			id: params.id
+			id: params.id,
+			modelId: params.id == null ? null : (params.modelId ?? null)
 		}
 		emitToUser("connections:setDefault", res)
 
@@ -943,6 +1089,433 @@ export const connectionsDetachScript: Handler<
 	}
 }
 
+/* --- the models on an endpoint (0114) -------------------------------- */
+
+/**
+ * All five model handlers answer with the same refreshed view.
+ *
+ * The `connectionScriptsView` pattern, for a sharper version of its reason: a
+ * write here changes more than the row it names. Creating the first model stars
+ * it, deleting the starred one promotes another, and both move
+ * `connections.model` — so a response carrying only the row that was touched
+ * would leave the client's idea of which model is default one write behind, and
+ * the star is the control most likely to be pressed twice.
+ *
+ * `type` and `preset` ride along for the same reason `capabilitiesView` carries
+ * them: a per-model capability panel needs the KEY SPACE, and that belongs to the
+ * saved endpoint.
+ */
+async function connectionModelsView(
+	connectionId: number
+): Promise<Sockets.Connections.Models.Response> {
+	const endpoint = await db.query.connections.findFirst({
+		where: (c, { eq }) => eq(c.id, connectionId),
+		columns: { id: true, type: true, preset: true }
+	})
+	if (!endpoint) return { connectionId, error: "Connection not found." }
+	const rows = await listConnectionModels(db, connectionId)
+	return {
+		connectionId,
+		type: endpoint.type,
+		preset: endpoint.preset ?? null,
+		models: rows.map((m) => ({
+			id: m.id,
+			connectionId: m.connectionId,
+			model: m.model,
+			name: m.name,
+			enabled: m.enabled,
+			isDefault: m.isDefault,
+			contextWindow: m.contextWindow ?? null,
+			promptFormat: m.promptFormat ?? null,
+			tokenCounter: m.tokenCounter ?? null,
+			sortOrder: m.sortOrder,
+			capabilities: capabilityColumn(m)
+		}))
+	}
+}
+
+const MODEL_DENIED =
+	"Access denied. Only admin users can manage connection models."
+
+/**
+ * What a client may state about a model, and what it may not.
+ *
+ * ⚠ `extraJson` is REFUSED rather than ignored. The column is real and is merged
+ * onto the pair for an adapter to read, but nothing renders it yet — so the only
+ * way to set it today would be a hand-crafted socket call, and the field it would
+ * most obviously be used for is an api key. The crypto path
+ * (`utils/tokenCrypto.ts`) walks `connections.extra_json` and only that one, so a
+ * key written onto a model row would sit in plaintext for as long as the row
+ * lives. Refusing at the door beats trusting the convention.
+ *
+ * ⚠ `isDefault` is refused for a different reason: moving the star is a write to
+ * two rows under a partial unique index, and `connections:setDefaultModel` is the
+ * one place that does it in the right order. Accepting it here would be a second
+ * attempt that the index refuses with a sentence about an index.
+ */
+function modelPayload(input: unknown): {
+	values?: Record<string, unknown>
+	error?: string
+} {
+	const raw = (input ?? {}) as Record<string, unknown>
+	if ("extraJson" in raw)
+		return {
+			error:
+				"Per-model adapter options cannot be set from here yet. The API key " +
+				"belongs to the connection, where it is encrypted at rest."
+		}
+	if ("isDefault" in raw)
+		return {
+			error:
+				"Use “Make default” to choose which model this connection means — " +
+				"exactly one may hold it."
+		}
+	const values: Record<string, unknown> = {}
+	if (typeof raw.model === "string") values.model = raw.model.trim()
+	if (typeof raw.name === "string") values.name = raw.name.trim()
+	if (typeof raw.enabled === "boolean") values.enabled = raw.enabled
+	if ("contextWindow" in raw) {
+		const n = Number(raw.contextWindow)
+		// Blank clears the override, which is a different state from zero: NULL
+		// means "the sampling config decides" and is the value every row the
+		// backfill created holds.
+		values.contextWindow =
+			raw.contextWindow == null || raw.contextWindow === ""
+				? null
+				: Number.isFinite(n) && n > 0
+					? Math.floor(n)
+					: null
+	}
+	if ("promptFormat" in raw)
+		values.promptFormat =
+			typeof raw.promptFormat === "string" && raw.promptFormat
+				? raw.promptFormat
+				: null
+	if ("tokenCounter" in raw)
+		values.tokenCounter =
+			typeof raw.tokenCounter === "string" && raw.tokenCounter
+				? raw.tokenCounter
+				: null
+	if (typeof raw.sortOrder === "number" && Number.isFinite(raw.sortOrder))
+		values.sortOrder = Math.floor(raw.sortOrder)
+	return { values }
+}
+
+/** The admin gate and the endpoint lookup, spelled once for all five. */
+async function modelGate(
+	socket: any,
+	event: string,
+	connectionId: number,
+	emitToUser: (event: string, data: any) => void
+): Promise<Sockets.Connections.Models.Response | null> {
+	if (!socket.user!.isAdmin) {
+		emitToUser(`${event}:error`, { error: MODEL_DENIED })
+		return { connectionId, error: MODEL_DENIED }
+	}
+	const exists = await db.query.connections.findFirst({
+		where: (c, { eq }) => eq(c.id, connectionId),
+		columns: { id: true }
+	})
+	if (!exists) {
+		const error = "Connection not found."
+		emitToUser(`${event}:error`, { error })
+		return { connectionId, error }
+	}
+	return null
+}
+
+export const connectionsModels: Handler<
+	Sockets.Connections.Models.Params,
+	Sockets.Connections.Models.Response
+> = {
+	event: "connections:models",
+	handler: async (socket, params, emitToUser) => {
+		const denied = await modelGate(
+			socket,
+			"connections:models",
+			params.id,
+			emitToUser
+		)
+		if (denied) return denied
+		const res = await connectionModelsView(params.id)
+		emitToUser("connections:models", res)
+		return res
+	}
+}
+
+export const connectionsCreateModel: Handler<
+	Sockets.Connections.CreateModel.Params,
+	Sockets.Connections.CreateModel.Response
+> = {
+	event: "connections:createModel",
+	handler: async (socket, params, emitToUser) => {
+		const fail = (error: string) => {
+			emitToUser("connections:createModel:error", { error })
+			return { connectionId: params.id, error }
+		}
+		const denied = await modelGate(
+			socket,
+			"connections:createModel",
+			params.id,
+			emitToUser
+		)
+		if (denied) return denied
+
+		const { values, error } = modelPayload(params.model)
+		if (error) return fail(error)
+		const identifier = String(values!.model ?? "")
+		if (!identifier)
+			return fail(
+				"A model needs the identifier the service knows it by — the text this connection will send."
+			)
+
+		// Refused rather than silently promoted. `ensureDefaultModel` treats a
+		// repeat as "star the one that is there", which is right for the managed
+		// flows whose whole pattern is find-or-create; a person pressing Add is
+		// making a different claim, and answering it with a star moving somewhere
+		// unexpected is worse than saying no.
+		const clash = (await listConnectionModels(db, params.id)).find(
+			(m) => m.model === identifier
+		)
+		if (clash)
+			return fail(
+				`This connection already has a model called “${clash.name}” sending “${identifier}”.`
+			)
+
+		// The first model on an endpoint has to be the default — a pair naming
+		// only the endpoint would otherwise resolve to nothing — and a later one
+		// must not steal the star from a model somebody chose.
+		const current = await defaultConnectionModel(db, params.id)
+		await db.insert(schema.connectionModels).values({
+			connectionId: params.id,
+			model: identifier,
+			name: (values!.name as string) || identifier,
+			isDefault: !current,
+			...(values!.enabled !== undefined
+				? { enabled: values!.enabled as boolean }
+				: {}),
+			...(values!.contextWindow !== undefined
+				? { contextWindow: values!.contextWindow as number | null }
+				: {}),
+			...(values!.promptFormat !== undefined
+				? { promptFormat: values!.promptFormat as string | null }
+				: {}),
+			...(values!.tokenCounter !== undefined
+				? { tokenCounter: values!.tokenCounter as string | null }
+				: {}),
+			...(values!.sortOrder !== undefined
+				? { sortOrder: values!.sortOrder as number }
+				: {})
+		})
+		if (!current) await mirrorDefaultModel(db, params.id)
+
+		const res = await connectionModelsView(params.id)
+		emitToUser("connections:createModel", res)
+		// The Connections list shows the endpoint's model, which the first
+		// insert just decided.
+		if (!current) await connectionsList.handler(socket, {}, emitToUser)
+		return res
+	}
+}
+
+export const connectionsUpdateModel: Handler<
+	Sockets.Connections.UpdateModel.Params,
+	Sockets.Connections.UpdateModel.Response
+> = {
+	event: "connections:updateModel",
+	handler: async (socket, params, emitToUser) => {
+		const fail = (error: string) => {
+			emitToUser("connections:updateModel:error", { error })
+			return { connectionId: params.id, error }
+		}
+		const denied = await modelGate(
+			socket,
+			"connections:updateModel",
+			params.id,
+			emitToUser
+		)
+		if (denied) return denied
+
+		const row = await connectionModelById(db, params.modelId)
+		// The pair has to be coherent even to be EDITED: a model id that belongs
+		// to another endpoint is not a permission problem, it is a request about
+		// a row this screen is not showing.
+		if (!row || row.connectionId !== params.id)
+			return fail("That model is not on this connection.")
+
+		const { values, error } = modelPayload(params.model)
+		if (error) return fail(error)
+		if (values!.model !== undefined && !values!.model)
+			return fail(
+				"A model needs the identifier the service knows it by — the text this connection will send."
+			)
+		if (values!.name !== undefined && !values!.name)
+			// The column's own check constraint refuses an empty name, and a
+			// person who cleared the box meant "call it what it sends".
+			values!.name = (values!.model as string) ?? row.model
+		if (!Object.keys(values!).length)
+			return await connectionModelsView(params.id)
+
+		if (values!.model && values!.model !== row.model) {
+			const clash = (await listConnectionModels(db, params.id)).find(
+				(m) => m.model === values!.model && m.id !== row.id
+			)
+			if (clash)
+				return fail(
+					`This connection already has a model sending “${values!.model}”.`
+				)
+		}
+
+		await db
+			.update(schema.connectionModels)
+			.set(values as any)
+			.where(eq(schema.connectionModels.id, params.modelId))
+		// Renaming the DEFAULT model's identifier moves what the endpoint sends,
+		// so the mirror has to follow it. A rename of the display name does not,
+		// which is why this asks about the row rather than about the payload.
+		if (row.isDefault && values!.model) {
+			await mirrorDefaultModel(db, params.id)
+			await connectionsList.handler(socket, {}, emitToUser)
+		}
+
+		const res = await connectionModelsView(params.id)
+		emitToUser("connections:updateModel", res)
+		return res
+	}
+}
+
+export const connectionsSetDefaultModel: Handler<
+	Sockets.Connections.SetDefaultModel.Params,
+	Sockets.Connections.SetDefaultModel.Response
+> = {
+	event: "connections:setDefaultModel",
+	handler: async (socket, params, emitToUser) => {
+		const fail = (error: string) => {
+			emitToUser("connections:setDefaultModel:error", { error })
+			return { connectionId: params.id, error }
+		}
+		const denied = await modelGate(
+			socket,
+			"connections:setDefaultModel",
+			params.id,
+			emitToUser
+		)
+		if (denied) return denied
+
+		const row = await connectionModelById(db, params.modelId)
+		if (!row || row.connectionId !== params.id)
+			return fail("That model is not on this connection.")
+		// A disabled model as the endpoint's default would make every pair that
+		// names only the endpoint refuse at dispatch, which reads as the
+		// connection breaking rather than as the switch being off.
+		if (!row.enabled)
+			return fail(
+				"Switch this model on before making it the default — a connection cannot mean a model it will not offer."
+			)
+
+		await setDefaultConnectionModel(db, params.id, params.modelId)
+
+		const res = await connectionModelsView(params.id)
+		emitToUser("connections:setDefaultModel", res)
+		// The endpoint's model changed, and the Connections list shows it.
+		await connectionsList.handler(socket, {}, emitToUser)
+		return res
+	}
+}
+
+export const connectionsDeleteModel: Handler<
+	Sockets.Connections.DeleteModel.Params,
+	Sockets.Connections.DeleteModel.Response
+> = {
+	event: "connections:deleteModel",
+	handler: async (socket, params, emitToUser) => {
+		const fail = (error: string) => {
+			emitToUser("connections:deleteModel:error", { error })
+			return { connectionId: params.id, error }
+		}
+		const denied = await modelGate(
+			socket,
+			"connections:deleteModel",
+			params.id,
+			emitToUser
+		)
+		if (denied) return denied
+
+		const row = await connectionModelById(db, params.modelId)
+		if (!row || row.connectionId !== params.id)
+			return fail("That model is not on this connection.")
+
+		await db
+			.delete(schema.connectionModels)
+			.where(eq(schema.connectionModels.id, params.modelId))
+
+		// Deleting the star leaves the endpoint meaning nothing, so promote the
+		// first in display order — the order the list is showing, which is the
+		// one a person would have called "the top one".
+		//
+		// ⚠ The ENDPOINT survives with no models, deliberately. Removing the last
+		// model is clearing a field, not throwing away a base URL and a key. Only
+		// the managed flows tie the two together, and they say so themselves
+		// (`forgetModelEverywhere`).
+		if (row.isDefault) {
+			const [first] = await listConnectionModels(db, params.id)
+			if (first) await setDefaultConnectionModel(db, params.id, first.id)
+			else await mirrorDefaultModel(db, params.id)
+			await connectionsList.handler(socket, {}, emitToUser)
+		}
+
+		// `connection_defaults.connection_model_id` is ON DELETE SET NULL, so a
+		// registration that named this model is released to "the endpoint's
+		// default" rather than stranded — and the defaults ride on
+		// `systemSettings:get`, which is how every client learns.
+		await systemSettingsGet.handler(socket, {}, emitToUser)
+
+		const res = await connectionModelsView(params.id)
+		emitToUser("connections:deleteModel", res)
+		return res
+	}
+}
+
+export const connectionsImportModels: Handler<
+	Sockets.Connections.ImportModels.Params,
+	Sockets.Connections.ImportModels.Response
+> = {
+	event: "connections:importModels",
+	handler: async (socket, params, emitToUser) => {
+		const denied = await modelGate(
+			socket,
+			"connections:importModels",
+			params.id,
+			emitToUser
+		)
+		if (denied) return denied
+
+		const before = await defaultConnectionModel(db, params.id)
+		const { added, skipped } = await importProbedModels(
+			db,
+			params.id,
+			(params.models ?? []).map((m) => ({
+				model: String(m.model ?? ""),
+				name: m.name ?? null
+			}))
+		)
+		// Only when the endpoint had no default at all — an import must never
+		// restar an endpoint whose model somebody chose. `ensureDefaultModel`
+		// already refuses to, and this is what tells the Connections list that
+		// the first import decided one.
+		if (!before) await connectionsList.handler(socket, {}, emitToUser)
+
+		const view = await connectionModelsView(params.id)
+		const res: Sockets.Connections.ImportModels.Response = {
+			...view,
+			added,
+			skipped
+		}
+		emitToUser("connections:importModels", res)
+		return res
+	}
+}
+
 export function registerConnectionHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -965,4 +1538,10 @@ export function registerConnectionHandlers(
 	register(socket, connectionsScripts, emitToUser)
 	register(socket, connectionsAttachScript, emitToUser)
 	register(socket, connectionsDetachScript, emitToUser)
+	register(socket, connectionsModels, emitToUser)
+	register(socket, connectionsCreateModel, emitToUser)
+	register(socket, connectionsUpdateModel, emitToUser)
+	register(socket, connectionsSetDefaultModel, emitToUser)
+	register(socket, connectionsDeleteModel, emitToUser)
+	register(socket, connectionsImportModels, emitToUser)
 }

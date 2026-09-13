@@ -15,6 +15,7 @@
 	 *   { t: "message",  message }                          // one update
 	 *   { t: "channel",  channel, messages }   // panel surfaces: one lane's msgs (21)
 	 *   { t: "props",    props }               // panel surfaces: declared props (21)
+	 *   { t: "settings", settings }         // panel surfaces: settings.v1 (25)
 	 *   { t: "style",    css, vars }           // panel surfaces: the widget skin (25)
 	 *   { t: "layout",   layout }              // panel surfaces: layout.v1 (25)
 	 *   { t: "event",    event }               // panel surfaces: one host event (25)
@@ -79,6 +80,14 @@
 		/** Panel surfaces (21): declared props posted as `{ t: "props" }`. */
 		props?: Record<string, unknown>
 		/**
+		 * Panel surfaces (25): this instance's effective settings, posted as
+		 * `{ t: "settings" }` — the same `settings.v1` a native widget reads off
+		 * its ctx, defaults filled in and the user's deviations over them.
+		 * Undefined on the surfaces that are not widgets, and nothing is posted
+		 * for those.
+		 */
+		settings?: Record<string, unknown>
+		/**
 		 * Panel surfaces (25): the widget skin this frame should wear, already
 		 * resolved by the host (`effectiveWidgetSkin`, so an unsaved draft shows
 		 * while it is being typed). Undefined on the surfaces that are not
@@ -118,6 +127,7 @@
 		messages,
 		channels,
 		props,
+		settings,
 		skin,
 		placement,
 		source,
@@ -192,6 +202,7 @@
 			post({ t: "messages", messages })
 		}
 		if (props !== undefined) post({ t: "props", props })
+		if (settings !== undefined) post({ t: "settings", settings })
 		// Sanitised at the boundary rather than by the caller: this is the one
 		// place a skin crosses into a frame, so it is the one place that has to
 		// be right. An EMPTY skin is still posted — taking a style off has to
@@ -211,6 +222,7 @@
 		void messages
 		void channels
 		void props
+		void settings
 		void skin
 		void placement
 		push()

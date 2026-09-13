@@ -79,7 +79,9 @@ describe("parse-tool-call", () => {
 	})
 
 	it("no call, an unknown tool, or broken JSON is prose — null, never a crash", async () => {
-		expect((await parse({ text: "Just narration.", tools: TOOLS })).value.call).toBeNull()
+		expect(
+			(await parse({ text: "Just narration.", tools: TOOLS })).value.call
+		).toBeNull()
 		expect(
 			(
 				await parse({
@@ -95,5 +97,88 @@ describe("parse-tool-call", () => {
 		expect(broken.value.call).toBeNull()
 		// Prose passes through untouched when nothing parsed.
 		expect(broken.value.text).toContain("BROKEN")
+	})
+})
+
+describe("run-tool", () => {
+	const runTool = (input: any, call: any) =>
+		coreBindings()["core:provider/run-tool@1"]!(input, {
+			call
+		} as any) as any
+
+	it("a null call is the loop's ordinary exit, and the prose is the answer", async () => {
+		let called = false
+		const r = await runTool(
+			{ call: null, tools: TOOLS, text: "Nothing to look up." },
+			async () => {
+				called = true
+				return {}
+			}
+		)
+		expect(called).toBe(false)
+		expect(r.value.main).toBeNull()
+		expect(r.value.text).toBe("")
+		expect(r.value.answer).toBe("Nothing to look up.")
+	})
+
+	it("refuses a name the advertisement did not carry, by name", async () => {
+		let called = false
+		const r = await runTool(
+			{ call: { tool: "rm_rf", args: {} }, tools: TOOLS, text: "" },
+			async () => {
+				called = true
+				return {}
+			}
+		)
+		expect(called).toBe(false)
+		expect(r.value.main).toEqual({
+			tool: "rm_rf",
+			error: expect.stringContaining("rm_rf")
+		})
+		// The model is told what it MAY call, or it asks for the same thing again.
+		expect(r.value.main.error).toContain("roll_dice")
+		expect(r.value.text).toContain("tool_result")
+	})
+
+	it("an error comes back as a result the model can read, never a throw", async () => {
+		const r = await runTool(
+			{ call: { tool: "roll_dice", args: {} }, tools: TOOLS, text: "" },
+			async () => ({ tool: "roll_dice", error: "no dice to roll" })
+		)
+		expect(r.kind).toBe("ok")
+		expect(r.value.text).toContain("no dice to roll")
+		// The iteration worked rather than answered, so it contributes no prose.
+		expect(r.value.answer).toBe("")
+	})
+})
+
+describe("join-text", () => {
+	const join = (input: any) =>
+		coreBindings()["core:task/join-text@1"]!(input, {} as any) as any
+
+	it("reads one key off each entry and skips the ones with nothing to say", async () => {
+		const r = await join({
+			items: [
+				{ text: "first", answer: "" },
+				{ text: "", answer: "" },
+				{ text: "second", answer: "the reply" }
+			],
+			params: { path: "text", separator: " | " }
+		})
+		expect(r.value.text).toBe("first | second")
+
+		const answers = await join({
+			items: [
+				{ text: "first", answer: "" },
+				{ text: "second", answer: "the reply" }
+			],
+			params: { path: "answer" }
+		})
+		expect(answers.value.text).toBe("the reply")
+	})
+
+	it("nothing to join is an empty string, not a separator", async () => {
+		expect((await join({ items: [] })).value.text).toBe("")
+		expect((await join({ items: [{ text: "" }] })).value.text).toBe("")
 	})
 })

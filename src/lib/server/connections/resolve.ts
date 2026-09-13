@@ -101,7 +101,19 @@ const column = (
  * untested connection from looking authoritative.
  */
 export function capabilityColumn(
-	row: CapabilityRow | null | undefined
+	/**
+	 * ⚠ Only the COLUMN, not a `CapabilityRow`.
+	 *
+	 * It was `CapabilityRow`, which additionally requires `type` — and this
+	 * function reads neither `type` nor `preset`, because it does not resolve
+	 * anything; it defaults and returns what is stored. The tighter type stopped
+	 * being merely redundant when 0114 added a second table with the same
+	 * column: a `connection_models` row HAS no `type` (its key space belongs to
+	 * the endpoint it hangs off), so `layerCapabilities` could not ask this one
+	 * function about both halves of a pair. Widened to what it actually reads;
+	 * every existing caller still satisfies it.
+	 */
+	row: { capabilities?: Record<string, unknown> | null } | null | undefined
 ): StoredCapabilities {
 	return column(row)
 }
@@ -331,5 +343,63 @@ export async function persistCapabilities(
 		.update(schema.connections)
 		.set({ capabilities })
 		.where(eq(schema.connections.id, connectionId))
+	return capabilities
+}
+
+/**
+ * The same write, for one MODEL's capability column (0114).
+ *
+ * ## Why a second function and not a table parameter
+ *
+ * The two writes differ in the one place that matters: the KEY SPACE. A
+ * connection resolves against its own `type` and `preset`; a model has neither
+ * column, and the key space it must be judged in belongs to the ENDPOINT it
+ * hangs off — an OpenAI-compatible protocol's `supports` map is what gates every
+ * layer, and a model cannot widen it. So this reads the parent row to resolve,
+ * and a `(table, idColumn)` parameterisation of `persistCapabilities` would have
+ * had to grow that join as a conditional anyway.
+ *
+ * The empty-rebuild guard above is deliberately NOT repeated here, and that is
+ * the second difference. It exists because 0175 determined `text->embedding` for
+ * types the manifest declares nothing for, and an unrelated edit writing `{}`
+ * back would undo it. A model row has no such determined-from-elsewhere state:
+ * it was created empty by the 0114 backfill, everything it holds a person put
+ * there, and an empty rebuild on a model IS the answer — switching the last
+ * override off on a model whose endpoint declares nothing should cache nothing.
+ *
+ * ⚠ `resolved` here is the MODEL's layer alone, not the pair's. The pair is
+ * `layerCapabilities` in `connections/models.ts` and is resolved live at every
+ * run; caching it on either row would be a third copy of a fact that is already
+ * derived from two, and the first of the three to go stale would be the one
+ * everything reads.
+ */
+export async function persistModelCapabilities(
+	db: Db,
+	connectionModelId: number,
+	next: PersistCapabilitiesInput
+): Promise<StoredCapabilities> {
+	const [row] = await db
+		.select({
+			capabilities: schema.connectionModels.capabilities
+		})
+		.from(schema.connectionModels)
+		.where(eq(schema.connectionModels.id, connectionModelId))
+		.limit(1)
+	const current = column(row)
+	const capabilities: StoredCapabilities = {
+		resolved: next.resolved,
+		// A fresh probe REPLACES the stored one, and an absent argument keeps it
+		// — `persistCapabilities`' rule verbatim, for the reason given there.
+		probe: next.probe
+			? { found: next.probe, at: new Date().toISOString() }
+			: current.probe,
+		// `undefined` means "keep what is stored", so a caller clearing the last
+		// override must pass `{}`. Same trap, same door.
+		overrides: next.overrides ?? current.overrides
+	}
+	await db
+		.update(schema.connectionModels)
+		.set({ capabilities })
+		.where(eq(schema.connectionModels.id, connectionModelId))
 	return capabilities
 }

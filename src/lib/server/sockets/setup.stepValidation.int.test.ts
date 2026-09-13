@@ -4,8 +4,11 @@
  * any value other than the literal "summarization" (including a typo or a
  * forged value) fell into the else branch and silently set
  * ragStepComplete, letting a client flip that onboarding flag without ever
- * completing the rag step. Fixed by validating step is exactly
- * "summarization" or "rag" up front.
+ * completing the rag step. Fixed by validating the step up front.
+ *
+ * The summarization step itself is gone (0126, the global toggle it set is
+ * gone), so "rag" is the only step there is — which makes the validation the
+ * only thing standing between a forged value and that flag.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -65,20 +68,25 @@ describe("setup:markComplete — step validation", () => {
 		expect(row?.ragStepComplete ?? false).toBe(false)
 	})
 
-	test('accepts "summarization" and sets only that flag', async () => {
+	test('rejects the retired "summarization" step', async () => {
 		const { setupMarkComplete } = await import("./setup")
 		const user = await makeUser("setup-step-summarization-user")
 
-		const res = await setupMarkComplete.handler(
-			fakeSocket(user.id),
-			{ step: "summarization" } as any,
-			noopEmit
-		)
-		expect(res.setup.summarizationStepComplete).toBe(true)
-		expect(res.setup.ragStepComplete).toBe(false)
+		await expect(
+			setupMarkComplete.handler(
+				fakeSocket(user.id),
+				{ step: "summarization" } as any,
+				noopEmit
+			)
+		).rejects.toThrow(/invalid setup step/i)
+
+		const row = await testDb.query.setup.findFirst({
+			where: (s, { eq }) => eq(s.userId, user.id)
+		})
+		expect(row?.ragStepComplete ?? false).toBe(false)
 	})
 
-	test('accepts "rag" and sets only that flag', async () => {
+	test('accepts "rag"', async () => {
 		const { setupMarkComplete } = await import("./setup")
 		const user = await makeUser("setup-step-rag-user")
 
@@ -88,6 +96,5 @@ describe("setup:markComplete — step validation", () => {
 			noopEmit
 		)
 		expect(res.setup.ragStepComplete).toBe(true)
-		expect(res.setup.summarizationStepComplete).toBe(false)
 	})
 })

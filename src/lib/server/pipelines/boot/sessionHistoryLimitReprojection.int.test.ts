@@ -36,7 +36,11 @@
 import { describe, it, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { and, eq, inArray } from "drizzle-orm"
-import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
+import {
+	createTestDb,
+	setConfigValue,
+	type TestDb
+} from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 
 /** The file that ships, not a re-typed copy of it. */
@@ -102,7 +106,10 @@ async function booted(): Promise<TestDb> {
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	const report = await bootstrapPipelines(db)
-	expect(report.conflict, report.conflict ?? "").toBeUndefined()
+	expect(
+		report.specs.length,
+		"the boot did not get as far as seeding the specs"
+	).toBeGreaterThan(0)
 	return db
 }
 
@@ -114,7 +121,10 @@ async function reboot(db: TestDb) {
 	// A conflict here is the failure the whole file exists to prevent: it is
 	// caught, reported, and `bootstrapPipelines` returns early, so pipelines
 	// silently stop on every upgraded install.
-	expect(report.conflict, report.conflict ?? "").toBeUndefined()
+	expect(
+		report.specs.length,
+		"the boot did not get as far as seeding the specs"
+	).toBeGreaterThan(0)
 }
 
 const registryRow = (db: TestDb, typeId: string) =>
@@ -213,17 +223,44 @@ const storedLimits = async (db: TestDb) => {
 	return rows.sort((a, b) => a.slug.localeCompare(b.slug))
 }
 
-/** Put every stored window back where an upgrading database has it: 40. */
-const asPreviousBuild = (db: TestDb) =>
-	db
-		.update(schema.pipelineConfigValues)
-		.set({ value: PREVIOUS_DECLARED_LIMIT })
-		.where(
-			and(
-				eq(schema.pipelineConfigValues.slot, "params"),
-				eq(schema.pipelineConfigValues.path, "limit")
+/**
+ * Put every stored window back where a 0110-era database has it: a row at every
+ * declared address, holding 40.
+ *
+ * ⚠ **An INSERT, where this was an `UPDATE`.** That form worked because a
+ * config used to materialize every declared value, so a row already existed at
+ * each address to move. Since the deviation ruling (2026-09-10) a config stores
+ * only what departs from the declaration, so a fresh boot leaves these three
+ * addresses empty — the `UPDATE` matched nothing, the fixture reproduced no
+ * upgrade at all, and the file went green on having asked nothing.
+ *
+ * Which is exactly what the state being reproduced looked like from the other
+ * side: a database that booted the previous build DID hold 40 at each address,
+ * and this migration exists to take it away.
+ */
+const asPreviousBuild = async (db: TestDb) => {
+	for (const pin of PINS) {
+		const configs = await db
+			.select({ id: schema.pipelineConfigs.id })
+			.from(schema.pipelineConfigs)
+			.innerJoin(
+				schema.pipelineSpecs,
+				eq(schema.pipelineSpecs.id, schema.pipelineConfigs.specId)
 			)
-		)
+			.where(eq(schema.pipelineSpecs.slug, pin.slug))
+		expect(
+			configs.length,
+			`${pin.slug} has no configuration to seed a stored window into`
+		).toBeGreaterThan(0)
+		for (const config of configs)
+			await setConfigValue(
+				db,
+				config.id,
+				{ nodeKey: pin.nodeKey, slot: "params", path: "limit" },
+				PREVIOUS_DECLARED_LIMIT
+			)
+	}
+}
 
 describe("0110 is ordered so an upgrade actually runs it", () => {
 	it("stamps after everything registered before it", async () => {
@@ -343,18 +380,26 @@ describe("0110 clears the stored copy of the old declared default", () => {
 	it("takes the old default at every one of the three addresses", async () => {
 		const db = await booted()
 
-		const seeded = await storedLimits(db)
-		// ⚠ The regression: `reconcileConfigs` back-fills a declared default and
-		// never revisits an address that still exists, so without the statement
-		// every booted database would hand the newly-live control the 40 it has
-		// been storing — turning a typing fix into a 100 → 40 retrieval change.
-		expect(seeded.map((r) => r.slug)).toEqual([...SLUGS].sort())
+		// ⚠ **A fresh database stores nothing here now** (deviation ruling,
+		// 2026-09-10): 100 is the declared value, so a config that agrees with
+		// it holds no row. This assertion used to read the three rows a fresh
+		// boot materialized; what it says instead is the same claim in the
+		// model that replaced it, and it is the stronger half — the rows this
+		// migration deletes must not be re-created by the very boot that runs it.
+		expect(
+			await storedLimits(db),
+			"a fresh boot materialized the declared window, which is the copy " +
+				"this migration exists to remove"
+		).toEqual([])
 
-		// A fresh database boots against the CURRENT declaration, so it stores
-		// 100. The state this migration exists for is a database that booted the
-		// PREVIOUS build, which stored 40 — written here by hand, the same way
-		// 0102's test writes the batch size it sweeps.
+		// The state this migration exists for is a database that booted the
+		// PREVIOUS build, which stored 40 at each address — written here by
+		// hand, the same way 0102's test writes the batch size it sweeps.
 		await asPreviousBuild(db)
+		expect(
+			(await storedLimits(db)).map((r) => r.slug),
+			"the fixture seeded no stored window, so everything below is vacuous"
+		).toEqual([...SLUGS].sort())
 
 		await applyMigration(db)
 		// ⚠ Asserted as "none left", not "the count went down". The statement
@@ -368,9 +413,17 @@ describe("0110 clears the stored copy of the old declared default", () => {
 		).toEqual([])
 
 		await reboot(db)
-		const rebuilt = await storedLimits(db)
-		expect(rebuilt.map((r) => r.slug)).toEqual([...SLUGS].sort())
-		for (const row of rebuilt) expect(row.value).toBe(DECLARED_LIMIT)
+		// And the boot does not put a copy back. The window every run then uses
+		// is the DECLARED one, resolved at the `author` layer rather than read
+		// off a row — which `runtime/sessionHistoryLimit.int.test.ts` asserts
+		// end to end, and which is why `DECLARED_LIMIT` is still the number
+		// that matters here even though nothing stores it.
+		expect(
+			await storedLimits(db),
+			"boot re-materialized the declared window after the migration " +
+				"removed it, so the next correction of it would reach nobody"
+		).toEqual([])
+		expect(DECLARED_LIMIT).toBe(100)
 	}, 60_000)
 
 	it("leaves a deliberately chosen window alone", async () => {
@@ -381,17 +434,12 @@ describe("0110 clears the stored copy of the old declared default", () => {
 		// the statement is scoped to rows still holding exactly the previous
 		// declared default, and this is what that scope is for.
 		const chosen = (await storedLimits(db))[0]!
-		await db
-			.update(schema.pipelineConfigValues)
-			.set({ value: 25 })
-			.where(
-				and(
-					eq(schema.pipelineConfigValues.configId, chosen.configId),
-					eq(schema.pipelineConfigValues.nodeKey, chosen.nodeKey),
-					eq(schema.pipelineConfigValues.slot, "params"),
-					eq(schema.pipelineConfigValues.path, "limit")
-				)
-			)
+		await setConfigValue(
+			db,
+			chosen.configId,
+			{ nodeKey: chosen.nodeKey, slot: "params", path: "limit" },
+			25
+		)
 
 		await applyMigration(db)
 		expect((await storedLimits(db)).map((r) => r.value)).toEqual([25])
@@ -402,8 +450,14 @@ describe("0110 clears the stored copy of the old declared default", () => {
 			rebuilt.find((r) => r.configId === chosen.configId)?.value,
 			"a deliberately chosen window was overwritten"
 		).toBe(25)
-		for (const row of rebuilt.filter((r) => r.configId !== chosen.configId))
-			expect(row.value).toBe(DECLARED_LIMIT)
+		// And every OTHER config is back to holding nothing — the deviation
+		// survives, its neighbours inherit. Before the ruling this line read
+		// `toBe(DECLARED_LIMIT)`, which was the same claim made about a copy.
+		expect(
+			rebuilt.filter((r) => r.configId !== chosen.configId),
+			"a config that chose nothing came back holding a copy of the " +
+				"declared window"
+		).toEqual([])
 	}, 60_000)
 
 	it("leaves other controls' stored values alone", async () => {
@@ -441,21 +495,50 @@ describe("0110 clears the stored copy of the old declared default", () => {
 					)
 				)
 
-		await db
-			.update(schema.pipelineConfigValues)
-			.set({ value: PREVIOUS_DECLARED_LIMIT })
-			.where(
-				and(
-					eq(schema.pipelineConfigValues.slot, "params"),
-					inArray(schema.pipelineConfigValues.path, [
-						"channel",
-						"scanDepth"
-					])
-				)
+		// ⚠ **Seeded, where this used to `UPDATE` rows that were already
+		// there.** A config stores only deviations now (2026-09-10), so a fresh
+		// boot holds nothing at either sibling address and the old form updated
+		// zero rows — leaving `before` empty and the comparison below vacuous.
+		// The addresses come off the declarations rather than a literal, so a
+		// version that stopped declaring one fails here rather than silently
+		// asserting about nothing.
+		const { declarations } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		for (const pin of PINS) {
+			const [spec] = await db
+				.select({
+					id: schema.pipelineSpecs.id,
+					activeVersionId: schema.pipelineSpecs.activeVersionId
+				})
+				.from(schema.pipelineSpecs)
+				.where(eq(schema.pipelineSpecs.slug, pin.slug))
+			if (!spec?.activeVersionId) continue
+			const decls = (await declarations(db, spec.activeVersionId)).filter(
+				(d) =>
+					d.slot === "params" &&
+					(d.path === "channel" || d.path === "scanDepth")
 			)
+			const configs = await db
+				.select({ id: schema.pipelineConfigs.id })
+				.from(schema.pipelineConfigs)
+				.where(eq(schema.pipelineConfigs.specId, spec.id))
+			for (const config of configs)
+				for (const d of decls)
+					await setConfigValue(
+						db,
+						config.id,
+						{ nodeKey: d.nodeKey, slot: d.slot, path: d.path },
+						PREVIOUS_DECLARED_LIMIT
+					)
+		}
 
 		const before = await siblings()
-		expect(before.length).toBeGreaterThan(0)
+		expect(
+			before.length,
+			"no sibling parameter was seeded, so the predicates below are " +
+				"being asserted against an empty table"
+		).toBeGreaterThan(0)
 
 		await applyMigration(db)
 		expect(await siblings()).toEqual(before)

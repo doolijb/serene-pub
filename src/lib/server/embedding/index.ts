@@ -13,9 +13,12 @@
  *    reports that. See that function for the one hardcoded exception
  *    (Android), which is a fast path for a genuine architectural
  *    impossibility, not a prediction.
- *  - "api": a plain OpenAI-compatible /embeddings HTTP endpoint (also
- *    implemented by Ollama, LM Studio, llama.cpp server, etc.) — just an
- *    HTTP request, so it works everywhere including Android.
+ *  - "api": a host, reached through an EMBEDDING ADAPTER
+ *    (`server/embeddingAdapters/`) — OpenAI-compatible `/embeddings`, or
+ *    Ollama's own `/api/embed`. Just an HTTP request, so it works everywhere
+ *    including Android. ⚠ The route is chosen by the connection's TYPE, never
+ *    by a local/api flag: `openai-embeddings` and `ollama-embeddings` are both
+ *    hosts and speak different routes, so a flag can only reach one of them.
  *
  * Every exported function below stays backend-agnostic on purpose: callers
  * (vectorizationQueue.ts, RagInfillEngine.ts, promptBuilder/index.ts's RAG
@@ -31,39 +34,31 @@
  */
 
 import type { FeatureExtractionPipeline } from "@huggingface/transformers"
-import { findModel } from "./models"
+import { findModel, isRegisteredLocalEmbeddingModel } from "./models"
 import { getAppDataDir, isAndroidWrapper } from "$lib/server/utils"
 import path from "path"
+import type { BaseEmbeddingAdapter } from "$lib/server/embeddingAdapters/BaseEmbeddingAdapter"
 import {
-	decryptToken,
-	VECTORIZATION_API_KEY_INFO
-} from "$lib/server/utils/tokenCrypto"
+	buildApiModelId,
+	resolveEmbeddingTarget,
+	type EmbeddingTarget
+} from "./target"
 
 /**
- * Decrypts a vectorizationConfigs row's apiKey (encrypted at rest via
- * tokenCrypto.ts) for actual use — every DB read site that's about to pass
- * the key to activateApiEmbedding() or echo it back to the admin client
- * should go through this, not read `.apiKey` directly off the row.
- * activateApiEmbedding()/apiEmbed() themselves stay encryption-agnostic —
- * they only ever see the already-decrypted value threaded through here.
+ * ⚠ `resolveVectorizationApiKey` is GONE, along with the key class it read.
+ *
+ * It decrypted `vectorization_configs.api_key` under
+ * `VECTORIZATION_API_KEY_INFO` — a secret class of its own, derived from the
+ * same root by a different HKDF info string. Embedding endpoints are connections
+ * now, their key lives in `connections.extra_json.apiKey` under
+ * `CONNECTION_API_KEY_INFO`, and migration 0127 re-encrypts across the two (it
+ * has to: a copied ciphertext is undecryptable under the new class while looking
+ * perfectly configured). Nothing in the running app derives the vectorization
+ * key any more, and nothing should — see `migrateEmbeddingConnection`, the one
+ * place that still holds it, exactly once, on the way out.
  */
-export function resolveVectorizationApiKey(vecConfig: {
-	apiKey: string | null
-	apiKeyIv: string | null
-	apiKeyAuthTag: string | null
-}): string | null {
-	if (!vecConfig.apiKey || !vecConfig.apiKeyIv || !vecConfig.apiKeyAuthTag) {
-		return null
-	}
-	return decryptToken(
-		{
-			ciphertext: vecConfig.apiKey,
-			iv: vecConfig.apiKeyIv,
-			authTag: vecConfig.apiKeyAuthTag
-		},
-		VECTORIZATION_API_KEY_INFO
-	)
-}
+
+export { buildApiModelId }
 
 type LocalEmbeddingProbeResult = { supported: boolean; reason: string | null }
 
@@ -134,10 +129,21 @@ export async function isLocalEmbeddingSupported(): Promise<boolean> {
 	return (await getLocalEmbeddingUnsupportedReason()) === null
 }
 
-type ApiEmbeddingConfig = {
-	baseUrl: string
-	apiKey?: string | null
-	model: string
+/**
+ * The live API backend: the adapter instance, and what the first real call
+ * measured.
+ *
+ * The ADAPTER is held rather than a `{baseUrl, apiKey, model}` bag, because the
+ * bag was the OpenAI wire written into this file — there was nowhere for
+ * Ollama's `/api/embed` to go. `dimensions` is not on the connection row and is
+ * not declared anywhere: it is read back from the first response, because a
+ * width nobody measured is a width that corrupts an index the day a backend
+ * changes its default.
+ */
+type ApiEmbeddingBackend = {
+	adapter: BaseEmbeddingAdapter
+	/** For the log line and for `isModelReady`'s "validated" claim. */
+	modelId: string
 	dimensions: number
 }
 
@@ -148,12 +154,7 @@ let isLoading = false
 let loadError: string | null = null
 
 let activeBackend: "local" | "api" | null = null
-let apiConfig: ApiEmbeddingConfig | null = null
-
-/** The composite identifier stored as embeddingModel for API-backed vectors — changes if either the endpoint or the model changes, so staleness detection (unmodified, model-string-based) catches both. */
-export function buildApiModelId(baseUrl: string, model: string): string {
-	return `api::${baseUrl}::${model}`
-}
+let apiBackend: ApiEmbeddingBackend | null = null
 
 // TTL idle timer — unloads the model after N minutes of inactivity
 let ttlMinutes = 5
@@ -199,14 +200,20 @@ export async function loadEmbeddingModel(
 	const unsupportedReason = await getLocalEmbeddingUnsupportedReason()
 	if (unsupportedReason) throw new Error(unsupportedReason)
 
+	// The catalogue first, because that is where a `dtype` comes from and it is
+	// the answer in the ordinary case. A model the registry holds — an `.onnx`
+	// the user downloaded, filed under modality `embeddings` — is loadable too,
+	// with no dtype override: nothing here knows what precision its weights were
+	// exported at, and guessing one is how a working file stops loading.
 	const modelDef = findModel(modelId)
-	if (!modelDef) throw new Error(`Unknown embedding model: ${modelId}`)
+	if (!modelDef && !(await isRegisteredLocalEmbeddingModel(modelId)))
+		throw new Error(`Unknown embedding model: ${modelId}`)
 
 	isLoading = true
 	pipeline = null
 	loadedModelId = null
 	loadError = null
-	apiConfig = null
+	apiBackend = null
 
 	try {
 		// Dynamic import keeps this out of the browser bundle entirely
@@ -223,7 +230,7 @@ export async function loadEmbeddingModel(
 		onProgress?.({ modelId, status: "loading" })
 
 		pipeline = (await createPipeline("feature-extraction", modelId, {
-			...(modelDef.dtype ? { dtype: modelDef.dtype } : {}),
+			...(modelDef?.dtype ? { dtype: modelDef.dtype } : {}),
 			// @ts-ignore — progress_callback is valid but not in all type defs
 			progress_callback: (event: any) => {
 				if (event?.status === "downloading") {
@@ -254,46 +261,53 @@ export async function loadEmbeddingModel(
 }
 
 /**
- * Validate and activate an external OpenAI-compatible embeddings API as the
- * embedding backend. Issues one real test embed call before activating
- * anything — a config that fails validation never reaches the "ready"
- * state, so isModelReady() can't report true for a broken setup. Throws on
- * failure; callers should not persist the config unless this resolves.
+ * Validate and activate a host-backed embedding connection as the backend.
+ *
+ * Issues one REAL embed call before activating anything, exactly as before: a
+ * config that fails validation never reaches the "ready" state, so
+ * `isModelReady()` cannot report true for a broken setup, and the round trip is
+ * also the only way to learn the vector width.
+ *
+ * Takes the starred CONNECTION rather than a `{baseUrl, apiKey, model}` bag.
+ * The bag was the OpenAI wire in disguise — it could only ever be handed to one
+ * hand-rolled client — and the type is what chooses between `/embeddings` and
+ * Ollama's `/api/embed`. The adapter also reads the key off the row itself, so
+ * no plaintext secret has to be threaded through this call at all.
  */
 export async function activateApiEmbedding(
-	config: { baseUrl: string; apiKey?: string | null; model: string },
+	connection: SelectConnection,
 	onProgress?: DownloadProgressCallback
 ): Promise<{ dimensions: number }> {
 	if (isLoading) throw new Error("Model is already loading")
 
-	const modelId = buildApiModelId(config.baseUrl, config.model)
+	const modelId = buildApiModelId(
+		connection.baseUrl ?? "",
+		connection.model ?? ""
+	)
 	isLoading = true
 	pipeline = null
 	loadedModelId = null
-	apiConfig = null
+	apiBackend = null
 	loadError = null
 
 	try {
 		onProgress?.({ modelId, status: "loading" })
 
-		const { OpenAI } = await import("openai")
-		const client = new OpenAI({
-			apiKey: config.apiKey || undefined,
-			baseURL: config.baseUrl
-		})
+		const { getEmbeddingAdapter } = await import(
+			"$lib/server/utils/getEmbeddingAdapter"
+		)
+		const { Adapter } = await getEmbeddingAdapter(connection.type)
+		const adapter = new Adapter(connection)
 
-		const testResult = await client.embeddings.create({
-			model: config.model,
-			input: "test"
-		})
-		const dimensions = testResult.data[0]?.embedding?.length
+		const probe = await adapter.embedText({ input: ["test"] })
+		const dimensions = probe.dimensions
 		if (!dimensions) {
 			throw new Error(
 				"Embeddings API returned no vector data for the test request"
 			)
 		}
 
-		apiConfig = { ...config, dimensions }
+		apiBackend = { adapter, modelId, dimensions }
 		loadedModelId = modelId
 		activeBackend = "api"
 		onProgress?.({ modelId, status: "ready" })
@@ -315,89 +329,39 @@ export async function activateApiEmbedding(
 	}
 }
 
-type ConfiguredEmbeddingTarget = {
-	modelId: string
-	mode: "local" | "api"
-	ttlMinutes: number
-	localModelName?: string
-	apiBaseUrl?: string
-	apiKey?: string | null
-	apiModel?: string
-}
-
 /**
- * Reads systemSettings/vectorizationConfigs and reports what backend/model
- * WOULD be loaded, without loading anything — the single source of truth
- * for "what's configured," consumed by loadConfiguredEmbeddingModel() below
- * (the "bring it up for real" side) and by getConfiguredModelId() (the
- * "just tell me the identity, cheaply" side used by the vectorization
- * queue's peek-before-load check). Two cheap DB reads, no pipeline/API call.
+ * What backend WOULD be loaded, without loading anything.
  *
- * Returns null if vectorization is disabled or no model is chosen yet
- * (today's silent no-op case). Still throws for "API mode selected but
- * apiBaseUrl/apiModel missing" — that's a real misconfiguration, not
- * "nothing to do," and both callers below should hear about it (the queue's
- * peek catches this specific throw and treats it as null instead, so a
- * broken config doesn't spam every idle tick — see getConfiguredModelId()).
+ * The single source of truth for "what's configured", consumed by
+ * `loadConfiguredEmbeddingModel()` below (the "bring it up for real" side) and
+ * by `getConfiguredModelId()` (the "just tell me the identity, cheaply" side the
+ * vectorization queue's peek-before-load check uses).
+ *
+ * ⚠ It reads THE STAR — the `text->embedding` row in `connection_defaults` — and
+ * nothing else. See `./target` for why that is the one store, and for why this
+ * is not `resolveCapabilityTarget`.
+ *
+ * Null means "nothing to do", including for a connection somebody has not
+ * finished. ⚠ An incomplete endpoint is never a THROW: a half-filled connection
+ * row is a row somebody is part-way through, the queue peeks at this on every
+ * idle tick, and the error a person needs is the one the connection's own Test
+ * button gives beside the field that is empty.
  */
-export async function getConfiguredEmbeddingTarget(): Promise<ConfiguredEmbeddingTarget | null> {
+export async function getConfiguredEmbeddingTarget(): Promise<EmbeddingTarget | null> {
 	const { db } = await import("$lib/server/db")
-	const { schema } = await import("$lib/server/db")
-	const { eq } = await import("drizzle-orm")
-
-	const settings = await db.query.systemSettings.findFirst({
-		where: eq(schema.systemSettings.id, 1),
-		columns: { vectorizationEnabled: true, embeddingModelName: true }
-	})
-	if (!settings?.vectorizationEnabled || !settings.embeddingModelName)
-		return null
-
-	const vecConfig = await db.query.vectorizationConfigs.findFirst({
-		where: eq(schema.vectorizationConfigs.id, 1),
-		columns: {
-			embeddingModelTtlMinutes: true,
-			mode: true,
-			apiBaseUrl: true,
-			apiKey: true,
-			apiKeyIv: true,
-			apiKeyAuthTag: true,
-			apiModel: true
-		}
-	})
-	const ttlMinutes = vecConfig?.embeddingModelTtlMinutes ?? 5
-
-	if (vecConfig?.mode === "api") {
-		if (!vecConfig.apiBaseUrl || !vecConfig.apiModel) {
-			throw new Error(
-				"API vectorization is enabled but not fully configured"
-			)
-		}
-		return {
-			modelId: buildApiModelId(vecConfig.apiBaseUrl, vecConfig.apiModel),
-			mode: "api",
-			ttlMinutes,
-			apiBaseUrl: vecConfig.apiBaseUrl,
-			apiKey: resolveVectorizationApiKey(vecConfig),
-			apiModel: vecConfig.apiModel
-		}
-	}
-	return {
-		modelId: settings.embeddingModelName,
-		mode: "local",
-		ttlMinutes,
-		localModelName: settings.embeddingModelName
-	}
+	return resolveEmbeddingTarget(db)
 }
 
 /**
  * Cheap projection of getConfiguredEmbeddingTarget() for the vectorization
  * queue's peek-before-load check (see runQueue() in vectorizationQueue.ts)
  * — just the identity string pickNextItem() needs to check for pending
- * work, without paying any load cost. Unlike the loader below, an
- * incomplete API config is reported as "nothing to load" (null) rather than
- * thrown — a queue peek shouldn't surface a config error on every idle
- * tick; that error still surfaces normally once real work exists and a real
- * load is attempted (or via a manual trigger).
+ * work, without paying any load cost.
+ *
+ * The try/catch is not about a misconfiguration — the resolver answers null for
+ * one. It is about the database read itself: this runs on every idle tick, and a
+ * transient failure there must not become an unhandled rejection inside the
+ * queue loop.
  */
 export async function getConfiguredModelId(): Promise<string | null> {
 	try {
@@ -423,7 +387,9 @@ export async function getConfiguredModelId(): Promise<string | null> {
  * load/activation failure (matching loadEmbeddingModel()/
  * activateApiEmbedding()'s own contract, and getConfiguredEmbeddingTarget()'s).
  */
-export async function loadConfiguredEmbeddingModel(): Promise<void> {
+export async function loadConfiguredEmbeddingModel(
+	onProgress?: DownloadProgressCallback
+): Promise<void> {
 	const target = await getConfiguredEmbeddingTarget()
 	if (!target) return
 
@@ -431,13 +397,14 @@ export async function loadConfiguredEmbeddingModel(): Promise<void> {
 	setEmbeddingTtlMinutes(target.ttlMinutes)
 
 	if (target.mode === "api") {
-		await activateApiEmbedding({
-			baseUrl: target.apiBaseUrl!,
-			apiKey: target.apiKey,
-			model: target.apiModel!
-		})
+		// The merged row, so the adapter reads its own base URL, model and
+		// (encrypted) key off the connection it was built from.
+		await activateApiEmbedding(target.connection, onProgress)
 	} else {
-		await loadEmbeddingModel(target.localModelName!)
+		// ⚠ `onProgress` is not optional in practice on this arm: a first local
+		// load DOWNLOADS several hundred megabytes, and a button that sits there
+		// for four minutes with nothing moving reads as a hang.
+		await loadEmbeddingModel(target.localModelName!, onProgress)
 	}
 }
 
@@ -483,7 +450,7 @@ export function unloadEmbeddingModel(reason?: string): void {
 	}
 	pipeline = null
 	loadedModelId = null
-	apiConfig = null
+	apiBackend = null
 	activeBackend = null
 	loadError = null
 	console.log(`[embedding] Model unloaded${reason ? ` ${reason}` : ""}`)
@@ -505,7 +472,7 @@ export function isModelReady(): boolean {
 	if (activeBackend === "local")
 		return pipeline !== null && loadedModelId !== null
 	if (activeBackend === "api")
-		return apiConfig !== null && loadedModelId !== null
+		return apiBackend !== null && loadedModelId !== null
 	return false
 }
 
@@ -548,10 +515,12 @@ export async function isModelCached(modelId: string): Promise<boolean> {
  * Throws if no backend is active.
  */
 export async function embed(text: string): Promise<number[]> {
-	if (activeBackend === "api" && apiConfig) {
-		const [vector] = await apiEmbed([text], apiConfig)
+	if (activeBackend === "api" && apiBackend) {
+		const { vectors } = await apiBackend.adapter.embedText({
+			input: [text]
+		})
 		resetTtlTimer()
-		return vector
+		return vectors[0]
 	}
 	if (!pipeline) throw new Error("No embedding model loaded")
 	const result = await pipeline(text, { pooling: "mean", normalize: true })
@@ -561,15 +530,15 @@ export async function embed(text: string): Promise<number[]> {
 
 /**
  * Embed multiple strings. More efficient than calling embed() in a loop
- * when the backend supports batching (both do: transformers.js pipelines
- * natively, the API backend via a single /embeddings call with an array
- * input, per the OpenAI-compatible spec).
+ * when the backend supports batching (every backend does: transformers.js
+ * pipelines natively, and `embedText` is array-in/array-out on every adapter
+ * precisely because each protocol behind it batches).
  */
 export async function batchEmbed(texts: string[]): Promise<number[][]> {
 	if (texts.length === 0) return []
 
-	if (activeBackend === "api" && apiConfig) {
-		const vectors = await apiEmbed(texts, apiConfig)
+	if (activeBackend === "api" && apiBackend) {
+		const { vectors } = await apiBackend.adapter.embedText({ input: texts })
 		resetTtlTimer()
 		return vectors
 	}
@@ -581,25 +550,6 @@ export async function batchEmbed(texts: string[]): Promise<number[][]> {
 	const flat = Array.from(results.data as Float32Array)
 	const dims = flat.length / texts.length
 	return texts.map((_, i) => flat.slice(i * dims, (i + 1) * dims))
-}
-
-/** Calls the configured OpenAI-compatible /embeddings endpoint, ordering results by the API's own index field rather than trusting response order. */
-async function apiEmbed(
-	texts: string[],
-	config: ApiEmbeddingConfig
-): Promise<number[][]> {
-	const { OpenAI } = await import("openai")
-	const client = new OpenAI({
-		apiKey: config.apiKey || undefined,
-		baseURL: config.baseUrl
-	})
-	const result = await client.embeddings.create({
-		model: config.model,
-		input: texts
-	})
-	return [...result.data]
-		.sort((a, b) => a.index - b.index)
-		.map((item) => item.embedding)
 }
 
 /**

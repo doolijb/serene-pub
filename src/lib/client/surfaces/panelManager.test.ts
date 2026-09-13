@@ -40,6 +40,26 @@ describe("SurfaceManager — activation", () => {
 		const m = make()
 		expect(m.addable.map((p) => p.id)).toEqual(["tasks"])
 	})
+
+	// The settings panel reads a widget's declared schema off the instance;
+	// a declaration that stops here is a panel with nothing to configure.
+	it("carries a declared settings schema onto the instance", () => {
+		const m = new SurfaceManager()
+		m.init(
+			1,
+			[
+				{
+					...PANELS[0],
+					settings: { rows: { type: "integer", default: 3 } }
+				}
+			],
+			{},
+			() => {}
+		)
+		expect(m.instances.find((p) => p.id === "tasks")!.settings).toEqual({
+			rows: { type: "integer", default: 3 }
+		})
+	})
 })
 
 describe("SurfaceManager — channel-driven autopopulation (21 §9)", () => {

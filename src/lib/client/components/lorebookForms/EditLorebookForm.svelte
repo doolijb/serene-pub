@@ -162,8 +162,12 @@
 		msg: Sockets.Lorebooks.Update.Response
 	) {
 		if (msg.lorebook && msg.lorebook.id === lorebookId) {
-			editLorebook = { ...msg.lorebook }
-			originalLorebook = { ...msg.lorebook }
+			// The update response carries the row, and `tags` is not on it —
+			// so the ones on screen are kept rather than blanked by a write
+			// that never touched them.
+			const kept = { ...msg.lorebook, tags: editLorebook?.tags }
+			editLorebook = kept
+			originalLorebook = { ...kept }
 			mode = "view"
 			toaster.success({
 				title: "Lorebook Updated",

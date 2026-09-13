@@ -38,6 +38,7 @@ import {
 	type MediaVariantName,
 	type MediaVisibilityType
 } from "$lib/shared/constants/MediaVisibility"
+import type { MediaFrame } from "$lib/shared/media/frame"
 import { mediaRelPath, resolveMediaPath, type MediaProvenance } from "./paths"
 import { sniffMedia, MAX_MEDIA_UPLOAD_BYTES } from "./sniff"
 import { WEB_SAFE_IMAGE_MIMES } from "./thumbnail"
@@ -143,6 +144,9 @@ export interface ClientMedia {
 	width: number | null
 	height: number | null
 	durationMs: number | null
+	/** The region a thumbnail is cut from, in source pixels of the original.
+	 *  Null means the default rule applies — see `$lib/shared/media/frame`. */
+	frame: MediaFrame | null
 	filename: string | null
 	visibility: string
 	position: number
@@ -189,6 +193,7 @@ export function toClientMedia(row: FileRow): ClientMedia {
 		width: row.width,
 		height: row.height,
 		durationMs: row.durationMs,
+		frame: row.frame ?? null,
 		filename: row.filename,
 		visibility: row.visibility,
 		position: row.position,

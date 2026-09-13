@@ -11,11 +11,19 @@
  * moves the instance value: a deleted row inherits the new one, a pinned copy
  * does not. That is the whole point of resolving per path rather than per slot
  * (F20).
+ *
+ * **And so does a write that lands back on the default** (ruled 2026-09-10). A
+ * config stores deviations, so `writeOption` deletes the row when the value it
+ * is handed equals the declaration's — the same delete `clearOption` performs,
+ * reached from the other direction. Without it, dragging a slider away and back
+ * would leave a row behind that resolves identically today and pins the config
+ * to the number forever after. See `config/deviations.ts`.
  */
 
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
+import { isDeviation } from "$lib/server/pipelines/config/deviations"
+import { acceptedEngines } from "$lib/shared/pipelines/templateEngines"
 import {
 	type Published,
 	declarations,
@@ -126,7 +134,12 @@ export async function contextTemplateOptionGate(
 	slug: string,
 	viewer: Viewer,
 	id: string
-): Promise<{ nodeTypeId: string; engine: string; specId: number }> {
+): Promise<{
+	nodeTypeId: string
+	engine: string
+	engines: string[]
+	specId: number
+}> {
 	const { at, decl } = await locate(db, secret, slug, id)
 	if (decl.control !== "context-template-ref" || !decl.nodeTypeId)
 		throw new OptionNotFoundError(
@@ -139,14 +152,20 @@ export async function contextTemplateOptionGate(
 		viewer.isAdmin ? "config" : undefined,
 		decl.matrixSlot
 	)
+	const engines = acceptedEngines(decl)
 	return {
 		nodeTypeId: decl.nodeTypeId,
-		// The language this slot is written in, which is half the template pool.
-		// Returned rather than left to the caller because the caller would have
-		// to guess, and the only guess available is core's — which is exactly
-		// how a jinja2 slot ends up holding Handlebars source that renders as
-		// raw markup instead of failing.
-		engine: decl.engine ?? CORE_TEMPLATE_ENGINE,
+		// The language a NEW template here is written in — the slot's first
+		// accepted engine. Returned rather than left to the caller because the
+		// caller would have to guess, and the only guess available is core's,
+		// which is exactly how a slot declaring another language ends up
+		// holding Handlebars source that renders as raw markup instead of
+		// failing.
+		engine: engines[0]!,
+		// Every language this slot renders, for the two callers that need the
+		// whole set: selection, which must accept a row in any of them, and
+		// creation, which must refuse one outside them.
+		engines,
 		specId: at.specId
 	}
 }
@@ -375,6 +394,32 @@ export async function writeOption(
 			configId != null
 				? await configTarget(db, at, configId)
 				: await instanceConfigTarget(db, at)
+
+		// ── setting it back to the default is a reset (ruled 2026-09-10) ──
+		//
+		// A config stores deviations, so a value equal to the declaration is not
+		// one and gets no row. Not a nicety: a stored copy resolves identically
+		// today and pins the config to the number forever after, so "I put it
+		// back" and "I explicitly chose today's default" would be the same
+		// gesture with permanently different consequences — and the panel could
+		// not tell the person which one they had just made.
+		//
+		// The delete rather than a skip, because there may be a row to remove:
+		// this is the path a slider dragged back to where it started takes.
+		if (!isDeviation(decl, value)) {
+			await db
+				.delete(schema.pipelineConfigValues)
+				.where(
+					and(
+						eq(schema.pipelineConfigValues.configId, row.id),
+						eq(schema.pipelineConfigValues.nodeKey, decl.nodeKey),
+						eq(schema.pipelineConfigValues.slot, decl.slot),
+						eq(schema.pipelineConfigValues.path, decl.path)
+					)
+				)
+			return
+		}
+
 		await db
 			.insert(schema.pipelineConfigValues)
 			.values({
@@ -476,6 +521,65 @@ export async function clearOption(
 				eq(schema.pipelineNodeOverrides.path, decl.path)
 			)
 		)
+}
+
+/**
+ * Reset a whole configuration — every deviation at once.
+ *
+ * The Changes view's "reset all", and it is a DELETE of the configuration's
+ * rows rather than a loop of `clearOption` over the ones the panel happened to
+ * be showing: a client-side loop would leave behind exactly the rows the viewer
+ * could not see, which is the half a person means least to keep.
+ *
+ * ⚠ **It takes the references with it, and that is what "back to shipped"
+ * means.** A `prompts` or `template` row has no declared default to fall back
+ * to, so deleting it leaves the slot resolving through `world.ts`'s own floor —
+ * the shipped prompt for the pool, the shipped layout for the variable — which
+ * is the row `ensureDefaultConfig` would have selected on a fresh install.
+ * That floor is why this is a reset and not an erasure, and it is also why this
+ * is the one write in this file that cannot be expressed as "set it to the
+ * declared value": there is no declared value to set.
+ *
+ * Refuses an immutable config on the same terms every other write does. The
+ * shipped default has nothing to reset — it *is* the reset — and offering the
+ * verb there would read as a way to empty it.
+ *
+ * Returns how many rows went, so the caller can tell "reset" from "there was
+ * nothing to reset".
+ */
+export async function resetConfig(
+	db: Db,
+	slug: string,
+	viewer: Viewer,
+	configId?: number
+): Promise<number> {
+	const at = await published(db, slug)
+	if (!at)
+		throw new OptionNotFoundError(
+			`There is no published pipeline called '${slug}'.`
+		)
+
+	// The same decision `writeOption` makes, asked with no declaration in hand:
+	// authoring a configuration is the admin's, always — this is not something a
+	// person does to their own session, because a configuration is not theirs
+	// (R8). `resolveWriteScope` answers per SLOT and there is no slot here, so
+	// the check is the one thing every slot's config branch has in common.
+	if (!viewer.isAdmin)
+		throw new OptionNotWritableError(
+			"Only an administrator edits a configuration. Your own changes are " +
+				"made inside a session."
+		)
+
+	const row =
+		configId != null
+			? await configTarget(db, at, configId)
+			: await instanceConfigTarget(db, at)
+
+	const gone = await db
+		.delete(schema.pipelineConfigValues)
+		.where(eq(schema.pipelineConfigValues.configId, row.id))
+		.returning({ id: schema.pipelineConfigValues.id })
+	return (gone as any[]).length
 }
 
 /**

@@ -5,6 +5,7 @@
 	import MessageComposer from "$lib/client/components/sessionMessages/MessageComposer.svelte"
 	import MessageControls from "$lib/client/components/sessionMessages/MessageControls.svelte"
 	import MessagePartsView from "$lib/client/components/sessionMessages/MessagePartsView.svelte"
+	import MessageStateLedger from "$lib/client/components/sessionMessages/MessageStateLedger.svelte"
 	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
 	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
@@ -831,6 +832,16 @@
 				{/if}
 			</div>
 		</div>
+
+		<!-- What this turn changed, and what it is still asking for (the stats
+		     and states ledger). Renders nothing at all for a message that
+		     changed nothing, which is almost every message — and it is outside
+		     the height-animated wrapper above, because a decision landing here
+		     must not look like the body re-rendering. -->
+		<MessageStateLedger
+			messageId={msg.id}
+			sessionId={session?.id ?? null}
+		/>
 	</div>
 </div>
 

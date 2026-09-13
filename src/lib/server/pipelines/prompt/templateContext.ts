@@ -37,6 +37,7 @@ import {
 	type ResolvedLayouts
 } from "$lib/server/pipelines/entities/variableLayouts"
 import type { RenderRun } from "$lib/server/pipelines/prompt/renderers"
+import { relationshipSections } from "$lib/server/pipelines/prompt/rankedRelationships"
 
 export interface CharacterRow {
 	id?: number
@@ -119,6 +120,10 @@ export interface BuildContextInput extends RenderRun {
 	 * relationships possible at all — and it arrives as two values, because
 	 * "how they see everyone" and "how everyone sees them" are opposite claims
 	 * that shared one heading, one layout and one switch.
+	 *
+	 * Either the section itself, or a wired port carrying the allocated
+	 * `relationships` band with that section behind it — `relationshipSections`
+	 * decides, and hands back a section either way.
 	 */
 	relationshipsPerspectives?: unknown
 	relationshipsKnown?: unknown
@@ -135,9 +140,47 @@ export interface BuildContextInput extends RenderRun {
 	 * default. See `variableLayouts.ts`.
 	 */
 	variables?: ResolvedLayouts
+	/**
+	 * The session's resolved state, when a spec wired
+	 * `core:query/session-state@1` into the builder's `state` port. Passed
+	 * through untouched: it is structure a template reads keys out of, not a
+	 * value anything here renders.
+	 */
+	state?: unknown
+	/**
+	 * The session's own genre fields, by key — `tone`, `difficulty`, and
+	 * whatever else a genre declared.
+	 *
+	 * ⚠ **They have to arrive HERE, not be merged onto the answer.**
+	 * `instructions` is interpolated inside this function, so a shipped prompt
+	 * saying "Difficulty is {{difficulty}}" renders "Difficulty is " for any
+	 * caller that adds the fields to the context this returns. A live receipt
+	 * is where that reads as "Keep the tone ." The merge above the caller stays,
+	 * for the templates reading the same keys; this is what makes a prompt row
+	 * read them too.
+	 *
+	 * The four names an interpolation context owns — `char`, `character`,
+	 * `user`, `persona` — are never taken from here: a genre field called
+	 * `char` is a field, not a rename of the speaker.
+	 */
+	fields?: Record<string, unknown>
 }
 
 export class TemplateContextError extends Error {}
+
+/** The names an interpolation context owns; a genre field may not take one. */
+const RESERVED_FIELD_NAMES = new Set(["char", "character", "user", "persona"])
+
+/** A genre's fields as interpolation variables: a plain bag, reserved names out. */
+function genreFields(fields: unknown): Record<string, unknown> {
+	if (!fields || typeof fields !== "object" || Array.isArray(fields))
+		return {}
+	return Object.fromEntries(
+		Object.entries(fields as Record<string, unknown>).filter(
+			([key]) => !RESERVED_FIELD_NAMES.has(key)
+		)
+	)
+}
 
 /** A session with no cast: the lore attachment finds nothing, and says nothing. */
 const EMPTY_CHAT = { sessionCharacters: [], sessionPersonas: [] }
@@ -164,6 +207,9 @@ export async function buildTemplateContext(
 		currentCharacterName: input.charName,
 		currentPersonaName: input.personaName,
 		additionalContext: {
+			// First, so the four reserved names below and the speaker's own
+			// cannot be taken by a genre field that happens to share one.
+			...genreFields(input.fields),
 			characterNames: joinWithAnd([...input.characterNames]),
 			personaNames: joinWithAnd([...input.personaNames]),
 			narratorName: input.narratorName
@@ -246,13 +292,20 @@ export async function buildTemplateContext(
 			"instructions",
 			interpolate(texts.instructions)
 		),
+		// Whatever the port carried — the allocated band when a spec wired the
+		// mechanism, the traversal's own section when it did not. See
+		// `rankedRelationships.ts`; a value that is not a wired port arrives
+		// here unchanged.
 		relationshipsPerspectives: await layout(
 			"relationshipsPerspectives",
-			input.relationshipsPerspectives
+			relationshipSections(
+				input.relationshipsPerspectives,
+				"perspectives"
+			)
 		),
 		relationshipsKnown: await layout(
 			"relationshipsKnown",
-			input.relationshipsKnown
+			relationshipSections(input.relationshipsKnown, "known")
 		),
 		characters: await layout("characters", charactersWithLore),
 		personas: await layout("personas", personasWithLore),
@@ -282,7 +335,12 @@ export async function buildTemplateContext(
 		// builder: the final message array is not known until allocation has
 		// run, so Assemble overwrites it. Left in rather than omitted so the
 		// shape is stable for a template that reads it.
+		//
+		// `instructions` is ungated here for the same reason: the history it is
+		// measured against is not assembled yet. `gatedBy` names the node that
+		// decides, so a reader of this node's output knows which copy this is.
 		postHistory: {
+			gatedBy: "assemble",
 			targetIndex: 0,
 			instructions: promptPostHistoryInstructions || undefined,
 			charInstructions: charPostHistory || undefined,
@@ -294,6 +352,11 @@ export async function buildTemplateContext(
 			)
 		},
 		sessionMessages: [],
+		// Structure, unrendered, and absent when nothing supplied it — so a
+		// template that tests `{{#if state}}` gets the honest answer.
+		...(input.state
+			? { state: input.state as TemplateContext["state"] }
+			: {}),
 		char: input.charName,
 		character: input.charName,
 		user: input.personaName,

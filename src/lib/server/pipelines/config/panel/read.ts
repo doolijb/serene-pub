@@ -28,6 +28,7 @@ import {
 } from "$lib/server/pipelines/config/panel/declarations"
 import { optionId } from "$lib/server/pipelines/config/panel/ids"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
+import { acceptedEngines } from "$lib/shared/pipelines/templateEngines"
 import {
 	visibleTo,
 	writeScopeFor
@@ -333,6 +334,10 @@ export async function namespaceView(
 			...(d.max != null ? { max: d.max } : {}),
 			...(d.of ? { of: d.of } : {}),
 			...(d.members ? { members: d.members } : {}),
+			// The element declaration for a `list`, already labelled — the list
+			// editor renders rows from it rather than knowing what any given
+			// list holds.
+			...(d.item ? { item: d.item } : {}),
 			...((c) => (c ? { choices: c } : {}))(choicesFor(d, sets)),
 			...(chainEntries ? { scripts: chainEntries } : {}),
 			...(d.control === "scripts-chain" &&
@@ -394,6 +399,12 @@ export async function namespaceView(
 			// it precisely when no row is selected.
 			...(d.control === "prompts-ref"
 				? { promptFields: d.promptFields ?? [] }
+				: {}),
+			// Same rule, same reason: the languages a new template here may be
+			// written in are a fact about the slot, and the button that asks
+			// for one is shown when nothing is selected.
+			...(d.control === "context-template-ref"
+				? { templateEngines: acceptedEngines(d) }
 				: {}),
 			...(promptRow
 				? {
@@ -473,7 +484,24 @@ export async function namespaceView(
 			overriddenHere:
 				effScope === "session"
 					? !!chain.session?.has(key)
-					: chain.preset.has(key)
+					: chain.preset.has(key),
+			/**
+			 * Did somebody depart from the default here (ruled 2026-09-10)?
+			 *
+			 * The row's existence, and nothing else — which is the whole of
+			 * what provenance means now that a config stores deviations. There
+			 * is no provenance column and there is nothing left for one to say:
+			 * seeding writes no row for a declared value, `writeOption` deletes
+			 * one that lands back on it, and `clearOption` has always deleted.
+			 *
+			 * Distinct from `overriddenHere`, which answers "does the scope I
+			 * am WRITING at hold this" and so flips to the session's own row
+			 * inside a session. This one is about the configuration, from
+			 * whichever surface is looking at it — a person in a session can
+			 * see that a field was tuned for everyone without that being the
+			 * thing their own reset would remove.
+			 */
+			changed: chain.preset.has(key)
 		}
 
 		let group = byNode.get(d.nodeKey)

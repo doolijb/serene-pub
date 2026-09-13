@@ -1,20 +1,26 @@
 <script lang="ts">
 	/**
-	 * "Would this entry fire?" — asked and answered without leaving the editor.
+	 * "Would this be read in?" — asked and answered without leaving the editor.
 	 *
 	 * The six steps this replaces (save, open a session, send a message, find
 	 * the run, open its receipt, read the retrieval panel) all existed to
 	 * manufacture a turn, because a retrieval decision only exists for one.
-	 * `entries:testRetrieval` manufactures it server-side and answers with the
-	 * **same row** the receipt's retrieval panel renders, so the two surfaces
-	 * cannot disagree about what a decision means.
+	 * `pipelines:previewRetrieval` manufactures it server-side and answers with
+	 * the **whole explanation** the receipt's retrieval panel renders, so the
+	 * two surfaces cannot disagree about what a decision means.
+	 *
+	 * ⚠ **The whole turn, not this entry's row.** "Rank 2 of 12" is a place
+	 * among the entries the turn judged and "4 entries ahead of the ceiling" is
+	 * a share of what the turn was given, and neither figure exists in a payload
+	 * carrying one row — which is why this asks the same verb the composer's
+	 * "What would fire now" asks and takes its own line out of the answer.
 	 *
 	 * Three rules it keeps:
 	 *
 	 * · **Explicit, never live.** A turn is a real pipeline run with a real
 	 *   embedding call in it. It happens when the author presses the button and
 	 *   at no other time — no debounce, no `$effect` that watches the content.
-	 * · **A conversation is part of the question.** An entry does not fire in
+	 * · **A conversation is part of the question.** An entry is not read in in
 	 *   the abstract, so the picker is not a refinement, it is the other half of
 	 *   what was asked. It offers the conversations bound to *this* lorebook,
 	 *   newest first, and defaults to the newest — the one the author was most
@@ -22,17 +28,27 @@
 	 * · **"No" always arrives with a reason.** The verdict sentence, the
 	 *   criteria the ranker weighed, the engine's own arithmetic, and — when
 	 *   nothing reported on the entry at all — the mechanism-level notes that
-	 *   say how far the scan looked. A bare "it did not fire" is the thing this
-	 *   exists to fix.
+	 *   say how far the scan looked. A bare "it was not read in" is the thing
+	 *   this exists to fix.
 	 *
 	 * ⚠ **It reports on the SAVED entry.** The pipeline gathers lore out of the
 	 * database, so this is offered from the view of a stored row and never from
 	 * the editor, where the verdict would be about text the run never read.
+	 *
+	 * Teach it writes the two levers that exist — `constant` is "always" and
+	 * `enabled: false` is "never", both real columns with real editors — and
+	 * says so about the third rather than pretending to record it.
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { onDestroy, onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import type { EntryTypeId } from "$lib/shared/entries/types"
+	import {
+		signalFactsFrom,
+		signalRow,
+		signalsResult
+	} from "$lib/client/lorebooks/editor/signals"
+	import type { RunExplanation } from "$lib/client/lorebooks/editor/readIn"
 
 	interface Props {
 		/** The stored entry being asked about. */
@@ -42,22 +58,31 @@
 		lorebookId: number
 		/** Whether the entry is switched on — an "off" entry explains itself. */
 		enabled?: boolean
+		/** Whether it is already pinned, so "always" says what it would do. */
+		constant?: boolean
 	}
 
-	let { entryId, typeId, lorebookId, enabled = true }: Props = $props()
+	let {
+		entryId,
+		typeId,
+		lorebookId,
+		enabled = true,
+		constant = false
+	}: Props = $props()
 
 	const socket = useTypedSocket()
 	/** Unique per instance: two lorebook panels can be open at once. */
 	const uid = $props.id()
 
 	type Session = Sockets.Sessions.List.Response["sessionList"][number]
-	type Answer = Sockets.Entries.TestRetrieval.Response
 
 	let sessions = $state<Session[]>([])
 	let sessionsLoaded = $state(false)
 	let sessionId = $state<number | null>(null)
 	let running = $state(false)
-	let answer = $state<Answer | null>(null)
+	let explanation = $state<RunExplanation | null>(null)
+	/** The server's own sentence when it refused, shown in place. */
+	let refusal = $state<string | null>(null)
 	/**
 	 * Which conversation the question in flight named.
 	 *
@@ -79,101 +104,102 @@
 			sessionId = sessions[0]?.id ?? null
 	}
 
-	const onAnswer = (res: Answer) => {
-		// The question named an entry and a conversation and the answer echoes
-		// all three, so a reply for a different one is dropped rather than
-		// shown under this heading — the channel is shared by every open
-		// manager, and by every earlier ask this one superseded.
-		if (
-			res.id !== entryId ||
-			res.typeId !== typeId ||
-			res.sessionId !== asked
-		)
+	/**
+	 * The turn, explained.
+	 *
+	 * ⚠ **Only what this panel asked for.** The answer echoes the
+	 * conversation and nothing else, and the channel is shared with the
+	 * composer's own "What would fire now" — whose answer is about the draft
+	 * sitting in its box rather than about the conversation as it stands. So
+	 * an answer arriving while this panel is not waiting is somebody else's.
+	 */
+	const onAnswer = (res: Sockets.Pipelines.PreviewRetrieval.Response) => {
+		if (!running) return
+		if (res.error) {
+			running = false
+			refusal = res.error
+			explanation = null
 			return
+		}
+		if (res.sessionId !== asked) return
 		running = false
-		answer = res
+		refusal = null
+		explanation = res.explanation ?? null
 	}
 
 	/** The run threw somewhere we did not anticipate. Stop waiting, say so. */
 	const onRefusal = (res: { error?: string }) => {
 		if (!running) return
 		running = false
-		answer = {
-			id: entryId,
-			typeId,
-			sessionId: asked ?? 0,
-			error: res?.error || "The test could not be run."
-		}
+		explanation = null
+		refusal = res?.error || "The test could not be run."
 	}
 
 	onMount(() => {
 		socket.on("sessions:list", onSessions)
-		socket.on("entries:testRetrieval", onAnswer)
-		socket.on("entries:testRetrieval:error", onRefusal)
+		socket.on("pipelines:previewRetrieval", onAnswer)
+		socket.on("pipelines:previewRetrieval:error", onRefusal)
 		socket.emit("sessions:list", {})
 	})
 	onDestroy(() => {
 		socket.off("sessions:list", onSessions)
-		socket.off("entries:testRetrieval", onAnswer)
-		socket.off("entries:testRetrieval:error", onRefusal)
+		socket.off("pipelines:previewRetrieval", onAnswer)
+		socket.off("pipelines:previewRetrieval:error", onRefusal)
 	})
 
 	function run() {
 		if (sessionId == null || running) return
-		answer = null
+		explanation = null
+		refusal = null
 		asked = sessionId
 		running = true
-		socket.emit("entries:testRetrieval", { id: entryId, typeId, sessionId })
+		// No draft: the question is what this conversation would read in as
+		// it stands, which is the turn the author is about to provoke rather
+		// than one they are halfway through typing.
+		socket.emit("pipelines:previewRetrieval", {
+			sessionId,
+			content: ""
+		} satisfies Sockets.Pipelines.PreviewRetrieval.Params)
 	}
-
-	const row = $derived(answer?.row)
 
 	/**
-	 * The four states, and the fourth is not a weaker third.
+	 * Teach it — the same `entries:update` the editor writes.
 	 *
-	 * `included`/`excluded`/`skipped` are the run's own outcomes; `unreported`
-	 * is the absence of a row, which means no mechanism offered this entry to
-	 * the ranker *and* none declined it by name. Collapsing it into "no" would
-	 * be this panel asserting a decision nobody made.
+	 * A patch of one column: the handler writes what the payload names and
+	 * nothing else, so this never sends a whole row back over what is being
+	 * typed in the editor beside it.
 	 */
-	const verdict = $derived(
-		!answer || answer.error ? null : (row?.outcome ?? "unreported")
-	)
-
-	const HEADLINE: Record<string, { label: string; preset: string }> = {
-		included: { label: "It fired", preset: "preset-filled-success-500" },
-		excluded: { label: "Left out", preset: "preset-filled-warning-500" },
-		skipped: {
-			label: "Never considered",
-			preset: "preset-filled-surface-400-600"
-		},
-		unreported: {
-			label: "Nothing reported on it",
-			preset: "preset-filled-surface-400-600"
-		}
+	function teach(patch: { constant?: boolean; enabled?: boolean }) {
+		socket.emit("entries:update", {
+			entry: { id: entryId, typeId, ...patch } as any
+		})
 	}
+
+	const row = $derived(
+		explanation ? signalRow(explanation, entryId) : undefined
+	)
+	const facts = $derived(
+		explanation ? signalFactsFrom(explanation, { entryId, enabled }) : null
+	)
+	const result = $derived(facts ? signalsResult(facts) : null)
 </script>
 
 <section
 	class="border-surface-300-700 flex flex-col gap-2 rounded border p-3"
-	aria-label="Would this entry fire?"
+	aria-label="Would this entry be read in?"
+	data-lore-signals
 >
-	<div class="flex flex-wrap items-baseline gap-2">
-		<h4 class="text-sm font-semibold">Would this fire?</h4>
-		<span class="text-surface-600-400 text-xs">
-			Run the retrieval against a conversation without sending anything.
-		</span>
-	</div>
-
 	{#if !sessionsLoaded}
 		<p class="text-surface-600-400 text-xs">Looking for conversations…</p>
 	{:else if !sessions.length}
 		<p class="text-surface-600-400 text-xs">
-			No conversation uses this lorebook yet. An entry only fires against
-			a conversation, so there is nothing to test it on until one does.
+			No conversation uses this lorebook yet. An entry is only read in
+			against a conversation, so there is nothing to test it on until one
+			does.
 		</p>
 	{:else}
 		<div class="flex flex-wrap items-center gap-2">
+			<span class="text-sm">Against</span>
 			<label class="sr-only" for="{uid}-session">
 				Conversation to test against
 			</label>
@@ -187,6 +213,7 @@
 					<option value={s.id}>{s.name || "Untitled Session"}</option>
 				{/each}
 			</select>
+			<span class="text-surface-600-400 text-xs">newest turn</span>
 			<button
 				class="btn btn-sm preset-filled-primary-500 shrink-0"
 				onclick={run}
@@ -209,65 +236,28 @@
 			</p>
 		{/if}
 
-		{#if answer?.error}
+		{#if refusal}
 			<p
 				class="preset-tonal-warning flex items-start gap-2 rounded p-2 text-xs"
 			>
 				<Icons.TriangleAlert size={14} class="mt-0.5 shrink-0" />
-				<span>{answer.error}</span>
+				<span>{refusal}</span>
 			</p>
-		{:else if verdict}
+		{:else if result}
 			<div class="flex flex-col gap-2">
-				<div class="flex flex-wrap items-center gap-2">
-					<span
-						class="{HEADLINE[verdict]
-							.preset} rounded px-2 py-1 text-xs font-semibold"
-					>
-						{HEADLINE[verdict].label}
-					</span>
-					{#if row?.marker}
-						<span
-							class="preset-tonal-surface rounded px-2 py-1 text-xs"
-						>
-							{row.marker}
-						</span>
-					{/if}
-					{#if row?.score !== undefined}
-						<span class="text-surface-600-400 text-xs">
-							score {row.score.toFixed(3)}
-						</span>
-					{/if}
-					{#if row?.tokens !== undefined}
-						<span class="text-surface-600-400 text-xs">
-							{row.tokens} tokens
-						</span>
-					{/if}
-				</div>
+				<!-- Level one: the whole answer as one sentence, in content
+				     vocabulary. Never omitted, and never without its reason. -->
+				<p class="text-sm" data-lore-signals-result>{result}</p>
 
-				<!-- Why. Never omitted: a verdict with no reason is the defect
-				     this panel exists to remove. -->
-				<p class="text-sm">
-					{#if row}
-						{row.verdict}
-					{:else if !enabled}
-						No mechanism reported on this entry — it is switched
-						off, so nothing offered it to the ranker.
-					{:else if answer?.ranked}
-						No mechanism reported on this entry. It was neither
-						offered to the ranker nor declined by name — nothing
-						matched it, and nothing named it as a miss either.
-					{:else}
-						This turn ranked nothing at all, so there is no decision
-						to report.
-					{/if}
-				</p>
+				{#if row?.verdict && facts?.read}
+					<p class="text-surface-600-400 text-xs">{row.verdict}</p>
+				{/if}
 
 				{#if row?.criteria?.length}
 					<ul class="flex flex-col gap-0.5 text-xs">
 						{#each row.criteria as c (c.label)}
 							<li>
-								<span class="font-semibold">{c.label}</span>
-								—
+								<span class="font-semibold">{c.label}:</span>
 								{c.detail}
 								{#if c.value !== undefined}
 									<span class="text-surface-600-400">
@@ -290,7 +280,7 @@
 					</ul>
 				{/if}
 
-				{#each answer?.warnings ?? [] as w (w)}
+				{#each explanation?.warnings ?? [] as w (w)}
 					<p
 						class="preset-tonal-warning flex items-start gap-2 rounded p-2 text-xs"
 					>
@@ -305,11 +295,11 @@
 				<!-- The half of the trail no row can carry: how deep the scan
 				     went, whether an embedding model was there. It answers a
 				     missing row, so it is shown whenever there isn't one. -->
-				{#if answer?.notes?.length && (!row || row.outcome !== "included")}
+				{#if explanation?.notes?.length && (!row || row.outcome !== "included")}
 					<ul
 						class="text-surface-600-400 flex flex-col gap-0.5 text-xs"
 					>
-						{#each answer.notes as n (n)}
+						{#each explanation.notes as n (n)}
 							<li>{n}</li>
 						{/each}
 					</ul>
@@ -317,4 +307,43 @@
 			</div>
 		{/if}
 	{/if}
+
+	<div class="border-surface-300-700 flex flex-col gap-1 border-t pt-2">
+		<span class="text-xs font-semibold">Teach it</span>
+		<div class="flex flex-wrap gap-1">
+			<button
+				class="btn btn-sm preset-tonal-surface"
+				type="button"
+				disabled={constant}
+				title={constant
+					? "This entry is already pinned"
+					: "Pin it, so every turn reads it in"}
+				onclick={() => teach({ constant: true })}
+			>
+				Always read this in
+			</button>
+			<button
+				class="btn btn-sm preset-tonal-surface"
+				type="button"
+				disabled={!enabled}
+				title={enabled
+					? "Switch it off, so no turn reads it in"
+					: "This entry is already off"}
+				onclick={() => teach({ enabled: false })}
+			>
+				Never read this in
+			</button>
+			<button
+				class="btn btn-sm preset-tonal-surface"
+				type="button"
+				disabled
+				title="Feedback is not collected yet"
+			>
+				This ranking is wrong
+			</button>
+		</div>
+		<p class="text-surface-600-400 text-[0.68rem]">
+			Feedback is not collected yet.
+		</p>
+	</div>
 </section>

@@ -786,6 +786,77 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 			},
 			defaults: ["text->image"]
 		}
+	},
+
+	/**
+	 * The three embedding formats, and the one key they each declare.
+	 *
+	 * ## Why entries exist for them at all now
+	 *
+	 * ⚠ **Every type a star can name needs an entry here.** The embedding star
+	 * is a `connection_defaults` row like any other, so `connections:setDefault`
+	 * judges the row with `capabilityRefusal`, and `capabilityRefusal` can grant
+	 * nothing to a type the manifest does not describe. An embedding type with
+	 * no entry is an endpoint nobody can register.
+	 *
+	 * ## `native` and nothing else
+	 *
+	 * One transform apiece, matching the one action each module implements. No
+	 * features: `ACTION_FEATURES.embedText` is `[]` — an embedding request has no
+	 * response format to constrain, no tools, and nothing to stream — and the
+	 * conformance test refuses a feature declared against an action that cannot
+	 * carry it.
+	 *
+	 * No `unproven` either, unlike KOBOLDCPP's image key. The question "can this
+	 * wire format embed" is answered by the format itself in all three cases: an
+	 * `/embeddings` route either exists or the connection test fails, and there
+	 * is no per-instance state (a loaded checkpoint, an enabled module) the
+	 * declaration would be guessing about.
+	 */
+	[CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS]: {
+		id: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+		capabilities: {
+			supports: {
+				"text->embedding": "native"
+			},
+			defaults: ["text->embedding"]
+		}
+	},
+
+	[CONNECTION_TYPE.OPENAI_EMBEDDINGS]: {
+		id: CONNECTION_TYPE.OPENAI_EMBEDDINGS,
+		capabilities: {
+			supports: {
+				"text->embedding": "native"
+			},
+			defaults: ["text->embedding"]
+		}
+	},
+
+	[CONNECTION_TYPE.OLLAMA_EMBEDDINGS]: {
+		id: CONNECTION_TYPE.OLLAMA_EMBEDDINGS,
+		capabilities: {
+			supports: {
+				"text->embedding": "native"
+			},
+			defaults: ["text->embedding"]
+		}
+	},
+
+	/**
+	 * The entity model runs in this process, so what it can do is a property of
+	 * the build rather than of a host: `native`, unconditionally, with no probe
+	 * to add anything. Whether `onnxruntime-node` loads on THIS machine is a
+	 * different question and is the connection's Test button's, not this table's.
+	 */
+	[CONNECTION_TYPE.LOCAL_ONNX_NER]: {
+		id: CONNECTION_TYPE.LOCAL_ONNX_NER,
+		capabilities: {
+			supports: {
+				"text->entities": "native"
+			},
+			defaults: ["text->entities"]
+		}
 	}
 }
 

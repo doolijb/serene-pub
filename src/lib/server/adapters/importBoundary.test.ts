@@ -364,8 +364,20 @@ describe("the eager load stays in one place", () => {
 			// and a `typeof thunk`, never a call — and it runs only in a Node
 			// test process. The question this list exists to force, answered.
 			"src/lib/server/connections/llamaCppTypeMigration.int.test.ts",
+			// Awaits ONE thunk, its own family's, to prove the loader routes
+			// through this map rather than a switch of its own. A key lookup and
+			// a single `import()` of a module that speaks `fetch`, in a Node
+			// test process. Same question, same answer.
+			"src/lib/server/embeddingAdapters/adapters.test.ts",
+			// Awaits ONE thunk, the NER family's, for the same reason and with
+			// the same answer: a key lookup and a single `import()` of a module
+			// whose own transformers.js import is mocked, in a Node test
+			// process.
+			"src/lib/server/nerAdapters/adapters.test.ts",
 			"src/lib/server/utils/getConnectionAdapter.ts",
-			"src/lib/server/utils/getImageAdapter.ts"
+			"src/lib/server/utils/getEmbeddingAdapter.ts",
+			"src/lib/server/utils/getImageAdapter.ts",
+			"src/lib/server/utils/getNerAdapter.ts"
 		]
 		const found = [
 			...new Set(

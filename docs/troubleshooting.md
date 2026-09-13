@@ -28,10 +28,9 @@ This page collects the most common ways Serene Pub gets stuck, organized by area
 ## Summarization, Scenes & the Narrative Graph
 
 - **A graph build, scene summarization, or compile job sits at "running" too long.** Check the admin **LLM Queue** tab (Activity sidebar) to see whether the underlying generation call is queued behind other work, still generating, or has silently disappeared — the latter usually means an error on the connection side. See [Troubleshooting a job that seems stuck](./summarization.md#troubleshooting-a-job-that-seems-stuck).
-- **The Graph tab isn't showing up on a lorebook.** It only appears when Summarization is enabled system-wide (System Settings) — Embeddings/Vectorization has no bearing on it. See [Lorebooks](./lorebooks.md#graph-tab).
 - **"Generate Summary" refuses to run on a Scene selection.** The selected messages must form one consecutive, gap-free run with no unselected visible message in between — reselect a truly contiguous range.
 - **Character Lore summarization won't generate.** Unlike World Lore, a Character Lore summary requires a focus topic (e.g. "abilities" or "relationship with Kira") before it will run.
-- **A scene's "ready to process" count for the graph seems low.** Step 4 (Build/Extend Graph) silently skips any scene that hasn't been through Process Scene (or reviewed from the initial Summarize-to-Lorebook step) yet — check for scenes still missing a summary. See [The Scene → History → Graph Pipeline](./lorebooks.md#the-scene-history-graph-pipeline).
+- **A scene's "ready to process" count for the graph seems low.** Step 4 (Build/Extend Graph) silently skips any scene that hasn't been through Process Scene (or reviewed from the initial Summarize-to-Lorebook step) yet — check for scenes still missing a summary. See [From a session to the graph](./lorebooks.md#from-a-session-to-the-graph).
 
 ## Accounts & Login
 

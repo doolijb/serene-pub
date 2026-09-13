@@ -120,17 +120,78 @@ export class CONNECTION_TYPE {
 	 */
 	static A1111 = "a1111"
 
+	/**
+	 * Embeddings from an in-process ONNX model (`@huggingface/transformers`).
+	 *
+	 * The id predates this type existing as a `CONNECTION_TYPE`: the boot-time
+	 * projection of the old `vectorization_configs` singleton has been writing
+	 * `local-onnx` into `connections.type` since 20 §14, so naming it anything
+	 * else here would strand every row that migration produced.
+	 *
+	 * No base URL — the model is a HuggingFace id and the weights live in the app
+	 * data directory, which is why its `listModels` answers from `EMBEDDING_MODELS`
+	 * and the `local_models` rows whose modality is `embeddings` rather than from a
+	 * host.
+	 */
+	static LOCAL_ONNX_EMBEDDINGS = "local-onnx"
+	/**
+	 * Any OpenAI-compatible `/embeddings` endpoint — OpenAI itself, LM Studio,
+	 * llama.cpp server, vLLM.
+	 *
+	 * Its own type rather than a capability on {@link OPENAI}, because a
+	 * connection names exactly ONE model and an embedding model is not a chat one
+	 * — the same argument {@link KOBOLDCPP_MANAGED_IMAGE} makes. `OpenAIChatAdapter`
+	 * speaks `/v1/chat/completions` and nothing else; `/embeddings` is a different
+	 * route, hence a different adapter.
+	 *
+	 * ⚠ Id fixed by the same migration that fixes `local-onnx` above.
+	 */
+	static OPENAI_EMBEDDINGS = "openai-embeddings"
+	/**
+	 * Ollama's native embedding route, `POST /api/embed`.
+	 *
+	 * Not the OpenAI preset pointed at Ollama: `/api/embed` takes `input` and
+	 * answers `{embeddings: number[][]}`, and it is the route Ollama's own docs
+	 * name — the `/v1/embeddings` shim exists but is the compatibility layer, not
+	 * the API. Same reasoning {@link OLLAMA} is its own type for.
+	 */
+	static OLLAMA_EMBEDDINGS = "ollama-embeddings"
+	/**
+	 * Named-entity recognition from an in-process ONNX model
+	 * (`@huggingface/transformers`, `token-classification`).
+	 *
+	 * The same shape as {@link LOCAL_ONNX_EMBEDDINGS} and for the same reasons:
+	 * no base URL and no key, because the model is a HuggingFace id whose weights
+	 * live in the app data directory, so its `listModels` answers from
+	 * `NER_MODELS` and the `local_models` rows whose modality is `ner` rather
+	 * than from a host.
+	 *
+	 * Its own type rather than a second capability on the embeddings type: a
+	 * connection names exactly ONE model, and a token-classification checkpoint
+	 * is not a sentence-embedding one. The API variant (a hosted entity endpoint)
+	 * is a further type when one exists, not a flag here.
+	 */
+	static LOCAL_ONNX_NER = "local-onnx-ner"
+
 	static options: {
 		value: string
 		label: string
 		description: string
 		difficulty: string
 		/**
-		 * Which model modality this connection type is for. Absent = "text-gen"
-		 * (every existing type). Image types carry "image-gen" so the New
-		 * Connection picker's Text/Image button-group can filter them.
+		 * Which model modality this connection type is for. Absent = "text-gen".
+		 *
+		 * ⚠ An OPEN string, not a union, and deliberately so. It is the same
+		 * vocabulary `connections.modality` and `local_models.modality` document
+		 * — `text-gen | embeddings | image-gen | ner | tts | …` — and a closed
+		 * union here would be a second, narrower spelling of it: adding a
+		 * modality would mean editing this line as well as the section table,
+		 * and the two could disagree. What a modality MEANS to a person (its
+		 * label, its star, its picker) is one entry in
+		 * `$lib/shared/constants/connectionSections`; what a TYPE is for is this
+		 * field, and neither constrains the other's spelling.
 		 */
-		modality?: "text-gen" | "image-gen"
+		modality?: string
 		/** Used to group this type alongside OPENAI_COMPATIBLE_PRESETS entries in the
 		 * unified "New Connection" service picker — "local" for anything that
 		 * talks to a process running on the user's own machine/network,
@@ -207,11 +268,75 @@ export class CONNECTION_TYPE {
 			difficulty: "Beginner (with KoboldCPP) - Simple setup",
 			category: "local",
 			modality: "image-gen"
+		},
+		{
+			value: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+			label: "Local embeddings (ONNX)",
+			description:
+				"<p>Runs a small embedding model in this process, on the CPU, " +
+				"through <b>@huggingface/transformers</b>. One download, then no " +
+				"network and no API key.</p>" +
+				"<p>Not available on Android, and not on every desktop build of " +
+				"onnxruntime-node — the connection says so when it cannot load.</p>",
+			difficulty: "Beginner - One download",
+			category: "local",
+			modality: "embeddings"
+		},
+		{
+			value: CONNECTION_TYPE.OPENAI_EMBEDDINGS,
+			label: "Embeddings (OpenAI-compatible)",
+			description:
+				"<p>Any OpenAI-compatible <b>/embeddings</b> endpoint — OpenAI " +
+				"itself, LM Studio, llama.cpp server, vLLM, a hosted gateway.</p>" +
+				"<p>Point it at the base URL and name the embedding model; the " +
+				"vector width is read back from the endpoint rather than assumed.</p>",
+			difficulty: "Beginner - Nothing to install",
+			category: "cloud",
+			modality: "embeddings"
+		},
+		{
+			value: CONNECTION_TYPE.OLLAMA_EMBEDDINGS,
+			label: "Ollama embeddings",
+			description:
+				"<p>Ollama's own embedding route, <b>POST /api/embed</b>.</p>" +
+				"<p>Pull an embedding model (<code>ollama pull nomic-embed-text</code>) " +
+				"and pick it here. Ollama loads and unloads it for you.</p>",
+			difficulty: "Beginner (No GUI) - Minimal setup required",
+			category: "local",
+			modality: "embeddings"
+		},
+		{
+			value: CONNECTION_TYPE.LOCAL_ONNX_NER,
+			label: "Local named entities (ONNX)",
+			description:
+				"<p>Runs a small entity model in this process, on the CPU, " +
+				"through <b>@huggingface/transformers</b>. One download, then no " +
+				"network and no API key.</p>" +
+				"<p>It reads the people, places and organisations out of your " +
+				"messages and lore, so an entry can be matched by the names it " +
+				"uses even when nobody set a keyword for it.</p>" +
+				"<p>Not available on Android, and not on every desktop build of " +
+				"onnxruntime-node — the connection says so when it cannot load.</p>",
+			difficulty: "Beginner - One download",
+			category: "local",
+			modality: "ner"
 		}
 	]
 
-	/** The modality a connection type is for; absent option ⇒ "text-gen". */
-	static modalityOf(type: string): "text-gen" | "image-gen" {
+	/**
+	 * The modality a connection type DECLARES; an absent option ⇒ "text-gen".
+	 *
+	 * ⚠ Returns `string`, not a union, and must stay that way. The vocabulary is
+	 * open — the SDK's connection shapes are its contract — and a union here
+	 * would have to be edited alongside `CONNECTION_SECTIONS` for every modality
+	 * added, which is one fact in two places that can disagree. A caller asking
+	 * what a modality is FOR asks `sectionForModality`; this answers only what
+	 * the type declared.
+	 *
+	 * A type nobody declared answers "text-gen", which is what every type that
+	 * predates the field is, and what an out-of-tree type most likely is.
+	 */
+	static modalityOf(type: string): string {
 		return (
 			CONNECTION_TYPE.options.find((o) => o.value === type)?.modality ??
 			"text-gen"
@@ -273,6 +398,8 @@ export function modalityOfShape(shape?: string | null): string {
 export function modalityLabel(modality: string): string {
 	if (modality === "text-gen") return "text generation"
 	if (modality === "image-gen") return "image generation"
+	if (modality === "embeddings") return "embeddings"
+	if (modality === "ner") return "entity extraction"
 	return modality || "this modality"
 }
 

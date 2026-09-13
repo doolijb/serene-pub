@@ -34,10 +34,15 @@ function makeConnection(overrides: Record<string, any> = {}): any {
 	}
 }
 
-function makeAdapter(connectionOverrides: Record<string, any> = {}) {
+function makeAdapter(
+	connectionOverrides: Record<string, any> = {},
+	// Already RESOLVED, the way an adapter receives it: a key being present is
+	// the switch being on.
+	sampling: Record<string, unknown> = {}
+) {
 	return new KoboldCppAdapter({
 		connection: makeConnection(connectionOverrides),
-		sampling: {} as any,
+		sampling: sampling as any,
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "You are a helpful narrator." } as any,
 		session: {
@@ -293,10 +298,13 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 	})
 
 	test("omits chat_template_kwargs entirely in completion wire mode, even with a value set", async () => {
-		const adapter = makeAdapter({
-			wireMode: "completion",
-			extraJson: { stream: false, enableThinking: true }
-		})
+		const adapter = makeAdapter(
+			{ wireMode: "completion", extraJson: { stream: false } },
+			// The choice arrives on the SAMPLING config now (ruling
+			// 2026-09-12), not on the connection. The route still cannot carry
+			// it, which is the property this case has always asserted.
+			{ reasoning: "high" }
+		)
 		mockCompilePrompt(adapter)
 		const result = await adapter.generateText()
 		expect(typeof result.completionResult).toBe("string")
@@ -311,10 +319,10 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 	// inside its Tkinter GUI's launch-config code. The real per-request path
 	// only reads a nested chat_template_kwargs object.
 	test("includes enable_thinking nested in chat_template_kwargs in session mode when explicitly set", async () => {
-		const adapter = makeAdapter({
-			wireMode: "chat",
-			extraJson: { stream: false, enableThinking: true }
-		})
+		const adapter = makeAdapter(
+			{ wireMode: "chat", extraJson: { stream: false } },
+			{ reasoning: "low" }
+		)
 		mockCompilePrompt(adapter)
 		await adapter.generateText()
 
@@ -323,10 +331,12 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		expect(body.chat_template_kwargs?.enable_thinking).toBe(true)
 	})
 
-	test("omits chat_template_kwargs in session mode when Auto (null)", async () => {
+	test("omits chat_template_kwargs in session mode when the sampler is off", async () => {
+		// The vocabulary's "say nothing" is the field being SWITCHED OFF, which
+		// is the state the connection's old Auto/On/Off control spelled `null`.
 		const adapter = makeAdapter({
 			wireMode: "chat",
-			extraJson: { stream: false, enableThinking: null }
+			extraJson: { stream: false }
 		})
 		mockCompilePrompt(adapter)
 		await adapter.generateText()
@@ -704,5 +714,136 @@ describe("KoboldCppAdapter — generation writes nothing to the server log", () 
 		} finally {
 			logSpy.mockRestore()
 		}
+	})
+})
+
+/**
+ * The node's `streaming` parameter, at the one line that reads it.
+ *
+ * KoboldCPP's own default is `?? true`, which makes it the adapter where `auto`
+ * meaning "true" would be invisible — it already is true — and where `off` is
+ * worth the most: a background stage gets one POST instead of a frame feed
+ * nobody reads. Read off `completionResult`, because that is the fact the
+ * dispatch branches on.
+ */
+describe("KoboldCppAdapter — the node's streaming parameter", () => {
+	let fetchMock: ReturnType<typeof vi.fn>
+
+	beforeEach(() => {
+		fetchMock = vi.fn(async () => ({
+			ok: true,
+			json: async () => ({ choices: [{ message: { content: "hi" } }] })
+		}))
+		vi.stubGlobal("fetch", fetchMock)
+	})
+	afterEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	const sendWith = async (stream: boolean, mode?: "auto" | "off") => {
+		const adapter = makeAdapter({ extraJson: { stream } })
+		adapter.withCompiledPrompt({
+			prompt: "hi",
+			messages: [{ role: "user", content: "hi" }],
+			meta: {} as any
+		} as any)
+		if (mode) adapter.withStreaming(mode)
+		const result = await adapter.generateText()
+		return typeof result.completionResult === "function"
+			? "streamed"
+			: "one request"
+	}
+
+	test("auto answers whatever the connection says, both ways", async () => {
+		expect(await sendWith(true, "auto")).toBe("streamed")
+		expect(await sendWith(false, "auto")).toBe("one request")
+	})
+
+	test("a node that hands nothing over is the same as auto", async () => {
+		// The unset case is the one that matters here: `?? true` means an
+		// untouched KoboldCPP connection streams, and it has to keep doing so.
+		const adapter = makeAdapter({ extraJson: {} })
+		adapter.withCompiledPrompt({
+			prompt: "hi",
+			messages: [{ role: "user", content: "hi" }],
+			meta: {} as any
+		} as any)
+		expect(typeof (await adapter.generateText()).completionResult).toBe(
+			"function"
+		)
+	})
+
+	test("off sends one request even on a streaming connection", async () => {
+		expect(await sendWith(true, "off")).toBe("one request")
+	})
+})
+
+/**
+ * Reasoning, as a SAMPLING parameter (ruling 2026-09-12).
+ *
+ * KoboldCPP has TWO states where the vocabulary has four, and only on the
+ * session route: `enable_thinking` is a Jinja variable the chat template reads,
+ * and the raw completion endpoints never run that pipeline. Everything the
+ * service cannot express is recorded rather than lost.
+ */
+describe("KoboldCppAdapter — reasoning on the wire", () => {
+	let fetchMock: ReturnType<typeof vi.fn>
+
+	beforeEach(() => {
+		fetchMock = vi.fn(async () => ({
+			ok: true,
+			status: 200,
+			json: async () => ({
+				results: [{ text: "ok" }],
+				choices: [{ message: { content: "ok" } }]
+			}),
+			text: async () => "{}"
+		}))
+		vi.stubGlobal("fetch", fetchMock)
+	})
+
+	afterEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	async function bodyFor(
+		sampling: Record<string, unknown>,
+		wireMode: "chat" | "completion" = "chat"
+	) {
+		const adapter = makeAdapter(
+			{ wireMode, extraJson: { stream: false } },
+			sampling
+		)
+		adapter.withCompiledPrompt({
+			prompt: "hi",
+			messages: [{ role: "user", content: "hi" }],
+			meta: {} as any
+		} as any)
+		await adapter.generateText()
+		const call = fetchMock.mock.calls.find((c: any) =>
+			String(c[0]).includes("completions")
+		) as any
+		return { body: JSON.parse(call[1].body), adapter }
+	}
+
+	test("off is the template variable set to false", async () => {
+		const { body, adapter } = await bodyFor({ reasoning: "off" })
+		expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
+		// Honoured exactly, so nothing is recorded.
+		expect(adapter.ignoredSamplers).toEqual([])
+	})
+
+	test("a level is honoured as on, and the level itself is recorded as lost", async () => {
+		const { body, adapter } = await bodyFor({ reasoning: "high" })
+		expect(body.chat_template_kwargs).toEqual({ enable_thinking: true })
+		expect(adapter.ignoredSamplers).toContain("reasoning")
+	})
+
+	test("a budget has no field on this service at all", async () => {
+		const { adapter } = await bodyFor({
+			reasoning: "low",
+			reasoningBudget: 2048
+		})
+		expect(adapter.ignoredSamplers).toContain("reasoningBudget")
 	})
 })

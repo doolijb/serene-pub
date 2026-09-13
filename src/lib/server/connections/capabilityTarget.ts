@@ -38,12 +38,33 @@
  * fail-factory handed in, and both are how a second copy of a sentence grows.
  * The `problem` carries the words; the caller carries the type.
  *
+ * ## What it resolves is a PAIR, not a connection (0114)
+ *
+ * The endpoint/model split made "which connection" half an answer. A tier names
+ * `(connectionId, connectionModelId)`, and where it names only the endpoint the
+ * endpoint's default model is what it meant — which is what every registration
+ * the 0114 backfill left behind says, so nothing that was configured before the
+ * split resolves differently after it.
+ *
+ * The two halves are NOT walked independently the way connection and sampling
+ * are: a `connection_models` row belongs to one endpoint, so a model surviving a
+ * higher tier's endpoint change would name a model of some other connection. The
+ * model therefore comes from whichever tier won the connection. See the walk.
+ *
+ * What comes back is the endpoint row with the model MERGED into it
+ * (`mergeEndpointModel`), so `connection.model` is the identifier that will go
+ * on the wire, `promptFormat` is the pair's template, and the capability column
+ * is the model's layer over the endpoint's. Everything downstream — the guard,
+ * the template dereference, the wire mode, the identity projection and all seven
+ * adapters — kept working unchanged because what they are handed is still a row.
+ *
  * ## ⚠ Nothing here may reach an adapter module
  *
  * Directly or transitively. `capabilityRefusal` reads the manifest (static
  * metadata) and the row's own cached capability set; the adapter modules stay
  * behind their lazy loaders because one of them cannot be PARSED on Android.
- * `adapters/importBoundary.test.ts` polices the rule.
+ * `adapters/importBoundary.test.ts` polices the rule. `connections/models.ts`
+ * inherits the rule for the same reason — it is imported from here.
  */
 
 import { eq } from "drizzle-orm"
@@ -58,6 +79,11 @@ import {
 import { capabilityDefault } from "./capabilityDefaults"
 import { withCompletionTemplate } from "./completionTemplates"
 import { withWireMode } from "./resolve"
+import {
+	connectionModelById,
+	defaultConnectionModel,
+	mergeEndpointModel
+} from "./models"
 import { capabilityRefusal } from "$lib/server/pipelines/runtime/capabilityGuard"
 import { connectionIdentity, type ConnectionIdentity } from "./visibility"
 
@@ -126,6 +152,17 @@ const WHERE_SET: Record<ResolutionTier, string> = {
 /** One tier's answer. `null`/`undefined` both mean "this tier said nothing". */
 export interface CapabilityCandidate {
 	connectionId?: number | null
+	/**
+	 * WHICH MODEL on that endpoint (0114). Absent means "its default model".
+	 *
+	 * ⚠ Read ONLY from the tier that won `connectionId`, never walked on its
+	 * own. A model id is meaningless apart from the endpoint it belongs to, so
+	 * a lower tier's model surviving a higher tier's endpoint change would
+	 * produce a pair naming a model of some OTHER connection — an incoherent
+	 * selection that no picker can display, and which the resolver would then
+	 * have to refuse at run time for a choice nobody made. See the walk below.
+	 */
+	connectionModelId?: number | null
 	samplingConfigId?: number | null
 }
 
@@ -134,6 +171,23 @@ export type CapabilityProblemKind =
 	| "unset"
 	| "cleared"
 	| "missing"
+	/**
+	 * The endpoint resolved and the MODEL did not (0114) — deleted, switched
+	 * off, or belonging to a different connection.
+	 *
+	 * Its own kind rather than folding into `missing`, because the two have
+	 * different fixes: `missing` means choose another connection, this means the
+	 * connection is fine and the model beside it is not.
+	 *
+	 * ⚠ It REFUSES rather than degrading to the endpoint's default model, which
+	 * is the opposite of what a dangling sampling id does. A missing sampling
+	 * config means "send nothing and let the backend decide", which is a working
+	 * run; silently substituting a different MODEL is a run that succeeds
+	 * against something the person did not pick — the panel showing one thing
+	 * and the wire carrying another, which is the defect class this whole file
+	 * exists to close.
+	 */
+	| "model"
 	| "incapable"
 
 /**
@@ -171,8 +225,9 @@ export type CapabilityTargetResult =
 			ok: true
 			capability: string
 			/**
-			 * The row WITH its completion template dereferenced, because this
-			 * is the last place that can do it — an adapter has no database and
+			 * The PAIR: the endpoint row with its model merged in (0114), and
+			 * WITH its completion template dereferenced, because this is the
+			 * last place that can do it — an adapter has no database and
 			 * `prompt_format` is only a key. See `AdapterConnection`.
 			 */
 			connection: AdapterConnection
@@ -199,7 +254,7 @@ export interface CapabilityTargetRequest {
 }
 
 /**
- * The two reads this resolver makes, spelled per table rather than through one
+ * The reads this resolver makes, spelled per table rather than through one
  * `(db: { select: any }, table: any, id) => any` helper.
  *
  * That helper was the hole in miniature. `any` in, `any` out: `connection`
@@ -280,6 +335,7 @@ export async function resolveCapabilityTarget(
 	}
 
 	let connectionId: number | null = null
+	let connectionModelId: number | null = null
 	let connectionVia: ResolutionTier | null = null
 	let samplingConfigId: number | null = null
 	let samplingVia: ResolutionTier | null = null
@@ -291,6 +347,21 @@ export async function resolveCapabilityTarget(
 		const at = byTier[tier]
 		if (at?.connectionId != null) {
 			connectionId = at.connectionId
+			// ⚠ The model is taken FROM THE SAME TIER, and reset to null when
+			// that tier named none. It is the one value here that is not walked
+			// independently, because it is not independent: `connection_models`
+			// rows belong to one endpoint, so carrying a lower tier's model past
+			// a higher tier's endpoint change would build a pair whose two
+			// halves name different connections. That pair cannot be displayed
+			// (no picker would find the model under the endpoint it shows) and
+			// cannot be run (the guard below refuses it), so it would turn a
+			// perfectly ordinary "the pipeline overrides the default connection"
+			// into a hard failure about a model nobody selected.
+			//
+			// Naming only the endpoint therefore means "its default model",
+			// everywhere, at every tier — which is also what every row the 0114
+			// backfill left behind says.
+			connectionModelId = at.connectionModelId ?? null
 			connectionVia = tier
 		}
 		if (at?.samplingConfigId != null) {
@@ -357,11 +428,72 @@ export async function resolveCapabilityTarget(
 			}
 		}
 
+	/**
+	 * The MODEL half of the pair (0114), resolved before anything judges the
+	 * connection — because what a pair can DO is the model's answer layered over
+	 * the endpoint's, and judging the bare endpoint would offer a vision slot a
+	 * text-only checkpoint sitting behind a vision-capable host.
+	 *
+	 * Named model: it must exist, belong to THIS endpoint, and be switched on.
+	 * All three are refusals rather than fallbacks — see the `model` problem
+	 * kind for why substituting the default here would be the worst of the
+	 * available answers.
+	 *
+	 * No model named: the endpoint's default. An endpoint with no models at all
+	 * merges to itself, which is exactly the pre-0114 row, so an install that
+	 * never filled in a model behaves the way it always did.
+	 */
+	const model =
+		connectionModelId == null
+			? await defaultConnectionModel(db, connectionId)
+			: await connectionModelById(db, connectionModelId)
+
+	if (connectionModelId != null) {
+		const wrong = !model
+			? "no longer exists"
+			: model.connectionId !== connectionId
+				? "belongs to a different connection"
+				: !model.enabled
+					? "is switched off"
+					: null
+		if (wrong)
+			return {
+				ok: false,
+				problem: {
+					kind: "model",
+					capability,
+					via: connectionVia,
+					connectionId,
+					message:
+						`The model chosen for ${capabilityLabel(capability as CapabilityId)} in ` +
+						`${WHERE_SET[connectionVia]} ${wrong}. Pick another model on that ` +
+						`connection, or clear the choice to use its default model.`,
+					// WHICH endpoint, for an administrator — the same key the
+					// projection removes for everyone else. The sentence above
+					// names neither the connection nor the model on purpose: it
+					// travels through `Error.message` and `Receipt.haltReason`,
+					// where nothing can redact it.
+					connection: connectionIdentity(connection)
+				}
+			}
+	}
+
+	// THE MERGE. From here down, `pair` is a connection row in every respect
+	// that matters — `model`, `promptFormat`, `tokenCounter`, `extraJson` and
+	// the layered capability column are the MODEL's answers — which is why the
+	// guard below, `withCompletionTemplate`, `withWireMode`, `connectionIdentity`
+	// and all seven adapters read it without having moved a line.
+	const pair = mergeEndpointModel(connection, model)
+
 	// Asked BEFORE any adapter is loaded, so an image-only connection is refused
 	// with a sentence naming the capability rather than by `getConnectionAdapter`
 	// failing to find a text adapter for its type. `capabilityRefusal` judges a
 	// connection somebody chose; it never selects one — see its header.
-	const refusal = capabilityRefusal(connection, capability as CapabilityId)
+	//
+	// Judged on the PAIR and not the endpoint: after 0114 "what can this do" is
+	// a question about a model, and one host can serve a vision checkpoint and a
+	// text-only one at the same base URL.
+	const refusal = capabilityRefusal(pair, capability as CapabilityId)
 	if (refusal)
 		return {
 			ok: false,
@@ -376,8 +508,9 @@ export async function resolveCapabilityTarget(
 				// WHICH row it was, for an administrator. The sentence above
 				// deliberately does not say — this is where the fact goes
 				// instead: a key the projection removes, rather than a name
-				// no projection could find.
-				connection: connectionIdentity(connection)
+				// no projection could find. Built from the PAIR, so the `model`
+				// it carries is the one that would actually have been sent.
+				connection: connectionIdentity(pair)
 			}
 		}
 
@@ -415,7 +548,7 @@ export async function resolveCapabilityTarget(
 		 * `config/world.ts` handed the render. Two independent answers to which
 		 * shape a prompt takes is the whole of the defect this closes.
 		 */
-		connection: withWireMode(await withCompletionTemplate(db, connection)),
+		connection: withWireMode(await withCompletionTemplate(db, pair)),
 		// A dangling sampling id degrades to null rather than failing, for the
 		// same reason an absent one does: no sampling means backend defaults,
 		// which is a working run. A dangling CONNECTION id cannot degrade —

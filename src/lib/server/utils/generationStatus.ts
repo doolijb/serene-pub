@@ -102,7 +102,17 @@ export async function persistGenerationErrorRow(
 	socketIo: any,
 	sessionId: number,
 	generatingMessageId: number,
-	err: unknown
+	err: unknown,
+	/**
+	 * The queue item this failure belongs to, where the caller holds one.
+	 *
+	 * ⚠ A run may only fail the row it still owns. `isGenerating` alone is true
+	 * again the moment a regenerate starts, so a late failure from a detached or
+	 * superseded run would stop the generation that replaced it and show its
+	 * error instead. A caller with no queue item — a refusal raised before one
+	 * exists — passes nothing and fences on `isGenerating` as before.
+	 */
+	queueItemId?: string
 ) {
 	const raw = friendlyErrorFromUnknown(err)
 	// The server log is the administrator's, and always has been.
@@ -129,7 +139,10 @@ export async function persistGenerationErrorRow(
 		db,
 		and(
 			eq(schema.sessionMessages.id, generatingMessageId),
-			eq(schema.sessionMessages.isGenerating, true)
+			eq(schema.sessionMessages.isGenerating, true),
+			...(queueItemId
+				? [eq(schema.sessionMessages.queueItemId, queueItemId)]
+				: [])
 		),
 		{
 			isGenerating: false,

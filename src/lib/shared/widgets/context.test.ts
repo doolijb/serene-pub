@@ -120,6 +120,14 @@ describe("projectWidgetData", () => {
 		expect(d.messages.v1).toHaveLength(3)
 		expect(d.layout.v1.tier).toBe("cozy")
 		expect(d.props.v1).toEqual({})
+		expect(d.settings.v1).toEqual({})
+	})
+
+	test("settings reach the widget as a base section of their own", () => {
+		const d = projectWidgetData(base({ settings: { lane: 3 } }))
+		expect(d.settings.v1).toEqual({ lane: 3 })
+		// A detached copy: the host goes on owning its object.
+		expect(d.settings.v1).not.toBe(base().settings)
 	})
 
 	test("messages are channel-scoped to the widget's lanes", () => {

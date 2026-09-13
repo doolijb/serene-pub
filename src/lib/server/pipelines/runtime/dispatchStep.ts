@@ -48,6 +48,12 @@ export interface StepCall {
 	userPrompt: string
 	/** The `connection` slot's resolved value — a `connections` row id. */
 	connectionId?: number | null
+	/**
+	 * The MODEL half of the `connection` slot's pair (0114). Null means the
+	 * endpoint's default model, which is what every slot authored before the
+	 * split says and what every registration the backfill left behind means.
+	 */
+	connectionModelId?: number | null
 	/** The `sampling` slot's resolved value — a `sampling_configs` row id. */
 	samplingId?: number | null
 	label?: string
@@ -137,6 +143,7 @@ export async function dispatchStep(
 		capability: TEXT_CAPABILITY,
 		pipelineConfig: {
 			connectionId: call.connectionId,
+			connectionModelId: call.connectionModelId,
 			samplingConfigId: call.samplingId
 		}
 	})
@@ -183,7 +190,17 @@ export async function dispatchStep(
 	// row storing "8192" used to send the string on, which is a different
 	// prompt budget and a decision for the sampling contract to make — the same
 	// laundering `summarizer/index.ts` does with `: number` on the same value.
-	const tokenLimit: number = (values.contextTokens ?? 4096) as number
+	//
+	// ⚠ And ABOVE it, the MODEL's own window (0114) where one is set. That is
+	// not a fourth knob on the node — 17 §1a's rule is that a step does not get
+	// its own window, and a model having one is a fact about the model. It is
+	// null on every row the 0114 backfill created, so this is byte-identical
+	// until somebody sets one, and it is the ONE place the column is read:
+	// `summarizer/index.ts` and `graphBuilder.ts` pin 4096 outright and their
+	// own comments say widening them is a decision for those contracts.
+	const tokenLimit: number = (connection.contextWindow ??
+		values.contextTokens ??
+		4096) as number
 	const maxTokens = values.responseTokens ?? 512
 
 	// The connection's own configured tokenizer, not a global default — the
@@ -212,7 +229,9 @@ export async function dispatchStep(
 	// Composed once and handed over — an adapter builds none of its own (ruling
 	// 2026-09-10). A step's session is minimal and has no cast, so this is the
 	// connection's completion template alone.
-	adapter.withStops(composeStopsFor(connection, minimalSession(call.userPrompt)))
+	adapter.withStops(
+		composeStopsFor(connection, minimalSession(call.userPrompt))
+	)
 
 	const result = await runQueuedLLMCall({
 		adapter,

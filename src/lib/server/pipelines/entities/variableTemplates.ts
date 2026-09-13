@@ -31,6 +31,7 @@ import { asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { declarations } from "$lib/server/pipelines/config/panel"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
+import { parseTemplate } from "$lib/shared/utils/templateValidation"
 
 /** The template named nothing here — deleted since the list was loaded. */
 export class VariableTemplateNotFoundError extends Error {}
@@ -150,6 +151,36 @@ export async function resolveVariableTemplate(
 	}
 }
 
+/**
+ * An engine id as the name of a language, for a message a person reads.
+ *
+ * Falls back to the raw id when the shape is unfamiliar — a plugin may publish
+ * anything, and a confident wrong guess in a refusal is worse than an id.
+ */
+const languageOf = (engineId: string): string => {
+	const name = engineId.split("/")[1]?.split("@")[0]
+	if (!name) return engineId
+	return name.charAt(0).toUpperCase() + name.slice(1)
+}
+
+/**
+ * Refuse a layout that does not parse, in the engine the row declares.
+ *
+ * `renderVariable` hands this source straight to `renderTemplate`, so a stored
+ * layout that does not parse is every prompt that renders that variable
+ * failing — at generation time, far from the edit. The engine's own words are
+ * passed through: they name the construct and point at the character.
+ */
+function refuseUnparsable(engine: string, source: string, name: string): void {
+	const err = parseTemplate(engine, source)
+	if (!err) return
+	throw new VariableTemplateNotUsableError(
+		`'${name}' is not valid ${languageOf(engine)}` +
+			(err.line ? ` (line ${err.line})` : "") +
+			`:\n${err.message}`
+	)
+}
+
 export interface CreateVariableTemplateInput {
 	variableId: string
 	name: string
@@ -163,6 +194,11 @@ export async function createVariableTemplate(
 	db: Db,
 	input: CreateVariableTemplateInput
 ): Promise<VariableTemplateRecord> {
+	refuseUnparsable(
+		input.engine ?? CORE_TEMPLATE_ENGINE,
+		input.source,
+		input.name
+	)
 	const [row] = await db
 		.insert(schema.pipelineVariableTemplates)
 		.values({
@@ -227,6 +263,26 @@ export async function updateVariableTemplate(
 				`is. Duplicate it and edit the copy — everything already pointing at ` +
 				`the original keeps working.`
 		)
+
+	const rowEngine = row.engine ?? CORE_TEMPLATE_ENGINE
+	const nextEngine =
+		patch.engine === undefined
+			? rowEngine
+			: (patch.engine ?? CORE_TEMPLATE_ENGINE)
+
+	// Same rule as a context template: a language is chosen when the row is
+	// created, because storing the text under a different engine id does not
+	// translate it — it makes every tag in it literal output.
+	if (nextEngine !== rowEngine && (row.source ?? "").trim())
+		throw new VariableTemplateNotUsableError(
+			`'${row.name}' is written in ${languageOf(rowEngine)}, and saving it as ` +
+				`${languageOf(nextEngine)} would not translate a word of it — its markup ` +
+				`would be sent to the model as ordinary text. Duplicate it and rewrite ` +
+				`the copy in ${languageOf(nextEngine)}.`
+		)
+
+	if (patch.source !== undefined)
+		refuseUnparsable(nextEngine, patch.source, patch.name ?? row.name)
 
 	await db
 		.update(schema.pipelineVariableTemplates)

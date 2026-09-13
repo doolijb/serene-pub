@@ -8,6 +8,7 @@
  * the app's real on-disk data directory.
  */
 import { PGlite } from "@electric-sql/pglite"
+import { and, eq } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/pglite"
 import { migrate } from "drizzle-orm/pglite/migrator"
 import path from "path"
@@ -88,6 +89,85 @@ export async function createTestDb(opts?: {
 	}
 
 	return db
+}
+
+/**
+ * The address of one tuned value inside a config — a node, a slot, a field.
+ *
+ * The same `(node_key, slot, path)` triple `pipeline_config_values` is keyed on,
+ * spelled as an object so a fixture cannot silently swap the last two.
+ */
+export interface ConfigValueAddress {
+	nodeKey: string
+	slot: string
+	path?: string
+}
+
+/**
+ * Store a tuned value in a config, the way the panel does.
+ *
+ * ⚠ An **upsert**, and it has to be. Before the deviation ruling (2026-09-10)
+ * every config held a row at every declared address, so a fixture could set a
+ * value with a bare `UPDATE` and be sure of hitting one. A config now stores
+ * only what departs from the declared default, so at an untouched address there
+ * is nothing to update: the `UPDATE` matched zero rows, the run went on
+ * resolving the default, and the assertion failed pointing at the pipeline
+ * rather than at the fixture.
+ *
+ * Named for what it is rather than mirroring `writeOption`'s signature: that
+ * one takes an option handle, a viewer and an instance secret, and a fixture
+ * establishing a stored value has none of those to hand.
+ */
+export async function setConfigValue(
+	db: TestDb,
+	configId: number,
+	at: ConfigValueAddress,
+	value: unknown
+): Promise<void> {
+	const row = {
+		configId,
+		nodeKey: at.nodeKey,
+		slot: at.slot,
+		path: at.path ?? "",
+		value
+	}
+	await db
+		.insert(schema.pipelineConfigValues)
+		.values(row)
+		.onConflictDoUpdate({
+			target: [
+				schema.pipelineConfigValues.configId,
+				schema.pipelineConfigValues.nodeKey,
+				schema.pipelineConfigValues.slot,
+				schema.pipelineConfigValues.path
+			],
+			set: { value }
+		})
+}
+
+/**
+ * Put an address back to inheriting — a delete, never a write of the default.
+ *
+ * The fixture half of `clearOption`, and the counterpart to `setConfigValue`
+ * above: a test that "restored" a value by writing the declared number back
+ * would leave a row behind that the reconciler then sweeps on the next boot, so
+ * the restore and the sweep would disagree about what the config holds.
+ */
+export async function clearConfigValue(
+	db: TestDb,
+	configId: number,
+	at: ConfigValueAddress
+): Promise<void> {
+	await db
+		.delete(schema.pipelineConfigValues)
+		.where(
+			and(
+				eq(schema.pipelineConfigValues.configId, configId),
+				eq(schema.pipelineConfigValues.nodeKey, at.nodeKey),
+				eq(schema.pipelineConfigValues.slot, at.slot),
+				eq(schema.pipelineConfigValues.path, at.path ?? "")
+			)
+		)
 }
 
 /** Creates a bare test user row — most handlers require a valid userId FK. */

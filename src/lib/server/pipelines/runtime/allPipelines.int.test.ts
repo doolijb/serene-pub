@@ -123,14 +123,18 @@ describe("every provider has a dispatch path", () => {
 		const { STEP_TYPES_FOR_TEST } = await import(
 			"$lib/server/pipelines/runtime/host"
 		)
-		// STEP_TYPES go through one dispatcher; these three have a case of their
+		// STEP_TYPES go through one dispatcher; these five have a case of their
 		// own in `host.call()` because each reaches a different substrate —
-		// session generation, the embedding runtime, the image adapters.
+		// session generation (twice, for prose and for a document), the
+		// embedding runtime, the image adapters, and the tool registry with the
+		// plugin sandbox behind it.
 		const dispatchable = new Set([
 			...STEP_TYPES_FOR_TEST,
 			"core:provider/generate-text",
+			"core:provider/generate-json",
 			"core:provider/embed-text",
-			"core:provider/generate-image"
+			"core:provider/generate-image",
+			"core:provider/run-tool"
 		])
 
 		const missing = [...ids].filter((id) => !dispatchable.has(id))

@@ -567,7 +567,7 @@ describe("thumbnails", () => {
 		expect(await thumbOf(created.file.id)).toBeTruthy()
 	})
 
-	test("are capped at the long edge with aspect preserved", async () => {
+	test("are capped at the long edge and cut square", async () => {
 		const { createMedia, ensureVariant } = await import("./index")
 		const { THUMB_MAX_EDGE } = await import("./thumbnail")
 		const user = await createTestUser(db, "media-thumb-size-user")
@@ -580,9 +580,30 @@ describe("thumbnails", () => {
 		const thumb = await thumbOf(created.file.id)
 		expect(thumb).toBeTruthy()
 		expect(Math.max(thumb!.width!, thumb!.height!)).toBe(THUMB_MAX_EDGE)
-		// 1200x800 is 3:2; the thumbnail has to still be 3:2.
-		expect(thumb!.width! / thumb!.height!).toBeCloseTo(1200 / 800, 2)
+		// The frame rule, not the source's aspect: 1200x800 is cut to the
+		// largest square before it is scaled.
+		expect(thumb!.width).toBe(thumb!.height)
 		expect(thumb!.bytes).toBeLessThan(created.original.bytes)
+	})
+
+	test("the sweep leaves a small non-square image alone", async () => {
+		const { createMedia, ensureVariant } = await import("./index")
+		const { backfillThumbnails } = await import("./backfill")
+		const user = await createTestUser(db, "media-thumb-short-edge-user")
+		const created = await createMedia(db, {
+			userId: user.id,
+			bytes: bigPng(600, 400, 73)
+		})
+		await ensureVariant(db, created.file, MediaVariant.THUMB)
+		const before = (await thumbOf(created.file.id))!
+		// 400px square from a 600x400 source: under the target, and already
+		// everything the cut has. A sweep that measured the IMAGE rather than
+		// the cut would re-cut this on every pass, forever, bumping `rev` each
+		// time.
+		expect(before.width).toBe(400)
+
+		await backfillThumbnails()
+		expect((await thumbOf(created.file.id))!.id).toBe(before.id)
 	})
 
 	test("the backfill re-cuts a thumbnail made under a smaller target", async () => {

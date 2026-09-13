@@ -23,7 +23,11 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { and, eq, inArray } from "drizzle-orm"
-import type { TestDb } from "$lib/server/utils/testDb"
+import {
+	clearConfigValue,
+	setConfigValue,
+	type TestDb
+} from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import { run } from "@serene-pub/sdk"
@@ -170,6 +174,13 @@ const scanned = (doc: any, specId: string) =>
  * nothing and prove nothing — which is exactly the shape of the bug this file is
  * about, so it is worth stating rather than discovering twice.
  */
+/** The address the `scanDepth` case tunes — one lane, so the others stay declared. */
+const SCAN_DEPTH_AT = {
+	nodeKey: "gather.worldLore.read",
+	slot: "params",
+	path: "scanDepth"
+}
+
 const selectedConfigId = async (slug: string, specId: number) => {
 	const { resolveSelectedConfig } = await import(
 		"$lib/server/pipelines/config/named"
@@ -230,20 +241,12 @@ describe("a lore node's scan depth reaches the scan", () => {
 			respondSpecRow.id
 		)
 
-		await db
-			.update(schema.pipelineConfigValues)
-			.set({ value: 4 })
-			.where(
-				and(
-					eq(schema.pipelineConfigValues.configId, configId),
-					eq(
-						schema.pipelineConfigValues.nodeKey,
-						"gather.worldLore.read"
-					),
-					eq(schema.pipelineConfigValues.slot, "params"),
-					eq(schema.pipelineConfigValues.path, "scanDepth")
-				)
-			)
+		// ⚠ An upsert, not the `UPDATE` this was. A config stores **deviations**
+		// (ruled 2026-09-10), so at an untouched address there is no row to
+		// update — the old form matched nothing and every lane came back at the
+		// engine default, which is the very reading this test exists to
+		// distinguish from an unwired slot.
+		await setConfigValue(db, configId, SCAN_DEPTH_AT, 4)
 
 		try {
 			const depths = await scanned(respondSpec(), RESPOND_SPEC_ID)
@@ -257,20 +260,10 @@ describe("a lore node's scan depth reaches the scan", () => {
 				DEFAULT_RETRIEVAL.scanDepth
 			)
 		} finally {
-			await db
-				.update(schema.pipelineConfigValues)
-				.set({ value: DEFAULT_RETRIEVAL.scanDepth })
-				.where(
-					and(
-						eq(schema.pipelineConfigValues.configId, configId),
-						eq(
-							schema.pipelineConfigValues.nodeKey,
-							"gather.worldLore.read"
-						),
-						eq(schema.pipelineConfigValues.slot, "params"),
-						eq(schema.pipelineConfigValues.path, "scanDepth")
-					)
-				)
+			// And the restore is a delete: writing the declared number back
+			// would leave a row the next reconcile sweeps, so the restore and
+			// the sweep would disagree about what this config holds.
+			await clearConfigValue(db, configId, SCAN_DEPTH_AT)
 		}
 	}, 60_000)
 })
@@ -318,18 +311,14 @@ describe("a lore node's guaranteed window reaches the scan", () => {
 			RESPOND_SPEC_ID,
 			respondSpecRow.id
 		)
-		const where = (nodeKey: string) =>
-			and(
-				eq(schema.pipelineConfigValues.configId, configId),
-				eq(schema.pipelineConfigValues.nodeKey, nodeKey),
-				eq(schema.pipelineConfigValues.slot, "params"),
-				eq(schema.pipelineConfigValues.path, "guaranteedMessages")
-			)
+		const windowAt = (nodeKey: string) => ({
+			nodeKey,
+			slot: "params",
+			path: "guaranteedMessages"
+		})
 
-		await db
-			.update(schema.pipelineConfigValues)
-			.set({ value: 3 })
-			.where(where("gather.worldLore.read"))
+		// The same upsert the `scanDepth` case above uses, for the same reason.
+		await setConfigValue(db, configId, windowAt("gather.worldLore.read"), 3)
 
 		try {
 			const windows = await scannedOn(
@@ -354,10 +343,11 @@ describe("a lore node's guaranteed window reaches the scan", () => {
 				DEFAULT_RETRIEVAL.scanDepth
 			)
 		} finally {
-			await db
-				.update(schema.pipelineConfigValues)
-				.set({ value: DEFAULT_RETRIEVAL.guaranteedMessages })
-				.where(where("gather.worldLore.read"))
+			await clearConfigValue(
+				db,
+				configId,
+				windowAt("gather.worldLore.read")
+			)
 		}
 	}, 60_000)
 })

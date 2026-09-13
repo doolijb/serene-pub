@@ -93,22 +93,56 @@
 	)
 
 	/**
+	 * The language this row is written in.
+	 *
+	 * On an existing row it is the row's own, never re-derived from the pool
+	 * control: `poolId` is seeded from `row.poolId`, which is the BARE target
+	 * id, so splitting it would answer "Handlebars" for every row and a save
+	 * would try to rewrite a Liquid template as Handlebars. In create mode
+	 * there is no row yet and the pool key is where the choice lives.
+	 */
+	let engine = $derived(
+		id != null
+			? (row?.engine ?? CORE_TEMPLATE_ENGINE)
+			: splitPoolKey(poolId, CORE_TEMPLATE_ENGINE).engine
+	)
+
+	/**
 	 * What this template may reference: a context template sees the whole
 	 * vocabulary; a variable layout sees only what its variable declares. A
 	 * plugin's variable isn't in this bundle, so the editor simply offers no
 	 * assistance rather than the wrong assistance.
+	 *
+	 * Split first: in create mode `poolId` is the composite `(variable)#(engine)`
+	 * key, and a variable id with an engine glued to it matches no declaration.
 	 */
 	let scope = $derived(
-		kind === "context" ? contextTemplateScope() : getVariable(poolId)?.scope
+		kind === "context"
+			? contextTemplateScope()
+			: getVariable(splitPoolKey(poolId, CORE_TEMPLATE_ENGINE).poolId)
+					?.scope
 	)
 
 	function handleLibrary(res: Sockets.Pipelines.Library.Response) {
 		view = res
 		loading = false
 	}
-	/** Every write answers with the refreshed view. */
-	function handleWrite(res: Sockets.Pipelines.Library.Response) {
-		view = res
+	/**
+	 * Every write answers with the refreshed view, wrapped.
+	 *
+	 * ⚠ The payload is `{ library, warnings? }`, not the view itself. Assigning
+	 * the wrapper to `view` left every list on it undefined, so the page
+	 * decided the row no longer existed the moment it was saved.
+	 */
+	function handleWrite(res: {
+		library?: Sockets.Pipelines.Library.Response
+		warnings?: Sockets.Pipelines.TemplateWarning[]
+	}) {
+		if (res.library) view = res.library
+		for (const w of res.warnings ?? [])
+			toaster.warning({
+				title: w.line ? `Line ${w.line}: ${w.message}` : w.message
+			})
 	}
 	function handleError(res: { error?: string }) {
 		toaster.error({ title: res.error ?? "The library refused the edit." })
@@ -130,7 +164,7 @@
 		socket.emit("pipelines:previewTemplate", {
 			kind,
 			source,
-			engine: split.engine,
+			engine,
 			poolId: split.poolId
 		})
 	}
@@ -161,7 +195,8 @@
 	})
 
 	function save() {
-		// The engine travels as half of the pool key — see `poolId` above.
+		// The pool control names the TARGET; `engine` above says where the
+		// language comes from in each mode.
 		const split = poolId
 			? splitPoolKey(poolId, CORE_TEMPLATE_ENGINE)
 			: { poolId: "", engine: CORE_TEMPLATE_ENGINE }
@@ -171,7 +206,7 @@
 				id,
 				name,
 				source,
-				engine: split.engine
+				engine
 			})
 			toaster.success({ title: "Template saved" })
 		} else {
@@ -181,7 +216,7 @@
 				poolId: split.poolId,
 				name: name || undefined,
 				source: source || undefined,
-				engine: split.engine
+				engine
 			})
 			toaster.success({ title: "Template created" })
 			goto(basePath)
@@ -286,7 +321,12 @@
 				     Pool control above already chooses it — its labels read
 				     "Assemble · Handlebars". A second control for the same fact
 				     could disagree with the pool, and its "default" option was
-				     literally `value={null}`, the null this sprint removed. -->
+				     literally `value={null}`, the null this sprint removed.
+
+				     That the pool control is read-only in edit mode is the
+				     right behaviour rather than a limitation: a language is
+				     chosen when a template is created, because storing the text
+				     under a different engine does not translate it. -->
 			</div>
 
 			<label class="flex flex-col gap-1 text-sm">
@@ -294,6 +334,7 @@
 				<TemplateEditor
 					value={source}
 					{scope}
+					{engine}
 					{readonly}
 					rows={16}
 					oninput={(v) => (source = v)}

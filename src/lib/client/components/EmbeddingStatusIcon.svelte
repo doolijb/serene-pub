@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext } from "svelte"
+	import { embeddingsStarred } from "$lib/shared/constants/embeddings"
 	import * as Icons from "@lucide/svelte"
 
 	interface Props {
@@ -13,11 +14,16 @@
 		getContext("systemSettingsCtx")
 	)
 
+	// The identity the star resolves to, sent beside the settings row rather
+	// than on it. Null means nothing is starred, which the status below reads as
+	// "hidden" — the same thing the old enabled flag did.
 	let activeModel = $derived(
-		systemSettingsCtx?.settings?.embeddingModelName ?? null
+		systemSettingsCtx?.settings?.activeEmbeddingModel ?? null
 	)
+	// The star is the switch: embeddings are on when something is registered
+	// for `text->embedding`.
 	let vectorizationEnabled = $derived(
-		!!systemSettingsCtx?.settings?.vectorizationEnabled
+		embeddingsStarred(systemSettingsCtx?.capabilityDefaults)
 	)
 
 	let status = $derived.by(() => {

@@ -186,9 +186,9 @@ describe("template context", () => {
 		// `__promptBuilderInstance` was how the infill engines reached back into
 		// the builder mid-render. Its absence is the coupling being removed, not
 		// a field that was forgotten — a node cannot reach back into anything.
-		expect("__promptBuilderInstance" in (await buildTemplateContext(base()))).toBe(
-			false
-		)
+		expect(
+			"__promptBuilderInstance" in (await buildTemplateContext(base()))
+		).toBe(false)
 	})
 
 	describe("the three pairs of post-history text", () => {
@@ -234,9 +234,9 @@ describe("template context", () => {
 		})
 
 		it("reports whether there is anything to place at all", async () => {
-			expect((await buildTemplateContext(base())).postHistory!.hasContent).toBe(
-				false
-			)
+			expect(
+				(await buildTemplateContext(base())).postHistory!.hasContent
+			).toBe(false)
 			// Any one of the three is enough, matching index.ts:447.
 			for (const texts of [
 				{ promptPostHistoryInstructions: "x" },
@@ -244,19 +244,31 @@ describe("template context", () => {
 				{ charExampleDialogue: "x" }
 			])
 				expect(
-					(await buildTemplateContext({ ...base(), texts })).postHistory!
-						.hasContent
+					(await buildTemplateContext({ ...base(), texts }))
+						.postHistory!.hasContent
 				).toBe(true)
 			// The *top-level* one is not one of the three: it renders where the
 			// template puts it, not next to the seed.
 			expect(
 				(
-				await buildTemplateContext({
-					...base(),
-					texts: { postHistoryInstructions: "x" }
-				})
+					await buildTemplateContext({
+						...base(),
+						texts: { postHistoryInstructions: "x" }
+					})
 				).postHistory!.hasContent
 			).toBe(false)
+		})
+
+		it("marks its copy as the ungated one", async () => {
+			// The builder ships the reminder whether or not the trigger admits
+			// it: the history it would be measured against does not exist yet.
+			// `gatedBy` names the node that decides, so a reader of this node's
+			// output knows it is looking at the input to that decision.
+			const built = await buildTemplateContext({
+				...base(),
+				texts: { promptPostHistoryInstructions: "Next to the seed." }
+			})
+			expect(built.postHistory!.gatedBy).toBe("assemble")
 		})
 	})
 

@@ -1,0 +1,166 @@
+/**
+ * The entity model, spoken for — the annotation lane's `LaneModelBroker`.
+ *
+ * **Constraint 1's seam.** The lane never calls a loader; it calls this. Where
+ * `modelFreeBroker` answers "none" to everything, this answers "none" only while
+ * nothing is starred — which is what makes the annotation lane one that CAN have
+ * a model without being one that REQUIRES one.
+ *
+ * ## No star is `none`, never `unconfigured`
+ *
+ * `LaneModelPeek` has both arms and the loop reads them oppositely: `none` means
+ * *pick work and process it with a null identity*, `unconfigured` means *settle
+ * every ticket and stop*. The gazetteer and the capitalisation heuristic are the
+ * zero-setup path — a lorebook with no keywords and nothing downloaded still
+ * gets its names matched — so an install that has starred nothing must take the
+ * first branch. Answering `unconfigured` here would make the model-free feature
+ * require a model, which is the exact shape the lane primitives were separated
+ * from the embedding queue to prevent.
+ *
+ * ## A star that cannot load degrades to model-free
+ *
+ * Same rule, second-order. If a starred model fails to load, the loop's
+ * residency request answers `unavailable` and that run stops — correct for one
+ * run, and fatal as a steady state, because the next tick would peek
+ * `configured`, ask again, fail again, and annotation would stop for as long as
+ * the broken star existed. Taking the lexical tier down with a model it has
+ * nothing to do with is exactly the "an unavailable mechanism subtracts a
+ * signal, it never disables a path" rule. So a failed load is REMEMBERED against
+ * the model identity that failed, and while that memory stands the broker
+ * answers `none`: the lane keeps annotating, without the model. The memory is
+ * keyed on the identity, so it clears itself the moment the star names anything
+ * else, and `forgetNerLoadFailure()` clears it for a caller that has reason to
+ * believe the world changed.
+ */
+
+import type {
+	LaneModelBroker,
+	LaneModelPeek,
+	ModelLease
+} from "$lib/server/indexing/lane"
+import { DEFAULT_NER_TTL_MINUTES } from "$lib/shared/constants/ner"
+import { resolveNerTarget } from "./target"
+import {
+	getLoadedNerModelId,
+	isNerModelLoading,
+	isNerModelReady,
+	loadNerModel,
+	setNerTtlMinutes
+} from "./index"
+
+/**
+ * The TTL last read off the starred connection, so `spec` can answer
+ * synchronously.
+ *
+ * Refreshed by every peek and every request rather than cached forever — a
+ * declaration that lies about the configured value is worse than no
+ * declaration. The number the model actually runs on is the one
+ * `setNerTtlMinutes` applies at load; this is the reporting copy, which is the
+ * same split `embeddingBroker` makes.
+ */
+let lastKnownTtlMinutes = DEFAULT_NER_TTL_MINUTES
+
+/** The model identity whose load failed, and what it said. */
+let failed: { modelId: string; reason: string } | null = null
+
+/** Forget a remembered load failure, so the next peek tries the star again. */
+export function forgetNerLoadFailure(): void {
+	failed = null
+}
+
+/** The database, resolved lazily — `db/index.ts` must not be imported for effect. */
+const getDb = async (): Promise<Db> => (await import("$lib/server/db")).db
+
+/**
+ * The starred target, or null, with the reporting TTL refreshed on the way past.
+ *
+ * Never throws: the lane peeks on every tick, and a database that has gone away
+ * under a background sweep is an ordinary shutdown. A null answer puts the lane
+ * on the lexical tier, which is the safe direction.
+ */
+async function currentTarget() {
+	try {
+		const target = await resolveNerTarget(await getDb())
+		if (target) lastKnownTtlMinutes = target.ttlMinutes
+		return target
+	} catch (err) {
+		console.error("[ner] could not read the starred connection:", err)
+		return null
+	}
+}
+
+export const nerBroker: LaneModelBroker = {
+	get spec() {
+		return {
+			/**
+			 * The ROLE is `"ner"` whether or not anything is starred, and the
+			 * peek is what says whether one is. An admin surface enumerating the
+			 * lanes wants to know which kind of model this lane would load — that
+			 * is what a declaration is for — and a role that flipped to null when
+			 * nothing was configured would make the lane's IDENTITY depend on a
+			 * setting.
+			 */
+			role: "ner",
+			ttlMinutes: lastKnownTtlMinutes
+		}
+	},
+
+	async peek(): Promise<LaneModelPeek> {
+		const target = await currentTarget()
+		if (!target) return { kind: "none" }
+		if (failed && failed.modelId === target.modelId) return { kind: "none" }
+		return { kind: "configured", modelId: target.modelId }
+	},
+
+	async request(opts): Promise<ModelLease> {
+		const target = await currentTarget()
+		if (!target) return { kind: "none", modelId: null }
+		if (failed && failed.modelId === target.modelId)
+			return { kind: "none", modelId: null }
+
+		const loaded = getLoadedNerModelId()
+		if (isNerModelReady() && loaded === target.modelId)
+			return { kind: "resident", modelId: loaded }
+
+		if (!opts?.wait) {
+			/**
+			 * Constraint 3, at the only call site where it bites. A promotion
+			 * runs inside a turn and a first-ever local model load is a
+			 * download; waiting for it here would stall the reply for minutes.
+			 * So the load is STARTED and the answer is `pending` — the turn
+			 * degrades to the lexical tier and the background pass uses what
+			 * this warmed.
+			 */
+			if (!isNerModelLoading())
+				void this.request({ wait: true }).catch(() => {})
+			return {
+				kind: "pending",
+				modelId: null,
+				reason: "the entity model is not resident yet — it has been requested"
+			}
+		}
+
+		try {
+			// Set before the load so the idle timer starts on the connection's
+			// own number rather than on the previous star's.
+			setNerTtlMinutes(target.ttlMinutes)
+			await loadNerModel(target.modelId)
+		} catch (err) {
+			const reason =
+				err instanceof Error
+					? `the entity model failed to load: ${err.message}`
+					: "the entity model failed to load"
+			failed = { modelId: target.modelId, reason }
+			console.warn(`[ner] ${reason} — annotating without it`)
+			return { kind: "unavailable", modelId: null, reason }
+		}
+
+		const after = getLoadedNerModelId()
+		if (!isNerModelReady() || after !== target.modelId) {
+			const reason = "the entity model did not come up"
+			failed = { modelId: target.modelId, reason }
+			return { kind: "unavailable", modelId: null, reason }
+		}
+		return { kind: "resident", modelId: after }
+	}
+}

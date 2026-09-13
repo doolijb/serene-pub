@@ -262,6 +262,10 @@ export function toEntryRow(
 		keys: joinKeys(row.keys),
 		secondaryKeys: joinKeys(row.secondaryKeys),
 		selectiveLogic: row.selectiveLogic,
+		// The `parent` role, for every type: one traversal edge, so the
+		// workspace's tree nests a district under its city and a scene under
+		// its history entry with one rule.
+		anchorEntryId: row.anchorEntryId ?? null,
 		matchMode: row.matchMode,
 		useRegex: row.useRegex,
 		caseSensitive: row.caseSensitive ?? false,
@@ -269,6 +273,8 @@ export function toEntryRow(
 		content: row.content,
 		constant: row.constant,
 		enabled: row.enabled,
+		archived: row.archived,
+		provenance: row.provenance,
 		extraJson: row.extraJson,
 		createdAt: toDateString(row.createdAt),
 		updatedAt: row.updatedAt,
@@ -335,6 +341,9 @@ export function entryInsert(
 		// `?? null` and not a default mode: an entry nobody has ruled on has no
 		// condition at all, which is a different state from every mode there is.
 		selectiveLogic: data.selectiveLogic ?? null,
+		// The `parent` role. Null is top level, which is where an entry created
+		// without one belongs.
+		anchorEntryId: data.anchorEntryId ?? null,
 		matchMode: data.matchMode ?? null,
 		useRegex: data.useRegex ?? false,
 		caseSensitive: data.caseSensitive ?? false,
@@ -342,6 +351,7 @@ export function entryInsert(
 		content: data.content ?? "",
 		constant: data.constant ?? false,
 		enabled: data.enabled ?? true,
+		archived: data.archived ?? false,
 		extraJson: data.extraJson ?? {}
 	}
 }
@@ -355,6 +365,9 @@ export function entryInsert(
  * mention appears in neither half and is therefore not written at all — and a
  * key this *type* does not declare appears in neither either, so a `year` sent
  * to a world lore row is ignored rather than stored where nothing reads it.
+ *
+ * ⚠ `anchorEntryId` is emitted, and the handler must have validated it first:
+ * this splits a payload, it does not judge one. See `assertAnchorEntry`.
  */
 export function splitUpdate(
 	typeId: string,
@@ -370,6 +383,10 @@ export function splitUpdate(
 		columns.secondaryKeys = keysToArray(data.secondaryKeys)
 	if (has("selectiveLogic"))
 		columns.selectiveLogic = data.selectiveLogic || null
+	// `?? null` and not `|| null`: 0 is not an id, but the distinction that
+	// matters here is that an explicit `null` is "move this to the top level"
+	// and must be written rather than dropped.
+	if (has("anchorEntryId")) columns.anchorEntryId = data.anchorEntryId ?? null
 	if (has("matchMode")) columns.matchMode = data.matchMode
 	if (has("useRegex")) columns.useRegex = data.useRegex
 	if (has("caseSensitive")) columns.caseSensitive = data.caseSensitive
@@ -377,6 +394,9 @@ export function splitUpdate(
 	if (has("content")) columns.content = data.content
 	if (has("constant")) columns.constant = data.constant
 	if (has("enabled")) columns.enabled = data.enabled
+	// `provenance` is deliberately absent: who wrote a row is the server's
+	// answer, not a claim a payload may make.
+	if (has("archived")) columns.archived = data.archived
 	if (has("extraJson")) columns.extraJson = data.extraJson
 	if (has("position")) columns.position = data.position
 
@@ -449,9 +469,7 @@ export async function parkingFloor(
 ): Promise<number> {
 	const [row] = await tx
 		.select({
-			lowest: sql<
-				number | null
-			>`min(${schema.lorebookEntries.position})`
+			lowest: sql<number | null>`min(${schema.lorebookEntries.position})`
 		})
 		.from(schema.lorebookEntries)
 		.where(where)

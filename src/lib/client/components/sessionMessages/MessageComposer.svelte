@@ -157,6 +157,10 @@
 	role="region"
 	aria-label="Message composer"
 >
+	<!-- Every trigger carries its own `title` and `aria-label`. A tab strip that
+	     shows icons only while inactive has no text to name it, and a name put
+	     on a generic element inside the button is not exposed at all — it has to
+	     be on the button. -->
 	<Tabs.List
 		class="flex flex-wrap items-center gap-1 border-none pt-[0.2em] pb-[0]"
 	>
@@ -164,12 +168,10 @@
 			<Tabs.Trigger
 				value="compose"
 				class="flex min-h-[2em] items-center justify-center"
+				title="Compose"
+				aria-label="Compose"
 			>
-				<span
-					title="Compose"
-					aria-label="Compose tab"
-					class="flex items-center gap-1"
-				>
+				<span class="flex items-center gap-1">
 					<Icons.Pen size="0.75em" aria-hidden="true" />
 					{#if tabGroup === "compose"}<span class="text-xs">
 							Compose
@@ -179,12 +181,10 @@
 			<Tabs.Trigger
 				value="preview"
 				class="flex min-h-[2em] items-center justify-center"
+				title="Preview"
+				aria-label="Preview"
 			>
-				<span
-					title="Preview"
-					aria-label="Preview tab"
-					class="flex items-center gap-1"
-				>
+				<span class="flex items-center gap-1">
 					<Icons.Eye size="0.75em" aria-hidden="true" />
 					{#if tabGroup === "preview"}<span class="text-xs">
 							Preview
@@ -199,12 +199,10 @@
 					class="flex min-h-[2em] items-center justify-center {tab.alwaysVisible
 						? ''
 						: 'max-lg:hidden'}"
+					title={tab.title}
+					aria-label={tab.title}
 				>
-					<span
-						title={tab.title}
-						aria-label="{tab.title} tab"
-						class="flex items-center gap-1"
-					>
+					<span class="flex items-center gap-1">
 						{@render tab.control?.()}
 						{#if tabGroup === tab.value}<span class="text-xs">
 								{tab.title}

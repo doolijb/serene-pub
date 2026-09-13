@@ -167,12 +167,16 @@
 			onOpenChange={(e) => (addBindingOpenState = e.open)}
 			positioning={{ placement: "bottom" }}
 		>
+			<!-- Named for what it puts in rather than for the syntax it puts
+			     in: a reader is inserting a cast member, and `{{char:N}}` is
+			     how that is spelled. -->
 			<Popover.Trigger
-				class="btn btn-sm preset-filled-surface-500"
-				title="Insert Character Tag"
-				aria-label="Insert Character Tag"
+				class="btn btn-sm preset-filled-surface-500 gap-1"
+				title="Insert a cast member"
+				aria-label="Insert a cast member"
 			>
-				<Icons.UserPlus size={16} />
+				<Icons.UserPlus size={16} aria-hidden="true" />
+				<span>Cast</span>
 			</Popover.Trigger>
 			<Portal>
 				<Popover.Positioner class="z-[1000]!">
@@ -181,7 +185,7 @@
 					>
 						<div class="flex flex-col gap-2">
 							<div class="mb-2 text-sm font-semibold">
-								Insert Character Tag
+								Insert a cast member
 							</div>
 							{#each lorebookBindingList as binding}
 								{@const char =
@@ -219,11 +223,12 @@
 			positioning={{ placement: "bottom" }}
 		>
 			<Popover.Trigger
-				class="btn btn-sm preset-filled-surface-500"
-				title="Insert Macro"
-				aria-label="Insert Macro"
+				class="btn btn-sm preset-filled-surface-500 gap-1"
+				title="Insert a macro"
+				aria-label="Insert a macro"
 			>
-				<Icons.Braces size={16} />
+				<Icons.Braces size={16} aria-hidden="true" />
+				<span>Macro</span>
 			</Popover.Trigger>
 			<Portal>
 				<Popover.Positioner class="z-[1000]!">
@@ -232,7 +237,7 @@
 					>
 						<div class="flex flex-col gap-2">
 							<div class="mb-2 text-sm font-semibold">
-								Insert Macro
+								Insert a macro
 							</div>
 							{#each INSERTABLE_MACRO_OPTIONS as macro}
 								<button

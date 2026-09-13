@@ -565,7 +565,11 @@ describe("a reorder is a permutation, and lands as one", () => {
 	const HISTORY = HISTORY_TYPE_ID
 
 	/** `n` world-lore entries, named and created through the real handler. */
-	async function seedWorld(userId: number, lorebookId: number, names: string[]) {
+	async function seedWorld(
+		userId: number,
+		lorebookId: number,
+		names: string[]
+	) {
 		const { createEntryHandler } = await import("./entries")
 		const created = []
 		for (const name of names)
@@ -640,9 +644,7 @@ describe("a reorder is a permutation, and lands as one", () => {
 			"C",
 			"D"
 		])
-		const byName = new Map(
-			created.map((e) => [e.name as string, e])
-		)
+		const byName = new Map(created.map((e) => [e.name as string, e]))
 		const reorder = (order: string[]) =>
 			updateEntryPositionsHandler.handler(
 				fakeSocket(user.id),
@@ -755,8 +757,11 @@ describe("a reorder is a permutation, and lands as one", () => {
 	})
 
 	test("entries:iterateNext shifts a contiguous run forward", async () => {
-		const { createEntryHandler, iterateNextEntryHandler, entryListHandler } =
-			await import("./entries")
+		const {
+			createEntryHandler,
+			iterateNextEntryHandler,
+			entryListHandler
+		} = await import("./entries")
 		const user = await makeUser("unified-iterate-user")
 		const lorebook = await makeLorebook(user.id, "Iterate Book")
 

@@ -12,6 +12,7 @@ import {
 	normalizeLegacyLorebookData,
 	normalizeNativeWorldInfoEntry,
 	parseImportedLorebook,
+	resolveAnchorEntryLinks,
 	resolveParentNodeLinks
 } from "./lorebookImportMapper"
 import { mapEntry } from "./lorebookExportMapper"
@@ -1412,6 +1413,68 @@ describe("resolveParentNodeLinks", () => {
 			[2, 102]
 		])
 		expect(resolveParentNodeLinks(nodes as any, realIds)).toEqual([])
+	})
+})
+
+describe("resolveAnchorEntryLinks", () => {
+	const realIds = new Map([
+		[1, 101],
+		[2, 102],
+		[3, 103]
+	])
+
+	test("resolves a parent stated by local id", () => {
+		expect(
+			resolveAnchorEntryLinks(
+				[{ realId: 201, localId: null, anchorLocalId: 1 }],
+				realIds
+			)
+		).toEqual([{ realId: 201, anchorRealId: 101 }])
+	})
+
+	test("nests one level under another", () => {
+		expect(
+			resolveAnchorEntryLinks(
+				[
+					{ realId: 102, localId: 2, anchorLocalId: 1 },
+					{ realId: 103, localId: 3, anchorLocalId: 2 }
+				],
+				realIds
+			)
+		).toEqual([
+			{ realId: 102, anchorRealId: 101 },
+			{ realId: 103, anchorRealId: 102 }
+		])
+	})
+
+	test("drops an entry filed under itself", () => {
+		expect(
+			resolveAnchorEntryLinks(
+				[{ realId: 101, localId: 1, anchorLocalId: 1 }],
+				realIds
+			)
+		).toEqual([])
+	})
+
+	test("drops both links of a cycle — neither is a tree", () => {
+		expect(
+			resolveAnchorEntryLinks(
+				[
+					{ realId: 101, localId: 1, anchorLocalId: 2 },
+					{ realId: 102, localId: 2, anchorLocalId: 1 }
+				],
+				realIds
+			)
+		).toEqual([])
+	})
+
+	test("drops a parent this import never inserted", () => {
+		expect(
+			resolveAnchorEntryLinks(
+				[{ realId: 201, localId: null, anchorLocalId: 99 }],
+				realIds
+			)
+		).toEqual([])
 	})
 })
 

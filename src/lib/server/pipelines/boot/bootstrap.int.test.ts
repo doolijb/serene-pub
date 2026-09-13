@@ -28,8 +28,8 @@ beforeAll(async () => {
 describe("bootstrapping the pipeline tables", () => {
 	it("registers the types and publishes core's spec on a fresh install", async () => {
 		const report = await bootstrapPipelines(db)
-		expect(report.conflict).toBeUndefined()
 		expect(report.types.inserted).toBeGreaterThan(0)
+		expect(report.types.republished).toEqual([])
 		// Every pipeline core ships, published once, each with nothing to
 		// reconcile: the shipped default is created here and there are no tuned
 		// configs yet to cull or back-fill.
@@ -70,19 +70,20 @@ describe("bootstrapping the pipeline tables", () => {
 		)
 	})
 
-	it("reports a registry conflict instead of taking the instance down", async () => {
-		// A type-hash conflict means *pipelines* cannot run safely. It does not
-		// mean the session app cannot start, and refusing to boot over a subsystem
-		// nobody has opted into would be the wrong trade — so it travels in the
-		// report where a diagnostics screen can show it.
-		// Every row: a hash that no longer matches the running code is exactly
-		// what an upgrade with a changed port list looks like.
+	it("republishes rather than stopping when the rows disagree with the build", async () => {
+		// Every row carrying a hash that no longer matches the running code is
+		// exactly what an upgrade with a changed declaration looks like — and it
+		// used to end the boot: `TypeRegistryConflictError` was caught here,
+		// `report.conflict` was set, and the function returned before publishing
+		// a single spec. So a descriptor edit disabled pipelines on every
+		// install that had booted the previous build.
 		await db
 			.update(schema.pipelineTypeRegistry)
 			.set({ contentHash: "tampered" })
 
 		const report = await bootstrapPipelines(db)
-		expect(report.conflict).toMatch(/./)
-		expect(report.specs).toEqual([])
+		expect(report.types.republished.length).toBeGreaterThan(0)
+		// The half that says the boot went on: the specs are still seeded.
+		expect(report.specs.length).toBe(CORE_SPECS.length)
 	})
 })

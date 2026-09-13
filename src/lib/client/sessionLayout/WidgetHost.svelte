@@ -61,6 +61,8 @@
 		messages?: SurfaceMessage[]
 		channels?: string[]
 		props?: Payload
+		/** This instance's effective settings — the `settings.v1` section. */
+		settings?: Payload
 		grants?: WidgetScope[]
 		scoped?: ProjectInput["scoped"]
 		/** This widget's measured cell geometry in its zone. */
@@ -86,6 +88,7 @@
 		messages = [],
 		channels = [],
 		props,
+		settings,
 		grants,
 		scoped,
 		placement,
@@ -141,6 +144,7 @@
 				messages,
 				channels,
 				props,
+				settings,
 				placement: placement ?? UNPLACED,
 				grants,
 				scoped

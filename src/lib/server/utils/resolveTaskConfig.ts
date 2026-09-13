@@ -109,6 +109,17 @@ export async function resolveTaskConfig(params: {
 	 * threaded through, that control changed nothing an admin could observe.
 	 */
 	pipelineConnectionId?: number | null
+	/**
+	 * The MODEL half of that node's `connection` slot (0114). Null means the
+	 * endpoint's default model.
+	 *
+	 * ⚠ It rides with `pipelineConnectionId` and is dropped whenever the legacy
+	 * per-config connection wins below — a model id belongs to one endpoint, so
+	 * carrying it onto a different one would build a pair whose halves name
+	 * different connections. `CapabilityCandidate` says the same thing at the
+	 * resolver.
+	 */
+	pipelineConnectionModelId?: number | null
 	pipelineSamplingId?: number | null
 }): Promise<ResolvedTaskConfig> {
 	const {
@@ -272,6 +283,16 @@ export async function resolveTaskConfig(params: {
 	// keep the instance's sampling default rather than clearing it.
 	const candidate: CapabilityCandidate = {
 		connectionId: params.pipelineConnectionId ?? overrideConnectionId,
+		// ⚠ Only when the NODE's own slot is what supplied the connection. If the
+		// legacy per-config override won, the model id beside it belongs to the
+		// node's endpoint and not to that one — a pair whose two halves name
+		// different connections, which the resolver refuses by design. Dropping
+		// it here means "the config's endpoint, its default model", which is what
+		// that config has always meant.
+		connectionModelId:
+			params.pipelineConnectionId != null
+				? (params.pipelineConnectionModelId ?? null)
+				: null,
 		samplingConfigId: params.pipelineSamplingId ?? overrideSamplingId
 	}
 	const target = await resolveCapabilityTarget(db, {

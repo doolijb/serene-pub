@@ -12,7 +12,7 @@ Everything on this tab is separate from your own personal preferences — easy-c
 
 Access is gated in two places, not just one. The **System** tab itself only renders for admins — everyone else simply doesn't see it in the Settings panel. But every individual setting change is also checked on the server: if a non-admin account somehow triggers one of these updates, the request is rejected as unauthorized. If the tab ever renders for a non-admin session (for example, an admin's session is downgraded while the panel is open), it falls back to a plain message: "Error: You do not have permission to view or modify system settings."
 
-In a fresh, single-admin install, System Settings still exist and are already populated with sensible defaults (managers off, summarization and vectorization off, accounts off) — there's nothing you're required to configure before using the app.
+In a fresh, single-admin install, System Settings still exist and are already populated with sensible defaults (managers off, vectorization off, accounts off) — there's nothing you're required to configure before using the app.
 
 ## Accounts & Authentication
 
@@ -62,11 +62,13 @@ Both the Ollama and KoboldCPP base URL fields use the same validation rule: the 
 
 **In the Android app**, this whole section is replaced by a short explanatory note instead of the toggles above: Ollama Manager and KoboldCPP Manager aren't offered at all, since both depend on locally-run binaries the Android build can't bundle. You can still connect to a remote Ollama or KoboldCPP instance from the Connections panel, and local embeddings are unavailable for the same reason — an external embeddings API works fine instead, configured from the Embeddings panel. See [Android App](./android.md) for the full list of Android-specific limitations.
 
-## Summarization
+## Embeddings
 
-**Enable Summarization** turns on the ability to select a range of session messages and generate a Scene Summary from them via an LLM, which feeds the Narrative Graph and can become a lorebook history entry. This is a manual, per-session action, not a background process — nothing runs automatically, and the original messages are never removed or replaced during prompt construction. Off by default. Full behavior is documented in [Summarization](./summarization.md).
+Embeddings have no switch here: the **Embeddings** card points at the Connections sidebar, where starring an embedding connection turns retrieval by meaning on. See [Embeddings and RAG](./embeddings-and-rag.md).
 
-An **Embeddings** card sits below Summarization, with its own **Enable Embeddings** switch — but unlike every other switch on this tab, it doesn't turn the feature on in place. Because enabling embeddings first requires choosing a backend (local model vs. external API, and which model), flipping it on routes you straight to the **Embedding** card in the Connections sidebar to complete that setup instead of doing anything itself. Flipping it back off (once already enabled) does act immediately, though — it disables embeddings right away via the same action as the **Disable Embeddings** button described below, with a "Embeddings disabled" confirmation toast. See [Embeddings & RAG](./embeddings-and-rag.md) for the full setup flow and how RAG uses whatever's configured there.
+## Lorebooks
+
+Lorebooks have no feature switches: every capability is available in every book, and the workspace shows what the book holds. See [Lorebooks](./lorebooks.md#one-pool-three-controls).
 
 ## Community Library: CharaVault
 

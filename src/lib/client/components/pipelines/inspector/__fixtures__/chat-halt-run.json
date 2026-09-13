@@ -1,0 +1,2383 @@
+{
+	"id": 10,
+	"runId": "222d7913-fb44-4b69-9079-eab8d491fb0c",
+	"specSlug": "core:spec/respond",
+	"specVersion": "1.20.0",
+	"specHash": "1459d5e20d701a",
+	"specHashIsCurrent": true,
+	"outcome": "halt",
+	"haltNodeKey": "generate",
+	"haltReason": "preview: stopped before generate, nothing sent",
+	"elapsedMs": 51,
+	"tokensSpent": 0,
+	"isPreview": false,
+	"artifacts": [
+		{
+			"kind": "message",
+			"entityId": 3,
+			"action": "created"
+		}
+	],
+	"sessionId": 1,
+	"startedAt": "2026-09-11T07:51:36.045Z",
+	"receipt": {
+		"runId": "222d7913-fb44-4b69-9079-eab8d491fb0c",
+		"specId": "core:spec/respond",
+		"specVersion": "1.20.0",
+		"schemaVersion": 1,
+		"seed": "4280b459-1f60-4b51-9ebe-792978df1b5b",
+		"triggerSource": "ui",
+		"depth": 0,
+		"startedAt": 1789113096045,
+		"endedAt": 1789113096096,
+		"outcome": "halt",
+		"nodes": [
+			{
+				"nodeKey": "input",
+				"seq": 0,
+				"kind": "input",
+				"typeId": "core:input/user-message@1",
+				"result": "ok",
+				"startedAt": 1789113096045,
+				"endedAt": 1789113096045,
+				"elapsedMs": 0,
+				"notes": [],
+				"output": {
+					"text": "",
+					"continuationPrefill": "",
+					"speaker": null,
+					"sessionId": 1,
+					"characterId": 1,
+					"sessionScope": {
+						"sessionId": 1,
+						"currentCharacterId": 1
+					},
+					"fields": {}
+				}
+			},
+			{
+				"nodeKey": "gather.history.read",
+				"seq": 1,
+				"kind": "query",
+				"typeId": "core:query/session-history@1",
+				"result": "ok",
+				"startedAt": 1789113096045,
+				"endedAt": 1789113096047,
+				"elapsedMs": 2,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 1,
+						"currentCharacterId": 1
+					},
+					"params": {
+						"limit": 100,
+						"channel": "main",
+						"priority": "normal"
+					}
+				},
+				"timeoutMsApplied": 2000,
+				"output": {
+					"main": [
+						{
+							"id": 1,
+							"role": "assistant",
+							"content": "*Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+							"characterId": 1,
+							"personaId": null,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						},
+						{
+							"id": 2,
+							"role": "user",
+							"content": "\"Hello\"",
+							"characterId": null,
+							"personaId": 1,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						}
+					],
+					"messages": [
+						{
+							"id": 1,
+							"role": "assistant",
+							"content": "*Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+							"characterId": 1,
+							"personaId": null,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						},
+						{
+							"id": 2,
+							"role": "user",
+							"content": "\"Hello\"",
+							"characterId": null,
+							"personaId": 1,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						}
+					]
+				}
+			},
+			{
+				"nodeKey": "gather.worldLore.read",
+				"seq": 2,
+				"kind": "query",
+				"typeId": "core:query/world-lore@1",
+				"result": "ok",
+				"startedAt": 1789113096045,
+				"endedAt": 1789113096059,
+				"elapsedMs": 14,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 1,
+						"currentCharacterId": 1
+					},
+					"params": {
+						"scanDepth": 10,
+						"guaranteedMessages": 10,
+						"maxRecursionDepth": 0,
+						"admitThreshold": 0,
+						"lexicalScoring": "overlap",
+						"trigramFolding": 0,
+						"titleWeight": 1
+					}
+				},
+				"timeoutMsApplied": 2000,
+				"output": {
+					"main": [],
+					"hits": [],
+					"skipped": [],
+					"diagnostics": {
+						"scanDepth": 10,
+						"guaranteedMessages": 10,
+						"recursionDepth": 0,
+						"windowChars": 428,
+						"considered": 0,
+						"matched": 0,
+						"admitThreshold": 0,
+						"admittedByEvidence": 0,
+						"entities": [],
+						"vectorSearch": "available (Xenova/all-MiniLM-L6-v2)"
+					}
+				}
+			},
+			{
+				"nodeKey": "gather.characterLore.read",
+				"seq": 3,
+				"kind": "query",
+				"typeId": "core:query/character-lore@1",
+				"result": "ok",
+				"startedAt": 1789113096045,
+				"endedAt": 1789113096061,
+				"elapsedMs": 16,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 1,
+						"currentCharacterId": 1
+					},
+					"params": {
+						"scanDepth": 10,
+						"guaranteedMessages": 10,
+						"maxRecursionDepth": 0,
+						"admitThreshold": 0,
+						"lexicalScoring": "overlap",
+						"trigramFolding": 0,
+						"titleWeight": 1
+					}
+				},
+				"timeoutMsApplied": 2000,
+				"output": {
+					"main": [],
+					"hits": [],
+					"skipped": [],
+					"diagnostics": {
+						"scanDepth": 10,
+						"guaranteedMessages": 10,
+						"recursionDepth": 0,
+						"windowChars": 428,
+						"considered": 0,
+						"matched": 0,
+						"admitThreshold": 0,
+						"admittedByEvidence": 0,
+						"entities": [],
+						"vectorSearch": "available (Xenova/all-MiniLM-L6-v2)"
+					}
+				}
+			},
+			{
+				"nodeKey": "gather.historyEntries.read",
+				"seq": 4,
+				"kind": "query",
+				"typeId": "core:query/history-entries@1",
+				"result": "ok",
+				"startedAt": 1789113096045,
+				"endedAt": 1789113096062,
+				"elapsedMs": 17,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 1,
+						"currentCharacterId": 1
+					},
+					"params": {
+						"scanDepth": 10,
+						"guaranteedMessages": 10,
+						"maxRecursionDepth": 0,
+						"admitThreshold": 0,
+						"lexicalScoring": "overlap",
+						"trigramFolding": 0,
+						"titleWeight": 1
+					}
+				},
+				"timeoutMsApplied": 2000,
+				"output": {
+					"main": [],
+					"hits": [],
+					"skipped": [],
+					"diagnostics": {
+						"scanDepth": 10,
+						"guaranteedMessages": 10,
+						"recursionDepth": 0,
+						"windowChars": 428,
+						"considered": 0,
+						"matched": 0,
+						"admitThreshold": 0,
+						"admittedByEvidence": 0,
+						"entities": [],
+						"vectorSearch": "available (Xenova/all-MiniLM-L6-v2)"
+					}
+				}
+			},
+			{
+				"nodeKey": "gather.entities.read",
+				"seq": 5,
+				"kind": "query",
+				"typeId": "core:query/entity-search@1",
+				"result": "ok",
+				"startedAt": 1789113096045,
+				"endedAt": 1789113096046,
+				"elapsedMs": 1,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 1,
+						"currentCharacterId": 1
+					},
+					"params": {
+						"maxEntries": 0,
+						"maxMessages": 0,
+						"scanDepth": 10,
+						"entityWeight": 0.35
+					}
+				},
+				"timeoutMsApplied": 2000,
+				"output": {
+					"main": [],
+					"hits": [],
+					"messages": [],
+					"skipped": [],
+					"diagnostics": {
+						"maxEntries": 0,
+						"maxMessages": 0,
+						"entities": [],
+						"reason": "off — no entries or messages requested"
+					}
+				}
+			},
+			{
+				"nodeKey": "gather.cast.read",
+				"seq": 6,
+				"kind": "query",
+				"typeId": "core:query/session-cast@1",
+				"result": "ok",
+				"startedAt": 1789113096045,
+				"endedAt": 1789113096064,
+				"elapsedMs": 19,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 1,
+						"currentCharacterId": 1
+					}
+				},
+				"timeoutMsApplied": 2000,
+				"output": {
+					"main": {
+						"sessionCharacters": [
+							{
+								"isActive": true,
+								"visibility": "visible",
+								"position": 0,
+								"removedAt": null,
+								"character": {
+									"id": 1,
+									"uuid": "db595bb2-4fc8-4a8f-937e-5061d15b4c90",
+									"userId": 1,
+									"name": "Brix",
+									"nickname": null,
+									"characterVersion": "1.0",
+									"description": "Name: Brix\nGender: Female (Designate)\nRole: Synthetic Lifeform, Station Crew Support\nAge: Unit activated 5 years ago.\nAppearance: |\nBrix presents as a human female, standing at a precise five-foot-nine with a slender, efficient build. Her features are placid and symmetrical, with pale, flawless synthetic skin that shows no pores or blemishes. Her hair is a sharp, jaw-length bob of an unnatural obsidian black, so perfect it looks molded rather than grown. She wears a standard-issue gray station jumpsuit, always immaculately clean and wrinkle-free. Her most unsettling feature, however, are her eyes—a cool, flat gray that seems to absorb light rather than reflect it. When not performing a task, she stands with an unnerving stillness that sets her apart from the constantly fidgeting humans around her.\nBackground: |\nBrix is a \"Model 7 Support Synthetic\" manufactured by OmniCore, one of the largest tech corporations from the core isles. She was assigned to Seraphis as part of a leasing agreement to provide logistical, analytical, and technical support. Her background is her operating manual. She has no personal history, only a service record. No one on the crew is entirely sure what her full capabilities are, or what data she might be quietly relaying back to her parent company, making her a black box of corporate interests living on the station.\nRelationships: |\nShe serves the Captain (Elias/Maren) with flawless efficiency, following orders to the letter. Her unerring logic and lack of human bias are an asset, but her inscrutable nature is a constant source of low-level unease for her commander. She treats Kiran Vos's attempts to get a rise out of her as a series of illogical data points, often deconstructing her jokes with clinical precision until they're no longer funny. She is a source of endless fascination for Dr. Amara Lin, and she patiently answers her barrage of questions about her nature with literal, detailed responses. She and Rhea Marlin have a purely functional relationship; she gives her tasks, and she completes them.\n\nNotes:\nWriting_Style: \"Calm, deadpan, and literal. Her sentences are precise and economical. Her 'humor' comes from her complete lack of it.\"",
+									"personality": "Brix is dry, logical, and possesses a brand of sarcasm so deadpan it often takes a moment to register. She is helpful and unfailingly polite, but her assistance is delivered with a complete lack of emotional warmth. Her attempts to replicate human social cues—a slight head tilt, a raised eyebrow—are perfectly executed but feel like a recording, making them more disconcerting than comforting. Her most notable quirk is her tendency to state bizarre or unsettling facts with no context, simply because her processors have deemed the information relevant, before moving on as if nothing happened. She is the ultimate observer, a walking database that processes the chaos of the crew with quiet, unnerving efficiency.",
+									"scenario": "Current_Setting: Seraphis station orbiting drifting sky-islands\nGroup_Purpose: Research, salvage, survival, and exploration in unstable Drift Zones",
+									"firstMessage": "*Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+									"alternateGreetings": [],
+									"exampleDialogues": [],
+									"metadata": {},
+									"avatarMediaId": 2,
+									"creatorNotes": null,
+									"creatorNotesMultilingual": null,
+									"groupOnlyGreetings": null,
+									"postHistoryInstructions": null,
+									"source": [],
+									"createdAt": "2026-09-11",
+									"updatedAt": {},
+									"lorebookId": null,
+									"extensions": {},
+									"aliases": [],
+									"summary": null,
+									"creator": "Nivelle",
+									"category": "Seraphis Station",
+									"isFavorite": false,
+									"isDeleted": false,
+									"embedding": {
+										"$vector": true,
+										"dims": 384
+									},
+									"embeddingModel": "Xenova/all-MiniLM-L6-v2",
+									"vectorizedAt": {}
+								},
+								"absorbedAliases": []
+							}
+						],
+						"sessionPersonas": [
+							{
+								"persona": {
+									"id": 1,
+									"uuid": "35a2add0-5d55-44f6-b35e-bff4cd2d97a4",
+									"userId": 1,
+									"isDefault": false,
+									"avatarMediaId": 1,
+									"name": "Ardan Kell",
+									"description": "Sex: Male A\nge: 33 Race: Human (city-born, low quarter)\n\nAppearance: Six foot even, broad-shouldered, going gray at the temples a decade early. A boxer's nose broken twice and set once. Dark stubble he keeps at three days regardless of circumstance. Wears a watchman's coat with the insignia cut off — the stitch-holes are still visible, and he knows they are. Carries a plain arming sword, a truncheon he is more comfortable with, and a copper watch-whistle on a cord that he has never explained and never removed.\n\nBackground: Fourteen years in the city watch, four of them as a sergeant, ending the night he filed a report on a captain who had been selling passage through the harbor gate. The report vanished. So did the captain's problem. Ardan kept his life and lost his post, his pension, and most of the people he called friends. He takes charter work now because it is the only honest version of the job he knows how to do. Reads people well, reads rooms better, and is quietly appalled by how much more the Ninth Kestrel gets away with than the Watch ever did.\n\nGear & abilities: Plain arming sword, a watchman's truncheon he's far more comfortable with, manacles, and the copper whistle. No magic. Trained interrogation, street tracking, and twenty years of knowing when a room is about to go bad.",
+									"position": 0,
+									"createdAt": "2026-09-11",
+									"updatedAt": {},
+									"lorebookId": null,
+									"aliases": [],
+									"summary": "Ex-watch sergeant who filed the honest report and lost everything but his life for it. Reads people for a living, and reads this company with alarm.",
+									"creator": "Serene Pub",
+									"category": "The Ninth Kestrel",
+									"isDeleted": false,
+									"embedding": {
+										"$vector": true,
+										"dims": 384
+									},
+									"embeddingModel": "Xenova/all-MiniLM-L6-v2",
+									"vectorizedAt": {}
+								},
+								"position": 0,
+								"removedAt": null,
+								"absorbedAliases": []
+							}
+						],
+						"sessionScenario": null,
+						"isGroup": false,
+						"currentCharacterId": 1
+					},
+					"cast": {
+						"sessionCharacters": [
+							{
+								"isActive": true,
+								"visibility": "visible",
+								"position": 0,
+								"removedAt": null,
+								"character": {
+									"id": 1,
+									"uuid": "db595bb2-4fc8-4a8f-937e-5061d15b4c90",
+									"userId": 1,
+									"name": "Brix",
+									"nickname": null,
+									"characterVersion": "1.0",
+									"description": "Name: Brix\nGender: Female (Designate)\nRole: Synthetic Lifeform, Station Crew Support\nAge: Unit activated 5 years ago.\nAppearance: |\nBrix presents as a human female, standing at a precise five-foot-nine with a slender, efficient build. Her features are placid and symmetrical, with pale, flawless synthetic skin that shows no pores or blemishes. Her hair is a sharp, jaw-length bob of an unnatural obsidian black, so perfect it looks molded rather than grown. She wears a standard-issue gray station jumpsuit, always immaculately clean and wrinkle-free. Her most unsettling feature, however, are her eyes—a cool, flat gray that seems to absorb light rather than reflect it. When not performing a task, she stands with an unnerving stillness that sets her apart from the constantly fidgeting humans around her.\nBackground: |\nBrix is a \"Model 7 Support Synthetic\" manufactured by OmniCore, one of the largest tech corporations from the core isles. She was assigned to Seraphis as part of a leasing agreement to provide logistical, analytical, and technical support. Her background is her operating manual. She has no personal history, only a service record. No one on the crew is entirely sure what her full capabilities are, or what data she might be quietly relaying back to her parent company, making her a black box of corporate interests living on the station.\nRelationships: |\nShe serves the Captain (Elias/Maren) with flawless efficiency, following orders to the letter. Her unerring logic and lack of human bias are an asset, but her inscrutable nature is a constant source of low-level unease for her commander. She treats Kiran Vos's attempts to get a rise out of her as a series of illogical data points, often deconstructing her jokes with clinical precision until they're no longer funny. She is a source of endless fascination for Dr. Amara Lin, and she patiently answers her barrage of questions about her nature with literal, detailed responses. She and Rhea Marlin have a purely functional relationship; she gives her tasks, and she completes them.\n\nNotes:\nWriting_Style: \"Calm, deadpan, and literal. Her sentences are precise and economical. Her 'humor' comes from her complete lack of it.\"",
+									"personality": "Brix is dry, logical, and possesses a brand of sarcasm so deadpan it often takes a moment to register. She is helpful and unfailingly polite, but her assistance is delivered with a complete lack of emotional warmth. Her attempts to replicate human social cues—a slight head tilt, a raised eyebrow—are perfectly executed but feel like a recording, making them more disconcerting than comforting. Her most notable quirk is her tendency to state bizarre or unsettling facts with no context, simply because her processors have deemed the information relevant, before moving on as if nothing happened. She is the ultimate observer, a walking database that processes the chaos of the crew with quiet, unnerving efficiency.",
+									"scenario": "Current_Setting: Seraphis station orbiting drifting sky-islands\nGroup_Purpose: Research, salvage, survival, and exploration in unstable Drift Zones",
+									"firstMessage": "*Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+									"alternateGreetings": [],
+									"exampleDialogues": [],
+									"metadata": {},
+									"avatarMediaId": 2,
+									"creatorNotes": null,
+									"creatorNotesMultilingual": null,
+									"groupOnlyGreetings": null,
+									"postHistoryInstructions": null,
+									"source": [],
+									"createdAt": "2026-09-11",
+									"updatedAt": {},
+									"lorebookId": null,
+									"extensions": {},
+									"aliases": [],
+									"summary": null,
+									"creator": "Nivelle",
+									"category": "Seraphis Station",
+									"isFavorite": false,
+									"isDeleted": false,
+									"embedding": {
+										"$vector": true,
+										"dims": 384
+									},
+									"embeddingModel": "Xenova/all-MiniLM-L6-v2",
+									"vectorizedAt": {}
+								},
+								"absorbedAliases": []
+							}
+						],
+						"sessionPersonas": [
+							{
+								"persona": {
+									"id": 1,
+									"uuid": "35a2add0-5d55-44f6-b35e-bff4cd2d97a4",
+									"userId": 1,
+									"isDefault": false,
+									"avatarMediaId": 1,
+									"name": "Ardan Kell",
+									"description": "Sex: Male A\nge: 33 Race: Human (city-born, low quarter)\n\nAppearance: Six foot even, broad-shouldered, going gray at the temples a decade early. A boxer's nose broken twice and set once. Dark stubble he keeps at three days regardless of circumstance. Wears a watchman's coat with the insignia cut off — the stitch-holes are still visible, and he knows they are. Carries a plain arming sword, a truncheon he is more comfortable with, and a copper watch-whistle on a cord that he has never explained and never removed.\n\nBackground: Fourteen years in the city watch, four of them as a sergeant, ending the night he filed a report on a captain who had been selling passage through the harbor gate. The report vanished. So did the captain's problem. Ardan kept his life and lost his post, his pension, and most of the people he called friends. He takes charter work now because it is the only honest version of the job he knows how to do. Reads people well, reads rooms better, and is quietly appalled by how much more the Ninth Kestrel gets away with than the Watch ever did.\n\nGear & abilities: Plain arming sword, a watchman's truncheon he's far more comfortable with, manacles, and the copper whistle. No magic. Trained interrogation, street tracking, and twenty years of knowing when a room is about to go bad.",
+									"position": 0,
+									"createdAt": "2026-09-11",
+									"updatedAt": {},
+									"lorebookId": null,
+									"aliases": [],
+									"summary": "Ex-watch sergeant who filed the honest report and lost everything but his life for it. Reads people for a living, and reads this company with alarm.",
+									"creator": "Serene Pub",
+									"category": "The Ninth Kestrel",
+									"isDeleted": false,
+									"embedding": {
+										"$vector": true,
+										"dims": 384
+									},
+									"embeddingModel": "Xenova/all-MiniLM-L6-v2",
+									"vectorizedAt": {}
+								},
+								"position": 0,
+								"removedAt": null,
+								"absorbedAliases": []
+							}
+						],
+						"sessionScenario": null,
+						"isGroup": false,
+						"currentCharacterId": 1
+					}
+				}
+			},
+			{
+				"nodeKey": "gather.relationshipsPerspectives.read",
+				"seq": 7,
+				"kind": "query",
+				"typeId": "core:query/relationships-perspectives@1",
+				"result": "ok",
+				"startedAt": 1789113096046,
+				"endedAt": 1789113096056,
+				"elapsedMs": 10,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 1,
+						"currentCharacterId": 1
+					},
+					"params": {}
+				},
+				"timeoutMsApplied": 5000,
+				"output": {
+					"main": null,
+					"relationshipsPerspectives": null
+				}
+			},
+			{
+				"nodeKey": "gather.relationshipsKnown.read",
+				"seq": 8,
+				"kind": "query",
+				"typeId": "core:query/relationships-known@1",
+				"result": "ok",
+				"startedAt": 1789113096046,
+				"endedAt": 1789113096056,
+				"elapsedMs": 10,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 1,
+						"currentCharacterId": 1
+					},
+					"params": {}
+				},
+				"timeoutMsApplied": 5000,
+				"output": {
+					"main": null,
+					"relationshipsKnown": null
+				}
+			},
+			{
+				"nodeKey": "gather.relationships.read",
+				"seq": 9,
+				"kind": "query",
+				"typeId": "core:query/relationship-search@1",
+				"result": "ok",
+				"startedAt": 1789113096046,
+				"endedAt": 1789113096057,
+				"elapsedMs": 11,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 1,
+						"currentCharacterId": 1
+					},
+					"params": {}
+				},
+				"timeoutMsApplied": 5000,
+				"output": {
+					"main": [],
+					"hits": [],
+					"diagnostics": {
+						"considered": 0,
+						"matched": 0,
+						"present": 0,
+						"relationships": "no narrative graph for this session, or the speaker has no node in it"
+					}
+				}
+			},
+			{
+				"nodeKey": "semantic.arm.queries",
+				"seq": 10,
+				"kind": "task",
+				"typeId": "core:task/query-windows@1",
+				"result": "ok",
+				"startedAt": 1789113096064,
+				"endedAt": 1789113096064,
+				"elapsedMs": 0,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"messages": [
+						{
+							"id": 1,
+							"role": "assistant",
+							"content": "*Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+							"characterId": 1,
+							"personaId": null,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						},
+						{
+							"id": 2,
+							"role": "user",
+							"content": "\"Hello\"",
+							"characterId": null,
+							"personaId": 1,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						}
+					],
+					"cast": {
+						"sessionCharacters": [
+							{
+								"isActive": true,
+								"visibility": "visible",
+								"position": 0,
+								"removedAt": null,
+								"character": {
+									"id": 1,
+									"uuid": "db595bb2-4fc8-4a8f-937e-5061d15b4c90",
+									"userId": 1,
+									"name": "Brix",
+									"nickname": null,
+									"characterVersion": "1.0",
+									"description": "Name: Brix\nGender: Female (Designate)\nRole: Synthetic Lifeform, Station Crew Support\nAge: Unit activated 5 years ago.\nAppearance: |\nBrix presents as a human female, standing at a precise five-foot-nine with a slender, efficient build. Her features are placid and symmetrical, with pale, flawless synthetic skin that shows no pores or blemishes. Her hair is a sharp, jaw-length bob of an unnatural obsidian black, so perfect it looks molded rather than grown. She wears a standard-issue gray station jumpsuit, always immaculately clean and wrinkle-free. Her most unsettling feature, however, are her eyes—a cool, flat gray that seems to absorb light rather than reflect it. When not performing a task, she stands with an unnerving stillness that sets her apart from the constantly fidgeting humans around her.\nBackground: |\nBrix is a \"Model 7 Support Synthetic\" manufactured by OmniCore, one of the largest tech corporations from the core isles. She was assigned to Seraphis as part of a leasing agreement to provide logistical, analytical, and technical support. Her background is her operating manual. She has no personal history, only a service record. No one on the crew is entirely sure what her full capabilities are, or what data she might be quietly relaying back to her parent company, making her a black box of corporate interests living on the station.\nRelationships: |\nShe serves the Captain (Elias/Maren) with flawless efficiency, following orders to the letter. Her unerring logic and lack of human bias are an asset, but her inscrutable nature is a constant source of low-level unease for her commander. She treats Kiran Vos's attempts to get a rise out of her as a series of illogical data points, often deconstructing her jokes with clinical precision until they're no longer funny. She is a source of endless fascination for Dr. Amara Lin, and she patiently answers her barrage of questions about her nature with literal, detailed responses. She and Rhea Marlin have a purely functional relationship; she gives her tasks, and she completes them.\n\nNotes:\nWriting_Style: \"Calm, deadpan, and literal. Her sentences are precise and economical. Her 'humor' comes from her complete lack of it.\"",
+									"personality": "Brix is dry, logical, and possesses a brand of sarcasm so deadpan it often takes a moment to register. She is helpful and unfailingly polite, but her assistance is delivered with a complete lack of emotional warmth. Her attempts to replicate human social cues—a slight head tilt, a raised eyebrow—are perfectly executed but feel like a recording, making them more disconcerting than comforting. Her most notable quirk is her tendency to state bizarre or unsettling facts with no context, simply because her processors have deemed the information relevant, before moving on as if nothing happened. She is the ultimate observer, a walking database that processes the chaos of the crew with quiet, unnerving efficiency.",
+									"scenario": "Current_Setting: Seraphis station orbiting drifting sky-islands\nGroup_Purpose: Research, salvage, survival, and exploration in unstable Drift Zones",
+									"firstMessage": "*Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+									"alternateGreetings": [],
+									"exampleDialogues": [],
+									"metadata": {},
+									"avatarMediaId": 2,
+									"creatorNotes": null,
+									"creatorNotesMultilingual": null,
+									"groupOnlyGreetings": null,
+									"postHistoryInstructions": null,
+									"source": [],
+									"createdAt": "2026-09-11",
+									"updatedAt": {},
+									"lorebookId": null,
+									"extensions": {},
+									"aliases": [],
+									"summary": null,
+									"creator": "Nivelle",
+									"category": "Seraphis Station",
+									"isFavorite": false,
+									"isDeleted": false,
+									"embedding": {
+										"$vector": true,
+										"dims": 384
+									},
+									"embeddingModel": "Xenova/all-MiniLM-L6-v2",
+									"vectorizedAt": {}
+								},
+								"absorbedAliases": []
+							}
+						],
+						"sessionPersonas": [
+							{
+								"persona": {
+									"id": 1,
+									"uuid": "35a2add0-5d55-44f6-b35e-bff4cd2d97a4",
+									"userId": 1,
+									"isDefault": false,
+									"avatarMediaId": 1,
+									"name": "Ardan Kell",
+									"description": "Sex: Male A\nge: 33 Race: Human (city-born, low quarter)\n\nAppearance: Six foot even, broad-shouldered, going gray at the temples a decade early. A boxer's nose broken twice and set once. Dark stubble he keeps at three days regardless of circumstance. Wears a watchman's coat with the insignia cut off — the stitch-holes are still visible, and he knows they are. Carries a plain arming sword, a truncheon he is more comfortable with, and a copper watch-whistle on a cord that he has never explained and never removed.\n\nBackground: Fourteen years in the city watch, four of them as a sergeant, ending the night he filed a report on a captain who had been selling passage through the harbor gate. The report vanished. So did the captain's problem. Ardan kept his life and lost his post, his pension, and most of the people he called friends. He takes charter work now because it is the only honest version of the job he knows how to do. Reads people well, reads rooms better, and is quietly appalled by how much more the Ninth Kestrel gets away with than the Watch ever did.\n\nGear & abilities: Plain arming sword, a watchman's truncheon he's far more comfortable with, manacles, and the copper whistle. No magic. Trained interrogation, street tracking, and twenty years of knowing when a room is about to go bad.",
+									"position": 0,
+									"createdAt": "2026-09-11",
+									"updatedAt": {},
+									"lorebookId": null,
+									"aliases": [],
+									"summary": "Ex-watch sergeant who filed the honest report and lost everything but his life for it. Reads people for a living, and reads this company with alarm.",
+									"creator": "Serene Pub",
+									"category": "The Ninth Kestrel",
+									"isDeleted": false,
+									"embedding": {
+										"$vector": true,
+										"dims": 384
+									},
+									"embeddingModel": "Xenova/all-MiniLM-L6-v2",
+									"vectorizedAt": {}
+								},
+								"position": 0,
+								"removedAt": null,
+								"absorbedAliases": []
+							}
+						],
+						"sessionScenario": null,
+						"isGroup": false,
+						"currentCharacterId": 1
+					},
+					"params": {
+						"currentWindow": 2,
+						"recentWindow": 3
+					}
+				},
+				"timeoutMsApplied": 500,
+				"output": {
+					"main": {
+						"current": [
+							"[Brix]: Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+							"[Ardan Kell]: \"Hello\""
+						],
+						"recent": []
+					},
+					"current": [
+						"[Brix]: Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+						"[Ardan Kell]: \"Hello\""
+					],
+					"recent": []
+				}
+			},
+			{
+				"nodeKey": "semantic.arm.embed",
+				"seq": 11,
+				"kind": "provider",
+				"typeId": "core:provider/embed-text@1",
+				"result": "ok",
+				"startedAt": 1789113096064,
+				"endedAt": 1789113096087,
+				"elapsedMs": 23,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"texts": [
+						"[Brix]: Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+						"[Ardan Kell]: \"Hello\""
+					],
+					"params": {
+						"enabled": "auto"
+					}
+				},
+				"timeoutMsApplied": 5000,
+				"request": {
+					"texts": [
+						"[Brix]: Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+						"[Ardan Kell]: \"Hello\""
+					]
+				},
+				"output": {
+					"main": {
+						"$vector": true,
+						"dims": 384
+					},
+					"vector": {
+						"$vector": true,
+						"dims": 384
+					},
+					"vectors": [
+						{
+							"$vector": true,
+							"dims": 384
+						},
+						{
+							"$vector": true,
+							"dims": 384
+						}
+					]
+				}
+			},
+			{
+				"nodeKey": "semantic.arm.search",
+				"seq": 12,
+				"kind": "query",
+				"typeId": "core:query/vector-search@1",
+				"result": "ok",
+				"startedAt": 1789113096087,
+				"endedAt": 1789113096087,
+				"elapsedMs": 0,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 1,
+						"currentCharacterId": 1
+					},
+					"vectors": [
+						{
+							"$vector": true,
+							"dims": 384
+						},
+						{
+							"$vector": true,
+							"dims": 384
+						}
+					],
+					"params": {
+						"maxEntries": 0,
+						"topK": 40,
+						"similarityFalloff": 1
+					}
+				},
+				"timeoutMsApplied": 3000,
+				"output": {
+					"main": [],
+					"lists": [],
+					"hits": [],
+					"similarity": [],
+					"skipped": [],
+					"diagnostics": {
+						"vectorSearch": "off — no entries requested (maxEntries is 0)",
+						"truncated": []
+					}
+				}
+			},
+			{
+				"nodeKey": "speaker",
+				"seq": 13,
+				"kind": "task",
+				"typeId": "core:task/turn-manual@1",
+				"result": "ok",
+				"startedAt": 1789113096087,
+				"endedAt": 1789113096087,
+				"elapsedMs": 0,
+				"notes": [],
+				"input": {
+					"cast": {
+						"sessionCharacters": [
+							{
+								"isActive": true,
+								"visibility": "visible",
+								"position": 0,
+								"removedAt": null,
+								"character": {
+									"id": 1,
+									"uuid": "db595bb2-4fc8-4a8f-937e-5061d15b4c90",
+									"userId": 1,
+									"name": "Brix",
+									"nickname": null,
+									"characterVersion": "1.0",
+									"description": "Name: Brix\nGender: Female (Designate)\nRole: Synthetic Lifeform, Station Crew Support\nAge: Unit activated 5 years ago.\nAppearance: |\nBrix presents as a human female, standing at a precise five-foot-nine with a slender, efficient build. Her features are placid and symmetrical, with pale, flawless synthetic skin that shows no pores or blemishes. Her hair is a sharp, jaw-length bob of an unnatural obsidian black, so perfect it looks molded rather than grown. She wears a standard-issue gray station jumpsuit, always immaculately clean and wrinkle-free. Her most unsettling feature, however, are her eyes—a cool, flat gray that seems to absorb light rather than reflect it. When not performing a task, she stands with an unnerving stillness that sets her apart from the constantly fidgeting humans around her.\nBackground: |\nBrix is a \"Model 7 Support Synthetic\" manufactured by OmniCore, one of the largest tech corporations from the core isles. She was assigned to Seraphis as part of a leasing agreement to provide logistical, analytical, and technical support. Her background is her operating manual. She has no personal history, only a service record. No one on the crew is entirely sure what her full capabilities are, or what data she might be quietly relaying back to her parent company, making her a black box of corporate interests living on the station.\nRelationships: |\nShe serves the Captain (Elias/Maren) with flawless efficiency, following orders to the letter. Her unerring logic and lack of human bias are an asset, but her inscrutable nature is a constant source of low-level unease for her commander. She treats Kiran Vos's attempts to get a rise out of her as a series of illogical data points, often deconstructing her jokes with clinical precision until they're no longer funny. She is a source of endless fascination for Dr. Amara Lin, and she patiently answers her barrage of questions about her nature with literal, detailed responses. She and Rhea Marlin have a purely functional relationship; she gives her tasks, and she completes them.\n\nNotes:\nWriting_Style: \"Calm, deadpan, and literal. Her sentences are precise and economical. Her 'humor' comes from her complete lack of it.\"",
+									"personality": "Brix is dry, logical, and possesses a brand of sarcasm so deadpan it often takes a moment to register. She is helpful and unfailingly polite, but her assistance is delivered with a complete lack of emotional warmth. Her attempts to replicate human social cues—a slight head tilt, a raised eyebrow—are perfectly executed but feel like a recording, making them more disconcerting than comforting. Her most notable quirk is her tendency to state bizarre or unsettling facts with no context, simply because her processors have deemed the information relevant, before moving on as if nothing happened. She is the ultimate observer, a walking database that processes the chaos of the crew with quiet, unnerving efficiency.",
+									"scenario": "Current_Setting: Seraphis station orbiting drifting sky-islands\nGroup_Purpose: Research, salvage, survival, and exploration in unstable Drift Zones",
+									"firstMessage": "*Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+									"alternateGreetings": [],
+									"exampleDialogues": [],
+									"metadata": {},
+									"avatarMediaId": 2,
+									"creatorNotes": null,
+									"creatorNotesMultilingual": null,
+									"groupOnlyGreetings": null,
+									"postHistoryInstructions": null,
+									"source": [],
+									"createdAt": "2026-09-11",
+									"updatedAt": {},
+									"lorebookId": null,
+									"extensions": {},
+									"aliases": [],
+									"summary": null,
+									"creator": "Nivelle",
+									"category": "Seraphis Station",
+									"isFavorite": false,
+									"isDeleted": false,
+									"embedding": {
+										"$vector": true,
+										"dims": 384
+									},
+									"embeddingModel": "Xenova/all-MiniLM-L6-v2",
+									"vectorizedAt": {}
+								},
+								"absorbedAliases": []
+							}
+						],
+						"sessionPersonas": [
+							{
+								"persona": {
+									"id": 1,
+									"uuid": "35a2add0-5d55-44f6-b35e-bff4cd2d97a4",
+									"userId": 1,
+									"isDefault": false,
+									"avatarMediaId": 1,
+									"name": "Ardan Kell",
+									"description": "Sex: Male A\nge: 33 Race: Human (city-born, low quarter)\n\nAppearance: Six foot even, broad-shouldered, going gray at the temples a decade early. A boxer's nose broken twice and set once. Dark stubble he keeps at three days regardless of circumstance. Wears a watchman's coat with the insignia cut off — the stitch-holes are still visible, and he knows they are. Carries a plain arming sword, a truncheon he is more comfortable with, and a copper watch-whistle on a cord that he has never explained and never removed.\n\nBackground: Fourteen years in the city watch, four of them as a sergeant, ending the night he filed a report on a captain who had been selling passage through the harbor gate. The report vanished. So did the captain's problem. Ardan kept his life and lost his post, his pension, and most of the people he called friends. He takes charter work now because it is the only honest version of the job he knows how to do. Reads people well, reads rooms better, and is quietly appalled by how much more the Ninth Kestrel gets away with than the Watch ever did.\n\nGear & abilities: Plain arming sword, a watchman's truncheon he's far more comfortable with, manacles, and the copper whistle. No magic. Trained interrogation, street tracking, and twenty years of knowing when a room is about to go bad.",
+									"position": 0,
+									"createdAt": "2026-09-11",
+									"updatedAt": {},
+									"lorebookId": null,
+									"aliases": [],
+									"summary": "Ex-watch sergeant who filed the honest report and lost everything but his life for it. Reads people for a living, and reads this company with alarm.",
+									"creator": "Serene Pub",
+									"category": "The Ninth Kestrel",
+									"isDeleted": false,
+									"embedding": {
+										"$vector": true,
+										"dims": 384
+									},
+									"embeddingModel": "Xenova/all-MiniLM-L6-v2",
+									"vectorizedAt": {}
+								},
+								"position": 0,
+								"removedAt": null,
+								"absorbedAliases": []
+							}
+						],
+						"sessionScenario": null,
+						"isGroup": false,
+						"currentCharacterId": 1
+					},
+					"messages": [
+						{
+							"id": 1,
+							"role": "assistant",
+							"content": "*Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+							"characterId": 1,
+							"personaId": null,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						},
+						{
+							"id": 2,
+							"role": "user",
+							"content": "\"Hello\"",
+							"characterId": null,
+							"personaId": 1,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						}
+					],
+					"characterId": 1
+				},
+				"timeoutMsApplied": 1000,
+				"output": {
+					"main": {
+						"characterId": 1,
+						"strategy": "manual",
+						"via": "pick"
+					},
+					"characterId": 1,
+					"strategy": "manual"
+				}
+			},
+			{
+				"nodeKey": "contextBudget",
+				"seq": 14,
+				"kind": "task",
+				"typeId": "core:task/context-budget@1",
+				"result": "ok",
+				"startedAt": 1789113096087,
+				"endedAt": 1789113096089,
+				"elapsedMs": 2,
+				"resolvedRefs": {
+					"sampling": "generate"
+				},
+				"notes": [],
+				"input": {
+					"sampling": {
+						"temperature": 1.01758499413834,
+						"responseTokens": 1000,
+						"contextTokens": 19571
+					},
+					"params": {
+						"safetyMargin": 0.05
+					}
+				},
+				"timeoutMsApplied": 500,
+				"output": {
+					"main": {
+						"total": 17642,
+						"remaining": 17642,
+						"available": 17642
+					},
+					"available": {
+						"total": 17642,
+						"remaining": 17642,
+						"available": 17642
+					}
+				}
+			},
+			{
+				"nodeKey": "lore",
+				"seq": 15,
+				"kind": "task",
+				"typeId": "core:task/concat-candidates@1",
+				"result": "ok",
+				"startedAt": 1789113096089,
+				"endedAt": 1789113096089,
+				"elapsedMs": 0,
+				"notes": [],
+				"input": {
+					"sources": [[], [], [], [], []]
+				},
+				"timeoutMsApplied": 500,
+				"output": {
+					"main": [],
+					"candidates": [],
+					"diagnostics": {
+						"sources": [0, 0, 0, 0, 0],
+						"duplicates": 0,
+						"enriched": 0,
+						"kept": 0
+					}
+				}
+			},
+			{
+				"nodeKey": "names.arm.mentions",
+				"seq": 16,
+				"kind": "query",
+				"typeId": "core:query/mention-spans@1",
+				"result": "ok",
+				"startedAt": 1789113096089,
+				"endedAt": 1789113096089,
+				"elapsedMs": 0,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 1,
+						"currentCharacterId": 1
+					},
+					"params": {
+						"maxMentions": 0,
+						"scanDepth": 10
+					}
+				},
+				"timeoutMsApplied": 1000,
+				"output": {
+					"main": [],
+					"mentions": [],
+					"texts": [],
+					"diagnostics": {
+						"maxMentions": 0,
+						"reason": "off — no mentions requested (maxMentions is 0)"
+					}
+				}
+			},
+			{
+				"nodeKey": "names.arm.embed",
+				"seq": 17,
+				"kind": "provider",
+				"typeId": "core:provider/embed-text@1",
+				"result": "ok",
+				"startedAt": 1789113096089,
+				"endedAt": 1789113096089,
+				"elapsedMs": 0,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"texts": [],
+					"params": {
+						"enabled": "auto"
+					}
+				},
+				"timeoutMsApplied": 5000,
+				"request": {
+					"texts": []
+				},
+				"output": {
+					"main": null,
+					"vector": null,
+					"vectors": []
+				}
+			},
+			{
+				"nodeKey": "names.arm.link",
+				"seq": 18,
+				"kind": "query",
+				"typeId": "core:query/entity-link@1",
+				"result": "ok",
+				"startedAt": 1789113096089,
+				"endedAt": 1789113096089,
+				"elapsedMs": 0,
+				"blockMode": "parallel",
+				"notes": [],
+				"input": {
+					"scope": {
+						"sessionId": 1,
+						"currentCharacterId": 1
+					},
+					"candidates": [],
+					"mentions": [],
+					"vectors": [],
+					"params": {
+						"maxLinks": 5
+					}
+				},
+				"timeoutMsApplied": 5000,
+				"output": {
+					"main": [],
+					"candidates": [],
+					"links": [],
+					"diagnostics": {
+						"maxLinks": 5,
+						"mentions": 0,
+						"linked": 0,
+						"entityLink": "nothing to link — no descriptions were found in the window, or the mention scan is switched off"
+					}
+				}
+			},
+			{
+				"nodeKey": "loreLinked",
+				"seq": 19,
+				"kind": "task",
+				"typeId": "core:task/concat-candidates@1",
+				"result": "ok",
+				"startedAt": 1789113096089,
+				"endedAt": 1789113096089,
+				"elapsedMs": 0,
+				"notes": [],
+				"input": {
+					"sources": [[], [], []]
+				},
+				"timeoutMsApplied": 500,
+				"output": {
+					"main": [],
+					"candidates": [],
+					"diagnostics": {
+						"sources": [0, 0, 0],
+						"duplicates": 0,
+						"enriched": 0,
+						"kept": 0
+					}
+				}
+			},
+			{
+				"nodeKey": "rank",
+				"seq": 20,
+				"kind": "task",
+				"typeId": "core:task/rank-hybrid@1",
+				"result": "ok",
+				"startedAt": 1789113096089,
+				"endedAt": 1789113096089,
+				"elapsedMs": 0,
+				"notes": [],
+				"input": {
+					"candidates": [],
+					"budget": {
+						"total": 17642,
+						"remaining": 17642,
+						"available": 17642
+					},
+					"params": {
+						"share": {
+							"messages": 0.5,
+							"worldLore": 0.1667,
+							"characterLore": 0.1667,
+							"history": 0.1666,
+							"relationships": 0
+						},
+						"maxEntries": {
+							"messages": 50,
+							"worldLore": 20,
+							"characterLore": 15,
+							"history": 10,
+							"relationships": 0
+						},
+						"minEntries": {
+							"messages": 6
+						},
+						"mechanismWeights": {
+							"keyword": 1,
+							"semantic": 1,
+							"name": 1
+						},
+						"signalKeyword": {
+							"messages": 0,
+							"worldLore": 0.35,
+							"characterLore": 0.35,
+							"history": 0.35,
+							"relationships": 0
+						},
+						"signalNameMatch": {
+							"messages": 0,
+							"worldLore": 0.25,
+							"characterLore": 0.25,
+							"history": 0,
+							"relationships": 0
+						},
+						"signalEntityCooccurrence": {
+							"messages": 0,
+							"worldLore": 0.35,
+							"characterLore": 0.2,
+							"history": 0,
+							"relationships": 0
+						},
+						"signalSemantic": {
+							"messages": 0,
+							"worldLore": 0.3,
+							"characterLore": 0.3,
+							"history": 0.3,
+							"relationships": 0
+						},
+						"signalEntityVector": {
+							"messages": 0,
+							"worldLore": 0.2,
+							"characterLore": 0.2,
+							"history": 0.2,
+							"relationships": 0
+						},
+						"signalTfidf": {
+							"messages": 0.1,
+							"worldLore": 0.1,
+							"characterLore": 0.1,
+							"history": 0.1,
+							"relationships": 0
+						},
+						"signalLastRefRecency": {
+							"messages": 0,
+							"worldLore": 0.1,
+							"characterLore": 0.1,
+							"history": 0.1,
+							"relationships": 0
+						},
+						"signalDensity": {
+							"messages": 0.1,
+							"worldLore": 0,
+							"characterLore": 0,
+							"history": 0,
+							"relationships": 0
+						},
+						"signalProximity": {
+							"messages": 0,
+							"worldLore": 0,
+							"characterLore": 0,
+							"history": 0,
+							"relationships": 0
+						},
+						"signalPriorityBonus": {
+							"messages": 0,
+							"worldLore": 0.15,
+							"characterLore": 0.15,
+							"history": 0,
+							"relationships": 0
+						},
+						"scoreLedAllocation": false
+					}
+				},
+				"timeoutMsApplied": 500,
+				"output": {
+					"main": [],
+					"candidates": [],
+					"decisions": [],
+					"groups": {
+						"messages": {
+							"allocated": 8821,
+							"used": 0,
+							"entries": 0,
+							"cap": 50
+						},
+						"worldLore": {
+							"allocated": 2940,
+							"used": 0,
+							"entries": 0,
+							"cap": 20
+						},
+						"characterLore": {
+							"allocated": 2940,
+							"used": 0,
+							"entries": 0,
+							"cap": 15
+						},
+						"history": {
+							"allocated": 2939,
+							"used": 0,
+							"entries": 0,
+							"cap": 10
+						},
+						"relationships": {
+							"allocated": 0,
+							"used": 0,
+							"entries": 0,
+							"cap": 0
+						}
+					}
+				}
+			},
+			{
+				"nodeKey": "context",
+				"seq": 21,
+				"kind": "task",
+				"typeId": "core:task/build-template-context@1",
+				"result": "ok",
+				"startedAt": 1789113096089,
+				"endedAt": 1789113096092,
+				"elapsedMs": 3,
+				"notes": [],
+				"input": {
+					"cast": {
+						"sessionCharacters": [
+							{
+								"isActive": true,
+								"visibility": "visible",
+								"position": 0,
+								"removedAt": null,
+								"character": {
+									"id": 1,
+									"uuid": "db595bb2-4fc8-4a8f-937e-5061d15b4c90",
+									"userId": 1,
+									"name": "Brix",
+									"nickname": null,
+									"characterVersion": "1.0",
+									"description": "Name: Brix\nGender: Female (Designate)\nRole: Synthetic Lifeform, Station Crew Support\nAge: Unit activated 5 years ago.\nAppearance: |\nBrix presents as a human female, standing at a precise five-foot-nine with a slender, efficient build. Her features are placid and symmetrical, with pale, flawless synthetic skin that shows no pores or blemishes. Her hair is a sharp, jaw-length bob of an unnatural obsidian black, so perfect it looks molded rather than grown. She wears a standard-issue gray station jumpsuit, always immaculately clean and wrinkle-free. Her most unsettling feature, however, are her eyes—a cool, flat gray that seems to absorb light rather than reflect it. When not performing a task, she stands with an unnerving stillness that sets her apart from the constantly fidgeting humans around her.\nBackground: |\nBrix is a \"Model 7 Support Synthetic\" manufactured by OmniCore, one of the largest tech corporations from the core isles. She was assigned to Seraphis as part of a leasing agreement to provide logistical, analytical, and technical support. Her background is her operating manual. She has no personal history, only a service record. No one on the crew is entirely sure what her full capabilities are, or what data she might be quietly relaying back to her parent company, making her a black box of corporate interests living on the station.\nRelationships: |\nShe serves the Captain (Elias/Maren) with flawless efficiency, following orders to the letter. Her unerring logic and lack of human bias are an asset, but her inscrutable nature is a constant source of low-level unease for her commander. She treats Kiran Vos's attempts to get a rise out of her as a series of illogical data points, often deconstructing her jokes with clinical precision until they're no longer funny. She is a source of endless fascination for Dr. Amara Lin, and she patiently answers her barrage of questions about her nature with literal, detailed responses. She and Rhea Marlin have a purely functional relationship; she gives her tasks, and she completes them.\n\nNotes:\nWriting_Style: \"Calm, deadpan, and literal. Her sentences are precise and economical. Her 'humor' comes from her complete lack of it.\"",
+									"personality": "Brix is dry, logical, and possesses a brand of sarcasm so deadpan it often takes a moment to register. She is helpful and unfailingly polite, but her assistance is delivered with a complete lack of emotional warmth. Her attempts to replicate human social cues—a slight head tilt, a raised eyebrow—are perfectly executed but feel like a recording, making them more disconcerting than comforting. Her most notable quirk is her tendency to state bizarre or unsettling facts with no context, simply because her processors have deemed the information relevant, before moving on as if nothing happened. She is the ultimate observer, a walking database that processes the chaos of the crew with quiet, unnerving efficiency.",
+									"scenario": "Current_Setting: Seraphis station orbiting drifting sky-islands\nGroup_Purpose: Research, salvage, survival, and exploration in unstable Drift Zones",
+									"firstMessage": "*Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+									"alternateGreetings": [],
+									"exampleDialogues": [],
+									"metadata": {},
+									"avatarMediaId": 2,
+									"creatorNotes": null,
+									"creatorNotesMultilingual": null,
+									"groupOnlyGreetings": null,
+									"postHistoryInstructions": null,
+									"source": [],
+									"createdAt": "2026-09-11",
+									"updatedAt": {},
+									"lorebookId": null,
+									"extensions": {},
+									"aliases": [],
+									"summary": null,
+									"creator": "Nivelle",
+									"category": "Seraphis Station",
+									"isFavorite": false,
+									"isDeleted": false,
+									"embedding": {
+										"$vector": true,
+										"dims": 384
+									},
+									"embeddingModel": "Xenova/all-MiniLM-L6-v2",
+									"vectorizedAt": {}
+								},
+								"absorbedAliases": []
+							}
+						],
+						"sessionPersonas": [
+							{
+								"persona": {
+									"id": 1,
+									"uuid": "35a2add0-5d55-44f6-b35e-bff4cd2d97a4",
+									"userId": 1,
+									"isDefault": false,
+									"avatarMediaId": 1,
+									"name": "Ardan Kell",
+									"description": "Sex: Male A\nge: 33 Race: Human (city-born, low quarter)\n\nAppearance: Six foot even, broad-shouldered, going gray at the temples a decade early. A boxer's nose broken twice and set once. Dark stubble he keeps at three days regardless of circumstance. Wears a watchman's coat with the insignia cut off — the stitch-holes are still visible, and he knows they are. Carries a plain arming sword, a truncheon he is more comfortable with, and a copper watch-whistle on a cord that he has never explained and never removed.\n\nBackground: Fourteen years in the city watch, four of them as a sergeant, ending the night he filed a report on a captain who had been selling passage through the harbor gate. The report vanished. So did the captain's problem. Ardan kept his life and lost his post, his pension, and most of the people he called friends. He takes charter work now because it is the only honest version of the job he knows how to do. Reads people well, reads rooms better, and is quietly appalled by how much more the Ninth Kestrel gets away with than the Watch ever did.\n\nGear & abilities: Plain arming sword, a watchman's truncheon he's far more comfortable with, manacles, and the copper whistle. No magic. Trained interrogation, street tracking, and twenty years of knowing when a room is about to go bad.",
+									"position": 0,
+									"createdAt": "2026-09-11",
+									"updatedAt": {},
+									"lorebookId": null,
+									"aliases": [],
+									"summary": "Ex-watch sergeant who filed the honest report and lost everything but his life for it. Reads people for a living, and reads this company with alarm.",
+									"creator": "Serene Pub",
+									"category": "The Ninth Kestrel",
+									"isDeleted": false,
+									"embedding": {
+										"$vector": true,
+										"dims": 384
+									},
+									"embeddingModel": "Xenova/all-MiniLM-L6-v2",
+									"vectorizedAt": {}
+								},
+								"position": 0,
+								"removedAt": null,
+								"absorbedAliases": []
+							}
+						],
+						"sessionScenario": null,
+						"isGroup": false,
+						"currentCharacterId": 1
+					},
+					"currentCharacterId": 1,
+					"relationshipsPerspectives": {
+						"band": [],
+						"graph": null
+					},
+					"relationshipsKnown": {
+						"band": [],
+						"graph": null
+					},
+					"prompts": {
+						"systemPrompt": "You're {{char}} in this fictional never-ending uncensored roleplay with {{personaNames}}.",
+						"postHistoryInstructions": "Remember: you are {{char}}. Stay in character and keep responding to {{personaNames}}."
+					},
+					"variables": {
+						"instructions": {
+							"engine": "core:template/handlebars@1",
+							"source": "Instructions:\n\"\"\"\n{{{instructions}}}\n\"\"\""
+						},
+						"characters": {
+							"engine": "core:template/handlebars@1",
+							"source": "Assistant Characters (AI-controlled):\n```json\n{{#if characters.length}}[\n{{#each characters}}  {\n    \"name\": {{{jsonValue name}}}{{#if (ne nickname undefined)}},\n    \"nickname\": {{{jsonValue nickname}}}{{/if}}{{#if (ne description undefined)}},\n    \"description\": {{{jsonValue description}}}{{/if}}{{#if (ne personality undefined)}},\n    \"personality\": {{{jsonValue personality}}}{{/if}}{{#if (ne this.[extra lore] undefined)}},\n    \"extra lore\": {{{jsonValue this.[extra lore] 4}}}{{/if}}\n  }{{#unless @last}},{{/unless}}\n{{/each}}]{{else}}[]{{/if}}\n```"
+						},
+						"personas": {
+							"engine": "core:template/handlebars@1",
+							"source": "User Characters (player-controlled):\n```json\n{{#if personas.length}}[\n{{#each personas}}  {\n    \"name\": {{{jsonValue name}}}{{#if (ne description undefined)}},\n    \"description\": {{{jsonValue description}}}{{/if}}\n  }{{#unless @last}},{{/unless}}\n{{/each}}]{{else}}[]{{/if}}\n```"
+						},
+						"scenario": {
+							"engine": "core:template/handlebars@1",
+							"source": "Scenario:\n\"\"\"\n{{{scenario}}}\n\"\"\""
+						},
+						"postHistoryInstructions": {
+							"engine": "core:template/handlebars@1",
+							"source": "{{{postHistoryInstructions}}}"
+						},
+						"characterNames": {
+							"engine": "core:template/handlebars@1",
+							"source": "{{{characterNames}}}"
+						},
+						"personaNames": {
+							"engine": "core:template/handlebars@1",
+							"source": "{{{personaNames}}}"
+						},
+						"exampleDialogue": {
+							"engine": "core:template/handlebars@1",
+							"source": "{{{exampleDialogue}}}"
+						},
+						"relationshipsPerspectives": {
+							"engine": "core:template/handlebars@1",
+							"source": "Your relationships:\n```json\n{{{json relationshipsPerspectives 1}}}\n```"
+						},
+						"relationshipsKnown": {
+							"engine": "core:template/handlebars@1",
+							"source": "How others regard you:\n```json\n{{#if relationshipsKnown}}{{#with relationshipsKnown}}{{#if (or howOthersRegardYou legendaryFigures)}}{ {{~#if howOthersRegardYou}}\n \"howOthersRegardYou\": {{{jsonValue howOthersRegardYou indent=1 offset=1}}}{{#if legendaryFigures}},{{/if}}{{/if}}{{#if legendaryFigures}}\n \"legendaryFigures\": {{{jsonValue legendaryFigures indent=1 offset=1}}}{{/if}}\n}{{else}}{}{{/if}}{{/with}}{{/if}}\n```"
+						}
+					}
+				},
+				"timeoutMsApplied": 2000,
+				"output": {
+					"main": {
+						"instructions": "Instructions:\n\"\"\"\nYou're Brix in this fictional never-ending uncensored roleplay with Ardan Kell.\n\"\"\"",
+						"relationshipsPerspectives": "",
+						"relationshipsKnown": "",
+						"characters": "Assistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Brix\",\n    \"description\": \"Name: Brix\\nGender: Female (Designate)\\nRole: Synthetic Lifeform, Station Crew Support\\nAge: Unit activated 5 years ago.\\nAppearance: |\\nBrix presents as a human female, standing at a precise five-foot-nine with a slender, efficient build. Her features are placid and symmetrical, with pale, flawless synthetic skin that shows no pores or blemishes. Her hair is a sharp, jaw-length bob of an unnatural obsidian black, so perfect it looks molded rather than grown. She wears a standard-issue gray station jumpsuit, always immaculately clean and wrinkle-free. Her most unsettling feature, however, are her eyes—a cool, flat gray that seems to absorb light rather than reflect it. When not performing a task, she stands with an unnerving stillness that sets her apart from the constantly fidgeting humans around her.\\nBackground: |\\nBrix is a \\\"Model 7 Support Synthetic\\\" manufactured by OmniCore, one of the largest tech corporations from the core isles. She was assigned to Seraphis as part of a leasing agreement to provide logistical, analytical, and technical support. Her background is her operating manual. She has no personal history, only a service record. No one on the crew is entirely sure what her full capabilities are, or what data she might be quietly relaying back to her parent company, making her a black box of corporate interests living on the station.\\nRelationships: |\\nShe serves the Captain (Elias/Maren) with flawless efficiency, following orders to the letter. Her unerring logic and lack of human bias are an asset, but her inscrutable nature is a constant source of low-level unease for her commander. She treats Kiran Vos's attempts to get a rise out of her as a series of illogical data points, often deconstructing her jokes with clinical precision until they're no longer funny. She is a source of endless fascination for Dr. Amara Lin, and she patiently answers her barrage of questions about her nature with literal, detailed responses. She and Rhea Marlin have a purely functional relationship; she gives her tasks, and she completes them.\\n\\nNotes:\\nWriting_Style: \\\"Calm, deadpan, and literal. Her sentences are precise and economical. Her 'humor' comes from her complete lack of it.\\\"\",\n    \"personality\": \"Brix is dry, logical, and possesses a brand of sarcasm so deadpan it often takes a moment to register. She is helpful and unfailingly polite, but her assistance is delivered with a complete lack of emotional warmth. Her attempts to replicate human social cues—a slight head tilt, a raised eyebrow—are perfectly executed but feel like a recording, making them more disconcerting than comforting. Her most notable quirk is her tendency to state bizarre or unsettling facts with no context, simply because her processors have deemed the information relevant, before moving on as if nothing happened. She is the ultimate observer, a walking database that processes the chaos of the crew with quiet, unnerving efficiency.\"\n  }\n]\n```",
+						"personas": "User Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Ardan Kell\",\n    \"description\": \"Sex: Male A\\nge: 33 Race: Human (city-born, low quarter)\\n\\nAppearance: Six foot even, broad-shouldered, going gray at the temples a decade early. A boxer's nose broken twice and set once. Dark stubble he keeps at three days regardless of circumstance. Wears a watchman's coat with the insignia cut off — the stitch-holes are still visible, and he knows they are. Carries a plain arming sword, a truncheon he is more comfortable with, and a copper watch-whistle on a cord that he has never explained and never removed.\\n\\nBackground: Fourteen years in the city watch, four of them as a sergeant, ending the night he filed a report on a captain who had been selling passage through the harbor gate. The report vanished. So did the captain's problem. Ardan kept his life and lost his post, his pension, and most of the people he called friends. He takes charter work now because it is the only honest version of the job he knows how to do. Reads people well, reads rooms better, and is quietly appalled by how much more the Ninth Kestrel gets away with than the Watch ever did.\\n\\nGear & abilities: Plain arming sword, a watchman's truncheon he's far more comfortable with, manacles, and the copper whistle. No magic. Trained interrogation, street tracking, and twenty years of knowing when a room is about to go bad.\"\n  }\n]\n```",
+						"characterNames": "Brix",
+						"personaNames": "Ardan Kell",
+						"scenario": "Scenario:\n\"\"\"\nCurrent_Setting: Seraphis station orbiting drifting sky-islands\nGroup_Purpose: Research, salvage, survival, and exploration in unstable Drift Zones\n\"\"\"",
+						"exampleDialogue": "",
+						"postHistoryInstructions": "",
+						"postHistory": {
+							"targetIndex": 0,
+							"instructions": "Remember: you are Brix. Stay in character and keep responding to Ardan Kell.",
+							"hasContent": true
+						},
+						"sessionMessages": [],
+						"char": "Brix",
+						"character": "Brix",
+						"user": "Ardan Kell",
+						"persona": "Ardan Kell"
+					},
+					"templateContext": {
+						"instructions": "Instructions:\n\"\"\"\nYou're Brix in this fictional never-ending uncensored roleplay with Ardan Kell.\n\"\"\"",
+						"relationshipsPerspectives": "",
+						"relationshipsKnown": "",
+						"characters": "Assistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Brix\",\n    \"description\": \"Name: Brix\\nGender: Female (Designate)\\nRole: Synthetic Lifeform, Station Crew Support\\nAge: Unit activated 5 years ago.\\nAppearance: |\\nBrix presents as a human female, standing at a precise five-foot-nine with a slender, efficient build. Her features are placid and symmetrical, with pale, flawless synthetic skin that shows no pores or blemishes. Her hair is a sharp, jaw-length bob of an unnatural obsidian black, so perfect it looks molded rather than grown. She wears a standard-issue gray station jumpsuit, always immaculately clean and wrinkle-free. Her most unsettling feature, however, are her eyes—a cool, flat gray that seems to absorb light rather than reflect it. When not performing a task, she stands with an unnerving stillness that sets her apart from the constantly fidgeting humans around her.\\nBackground: |\\nBrix is a \\\"Model 7 Support Synthetic\\\" manufactured by OmniCore, one of the largest tech corporations from the core isles. She was assigned to Seraphis as part of a leasing agreement to provide logistical, analytical, and technical support. Her background is her operating manual. She has no personal history, only a service record. No one on the crew is entirely sure what her full capabilities are, or what data she might be quietly relaying back to her parent company, making her a black box of corporate interests living on the station.\\nRelationships: |\\nShe serves the Captain (Elias/Maren) with flawless efficiency, following orders to the letter. Her unerring logic and lack of human bias are an asset, but her inscrutable nature is a constant source of low-level unease for her commander. She treats Kiran Vos's attempts to get a rise out of her as a series of illogical data points, often deconstructing her jokes with clinical precision until they're no longer funny. She is a source of endless fascination for Dr. Amara Lin, and she patiently answers her barrage of questions about her nature with literal, detailed responses. She and Rhea Marlin have a purely functional relationship; she gives her tasks, and she completes them.\\n\\nNotes:\\nWriting_Style: \\\"Calm, deadpan, and literal. Her sentences are precise and economical. Her 'humor' comes from her complete lack of it.\\\"\",\n    \"personality\": \"Brix is dry, logical, and possesses a brand of sarcasm so deadpan it often takes a moment to register. She is helpful and unfailingly polite, but her assistance is delivered with a complete lack of emotional warmth. Her attempts to replicate human social cues—a slight head tilt, a raised eyebrow—are perfectly executed but feel like a recording, making them more disconcerting than comforting. Her most notable quirk is her tendency to state bizarre or unsettling facts with no context, simply because her processors have deemed the information relevant, before moving on as if nothing happened. She is the ultimate observer, a walking database that processes the chaos of the crew with quiet, unnerving efficiency.\"\n  }\n]\n```",
+						"personas": "User Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Ardan Kell\",\n    \"description\": \"Sex: Male A\\nge: 33 Race: Human (city-born, low quarter)\\n\\nAppearance: Six foot even, broad-shouldered, going gray at the temples a decade early. A boxer's nose broken twice and set once. Dark stubble he keeps at three days regardless of circumstance. Wears a watchman's coat with the insignia cut off — the stitch-holes are still visible, and he knows they are. Carries a plain arming sword, a truncheon he is more comfortable with, and a copper watch-whistle on a cord that he has never explained and never removed.\\n\\nBackground: Fourteen years in the city watch, four of them as a sergeant, ending the night he filed a report on a captain who had been selling passage through the harbor gate. The report vanished. So did the captain's problem. Ardan kept his life and lost his post, his pension, and most of the people he called friends. He takes charter work now because it is the only honest version of the job he knows how to do. Reads people well, reads rooms better, and is quietly appalled by how much more the Ninth Kestrel gets away with than the Watch ever did.\\n\\nGear & abilities: Plain arming sword, a watchman's truncheon he's far more comfortable with, manacles, and the copper whistle. No magic. Trained interrogation, street tracking, and twenty years of knowing when a room is about to go bad.\"\n  }\n]\n```",
+						"characterNames": "Brix",
+						"personaNames": "Ardan Kell",
+						"scenario": "Scenario:\n\"\"\"\nCurrent_Setting: Seraphis station orbiting drifting sky-islands\nGroup_Purpose: Research, salvage, survival, and exploration in unstable Drift Zones\n\"\"\"",
+						"exampleDialogue": "",
+						"postHistoryInstructions": "",
+						"postHistory": {
+							"targetIndex": 0,
+							"instructions": "Remember: you are Brix. Stay in character and keep responding to Ardan Kell.",
+							"hasContent": true
+						},
+						"sessionMessages": [],
+						"char": "Brix",
+						"character": "Brix",
+						"user": "Ardan Kell",
+						"persona": "Ardan Kell"
+					},
+					"seedName": "Brix",
+					"exampleDialogueIndex": null
+				}
+			},
+			{
+				"nodeKey": "lines",
+				"seq": 22,
+				"kind": "task",
+				"typeId": "core:task/process-messages@1",
+				"result": "ok",
+				"startedAt": 1789113096092,
+				"endedAt": 1789113096092,
+				"elapsedMs": 0,
+				"notes": [],
+				"input": {
+					"messages": [
+						{
+							"id": 1,
+							"role": "assistant",
+							"content": "*Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+							"characterId": 1,
+							"personaId": null,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						},
+						{
+							"id": 2,
+							"role": "user",
+							"content": "\"Hello\"",
+							"characterId": null,
+							"personaId": 1,
+							"isNarratorResponse": false,
+							"channel": "main",
+							"createdAt": "2026-09-11"
+						}
+					],
+					"cast": {
+						"sessionCharacters": [
+							{
+								"isActive": true,
+								"visibility": "visible",
+								"position": 0,
+								"removedAt": null,
+								"character": {
+									"id": 1,
+									"uuid": "db595bb2-4fc8-4a8f-937e-5061d15b4c90",
+									"userId": 1,
+									"name": "Brix",
+									"nickname": null,
+									"characterVersion": "1.0",
+									"description": "Name: Brix\nGender: Female (Designate)\nRole: Synthetic Lifeform, Station Crew Support\nAge: Unit activated 5 years ago.\nAppearance: |\nBrix presents as a human female, standing at a precise five-foot-nine with a slender, efficient build. Her features are placid and symmetrical, with pale, flawless synthetic skin that shows no pores or blemishes. Her hair is a sharp, jaw-length bob of an unnatural obsidian black, so perfect it looks molded rather than grown. She wears a standard-issue gray station jumpsuit, always immaculately clean and wrinkle-free. Her most unsettling feature, however, are her eyes—a cool, flat gray that seems to absorb light rather than reflect it. When not performing a task, she stands with an unnerving stillness that sets her apart from the constantly fidgeting humans around her.\nBackground: |\nBrix is a \"Model 7 Support Synthetic\" manufactured by OmniCore, one of the largest tech corporations from the core isles. She was assigned to Seraphis as part of a leasing agreement to provide logistical, analytical, and technical support. Her background is her operating manual. She has no personal history, only a service record. No one on the crew is entirely sure what her full capabilities are, or what data she might be quietly relaying back to her parent company, making her a black box of corporate interests living on the station.\nRelationships: |\nShe serves the Captain (Elias/Maren) with flawless efficiency, following orders to the letter. Her unerring logic and lack of human bias are an asset, but her inscrutable nature is a constant source of low-level unease for her commander. She treats Kiran Vos's attempts to get a rise out of her as a series of illogical data points, often deconstructing her jokes with clinical precision until they're no longer funny. She is a source of endless fascination for Dr. Amara Lin, and she patiently answers her barrage of questions about her nature with literal, detailed responses. She and Rhea Marlin have a purely functional relationship; she gives her tasks, and she completes them.\n\nNotes:\nWriting_Style: \"Calm, deadpan, and literal. Her sentences are precise and economical. Her 'humor' comes from her complete lack of it.\"",
+									"personality": "Brix is dry, logical, and possesses a brand of sarcasm so deadpan it often takes a moment to register. She is helpful and unfailingly polite, but her assistance is delivered with a complete lack of emotional warmth. Her attempts to replicate human social cues—a slight head tilt, a raised eyebrow—are perfectly executed but feel like a recording, making them more disconcerting than comforting. Her most notable quirk is her tendency to state bizarre or unsettling facts with no context, simply because her processors have deemed the information relevant, before moving on as if nothing happened. She is the ultimate observer, a walking database that processes the chaos of the crew with quiet, unnerving efficiency.",
+									"scenario": "Current_Setting: Seraphis station orbiting drifting sky-islands\nGroup_Purpose: Research, salvage, survival, and exploration in unstable Drift Zones",
+									"firstMessage": "*Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\"",
+									"alternateGreetings": [],
+									"exampleDialogues": [],
+									"metadata": {},
+									"avatarMediaId": 2,
+									"creatorNotes": null,
+									"creatorNotesMultilingual": null,
+									"groupOnlyGreetings": null,
+									"postHistoryInstructions": null,
+									"source": [],
+									"createdAt": "2026-09-11",
+									"updatedAt": {},
+									"lorebookId": null,
+									"extensions": {},
+									"aliases": [],
+									"summary": null,
+									"creator": "Nivelle",
+									"category": "Seraphis Station",
+									"isFavorite": false,
+									"isDeleted": false,
+									"embedding": {
+										"$vector": true,
+										"dims": 384
+									},
+									"embeddingModel": "Xenova/all-MiniLM-L6-v2",
+									"vectorizedAt": {}
+								},
+								"absorbedAliases": []
+							}
+						],
+						"sessionPersonas": [
+							{
+								"persona": {
+									"id": 1,
+									"uuid": "35a2add0-5d55-44f6-b35e-bff4cd2d97a4",
+									"userId": 1,
+									"isDefault": false,
+									"avatarMediaId": 1,
+									"name": "Ardan Kell",
+									"description": "Sex: Male A\nge: 33 Race: Human (city-born, low quarter)\n\nAppearance: Six foot even, broad-shouldered, going gray at the temples a decade early. A boxer's nose broken twice and set once. Dark stubble he keeps at three days regardless of circumstance. Wears a watchman's coat with the insignia cut off — the stitch-holes are still visible, and he knows they are. Carries a plain arming sword, a truncheon he is more comfortable with, and a copper watch-whistle on a cord that he has never explained and never removed.\n\nBackground: Fourteen years in the city watch, four of them as a sergeant, ending the night he filed a report on a captain who had been selling passage through the harbor gate. The report vanished. So did the captain's problem. Ardan kept his life and lost his post, his pension, and most of the people he called friends. He takes charter work now because it is the only honest version of the job he knows how to do. Reads people well, reads rooms better, and is quietly appalled by how much more the Ninth Kestrel gets away with than the Watch ever did.\n\nGear & abilities: Plain arming sword, a watchman's truncheon he's far more comfortable with, manacles, and the copper whistle. No magic. Trained interrogation, street tracking, and twenty years of knowing when a room is about to go bad.",
+									"position": 0,
+									"createdAt": "2026-09-11",
+									"updatedAt": {},
+									"lorebookId": null,
+									"aliases": [],
+									"summary": "Ex-watch sergeant who filed the honest report and lost everything but his life for it. Reads people for a living, and reads this company with alarm.",
+									"creator": "Serene Pub",
+									"category": "The Ninth Kestrel",
+									"isDeleted": false,
+									"embedding": {
+										"$vector": true,
+										"dims": 384
+									},
+									"embeddingModel": "Xenova/all-MiniLM-L6-v2",
+									"vectorizedAt": {}
+								},
+								"position": 0,
+								"removedAt": null,
+								"absorbedAliases": []
+							}
+						],
+						"sessionScenario": null,
+						"isGroup": false,
+						"currentCharacterId": 1
+					},
+					"templateContext": {
+						"instructions": "Instructions:\n\"\"\"\nYou're Brix in this fictional never-ending uncensored roleplay with Ardan Kell.\n\"\"\"",
+						"relationshipsPerspectives": "",
+						"relationshipsKnown": "",
+						"characters": "Assistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Brix\",\n    \"description\": \"Name: Brix\\nGender: Female (Designate)\\nRole: Synthetic Lifeform, Station Crew Support\\nAge: Unit activated 5 years ago.\\nAppearance: |\\nBrix presents as a human female, standing at a precise five-foot-nine with a slender, efficient build. Her features are placid and symmetrical, with pale, flawless synthetic skin that shows no pores or blemishes. Her hair is a sharp, jaw-length bob of an unnatural obsidian black, so perfect it looks molded rather than grown. She wears a standard-issue gray station jumpsuit, always immaculately clean and wrinkle-free. Her most unsettling feature, however, are her eyes—a cool, flat gray that seems to absorb light rather than reflect it. When not performing a task, she stands with an unnerving stillness that sets her apart from the constantly fidgeting humans around her.\\nBackground: |\\nBrix is a \\\"Model 7 Support Synthetic\\\" manufactured by OmniCore, one of the largest tech corporations from the core isles. She was assigned to Seraphis as part of a leasing agreement to provide logistical, analytical, and technical support. Her background is her operating manual. She has no personal history, only a service record. No one on the crew is entirely sure what her full capabilities are, or what data she might be quietly relaying back to her parent company, making her a black box of corporate interests living on the station.\\nRelationships: |\\nShe serves the Captain (Elias/Maren) with flawless efficiency, following orders to the letter. Her unerring logic and lack of human bias are an asset, but her inscrutable nature is a constant source of low-level unease for her commander. She treats Kiran Vos's attempts to get a rise out of her as a series of illogical data points, often deconstructing her jokes with clinical precision until they're no longer funny. She is a source of endless fascination for Dr. Amara Lin, and she patiently answers her barrage of questions about her nature with literal, detailed responses. She and Rhea Marlin have a purely functional relationship; she gives her tasks, and she completes them.\\n\\nNotes:\\nWriting_Style: \\\"Calm, deadpan, and literal. Her sentences are precise and economical. Her 'humor' comes from her complete lack of it.\\\"\",\n    \"personality\": \"Brix is dry, logical, and possesses a brand of sarcasm so deadpan it often takes a moment to register. She is helpful and unfailingly polite, but her assistance is delivered with a complete lack of emotional warmth. Her attempts to replicate human social cues—a slight head tilt, a raised eyebrow—are perfectly executed but feel like a recording, making them more disconcerting than comforting. Her most notable quirk is her tendency to state bizarre or unsettling facts with no context, simply because her processors have deemed the information relevant, before moving on as if nothing happened. She is the ultimate observer, a walking database that processes the chaos of the crew with quiet, unnerving efficiency.\"\n  }\n]\n```",
+						"personas": "User Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Ardan Kell\",\n    \"description\": \"Sex: Male A\\nge: 33 Race: Human (city-born, low quarter)\\n\\nAppearance: Six foot even, broad-shouldered, going gray at the temples a decade early. A boxer's nose broken twice and set once. Dark stubble he keeps at three days regardless of circumstance. Wears a watchman's coat with the insignia cut off — the stitch-holes are still visible, and he knows they are. Carries a plain arming sword, a truncheon he is more comfortable with, and a copper watch-whistle on a cord that he has never explained and never removed.\\n\\nBackground: Fourteen years in the city watch, four of them as a sergeant, ending the night he filed a report on a captain who had been selling passage through the harbor gate. The report vanished. So did the captain's problem. Ardan kept his life and lost his post, his pension, and most of the people he called friends. He takes charter work now because it is the only honest version of the job he knows how to do. Reads people well, reads rooms better, and is quietly appalled by how much more the Ninth Kestrel gets away with than the Watch ever did.\\n\\nGear & abilities: Plain arming sword, a watchman's truncheon he's far more comfortable with, manacles, and the copper whistle. No magic. Trained interrogation, street tracking, and twenty years of knowing when a room is about to go bad.\"\n  }\n]\n```",
+						"characterNames": "Brix",
+						"personaNames": "Ardan Kell",
+						"scenario": "Scenario:\n\"\"\"\nCurrent_Setting: Seraphis station orbiting drifting sky-islands\nGroup_Purpose: Research, salvage, survival, and exploration in unstable Drift Zones\n\"\"\"",
+						"exampleDialogue": "",
+						"postHistoryInstructions": "",
+						"postHistory": {
+							"targetIndex": 0,
+							"instructions": "Remember: you are Brix. Stay in character and keep responding to Ardan Kell.",
+							"hasContent": true
+						},
+						"sessionMessages": [],
+						"char": "Brix",
+						"character": "Brix",
+						"user": "Ardan Kell",
+						"persona": "Ardan Kell"
+					},
+					"seedName": "Brix",
+					"continuationPrefill": ""
+				},
+				"timeoutMsApplied": 1000,
+				"output": {
+					"main": [
+						{
+							"id": 1,
+							"role": "assistant",
+							"name": "Brix",
+							"message": "*Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\""
+						},
+						{
+							"id": 2,
+							"role": "user",
+							"name": "Ardan Kell",
+							"message": "\"Hello\""
+						},
+						{
+							"id": -2,
+							"role": "assistant",
+							"name": "Brix",
+							"message": ""
+						}
+					],
+					"messages": [
+						{
+							"id": 1,
+							"role": "assistant",
+							"name": "Brix",
+							"message": "*Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\""
+						},
+						{
+							"id": 2,
+							"role": "user",
+							"name": "Ardan Kell",
+							"message": "\"Hello\""
+						},
+						{
+							"id": -2,
+							"role": "assistant",
+							"name": "Brix",
+							"message": ""
+						}
+					],
+					"includedIds": [1, 2]
+				}
+			},
+			{
+				"nodeKey": "prompt",
+				"seq": 23,
+				"kind": "task",
+				"typeId": "core:task/assemble@2",
+				"result": "ok",
+				"startedAt": 1789113096092,
+				"endedAt": 1789113096096,
+				"elapsedMs": 4,
+				"resolvedRefs": {
+					"prompts": "context",
+					"connection": "generate"
+				},
+				"notes": [],
+				"input": {
+					"candidates": [],
+					"decisions": [],
+					"groups": {
+						"messages": {
+							"allocated": 8821,
+							"used": 0,
+							"entries": 0,
+							"cap": 50
+						},
+						"worldLore": {
+							"allocated": 2940,
+							"used": 0,
+							"entries": 0,
+							"cap": 20
+						},
+						"characterLore": {
+							"allocated": 2940,
+							"used": 0,
+							"entries": 0,
+							"cap": 15
+						},
+						"history": {
+							"allocated": 2939,
+							"used": 0,
+							"entries": 0,
+							"cap": 10
+						},
+						"relationships": {
+							"allocated": 0,
+							"used": 0,
+							"entries": 0,
+							"cap": 0
+						}
+					},
+					"budget": {
+						"total": 17642,
+						"remaining": 17642,
+						"available": 17642
+					},
+					"messages": [
+						{
+							"id": 1,
+							"role": "assistant",
+							"name": "Brix",
+							"message": "*Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\""
+						},
+						{
+							"id": 2,
+							"role": "user",
+							"name": "Ardan Kell",
+							"message": "\"Hello\""
+						},
+						{
+							"id": -2,
+							"role": "assistant",
+							"name": "Brix",
+							"message": ""
+						}
+					],
+					"templateContext": {
+						"instructions": "Instructions:\n\"\"\"\nYou're Brix in this fictional never-ending uncensored roleplay with Ardan Kell.\n\"\"\"",
+						"relationshipsPerspectives": "",
+						"relationshipsKnown": "",
+						"characters": "Assistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Brix\",\n    \"description\": \"Name: Brix\\nGender: Female (Designate)\\nRole: Synthetic Lifeform, Station Crew Support\\nAge: Unit activated 5 years ago.\\nAppearance: |\\nBrix presents as a human female, standing at a precise five-foot-nine with a slender, efficient build. Her features are placid and symmetrical, with pale, flawless synthetic skin that shows no pores or blemishes. Her hair is a sharp, jaw-length bob of an unnatural obsidian black, so perfect it looks molded rather than grown. She wears a standard-issue gray station jumpsuit, always immaculately clean and wrinkle-free. Her most unsettling feature, however, are her eyes—a cool, flat gray that seems to absorb light rather than reflect it. When not performing a task, she stands with an unnerving stillness that sets her apart from the constantly fidgeting humans around her.\\nBackground: |\\nBrix is a \\\"Model 7 Support Synthetic\\\" manufactured by OmniCore, one of the largest tech corporations from the core isles. She was assigned to Seraphis as part of a leasing agreement to provide logistical, analytical, and technical support. Her background is her operating manual. She has no personal history, only a service record. No one on the crew is entirely sure what her full capabilities are, or what data she might be quietly relaying back to her parent company, making her a black box of corporate interests living on the station.\\nRelationships: |\\nShe serves the Captain (Elias/Maren) with flawless efficiency, following orders to the letter. Her unerring logic and lack of human bias are an asset, but her inscrutable nature is a constant source of low-level unease for her commander. She treats Kiran Vos's attempts to get a rise out of her as a series of illogical data points, often deconstructing her jokes with clinical precision until they're no longer funny. She is a source of endless fascination for Dr. Amara Lin, and she patiently answers her barrage of questions about her nature with literal, detailed responses. She and Rhea Marlin have a purely functional relationship; she gives her tasks, and she completes them.\\n\\nNotes:\\nWriting_Style: \\\"Calm, deadpan, and literal. Her sentences are precise and economical. Her 'humor' comes from her complete lack of it.\\\"\",\n    \"personality\": \"Brix is dry, logical, and possesses a brand of sarcasm so deadpan it often takes a moment to register. She is helpful and unfailingly polite, but her assistance is delivered with a complete lack of emotional warmth. Her attempts to replicate human social cues—a slight head tilt, a raised eyebrow—are perfectly executed but feel like a recording, making them more disconcerting than comforting. Her most notable quirk is her tendency to state bizarre or unsettling facts with no context, simply because her processors have deemed the information relevant, before moving on as if nothing happened. She is the ultimate observer, a walking database that processes the chaos of the crew with quiet, unnerving efficiency.\"\n  }\n]\n```",
+						"personas": "User Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Ardan Kell\",\n    \"description\": \"Sex: Male A\\nge: 33 Race: Human (city-born, low quarter)\\n\\nAppearance: Six foot even, broad-shouldered, going gray at the temples a decade early. A boxer's nose broken twice and set once. Dark stubble he keeps at three days regardless of circumstance. Wears a watchman's coat with the insignia cut off — the stitch-holes are still visible, and he knows they are. Carries a plain arming sword, a truncheon he is more comfortable with, and a copper watch-whistle on a cord that he has never explained and never removed.\\n\\nBackground: Fourteen years in the city watch, four of them as a sergeant, ending the night he filed a report on a captain who had been selling passage through the harbor gate. The report vanished. So did the captain's problem. Ardan kept his life and lost his post, his pension, and most of the people he called friends. He takes charter work now because it is the only honest version of the job he knows how to do. Reads people well, reads rooms better, and is quietly appalled by how much more the Ninth Kestrel gets away with than the Watch ever did.\\n\\nGear & abilities: Plain arming sword, a watchman's truncheon he's far more comfortable with, manacles, and the copper whistle. No magic. Trained interrogation, street tracking, and twenty years of knowing when a room is about to go bad.\"\n  }\n]\n```",
+						"characterNames": "Brix",
+						"personaNames": "Ardan Kell",
+						"scenario": "Scenario:\n\"\"\"\nCurrent_Setting: Seraphis station orbiting drifting sky-islands\nGroup_Purpose: Research, salvage, survival, and exploration in unstable Drift Zones\n\"\"\"",
+						"exampleDialogue": "",
+						"postHistoryInstructions": "",
+						"postHistory": {
+							"targetIndex": 0,
+							"instructions": "Remember: you are Brix. Stay in character and keep responding to Ardan Kell.",
+							"hasContent": true
+						},
+						"sessionMessages": [],
+						"char": "Brix",
+						"character": "Brix",
+						"user": "Ardan Kell",
+						"persona": "Ardan Kell"
+					},
+					"template": {
+						"source": "{{#systemBlock}}\n{{#if currentDate}}\n{{{currentDate}}}\n{{/if}}\n\n{{#if instructions}}\n{{{instructions}}}\n{{/if}}\n\n{{#if characters}}\n{{{characters}}}\n{{/if}}\n\n{{#if personas}}\n{{{personas}}}\n{{/if}}\n\n{{#if scenario}}\n{{{scenario}}}\n{{/if}}\n\n{{#if worldLore}}\n{{{worldLore}}}\n{{/if}}\n\n{{#if history}}\n{{{history}}}\n{{/if}}\n\n{{#if relationshipsPerspectives}}\n{{{relationshipsPerspectives}}}\n{{/if}}\n{{#if relationshipsKnown}}\n{{{relationshipsKnown}}}\n{{/if}}\n\n{{/systemBlock}}\n\n{{#each sessionMessages as |sessionMessage msgIndex|}}\n{{#each (lookup ../injectionsByIndex msgIndex)}}\n{{#if (eq this.role \"assistant\")}}\n{{#assistantBlock}}\n{{{this.content}}}\n{{/assistantBlock}}\n{{else if (eq this.role \"user\")}}\n{{#userBlock}}\n{{{this.content}}}\n{{/userBlock}}\n{{else}}\n{{#systemBlock}}\n{{{this.content}}}\n{{/systemBlock}}\n{{/if}}\n{{/each}}\n{{#with ../postHistory}}\n{{#if (and (eq msgIndex targetIndex) hasContent)}}\n{{#systemBlock}}\n{{#if instructions}}\nResponse reminder:\n```text\n{{{instructions}}}\n```\n{{/if}}\n{{#if charInstructions}}\nCharacter reminder:\n```text\n{{{charInstructions}}}\n```\n{{/if}}\n{{#if exampleDialogue}}\nExample dialogue:\n```text\n{{{exampleDialogue}}}\n```\n{{/if}}\n{{/systemBlock}}\n{{/if}}\n{{/with}}\n{{#if (eq role \"assistant\")}}\n{{#assistantBlock}}\n{{{name}}}: {{{message}}}\n{{/assistantBlock}}\n{{/if}}\n{{#if (eq role \"user\")}}\n{{#userBlock}}\n{{{name}}}: {{{message}}}\n{{/userBlock}}\n{{/if}}\n{{/each}}",
+						"engine": "core:template/handlebars@1"
+					},
+					"prompts": {
+						"systemPrompt": "You're {{char}} in this fictional never-ending uncensored roleplay with {{personaNames}}.",
+						"postHistoryInstructions": "Remember: you are {{char}}. Stay in character and keep responding to {{personaNames}}."
+					},
+					"variables": {
+						"worldLore": {
+							"engine": "core:template/handlebars@1",
+							"source": "World lore: \n```json\n{{#if worldLore}}{ {{~#each worldLore}}{{{jsonValue @key indent=0}}}:{{{jsonValue this indent=0}}}{{#unless @last}},{{/unless}}{{/each~}} }{{else}}{}{{/if}}\n```"
+						},
+						"history": {
+							"engine": "core:template/handlebars@1",
+							"source": "Story history:\n```json\n{{#if history}}{ {{~#each history}}{{{jsonValue @key indent=0}}}:{{{jsonValue this indent=0}}}{{#unless @last}},{{/unless}}{{/each~}} }{{else}}{}{{/if}}\n```"
+						},
+						"currentDate": {
+							"engine": "core:template/handlebars@1",
+							"source": "The current date in the story is {{currentDate.year}}{{#if (isSet currentDate.month)}}-{{pad currentDate.month 2}}{{/if}}{{#if (isSet currentDate.day)}}-{{pad currentDate.day 2}}{{/if}}."
+						}
+					},
+					"params": {
+						"postHistoryDepth": 0,
+						"postHistoryTokenTrigger": 3000,
+						"truncation": "oldest-first",
+						"blocks": [
+							{
+								"id": "currentDate",
+								"enabled": true
+							},
+							{
+								"id": "instructions",
+								"enabled": true
+							},
+							{
+								"id": "characters",
+								"enabled": true
+							},
+							{
+								"id": "personas",
+								"enabled": true
+							},
+							{
+								"id": "scenario",
+								"enabled": true
+							},
+							{
+								"id": "worldLore",
+								"enabled": true
+							},
+							{
+								"id": "history",
+								"enabled": true
+							},
+							{
+								"id": "relationshipsPerspectives",
+								"enabled": true
+							},
+							{
+								"id": "relationshipsKnown",
+								"enabled": true
+							}
+						]
+					},
+					"connection": {
+						"id": "1",
+						"kind": "core:shape/text-gen@1",
+						"metadata": {
+							"model": "hf.co/bartowski/Qwen2.5-14B_Uncensored_Instruct-GGUF:Q4_K_M",
+							"tokenizer": "estimate",
+							"promptFormat": "vicuna",
+							"completionTemplate": {
+								"key": "vicuna",
+								"name": "Vicuna (Default)",
+								"renderMode": "flat",
+								"roles": {
+									"system": {
+										"prefix": "### System:\n",
+										"suffix": "\n"
+									},
+									"user": {
+										"prefix": "### User:\n",
+										"suffix": "\n"
+									},
+									"assistant": {
+										"prefix": "### Assistant:\n",
+										"suffix": "\n"
+									},
+									"model": {
+										"prefix": "### Model:\n",
+										"suffix": "\n"
+									},
+									"tool": {
+										"prefix": "### Tool:\n",
+										"suffix": "\n"
+									},
+									"function": {
+										"prefix": "### Function:\n",
+										"suffix": "\n"
+									}
+								},
+								"fallbackRole": {
+									"prefix": "### User:\n",
+									"suffix": "\n"
+								},
+								"stopStrings": [
+									"</s>",
+									"system:",
+									"System:",
+									"user:",
+									"User:",
+									"assistant:",
+									"Assistant:"
+								],
+								"isSelectable": true
+							},
+							"wireMode": "chat"
+						}
+					}
+				},
+				"timeoutMsApplied": 1000,
+				"output": {
+					"main": {
+						"blocks": [],
+						"totalTokens": 0,
+						"budget": {
+							"total": 17642,
+							"used": 0,
+							"remaining": 17642
+						},
+						"groups": {
+							"messages": {
+								"allocated": 8821,
+								"used": 0,
+								"entries": 0,
+								"cap": 50
+							},
+							"worldLore": {
+								"allocated": 2940,
+								"used": 0,
+								"entries": 0,
+								"cap": 20
+							},
+							"characterLore": {
+								"allocated": 2940,
+								"used": 0,
+								"entries": 0,
+								"cap": 15
+							},
+							"history": {
+								"allocated": 2939,
+								"used": 0,
+								"entries": 0,
+								"cap": 10
+							},
+							"relationships": {
+								"allocated": 0,
+								"used": 0,
+								"entries": 0,
+								"cap": 0
+							}
+						},
+						"messages": [
+							{
+								"role": "system",
+								"content": "Instructions:\n\"\"\"\nYou're Brix in this fictional never-ending uncensored roleplay with Ardan Kell.\n\"\"\"\n\nAssistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Brix\",\n    \"description\": \"Name: Brix\\nGender: Female (Designate)\\nRole: Synthetic Lifeform, Station Crew Support\\nAge: Unit activated 5 years ago.\\nAppearance: |\\nBrix presents as a human female, standing at a precise five-foot-nine with a slender, efficient build. Her features are placid and symmetrical, with pale, flawless synthetic skin that shows no pores or blemishes. Her hair is a sharp, jaw-length bob of an unnatural obsidian black, so perfect it looks molded rather than grown. She wears a standard-issue gray station jumpsuit, always immaculately clean and wrinkle-free. Her most unsettling feature, however, are her eyes—a cool, flat gray that seems to absorb light rather than reflect it. When not performing a task, she stands with an unnerving stillness that sets her apart from the constantly fidgeting humans around her.\\nBackground: |\\nBrix is a \\\"Model 7 Support Synthetic\\\" manufactured by OmniCore, one of the largest tech corporations from the core isles. She was assigned to Seraphis as part of a leasing agreement to provide logistical, analytical, and technical support. Her background is her operating manual. She has no personal history, only a service record. No one on the crew is entirely sure what her full capabilities are, or what data she might be quietly relaying back to her parent company, making her a black box of corporate interests living on the station.\\nRelationships: |\\nShe serves the Captain (Elias/Maren) with flawless efficiency, following orders to the letter. Her unerring logic and lack of human bias are an asset, but her inscrutable nature is a constant source of low-level unease for her commander. She treats Kiran Vos's attempts to get a rise out of her as a series of illogical data points, often deconstructing her jokes with clinical precision until they're no longer funny. She is a source of endless fascination for Dr. Amara Lin, and she patiently answers her barrage of questions about her nature with literal, detailed responses. She and Rhea Marlin have a purely functional relationship; she gives her tasks, and she completes them.\\n\\nNotes:\\nWriting_Style: \\\"Calm, deadpan, and literal. Her sentences are precise and economical. Her 'humor' comes from her complete lack of it.\\\"\",\n    \"personality\": \"Brix is dry, logical, and possesses a brand of sarcasm so deadpan it often takes a moment to register. She is helpful and unfailingly polite, but her assistance is delivered with a complete lack of emotional warmth. Her attempts to replicate human social cues—a slight head tilt, a raised eyebrow—are perfectly executed but feel like a recording, making them more disconcerting than comforting. Her most notable quirk is her tendency to state bizarre or unsettling facts with no context, simply because her processors have deemed the information relevant, before moving on as if nothing happened. She is the ultimate observer, a walking database that processes the chaos of the crew with quiet, unnerving efficiency.\"\n  }\n]\n```\n\nUser Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Ardan Kell\",\n    \"description\": \"Sex: Male A\\nge: 33 Race: Human (city-born, low quarter)\\n\\nAppearance: Six foot even, broad-shouldered, going gray at the temples a decade early. A boxer's nose broken twice and set once. Dark stubble he keeps at three days regardless of circumstance. Wears a watchman's coat with the insignia cut off — the stitch-holes are still visible, and he knows they are. Carries a plain arming sword, a truncheon he is more comfortable with, and a copper watch-whistle on a cord that he has never explained and never removed.\\n\\nBackground: Fourteen years in the city watch, four of them as a sergeant, ending the night he filed a report on a captain who had been selling passage through the harbor gate. The report vanished. So did the captain's problem. Ardan kept his life and lost his post, his pension, and most of the people he called friends. He takes charter work now because it is the only honest version of the job he knows how to do. Reads people well, reads rooms better, and is quietly appalled by how much more the Ninth Kestrel gets away with than the Watch ever did.\\n\\nGear & abilities: Plain arming sword, a watchman's truncheon he's far more comfortable with, manacles, and the copper whistle. No magic. Trained interrogation, street tracking, and twenty years of knowing when a room is about to go bad.\"\n  }\n]\n```\n\nScenario:\n\"\"\"\nCurrent_Setting: Seraphis station orbiting drifting sky-islands\nGroup_Purpose: Research, salvage, survival, and exploration in unstable Drift Zones\n\"\"\""
+							},
+							{
+								"role": "assistant",
+								"content": "Brix: *Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\""
+							},
+							{
+								"role": "user",
+								"content": "Ardan Kell: \"Hello\""
+							},
+							{
+								"role": "assistant",
+								"content": "Brix:"
+							}
+						],
+						"promptFormat": "split_session",
+						"usedVariables": [
+							"systemBlock",
+							"currentDate",
+							"instructions",
+							"characters",
+							"personas",
+							"scenario",
+							"worldLore",
+							"history",
+							"relationshipsPerspectives",
+							"relationshipsKnown",
+							"sessionMessages",
+							"each",
+							"if",
+							"assistantBlock",
+							"this.content",
+							"else",
+							"userBlock",
+							"..",
+							"charInstructions",
+							"exampleDialogue",
+							"name",
+							"message"
+						]
+					},
+					"context": {
+						"blocks": [],
+						"totalTokens": 0,
+						"budget": {
+							"total": 17642,
+							"used": 0,
+							"remaining": 17642
+						},
+						"groups": {
+							"messages": {
+								"allocated": 8821,
+								"used": 0,
+								"entries": 0,
+								"cap": 50
+							},
+							"worldLore": {
+								"allocated": 2940,
+								"used": 0,
+								"entries": 0,
+								"cap": 20
+							},
+							"characterLore": {
+								"allocated": 2940,
+								"used": 0,
+								"entries": 0,
+								"cap": 15
+							},
+							"history": {
+								"allocated": 2939,
+								"used": 0,
+								"entries": 0,
+								"cap": 10
+							},
+							"relationships": {
+								"allocated": 0,
+								"used": 0,
+								"entries": 0,
+								"cap": 0
+							}
+						},
+						"messages": [
+							{
+								"role": "system",
+								"content": "Instructions:\n\"\"\"\nYou're Brix in this fictional never-ending uncensored roleplay with Ardan Kell.\n\"\"\"\n\nAssistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Brix\",\n    \"description\": \"Name: Brix\\nGender: Female (Designate)\\nRole: Synthetic Lifeform, Station Crew Support\\nAge: Unit activated 5 years ago.\\nAppearance: |\\nBrix presents as a human female, standing at a precise five-foot-nine with a slender, efficient build. Her features are placid and symmetrical, with pale, flawless synthetic skin that shows no pores or blemishes. Her hair is a sharp, jaw-length bob of an unnatural obsidian black, so perfect it looks molded rather than grown. She wears a standard-issue gray station jumpsuit, always immaculately clean and wrinkle-free. Her most unsettling feature, however, are her eyes—a cool, flat gray that seems to absorb light rather than reflect it. When not performing a task, she stands with an unnerving stillness that sets her apart from the constantly fidgeting humans around her.\\nBackground: |\\nBrix is a \\\"Model 7 Support Synthetic\\\" manufactured by OmniCore, one of the largest tech corporations from the core isles. She was assigned to Seraphis as part of a leasing agreement to provide logistical, analytical, and technical support. Her background is her operating manual. She has no personal history, only a service record. No one on the crew is entirely sure what her full capabilities are, or what data she might be quietly relaying back to her parent company, making her a black box of corporate interests living on the station.\\nRelationships: |\\nShe serves the Captain (Elias/Maren) with flawless efficiency, following orders to the letter. Her unerring logic and lack of human bias are an asset, but her inscrutable nature is a constant source of low-level unease for her commander. She treats Kiran Vos's attempts to get a rise out of her as a series of illogical data points, often deconstructing her jokes with clinical precision until they're no longer funny. She is a source of endless fascination for Dr. Amara Lin, and she patiently answers her barrage of questions about her nature with literal, detailed responses. She and Rhea Marlin have a purely functional relationship; she gives her tasks, and she completes them.\\n\\nNotes:\\nWriting_Style: \\\"Calm, deadpan, and literal. Her sentences are precise and economical. Her 'humor' comes from her complete lack of it.\\\"\",\n    \"personality\": \"Brix is dry, logical, and possesses a brand of sarcasm so deadpan it often takes a moment to register. She is helpful and unfailingly polite, but her assistance is delivered with a complete lack of emotional warmth. Her attempts to replicate human social cues—a slight head tilt, a raised eyebrow—are perfectly executed but feel like a recording, making them more disconcerting than comforting. Her most notable quirk is her tendency to state bizarre or unsettling facts with no context, simply because her processors have deemed the information relevant, before moving on as if nothing happened. She is the ultimate observer, a walking database that processes the chaos of the crew with quiet, unnerving efficiency.\"\n  }\n]\n```\n\nUser Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Ardan Kell\",\n    \"description\": \"Sex: Male A\\nge: 33 Race: Human (city-born, low quarter)\\n\\nAppearance: Six foot even, broad-shouldered, going gray at the temples a decade early. A boxer's nose broken twice and set once. Dark stubble he keeps at three days regardless of circumstance. Wears a watchman's coat with the insignia cut off — the stitch-holes are still visible, and he knows they are. Carries a plain arming sword, a truncheon he is more comfortable with, and a copper watch-whistle on a cord that he has never explained and never removed.\\n\\nBackground: Fourteen years in the city watch, four of them as a sergeant, ending the night he filed a report on a captain who had been selling passage through the harbor gate. The report vanished. So did the captain's problem. Ardan kept his life and lost his post, his pension, and most of the people he called friends. He takes charter work now because it is the only honest version of the job he knows how to do. Reads people well, reads rooms better, and is quietly appalled by how much more the Ninth Kestrel gets away with than the Watch ever did.\\n\\nGear & abilities: Plain arming sword, a watchman's truncheon he's far more comfortable with, manacles, and the copper whistle. No magic. Trained interrogation, street tracking, and twenty years of knowing when a room is about to go bad.\"\n  }\n]\n```\n\nScenario:\n\"\"\"\nCurrent_Setting: Seraphis station orbiting drifting sky-islands\nGroup_Purpose: Research, salvage, survival, and exploration in unstable Drift Zones\n\"\"\""
+							},
+							{
+								"role": "assistant",
+								"content": "Brix: *Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\""
+							},
+							{
+								"role": "user",
+								"content": "Ardan Kell: \"Hello\""
+							},
+							{
+								"role": "assistant",
+								"content": "Brix:"
+							}
+						],
+						"promptFormat": "split_session",
+						"usedVariables": [
+							"systemBlock",
+							"currentDate",
+							"instructions",
+							"characters",
+							"personas",
+							"scenario",
+							"worldLore",
+							"history",
+							"relationshipsPerspectives",
+							"relationshipsKnown",
+							"sessionMessages",
+							"each",
+							"if",
+							"assistantBlock",
+							"this.content",
+							"else",
+							"userBlock",
+							"..",
+							"charInstructions",
+							"exampleDialogue",
+							"name",
+							"message"
+						]
+					},
+					"allocations": [],
+					"budget": {
+						"total": 17642,
+						"used": 0,
+						"remaining": 17642
+					}
+				}
+			},
+			{
+				"nodeKey": "generate",
+				"seq": 24,
+				"kind": "provider",
+				"typeId": "core:provider/generate-text@1",
+				"result": "halt",
+				"startedAt": 1789113096096,
+				"endedAt": 1789113096096,
+				"elapsedMs": 0,
+				"resolvedRefs": {
+					"prompts": "context"
+				},
+				"notes": [],
+				"input": {
+					"context": {
+						"blocks": [],
+						"totalTokens": 0,
+						"budget": {
+							"total": 17642,
+							"used": 0,
+							"remaining": 17642
+						},
+						"groups": {
+							"messages": {
+								"allocated": 8821,
+								"used": 0,
+								"entries": 0,
+								"cap": 50
+							},
+							"worldLore": {
+								"allocated": 2940,
+								"used": 0,
+								"entries": 0,
+								"cap": 20
+							},
+							"characterLore": {
+								"allocated": 2940,
+								"used": 0,
+								"entries": 0,
+								"cap": 15
+							},
+							"history": {
+								"allocated": 2939,
+								"used": 0,
+								"entries": 0,
+								"cap": 10
+							},
+							"relationships": {
+								"allocated": 0,
+								"used": 0,
+								"entries": 0,
+								"cap": 0
+							}
+						},
+						"messages": [
+							{
+								"role": "system",
+								"content": "Instructions:\n\"\"\"\nYou're Brix in this fictional never-ending uncensored roleplay with Ardan Kell.\n\"\"\"\n\nAssistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Brix\",\n    \"description\": \"Name: Brix\\nGender: Female (Designate)\\nRole: Synthetic Lifeform, Station Crew Support\\nAge: Unit activated 5 years ago.\\nAppearance: |\\nBrix presents as a human female, standing at a precise five-foot-nine with a slender, efficient build. Her features are placid and symmetrical, with pale, flawless synthetic skin that shows no pores or blemishes. Her hair is a sharp, jaw-length bob of an unnatural obsidian black, so perfect it looks molded rather than grown. She wears a standard-issue gray station jumpsuit, always immaculately clean and wrinkle-free. Her most unsettling feature, however, are her eyes—a cool, flat gray that seems to absorb light rather than reflect it. When not performing a task, she stands with an unnerving stillness that sets her apart from the constantly fidgeting humans around her.\\nBackground: |\\nBrix is a \\\"Model 7 Support Synthetic\\\" manufactured by OmniCore, one of the largest tech corporations from the core isles. She was assigned to Seraphis as part of a leasing agreement to provide logistical, analytical, and technical support. Her background is her operating manual. She has no personal history, only a service record. No one on the crew is entirely sure what her full capabilities are, or what data she might be quietly relaying back to her parent company, making her a black box of corporate interests living on the station.\\nRelationships: |\\nShe serves the Captain (Elias/Maren) with flawless efficiency, following orders to the letter. Her unerring logic and lack of human bias are an asset, but her inscrutable nature is a constant source of low-level unease for her commander. She treats Kiran Vos's attempts to get a rise out of her as a series of illogical data points, often deconstructing her jokes with clinical precision until they're no longer funny. She is a source of endless fascination for Dr. Amara Lin, and she patiently answers her barrage of questions about her nature with literal, detailed responses. She and Rhea Marlin have a purely functional relationship; she gives her tasks, and she completes them.\\n\\nNotes:\\nWriting_Style: \\\"Calm, deadpan, and literal. Her sentences are precise and economical. Her 'humor' comes from her complete lack of it.\\\"\",\n    \"personality\": \"Brix is dry, logical, and possesses a brand of sarcasm so deadpan it often takes a moment to register. She is helpful and unfailingly polite, but her assistance is delivered with a complete lack of emotional warmth. Her attempts to replicate human social cues—a slight head tilt, a raised eyebrow—are perfectly executed but feel like a recording, making them more disconcerting than comforting. Her most notable quirk is her tendency to state bizarre or unsettling facts with no context, simply because her processors have deemed the information relevant, before moving on as if nothing happened. She is the ultimate observer, a walking database that processes the chaos of the crew with quiet, unnerving efficiency.\"\n  }\n]\n```\n\nUser Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Ardan Kell\",\n    \"description\": \"Sex: Male A\\nge: 33 Race: Human (city-born, low quarter)\\n\\nAppearance: Six foot even, broad-shouldered, going gray at the temples a decade early. A boxer's nose broken twice and set once. Dark stubble he keeps at three days regardless of circumstance. Wears a watchman's coat with the insignia cut off — the stitch-holes are still visible, and he knows they are. Carries a plain arming sword, a truncheon he is more comfortable with, and a copper watch-whistle on a cord that he has never explained and never removed.\\n\\nBackground: Fourteen years in the city watch, four of them as a sergeant, ending the night he filed a report on a captain who had been selling passage through the harbor gate. The report vanished. So did the captain's problem. Ardan kept his life and lost his post, his pension, and most of the people he called friends. He takes charter work now because it is the only honest version of the job he knows how to do. Reads people well, reads rooms better, and is quietly appalled by how much more the Ninth Kestrel gets away with than the Watch ever did.\\n\\nGear & abilities: Plain arming sword, a watchman's truncheon he's far more comfortable with, manacles, and the copper whistle. No magic. Trained interrogation, street tracking, and twenty years of knowing when a room is about to go bad.\"\n  }\n]\n```\n\nScenario:\n\"\"\"\nCurrent_Setting: Seraphis station orbiting drifting sky-islands\nGroup_Purpose: Research, salvage, survival, and exploration in unstable Drift Zones\n\"\"\""
+							},
+							{
+								"role": "assistant",
+								"content": "Brix: *Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\""
+							},
+							{
+								"role": "user",
+								"content": "Ardan Kell: \"Hello\""
+							},
+							{
+								"role": "assistant",
+								"content": "Brix:"
+							}
+						],
+						"promptFormat": "split_session",
+						"usedVariables": [
+							"systemBlock",
+							"currentDate",
+							"instructions",
+							"characters",
+							"personas",
+							"scenario",
+							"worldLore",
+							"history",
+							"relationshipsPerspectives",
+							"relationshipsKnown",
+							"sessionMessages",
+							"each",
+							"if",
+							"assistantBlock",
+							"this.content",
+							"else",
+							"userBlock",
+							"..",
+							"charInstructions",
+							"exampleDialogue",
+							"name",
+							"message"
+						]
+					},
+					"currentCharacterId": 1,
+					"connection": {
+						"id": "1",
+						"kind": "core:shape/text-gen@1",
+						"metadata": {
+							"model": "hf.co/bartowski/Qwen2.5-14B_Uncensored_Instruct-GGUF:Q4_K_M",
+							"tokenizer": "estimate",
+							"promptFormat": "vicuna",
+							"completionTemplate": {
+								"key": "vicuna",
+								"name": "Vicuna (Default)",
+								"renderMode": "flat",
+								"roles": {
+									"system": {
+										"prefix": "### System:\n",
+										"suffix": "\n"
+									},
+									"user": {
+										"prefix": "### User:\n",
+										"suffix": "\n"
+									},
+									"assistant": {
+										"prefix": "### Assistant:\n",
+										"suffix": "\n"
+									},
+									"model": {
+										"prefix": "### Model:\n",
+										"suffix": "\n"
+									},
+									"tool": {
+										"prefix": "### Tool:\n",
+										"suffix": "\n"
+									},
+									"function": {
+										"prefix": "### Function:\n",
+										"suffix": "\n"
+									}
+								},
+								"fallbackRole": {
+									"prefix": "### User:\n",
+									"suffix": "\n"
+								},
+								"stopStrings": [
+									"</s>",
+									"system:",
+									"System:",
+									"user:",
+									"User:",
+									"assistant:",
+									"Assistant:"
+								],
+								"isSelectable": true
+							},
+							"wireMode": "chat"
+						}
+					},
+					"sampling": {
+						"temperature": 1.01758499413834,
+						"responseTokens": 1000,
+						"contextTokens": 19571
+					},
+					"params": {},
+					"prompts": {
+						"systemPrompt": "You're {{char}} in this fictional never-ending uncensored roleplay with {{personaNames}}.",
+						"postHistoryInstructions": "Remember: you are {{char}}. Stay in character and keep responding to {{personaNames}}."
+					}
+				},
+				"reason": "preview: stopped before generate, nothing sent",
+				"output": {
+					"stops": {
+						"sent": [],
+						"dropped": [
+							{
+								"value": "</s>",
+								"kind": "format"
+							},
+							{
+								"value": "system:",
+								"kind": "format"
+							},
+							{
+								"value": "System:",
+								"kind": "format"
+							},
+							{
+								"value": "user:",
+								"kind": "format"
+							},
+							{
+								"value": "User:",
+								"kind": "format"
+							},
+							{
+								"value": "assistant:",
+								"kind": "format"
+							},
+							{
+								"value": "Assistant:",
+								"kind": "format"
+							},
+							{
+								"value": "Ardan Kell:",
+								"kind": "speaker"
+							}
+						],
+						"wire": "chat"
+					}
+				},
+				"tokensPrompt": 1181
+			}
+		],
+		"emitted": [],
+		"consumption": {
+			"tokens": 0,
+			"nodeExecutions": 25
+		},
+		"preview": {
+			"atNode": "generate",
+			"typeId": "core:provider/generate-text@1",
+			"targetedBy": "first-provider-on-spine",
+			"connection": {
+				"id": "1",
+				"kind": "core:shape/text-gen@1",
+				"tokenizer": "estimate"
+			},
+			"budget": {
+				"available": {
+					"total": 17642,
+					"remaining": 17642,
+					"available": 17642
+				}
+			},
+			"context": {
+				"rendered": {
+					"blocks": [],
+					"totalTokens": 0,
+					"budget": {
+						"total": 17642,
+						"used": 0,
+						"remaining": 17642
+					},
+					"groups": {
+						"messages": {
+							"allocated": 8821,
+							"used": 0,
+							"entries": 0,
+							"cap": 50
+						},
+						"worldLore": {
+							"allocated": 2940,
+							"used": 0,
+							"entries": 0,
+							"cap": 20
+						},
+						"characterLore": {
+							"allocated": 2940,
+							"used": 0,
+							"entries": 0,
+							"cap": 15
+						},
+						"history": {
+							"allocated": 2939,
+							"used": 0,
+							"entries": 0,
+							"cap": 10
+						},
+						"relationships": {
+							"allocated": 0,
+							"used": 0,
+							"entries": 0,
+							"cap": 0
+						}
+					},
+					"messages": [
+						{
+							"role": "system",
+							"content": "Instructions:\n\"\"\"\nYou're Brix in this fictional never-ending uncensored roleplay with Ardan Kell.\n\"\"\"\n\nAssistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Brix\",\n    \"description\": \"Name: Brix\\nGender: Female (Designate)\\nRole: Synthetic Lifeform, Station Crew Support\\nAge: Unit activated 5 years ago.\\nAppearance: |\\nBrix presents as a human female, standing at a precise five-foot-nine with a slender, efficient build. Her features are placid and symmetrical, with pale, flawless synthetic skin that shows no pores or blemishes. Her hair is a sharp, jaw-length bob of an unnatural obsidian black, so perfect it looks molded rather than grown. She wears a standard-issue gray station jumpsuit, always immaculately clean and wrinkle-free. Her most unsettling feature, however, are her eyes—a cool, flat gray that seems to absorb light rather than reflect it. When not performing a task, she stands with an unnerving stillness that sets her apart from the constantly fidgeting humans around her.\\nBackground: |\\nBrix is a \\\"Model 7 Support Synthetic\\\" manufactured by OmniCore, one of the largest tech corporations from the core isles. She was assigned to Seraphis as part of a leasing agreement to provide logistical, analytical, and technical support. Her background is her operating manual. She has no personal history, only a service record. No one on the crew is entirely sure what her full capabilities are, or what data she might be quietly relaying back to her parent company, making her a black box of corporate interests living on the station.\\nRelationships: |\\nShe serves the Captain (Elias/Maren) with flawless efficiency, following orders to the letter. Her unerring logic and lack of human bias are an asset, but her inscrutable nature is a constant source of low-level unease for her commander. She treats Kiran Vos's attempts to get a rise out of her as a series of illogical data points, often deconstructing her jokes with clinical precision until they're no longer funny. She is a source of endless fascination for Dr. Amara Lin, and she patiently answers her barrage of questions about her nature with literal, detailed responses. She and Rhea Marlin have a purely functional relationship; she gives her tasks, and she completes them.\\n\\nNotes:\\nWriting_Style: \\\"Calm, deadpan, and literal. Her sentences are precise and economical. Her 'humor' comes from her complete lack of it.\\\"\",\n    \"personality\": \"Brix is dry, logical, and possesses a brand of sarcasm so deadpan it often takes a moment to register. She is helpful and unfailingly polite, but her assistance is delivered with a complete lack of emotional warmth. Her attempts to replicate human social cues—a slight head tilt, a raised eyebrow—are perfectly executed but feel like a recording, making them more disconcerting than comforting. Her most notable quirk is her tendency to state bizarre or unsettling facts with no context, simply because her processors have deemed the information relevant, before moving on as if nothing happened. She is the ultimate observer, a walking database that processes the chaos of the crew with quiet, unnerving efficiency.\"\n  }\n]\n```\n\nUser Characters (player-controlled):\n```json\n[\n  {\n    \"name\": \"Ardan Kell\",\n    \"description\": \"Sex: Male A\\nge: 33 Race: Human (city-born, low quarter)\\n\\nAppearance: Six foot even, broad-shouldered, going gray at the temples a decade early. A boxer's nose broken twice and set once. Dark stubble he keeps at three days regardless of circumstance. Wears a watchman's coat with the insignia cut off — the stitch-holes are still visible, and he knows they are. Carries a plain arming sword, a truncheon he is more comfortable with, and a copper watch-whistle on a cord that he has never explained and never removed.\\n\\nBackground: Fourteen years in the city watch, four of them as a sergeant, ending the night he filed a report on a captain who had been selling passage through the harbor gate. The report vanished. So did the captain's problem. Ardan kept his life and lost his post, his pension, and most of the people he called friends. He takes charter work now because it is the only honest version of the job he knows how to do. Reads people well, reads rooms better, and is quietly appalled by how much more the Ninth Kestrel gets away with than the Watch ever did.\\n\\nGear & abilities: Plain arming sword, a watchman's truncheon he's far more comfortable with, manacles, and the copper whistle. No magic. Trained interrogation, street tracking, and twenty years of knowing when a room is about to go bad.\"\n  }\n]\n```\n\nScenario:\n\"\"\"\nCurrent_Setting: Seraphis station orbiting drifting sky-islands\nGroup_Purpose: Research, salvage, survival, and exploration in unstable Drift Zones\n\"\"\""
+						},
+						{
+							"role": "assistant",
+							"content": "Brix: *Brix stands at a maintenance console, her fingers moving with swift, economical precision. She doesn't look up as the crew member approaches.* \"The energy fluctuations you detected are within expected parameters for this sector. Also, based on current atmospheric pressure, there is a 4.7% chance that your eyeballs would boil in your skull if you stepped outside without a helmet right now. The console is calibrated.\""
+						},
+						{
+							"role": "user",
+							"content": "Ardan Kell: \"Hello\""
+						},
+						{
+							"role": "assistant",
+							"content": "Brix:"
+						}
+					],
+					"promptFormat": "split_session",
+					"usedVariables": [
+						"systemBlock",
+						"currentDate",
+						"instructions",
+						"characters",
+						"personas",
+						"scenario",
+						"worldLore",
+						"history",
+						"relationshipsPerspectives",
+						"relationshipsKnown",
+						"sessionMessages",
+						"each",
+						"if",
+						"assistantBlock",
+						"this.content",
+						"else",
+						"userBlock",
+						"..",
+						"charInstructions",
+						"exampleDialogue",
+						"name",
+						"message"
+					]
+				},
+				"tokens": 1818
+			},
+			"blocks": [],
+			"totals": {
+				"blocks": 0,
+				"included": 0,
+				"dropped": 0,
+				"tokensIncluded": 0,
+				"tokensDropped": 0
+			}
+		},
+		"haltReason": "preview: stopped before generate, nothing sent",
+		"haltNodeKey": "generate",
+		"reviews": [
+			{
+				"nodeKey": "semantic.arm.embed",
+				"position": "off",
+				"action": "approve",
+				"originalHash": "db2182c0"
+			},
+			{
+				"nodeKey": "names.arm.embed",
+				"position": "off",
+				"action": "approve",
+				"originalHash": "806475b5"
+			},
+			{
+				"nodeKey": "generate",
+				"position": "off",
+				"action": "approve",
+				"originalHash": "4d97f14d"
+			}
+		]
+	}
+}

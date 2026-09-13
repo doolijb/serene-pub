@@ -1,6 +1,7 @@
 // See https://svelte.dev/docs/kit/types#app.d.ts
 
 import type { Component } from "@lucide/svelte"
+import type { LoreRoute } from "$lib/client/lorebooks/loreRoute"
 import * as schema from "$lib/server/db/schema"
 import type { Schema } from "inspector/promises"
 import type { P } from "ollama/dist/shared/ollama.d792a03f.mjs"
@@ -91,20 +92,14 @@ declare global {
 			sessionId?: number
 			sessionPersonaId?: number
 			sessionCharacterId?: number
-			lorebookId?: number
 			tutorial?: boolean
-			/** Focus a specific history entry in the lorebook sidebar */
-			historyEntryId?: number
-			/** Which tab to open when focusing a history entry */
-			historyEntryTab?: "content" | "scenes"
-			/** Expand a specific scene within the scenes tab */
-			sceneId?: number
-			/** Navigate to a specific lorebook tab when digest.lorebookId is set */
-			lorebookTab?: string
+			/** Where the lorebook workspace should open — one address for the
+			 * book, the section, the entry and how it is presented. */
+			lore?: LoreRoute
 			/** Open the connections sidebar and select a specific connection */
 			connectionId?: number
-			/** Open the connections sidebar straight to a category, skipping the index screen */
-			connectionsView?: "connections" | "embedding"
+			/** Open the connections sidebar straight to one modality's section. */
+			connectionsModality?: string
 		}
 		leftNavOrder: string[]
 		rightNavOrder: string[]
@@ -126,7 +121,16 @@ declare global {
 			| "charaVaultEncryptedToken"
 			| "charaVaultTokenIv"
 			| "charaVaultTokenAuthTag"
-		> & { isAndroidWrapper?: boolean; localEmbeddingsSupported?: boolean }
+		> & {
+			isAndroidWrapper?: boolean
+			localEmbeddingsSupported?: boolean
+			/**
+			 * What an embedded row's `embedding_model` is compared against, or
+			 * null when nothing is starred. Derived from the star, not a column
+			 * — see `SystemSettings.Get.Response`.
+			 */
+			activeEmbeddingModel?: string | null
+		}
 		/**
 		 * The instance default connection and sampling config, per capability
 		 * (0175) — its own table now rather than a column pair per modality, so
@@ -183,6 +187,8 @@ declare global {
 	// dedicated fetch of their own.
 	interface OpenSessionCtx {
 		sessionId: number | null
+		/** What the session is called, for copy that names it. */
+		sessionName: string | null
 		lorebookId: number | null
 		isOwner: boolean
 	}
@@ -254,7 +260,7 @@ declare global {
 
 	interface SceneSummarizesCtx {
 		activities: SceneSummarizeState[]
-		/** Set by the activity sidebar to trigger HistoryEntryManager to open the review modal */
+		/** Set by the activity sidebar so the lorebook workspace opens the review modal */
 		reviewSceneId: number | null
 		dismiss: (activityId: string) => void
 		setReviewSceneId: (id: number | null) => void
@@ -313,7 +319,7 @@ declare global {
 
 	interface CompileEntriesCtx {
 		activities: CompileEntryState[]
-		/** Set by the activity sidebar to trigger HistoryEntryManager to open the compile modal */
+		/** Set by the activity sidebar so the lorebook workspace opens the compile modal */
 		reviewHistoryEntryId: number | null
 		dismiss: (activityId: string) => void
 		setReviewHistoryEntryId: (id: number | null) => void

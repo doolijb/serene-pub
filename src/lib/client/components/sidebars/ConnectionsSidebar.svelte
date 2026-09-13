@@ -22,8 +22,17 @@
 		stableStringify
 	} from "$lib/shared/utils/connectionDefaults"
 	import ConnectionCapabilities from "$lib/client/components/connections/ConnectionCapabilities.svelte"
-	import EmbeddingConnectionPanel from "./EmbeddingConnectionPanel.svelte"
+	import ConnectionModels from "$lib/client/components/connections/ConnectionModels.svelte"
+	import EmbeddingConnectionForm from "$lib/client/connectionForms/EmbeddingConnectionForm.svelte"
+	import EmbeddingQueuePanel from "$lib/client/components/connections/EmbeddingQueuePanel.svelte"
+	import NerConnectionForm from "$lib/client/connectionForms/NerConnectionForm.svelte"
+	import NerLanePanel from "$lib/client/components/connections/NerLanePanel.svelte"
 	import ConnectionServicePicker from "./ConnectionServicePicker.svelte"
+	import {
+		CONNECTION_SECTIONS,
+		sectionForModality
+	} from "$lib/shared/constants/connectionSections"
+	import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
 	import {
 		isKoboldCppManagedType,
 		type ConnectionServiceItem
@@ -54,30 +63,53 @@
 	const socket = useTypedSocket()
 
 	// ── View state ──────────────────────────────────────────────────────────
-	// "connections" (LLM/Text Generation) and "embedding" are categories under
-	// one Connections sidebar, mirroring PromptsSidebar's card-list pattern.
-	type View = "index" | "connections" | "embedding"
+	// An index of section cards, and ONE management view behind all of them.
+	// ⚠ Two values, and a modality must never become a third: a section is an
+	// entry in `CONNECTION_SECTIONS`, not a view with a panel of its own.
+	type View = "index" | "connections"
 	let view = $state<View>("index")
 
-	// Which modality the "connections" view is managing — text (LLMs) or image
-	// generation. The two share one management view, filtered by this; the index
-	// cards set it. Image connections never take part in the text default.
-	let connectionModality = $state<"text-gen" | "image-gen">("text-gen")
-	let isImageView = $derived(connectionModality === "image-gen")
-	function openCategory(m: "text-gen" | "image-gen") {
+	/**
+	 * Which modality the management view is showing.
+	 *
+	 * An open string, and the section it names comes from `CONNECTION_SECTIONS`
+	 * — label, star capability, picker label and empty state all ride on that
+	 * one entry, so adding a modality needs no branch here.
+	 */
+	let connectionModality = $state<string>("text-gen")
+	let section = $derived(
+		sectionForModality(connectionModality) ?? CONNECTION_SECTIONS[0]
+	)
+	let isEmbeddingView = $derived(connectionModality === "embeddings")
+	/**
+	 * The two views whose star has a COST when it moves, and the switch
+	 * confirmation each one quotes.
+	 *
+	 * Not one flag: the two sentences are about different work (vectors thrown
+	 * away, annotations re-scanned) and the two counts come from different
+	 * events. What they share is the rule that a FIRST star costs nothing and
+	 * must not open a dialog, which `handleSetDefault` states once for both.
+	 */
+	let isNerView = $derived(connectionModality === "ner")
+	function openCategory(m: string) {
 		connectionModality = m
 		view = "connections"
 	}
 
 	// --- State ---
 	let connectionsList: Partial<SelectConnection>[] = $state([])
-	// The connections shown in the current category view (text vs image).
+	/**
+	 * The connections in the section being shown.
+	 *
+	 * ⚠ Filtered on the ROW's `modality` COLUMN, not on `modalityOf(type)`. The
+	 * column is what a provider slot compares against (`shapeOfModality`) and
+	 * what the picker filters by, so filing a row differently here than the
+	 * binding does would show a connection in a list it could not be used from.
+	 * The column is NOT NULL and every create path writes it from
+	 * `CONNECTION_DEFAULTS`.
+	 */
 	let viewConnections = $derived(
-		connectionsList.filter(
-			(c) =>
-				CONNECTION_TYPE.modalityOf(c.type as string) ===
-				connectionModality
-		)
+		connectionsList.filter((c) => c.modality === connectionModality)
 	)
 	let isLoading = $state(true)
 	let connection: any = $state()
@@ -140,25 +172,13 @@
 	 * it, which is why this is derived from the modality and not from the
 	 * connection.
 	 */
-	let starCapability = $derived(isImageView ? "text->image" : "text->text")
+	let starCapability = $derived(section.starCapability)
 	// The instance default for THIS category's capability. Read from
 	// `capabilityDefaults` — the only place a default lives since 0181 — never
 	// from a column on the settings row.
 	let defaultConnectionId = $derived(
 		systemSettingsCtx.capabilityDefaults?.[starCapability]?.connectionId ??
 			null
-	)
-	// Shown as the "active" badge on the index screen's LLM/Text Generation
-	// card. Always the CHAT default, whichever category is open: the card is
-	// the text one, and reading `defaultConnectionId` here would blank it the
-	// moment somebody browsed the image category.
-	let defaultConnectionName = $derived(
-		connectionsList.find(
-			(c) =>
-				c.id ===
-				(systemSettingsCtx.capabilityDefaults?.["text->text"]
-					?.connectionId ?? null)
-		)?.name ?? null
 	)
 	// A Managed KoboldCPP connection can't be set default while the manager is
 	// off — the image one no less than the text one. Both name a file in the
@@ -224,7 +244,7 @@
 	 * `capability` is a REQUIRED param and is not derivable from the
 	 * connection — see the socket type. The category supplies it.
 	 */
-	function handleSetDefault() {
+	function commitSetDefault() {
 		if (!selectedConnectionId) return
 		socket.emit("connections:setDefault", {
 			capability: starCapability,
@@ -234,9 +254,67 @@
 			(c) => c.id === selectedConnectionId
 		)
 		if (selected)
-			announce(
-				`${selected.name} will be used for ${isImageView ? "image generation" : "chat"}`
-			)
+			announce(`${selected.name} will be used for ${section.starVerb}`)
+	}
+
+	/**
+	 * Moving the embedding star throws every stored vector away, so it asks
+	 * first — with the real number, not a generic warning.
+	 *
+	 * The number comes from the SERVER (`vectorization:reindexCost`), because it
+	 * is a count across six stores and the client has no way to ask otherwise.
+	 * ⚠ There is deliberately no time estimate beside it: nothing in the queue
+	 * measures throughput, and a "roughly N minutes" invented here would be the
+	 * one number on a cost-disclosure screen that was made up.
+	 *
+	 * Only when a DIFFERENT connection is already starred. The first star on a
+	 * fresh install costs nothing and must not open a scary dialog; the server
+	 * makes the same judgement on the model identity, so a second row naming the
+	 * same endpoint and model is a no-op there too.
+	 */
+	let showReindexModal = $state(false)
+	let reindexRows = $state<number | null>(null)
+	function handleReindexCost(
+		msg: Sockets.Vectorization.ReindexCost.Response
+	) {
+		reindexRows = msg.rows
+	}
+	/**
+	 * The same disclosure for the entity star, with the entity star's own cost.
+	 *
+	 * Every annotation was written by whichever extractor was in force when the
+	 * lane reached that row, so a different model means every row is re-scanned
+	 * — and the number comes from the SERVER for the same reason the embedding
+	 * one does. The count rides on `ner:status` rather than an event of its own:
+	 * it is the same count that panel shows, and asking twice would be two
+	 * numbers that can differ.
+	 */
+	let showReannotateModal = $state(false)
+	let reannotateRows = $state<number | null>(null)
+	function handleNerStatus(msg: Sockets.Ner.Status.Response) {
+		reannotateRows = msg.annotatedRows
+	}
+	function handleSetDefault() {
+		if (!selectedConnectionId) return
+		// A first star costs nothing and must not open a scary dialog; the
+		// server makes the same judgement on the model identity, so a second row
+		// naming the same model is a no-op there too.
+		const switching =
+			defaultConnectionId != null &&
+			defaultConnectionId !== selectedConnectionId
+		if (switching && isEmbeddingView) {
+			reindexRows = null
+			socket.emit("vectorization:reindexCost", {})
+			showReindexModal = true
+			return
+		}
+		if (switching && isNerView) {
+			reannotateRows = null
+			socket.emit("ner:status", {})
+			showReannotateModal = true
+			return
+		}
+		commitSetDefault()
 	}
 	function handleNew() {
 		newConnectionName = ""
@@ -386,7 +464,12 @@
 		// them back to the text list.
 		if (msg.connection.id === deepLinkedConnectionId) {
 			deepLinkedConnectionId = null
-			connectionModality = CONNECTION_TYPE.modalityOf(msg.connection.type)
+			// The row's own COLUMN, matching what the list filters on. Taking it
+			// from the type would file a row whose column says otherwise into a
+			// section its own list does not contain.
+			connectionModality =
+				msg.connection.modality ??
+				CONNECTION_TYPE.modalityOf(msg.connection.type)
 		}
 	}
 	function handleConnectionsTest(msg: Sockets.Connections.Test.Response) {
@@ -529,17 +612,19 @@
 		socket.on("connections:delete", handleConnectionsDelete)
 		socket.on("connections:create", handleConnectionsCreate)
 		socket.on("connections:setDefault", handleConnectionsSetDefault)
+		socket.on("vectorization:reindexCost", handleReindexCost)
+		socket.on("ner:status", handleNerStatus)
 		socket.emit("connections:list", {})
 		// Seed the view: digest.connectionId (from external nav, e.g. Ollama
 		// Manager's "open connection sidebar") always means "go straight to the
 		// connections category," taking priority over the default. Otherwise
-		// digest.connectionsView (set by System Settings' Embeddings toggle and
-		// the onboarding wizard) routes straight to a specific category. If
-		// neither is set, land on the index/category-picker screen.
+		// digest.connectionsModality (set by the onboarding wizard's retrieval
+		// step) opens one SECTION directly. If neither is set, land on the
+		// index/section-picker screen.
 		const digestId = panelsCtx.digest.connectionId ?? null
 		// The CHAT default, spelled out rather than read through
 		// `defaultConnectionId`: this runs on mount, before any category has
-		// been opened, so the derived value would be whatever `isImageView`
+		// been opened, so the derived value would be whatever `section`
 		// happens to be at that instant. Landing on the text connection is what
 		// this has always done.
 		const initialId =
@@ -551,9 +636,9 @@
 			panelsCtx.digest.connectionId = undefined
 			deepLinkedConnectionId = digestId
 			view = "connections"
-		} else if (panelsCtx.digest.connectionsView) {
-			view = panelsCtx.digest.connectionsView
-			panelsCtx.digest.connectionsView = undefined
+		} else if (panelsCtx.digest.connectionsModality) {
+			openCategory(panelsCtx.digest.connectionsModality)
+			panelsCtx.digest.connectionsModality = undefined
 		}
 		selectedConnectionId = initialId
 		if (initialId) {
@@ -589,6 +674,8 @@
 		socket.off("connections:delete", handleConnectionsDelete)
 		socket.off("connections:create", handleConnectionsCreate)
 		socket.off("connections:setDefault", handleConnectionsSetDefault)
+		socket.off("vectorization:reindexCost", handleReindexCost)
+		socket.off("ner:status", handleNerStatus)
 		onclose = undefined
 	})
 </script>
@@ -599,122 +686,60 @@
 			Select a connection category to view and edit its configurations.
 		</p>
 
-		<!-- LLM / Text Generation card -->
-		<button
-			class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
-			onclick={() => openCategory("text-gen")}
-		>
-			<div class="flex items-start gap-3">
-				<div
-					class="bg-primary-500/10 text-primary-500 mt-0.5 shrink-0 rounded-lg p-2"
-				>
-					<Icons.Cable size={20} />
-				</div>
-				<div class="min-w-0 flex-1">
-					<div class="flex items-center justify-between gap-2">
-						<span class="font-semibold">Large Language Models</span>
-						<Icons.ChevronRight
-							size={16}
-							class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5"
-						/>
-					</div>
-					<p class="text-muted-foreground mt-0.5 text-sm">
-						Connections used for session, summarization, and
-						narration.
-					</p>
-					{#if defaultConnectionName}
-						<div class="mt-2 flex items-center gap-1.5">
-							<Icons.CheckCircle
-								size={12}
-								class="text-success-500 shrink-0"
-							/>
-							<span
-								class="text-success-600 dark:text-success-400 truncate text-xs font-medium"
-							>
-								{defaultConnectionName}
-							</span>
-						</div>
-					{/if}
-				</div>
-			</div>
-		</button>
-
-		<!-- Image Generation card -->
-		<button
-			class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
-			onclick={() => openCategory("image-gen")}
-		>
-			<div class="flex items-start gap-3">
-				<div
-					class="bg-primary-500/10 text-primary-500 mt-0.5 shrink-0 rounded-lg p-2"
-				>
-					<Icons.Image size={20} />
-				</div>
-				<div class="min-w-0 flex-1">
-					<div class="flex items-center justify-between gap-2">
-						<span class="font-semibold">Image Generation</span>
-						<Icons.ChevronRight
-							size={16}
-							class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5"
-						/>
-					</div>
-					<p class="text-muted-foreground mt-0.5 text-sm">
-						Local image backends (KoboldCPP, A1111, …) for portraits
-						and scene art.
-					</p>
-				</div>
-			</div>
-		</button>
-
-		<!-- Embedding card — hidden until an admin has actually enabled
-		     embeddings (via System Settings or the onboarding wizard), both of
-		     which route straight into this category via digest.connectionsView
-		     rather than through this card. -->
-		{#if systemSettingsCtx.settings?.vectorizationEnabled}
+		<!-- One card per SECTION, and no per-modality markup. A card written
+		     out by hand, or gated behind a switch of its own, is how a modality
+		     stops being a kind of connection and becomes a feature. -->
+		{#each CONNECTION_SECTIONS as s (s.modality)}
+			{@const Icon = (Icons as any)[s.icon] ?? Icons.Cable}
+			{@const inUse =
+				connectionsList.find(
+					(c) =>
+						c.id ===
+						(systemSettingsCtx.capabilityDefaults?.[
+							s.starCapability
+						]?.connectionId ?? null)
+				)?.name ?? null}
 			<button
 				class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
-				onclick={() => (view = "embedding")}
+				onclick={() => openCategory(s.modality)}
 			>
 				<div class="flex items-start gap-3">
 					<div
 						class="bg-primary-500/10 text-primary-500 mt-0.5 shrink-0 rounded-lg p-2"
 					>
-						<Icons.Zap size={20} />
+						<Icon size={20} />
 					</div>
 					<div class="min-w-0 flex-1">
 						<div class="flex items-center justify-between gap-2">
-							<span class="font-semibold">Embedding</span>
+							<span class="font-semibold">{s.label}</span>
 							<Icons.ChevronRight
 								size={16}
 								class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5"
 							/>
 						</div>
 						<p class="text-muted-foreground mt-0.5 text-sm">
-							RAG embedding model, queue, and configuration.
+							{s.description}
 						</p>
+						<!-- What is starred for this section, which for
+						     Embeddings is also the whole of "are embeddings
+						     on". -->
+						{#if inUse}
+							<div class="mt-2 flex items-center gap-1.5">
+								<Icons.CheckCircle
+									size={12}
+									class="text-success-500 shrink-0"
+								/>
+								<span
+									class="text-success-600 dark:text-success-400 truncate text-xs font-medium"
+								>
+									{inUse}
+								</span>
+							</div>
+						{/if}
 					</div>
 				</div>
 			</button>
-		{/if}
-	</div>
-{:else if view === "embedding"}
-	<div class="flex h-full flex-col">
-		<div class="flex items-center gap-2 px-4 pt-4 pb-2">
-			<button
-				class="btn btn-sm preset-filled-surface-400-600 p-2"
-				onclick={() => (view = "index")}
-				title="Back"
-				aria-label="Back to connection types"
-			>
-				<Icons.ChevronLeft size={16} />
-			</button>
-			<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
-				Embedding
-			</h2>
-		</div>
-		<div class="min-h-0 flex-1 pt-2">
-			<EmbeddingConnectionPanel />
-		</div>
+		{/each}
 	</div>
 {:else}
 	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -738,7 +763,7 @@
 				<Icons.ChevronLeft size={16} />
 			</button>
 			<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
-				{isImageView ? "Image Generation" : "LLM / Text Generation"}
+				{section.label}
 			</h2>
 		</div>
 		<div class="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
@@ -900,9 +925,9 @@
 									? "KoboldCPP Manager must be enabled to use this connection"
 									: selectedConnectionId ===
 										  defaultConnectionId
-										? `Already used for ${isImageView ? "image generation" : "chat"}`
-										: `Use this connection for ${isImageView ? "image generation" : "chat"}`}
-								aria-label={`Use this connection for ${isImageView ? "image generation" : "chat"}`}
+										? `Already used for ${section.starVerb}`
+										: `Use this connection for ${section.starVerb}`}
+								aria-label={`Use this connection for ${section.starVerb}`}
 							>
 								<Icons.Star
 									size={14}
@@ -914,9 +939,7 @@
 								/>
 								{selectedConnectionId === defaultConnectionId
 									? "In use"
-									: isImageView
-										? "Use for Images"
-										: "Use for Chat"}
+									: `Use for ${section.starVerb}`}
 							</button>
 						</div>
 						<div id="save-status" class="sr-only">
@@ -959,6 +982,18 @@
 							     generated from what the adapter declares, so a new
 							     one needs no case here and no component. -->
 							<ImageConnectionForm bind:connection />
+						{:else if connection.modality === "embeddings"}
+							<!-- One branch for all three embedding backends,
+							     for the same reason. What differs between them
+							     is two fields, not a component; the MODEL is
+							     picked in ConnectionModels below like every
+							     other connection's. -->
+							<EmbeddingConnectionForm bind:connection />
+						{:else if connection.modality === "ner"}
+							<!-- One field, for the same reason: the local
+							     entity backend has no host and no key, and its
+							     model is picked in ConnectionModels below. -->
+							<NerConnectionForm bind:connection />
 						{/if}
 
 						<!-- Below the settings, not above them: a note is a
@@ -1013,9 +1048,46 @@
 							     everything it shows is its own fetch, so nothing it
 							     does can dirty this form's unsaved-changes
 							     baseline. -->
+							<!-- The MODELS on this endpoint (0114). Mounted
+							     here for the same reason the capability panel is:
+							     this is the one place all nine forms share, and
+							     nine pasted copies would be nine model lists that
+							     drift AND nine `connections:test` subscriptions
+							     racing. It takes the id, plus whatever the last
+							     test or refresh reported — the editor owns the
+							     test, so the probed list is handed down rather
+							     than fetched a second time. -->
+							<ConnectionModels
+								connectionId={connection.id}
+								probed={refreshModelsResult?.models ??
+									testResult?.models ??
+									[]}
+							/>
 							<ConnectionCapabilities
 								connectionId={connection.id}
 							/>
+							{#if connection.modality === "embeddings"}
+								<!-- The indexing queue, as this connection's
+								     detail panel. ⚠ Only what belongs to no
+								     field goes here: the service, endpoint,
+								     key and model are ordinary connection
+								     controls above, and "off" is unstarring. -->
+								<EmbeddingQueuePanel
+									isStarred={connection.id ===
+										defaultConnectionId}
+								/>
+							{/if}
+							{#if connection.modality === "ner"}
+								<!-- The annotation lane, same rule. A status
+								     line rather than a queue panel: this lane
+								     publishes no groups and needs no start
+								     control, so a copy of the embedding panel
+								     would be controls that do nothing. -->
+								<NerLanePanel
+									isStarred={connection.id ===
+										defaultConnectionId}
+								/>
+							{/if}
 							<!-- Stop guards ride the connection (18 §4b): model
 							     knowledge — "this endpoint leaks template
 							     tokens" — attaches once and reaches every
@@ -1139,10 +1211,8 @@
 				</div>
 			{:else if !viewConnections.length}
 				<EmptyState
-					icon={isImageView ? Icons.Image : Icons.Cable}
-					message={isImageView
-						? "No image connections yet — add one to generate images."
-						: "No AI connections yet — create one to get started with AI conversations."}
+					icon={(Icons as any)[section.icon] ?? Icons.Cable}
+					message={section.emptyMessage}
 				/>
 			{/if}
 		</div>
@@ -1261,9 +1331,7 @@
 						</div>
 						<div>
 							<ConnectionServicePicker
-								label={isImageView
-									? "Image Service"
-									: "AI Service"}
+								label={section.servicePicker}
 								initialModality={connectionModality}
 								bind:selectedItem={newConnectionService}
 							/>
@@ -1301,6 +1369,159 @@
 									: `Create connection named ${newConnectionName}`}
 						>
 							Create
+						</button>
+					</footer>
+				</div>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
+<!-- Switching the embedding connection re-indexes everything. The number is
+     the whole point of this dialog: "all existing embeddings will need to be
+     regenerated" was what the old panel said, and it is true of one row and of
+     four hundred thousand. -->
+<Dialog
+	open={showReindexModal}
+	onOpenChange={(e) => (showReindexModal = e.open)}
+>
+	<Portal>
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 w-full max-w-lg space-y-5 p-6 shadow-xl"
+			>
+				<div
+					role="alertdialog"
+					aria-labelledby="reindex-title"
+					aria-describedby="reindex-desc"
+				>
+					<header class="flex items-center gap-3">
+						<Icons.AlertTriangle
+							class="text-warning-500 h-5 w-5 shrink-0"
+						/>
+						<h2 id="reindex-title" class="h2 text-lg font-bold">
+							Change the embedding model?
+						</h2>
+					</header>
+					<article id="reindex-desc" class="mt-3 space-y-2 text-sm">
+						<p>
+							Vectors made by one model cannot be compared with
+							another's, so everything already embedded is thrown
+							away and built again against the new model.
+						</p>
+						{#if reindexRows === null}
+							<p class="text-muted">Counting…</p>
+						{:else}
+							<p class="font-medium">
+								Every embedded row is re-indexed against the new
+								model: {reindexRows.toLocaleString()}
+								{reindexRows === 1 ? "row" : "rows"}.
+							</p>
+						{/if}
+						<p class="text-muted text-xs">
+							Retrieval falls back to keyword search while it
+							catches up. Starring the old connection again does
+							not bring the old vectors back.
+						</p>
+					</article>
+					<footer class="mt-5 flex justify-end gap-2">
+						<button
+							type="button"
+							class="btn preset-filled-surface-500"
+							onclick={() => (showReindexModal = false)}
+						>
+							Cancel
+						</button>
+						<button
+							type="button"
+							class="btn preset-filled-warning-500"
+							onclick={() => {
+								showReindexModal = false
+								commitSetDefault()
+							}}
+						>
+							<Icons.RefreshCw size={16} aria-hidden="true" />
+							Switch and re-index
+						</button>
+					</footer>
+				</div>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
+<Dialog
+	open={showReannotateModal}
+	onOpenChange={(e) => (showReannotateModal = e.open)}
+>
+	<Portal>
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 w-full max-w-lg space-y-5 p-6 shadow-xl"
+			>
+				<div
+					role="alertdialog"
+					aria-labelledby="reannotate-title"
+					aria-describedby="reannotate-desc"
+				>
+					<header class="flex items-center gap-3">
+						<Icons.AlertTriangle
+							class="text-warning-500 h-5 w-5 shrink-0"
+						/>
+						<h2 id="reannotate-title" class="h2 text-lg font-bold">
+							Change the entity model?
+						</h2>
+					</header>
+					<article
+						id="reannotate-desc"
+						class="mt-3 space-y-2 text-sm"
+					>
+						<p>
+							Names found by one model are not the names another
+							finds, so everything already scanned is dropped and
+							read again against the new model.
+						</p>
+						{#if reannotateRows === null}
+							<p class="text-muted">Counting…</p>
+						{:else}
+							<p class="font-medium">
+								Every annotated row is re-scanned against the
+								new model: {reannotateRows.toLocaleString()}
+								{reannotateRows === 1 ? "row" : "rows"}.
+							</p>
+						{/if}
+						<p class="text-muted text-xs">
+							Names your lorebook declares keep matching
+							throughout. Starring the old connection again does
+							not bring the old scan back.
+						</p>
+					</article>
+					<footer class="mt-5 flex justify-end gap-2">
+						<button
+							type="button"
+							class="btn preset-filled-surface-500"
+							onclick={() => (showReannotateModal = false)}
+						>
+							Cancel
+						</button>
+						<button
+							type="button"
+							class="btn preset-filled-warning-500"
+							onclick={() => {
+								showReannotateModal = false
+								commitSetDefault()
+							}}
+						>
+							<Icons.RefreshCw size={16} aria-hidden="true" />
+							Switch and re-scan
 						</button>
 					</footer>
 				</div>

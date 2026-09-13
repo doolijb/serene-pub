@@ -29,6 +29,7 @@ import {
 	humanizeTypeId,
 	i18nText,
 	namespaceView,
+	resetConfig,
 	selectNamedConfig,
 	writeOption,
 	OptionNotFoundError,
@@ -49,22 +50,17 @@ import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 // second copy of it here would answer a different question from the one the
 // send answers.
 import { getNextCharacterTurn } from "$lib/server/utils/getNextCharacterTurn"
-import {
-	DEFAULT_CHANNEL,
-	channelWhere
-} from "$lib/server/messages/channels"
+import { DEFAULT_CHANNEL, channelWhere } from "$lib/server/messages/channels"
 import { MAX_CHAT_MESSAGE_LENGTH } from "$lib/shared/constants/MessageLimits"
 // The budget band a declared entry type's rows compete in — the declaration's
 // own answer, not a fourth table of source names. It is what keys the entry
 // index the retrieval explanation looks rows up in.
-import {
-	entryDeclaration,
-	bandOfType
-} from "$lib/server/entries/declarations"
+import { entryDeclaration, bandOfType } from "$lib/server/entries/declarations"
 // The one recipe for "what this entry says", shared with the annotation lane
 // and with the run that recorded the receipt — see `entrySourceHash`.
 import { entrySourceHash } from "$lib/server/annotations"
 import type { EntryTypeId } from "$lib/shared/entries/types"
+import { CORE_TEMPLATE_ENGINE } from "$lib/shared/pipelines/templateEngines"
 
 /**
  * The instance secret that keys option handles.
@@ -240,6 +236,44 @@ export const pipelinesClearOption: Handler<
 			params.slug,
 			params.sessionId
 		)) as Sockets.Pipelines.ClearOption.Response
+	}
+}
+
+/**
+ * Reset a whole configuration — every deviation at once.
+ *
+ * Admin-gated inside `resetConfig`, on the same grounds every config write is:
+ * a configuration is the administrator's and a person's own changes are made
+ * inside a session (R8). Answers on `pipelines:get` like every other mutation,
+ * because one reset moves every field on screen.
+ */
+export const pipelinesResetConfig: Handler<
+	Sockets.Pipelines.ResetConfig.Params,
+	Sockets.Pipelines.ResetConfig.Response
+> = {
+	event: "pipelines:resetConfig",
+	handler: async (socket, params, emitToUser) => {
+		let cleared = 0
+		try {
+			cleared = await resetConfig(
+				db,
+				params.slug,
+				await viewerFor(socket, params.sessionId),
+				params.configId
+			)
+		} catch (err) {
+			const res = { error: refusal(err) }
+			emitToUser("pipelines:resetConfig:error", res)
+			return res
+		}
+		const view = (await emitView(
+			socket,
+			emitToUser,
+			"pipelines:get",
+			params.slug,
+			params.sessionId
+		)) as Sockets.Pipelines.ResetConfig.Response
+		return { ...view, cleared }
 	}
 }
 
@@ -1358,20 +1392,23 @@ async function contextTemplateForOption(
 		"$lib/server/pipelines/entities/contextTemplates"
 	)
 	const viewer = await viewerFor(socket, params.sessionId)
-	const { nodeTypeId, engine, specId } = await contextTemplateOptionGate(
-		db,
-		await instanceSecret(),
-		params.slug,
-		viewer,
-		params.optionId
-	)
+	const { nodeTypeId, engine, engines, specId } =
+		await contextTemplateOptionGate(
+			db,
+			await instanceSecret(),
+			params.slug,
+			viewer,
+			params.optionId
+		)
+	// Judged against every language the slot renders, not just the one a new
+	// template here would be written in — the picker offers all of them.
 	const row = await assertSelectable(
 		db,
 		nodeTypeId,
 		params.templateId,
-		engine
+		engines
 	)
-	return { viewer, nodeTypeId, engine, specId, row }
+	return { viewer, nodeTypeId, engine, engines, specId, row }
 }
 
 /** "Default (copy)", then "(copy 2)" — names are unique per node type. */
@@ -1427,16 +1464,16 @@ export const pipelinesCreateContextTemplate: Handler<
 				"$lib/server/pipelines/config/panel"
 			)
 			const viewer = await viewerFor(socket, params.sessionId)
-			const { nodeTypeId, specId } = await contextTemplateOptionGate(
-				db,
-				await instanceSecret(),
-				params.slug,
-				viewer,
-				params.optionId
-			)
-			const { createContextTemplate } = await import(
-				"$lib/server/pipelines/entities/contextTemplates"
-			)
+			const { nodeTypeId, engines, specId } =
+				await contextTemplateOptionGate(
+					db,
+					await instanceSecret(),
+					params.slug,
+					viewer,
+					params.optionId
+				)
+			const { createContextTemplate, assertEngineAccepted } =
+				await import("$lib/server/pipelines/entities/contextTemplates")
 			const created = await createContextTemplate(db, {
 				nodeTypeId,
 				name: await contextTemplateCopyName(
@@ -1444,6 +1481,13 @@ export const pipelinesCreateContextTemplate: Handler<
 					params.name?.trim() || "New template"
 				),
 				source: params.source ?? "",
+				// The language the caller asked for, refused if this slot does
+				// not render it, and the slot's first accepted engine when it
+				// asked for none. Passed rather than left to default: the
+				// entity's default is CORE's engine, not this slot's, so
+				// omitting it writes the row into a pool this panel never
+				// reads.
+				engine: assertEngineAccepted(engines, params.engine),
 				// Written here, so it sorts to the top of *this* pipeline's
 				// picker next time. Grouping only — it stays selectable
 				// everywhere the node type matches.
@@ -1635,6 +1679,30 @@ export const pipelinesPreviewTemplate: Handler<
 		} = await import("$lib/shared/utils/contextConfigCards")
 		const { getVariable } = await import("@serene-pub/sdk")
 
+		/**
+		 * The lint below reads Handlebars specifically — `{{#each}}`, `{{path}}`,
+		 * the helper whitelist — so for any other engine it would report a
+		 * perfectly good template as a wall of unrecognised text. Every engine
+		 * core can parse gets the engine-aware check instead, which asks the
+		 * narrower question both languages can answer.
+		 */
+		const handlebars = params.engine === CORE_TEMPLATE_ENGINE
+		const crossEngineIssues = async () => {
+			const checked = await validateTemplateDraft(params)
+			return [
+				...(checked.syntax
+					? [
+							checked.syntax.line
+								? `Line ${checked.syntax.line}: ${checked.syntax.message}`
+								: checked.syntax.message
+						]
+					: []),
+				...checked.warnings.map((w) =>
+					w.line ? `Line ${w.line}: ${w.message}` : w.message
+				)
+			]
+		}
+
 		let res: Sockets.Pipelines.PreviewTemplate.Response
 		if (params.kind === "variable") {
 			const decl = getVariable(params.poolId)
@@ -1643,7 +1711,8 @@ export const pipelinesPreviewTemplate: Handler<
 				engine: params.engine,
 				variableId: params.poolId
 			})
-			if (decl)
+			if (!handlebars) res.issues = await crossEngineIssues()
+			else if (decl)
 				res.issues = lintVariableTemplate(
 					params.source,
 					decl.scope
@@ -1653,9 +1722,11 @@ export const pipelinesPreviewTemplate: Handler<
 				source: params.source,
 				engine: params.engine
 			})
-			res.issues = lintContextTemplate(
-				parseContextTemplate(params.source).cards
-			).map((i) => i.message)
+			res.issues = handlebars
+				? lintContextTemplate(
+						parseContextTemplate(params.source).cards
+					).map((i) => i.message)
+				: await crossEngineIssues()
 		}
 
 		emitToUser("pipelines:previewTemplate", res)
@@ -1720,18 +1791,79 @@ const libraryRefusal = async (err: unknown): Promise<string> => {
 	return "That change could not be saved. The server log has the details."
 }
 
-/** The whole view, which is what every write on this page answers with. */
+/**
+ * The whole view, which is what every write on this page answers with.
+ *
+ * `warnings` rides along on a template write. It is deliberately part of the
+ * success answer rather than a second round trip: the save happened, and what
+ * the person needs to know is about the row that now exists.
+ */
 async function libraryAnswer(
 	emitToUser: any,
-	event: string
-): Promise<{ library: Sockets.Pipelines.Library.Response }> {
+	event: string,
+	warnings?: Sockets.Pipelines.TemplateWarning[]
+): Promise<{
+	library: Sockets.Pipelines.Library.Response
+	warnings?: Sockets.Pipelines.TemplateWarning[]
+}> {
 	const { libraryView } = await import("$lib/server/pipelines/config/library")
 	const library = (await libraryView(
 		db
 	)) as Sockets.Pipelines.Library.Response
-	const res = { library }
+	const res = warnings?.length ? { library, warnings } : { library }
 	emitToUser(event, res)
 	return res
+}
+
+/**
+ * What the row that was just written references but nobody supplies.
+ *
+ * Reads the STORED row rather than the params: a create normalizes the engine
+ * and a patch may leave the source alone, so the params are a description of
+ * the change and this is a statement about the template that now exists.
+ * Warnings are advice, so a failure to produce them is not a failure to save —
+ * an empty list is the answer when anything here goes wrong.
+ */
+async function savedTemplateWarnings(
+	kind: "context" | "variable",
+	id: number
+): Promise<Sockets.Pipelines.TemplateWarning[]> {
+	try {
+		let draft: Parameters<typeof validateTemplateDraft>[0] | null = null
+		if (kind === "context") {
+			const [row] = await db
+				.select()
+				.from(schema.pipelineContextTemplates)
+				.where(eq(schema.pipelineContextTemplates.id, id))
+				.limit(1)
+			if (row)
+				draft = {
+					kind,
+					source: row.source ?? "",
+					engine: row.engine ?? CORE_TEMPLATE_ENGINE,
+					poolId: row.nodeTypeId
+				}
+		} else {
+			const [row] = await db
+				.select()
+				.from(schema.pipelineVariableTemplates)
+				.where(eq(schema.pipelineVariableTemplates.id, id))
+				.limit(1)
+			if (row)
+				draft = {
+					kind,
+					source: row.source ?? "",
+					engine: row.engine ?? CORE_TEMPLATE_ENGINE,
+					poolId: row.variableId
+				}
+		}
+		if (!draft) return []
+		const result = await validateTemplateDraft(draft)
+		return result.warnings
+	} catch (err) {
+		console.error("[pipelines] could not check a saved template:", err)
+		return []
+	}
 }
 
 /** "Default (copy)", then "(copy 2)" — unique within the row's own pool. */
@@ -1789,6 +1921,79 @@ async function promptCopyName(
 	return candidate
 }
 
+/**
+ * Does this draft parse, and does it name anything the step does not supply?
+ *
+ * The cheap half of `previewTemplate`, and separate from it on purpose:
+ * previewing renders, which needs sample content and costs what a render
+ * costs, while this only parses. An editor can therefore run it on every pause
+ * in typing, which is the point — the warning that matters ("you wrote
+ * `speakerRelationship`, and nothing supplies that") is worth nothing at the
+ * moment of a failed generation and everything while the cursor is still on
+ * the word.
+ */
+export const pipelinesValidateTemplate: Handler<
+	Sockets.Pipelines.ValidateTemplate.Params,
+	Sockets.Pipelines.ValidateTemplate.Response
+> = {
+	event: "pipelines:validateTemplate",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res = {
+				error: "Access denied. Only admin users can manage pipelines.",
+				warnings: [],
+				checked: false
+			}
+			emitToUser("pipelines:validateTemplate:error", res)
+			return res
+		}
+		const res = await validateTemplateDraft(params)
+		emitToUser("pipelines:validateTemplate", res)
+		return res
+	}
+}
+
+/**
+ * The contract a draft is checked against, and the check itself.
+ *
+ * Shared by the verb above and by the three library writes, so a warning shown
+ * while typing and a warning returned by the save are the same sentence about
+ * the same name.
+ */
+async function validateTemplateDraft(draft: {
+	kind: "context" | "variable"
+	source: string
+	engine: string
+	poolId: string
+}): Promise<Sockets.Pipelines.ValidateTemplate.Response> {
+	const { validateTemplateContext } = await import(
+		"$lib/shared/utils/templateValidation"
+	)
+	const { KNOWN_TOP_LEVEL_FIELDS } = await import(
+		"$lib/shared/utils/contextConfigCards"
+	)
+	let contractKeys: Iterable<string> = KNOWN_TOP_LEVEL_FIELDS
+	if (draft.kind === "variable") {
+		const { getVariable } = await import("@serene-pub/sdk")
+		const decl = getVariable(draft.poolId)
+		// A layout sees one variable's scope and nothing else. An unregistered
+		// variable id is a disabled plugin's, not a mistake — there is nothing
+		// to check against, and inventing a contract would report every name.
+		if (!decl) return { warnings: [], checked: false }
+		contractKeys = Object.keys(decl.scope)
+	}
+	const result = validateTemplateContext(
+		draft.engine,
+		draft.source,
+		contractKeys
+	)
+	return {
+		...(result.error ? { syntax: result.error } : {}),
+		warnings: result.warnings,
+		checked: result.checked
+	}
+}
+
 export const pipelinesLibraryCreateTemplate: Handler<
 	Sockets.Pipelines.LibraryTemplateWrite.CreateParams,
 	Sockets.Pipelines.LibraryTemplateWrite.Response
@@ -1806,11 +2011,12 @@ export const pipelinesLibraryCreateTemplate: Handler<
 				params.poolId,
 				params.name?.trim() || "New"
 			)
+			let created: { id: number }
 			if (params.kind === "context") {
 				const { createContextTemplate } = await import(
 					"$lib/server/pipelines/entities/contextTemplates"
 				)
-				await createContextTemplate(db, {
+				created = await createContextTemplate(db, {
 					nodeTypeId: params.poolId,
 					name,
 					source: params.source ?? "",
@@ -1820,22 +2026,23 @@ export const pipelinesLibraryCreateTemplate: Handler<
 				const { createVariableTemplate } = await import(
 					"$lib/server/pipelines/entities/variableTemplates"
 				)
-				await createVariableTemplate(db, {
+				created = await createVariableTemplate(db, {
 					variableId: params.poolId,
 					name,
 					source: params.source ?? "",
 					engine: params.engine ?? null
 				})
 			}
+			return await libraryAnswer(
+				emitToUser,
+				"pipelines:libraryCreateTemplate",
+				await savedTemplateWarnings(params.kind, created.id)
+			)
 		} catch (err) {
 			const res = { error: await libraryRefusal(err) }
 			emitToUser("pipelines:libraryCreateTemplate:error", res)
 			return res
 		}
-		return await libraryAnswer(
-			emitToUser,
-			"pipelines:libraryCreateTemplate"
-		)
 	}
 }
 
@@ -1942,7 +2149,8 @@ export const pipelinesLibraryUpdateTemplate: Handler<
 		}
 		return await libraryAnswer(
 			emitToUser,
-			"pipelines:libraryUpdateTemplate"
+			"pipelines:libraryUpdateTemplate",
+			await savedTemplateWarnings(params.kind, params.id)
 		)
 	}
 }
@@ -2600,6 +2808,62 @@ async function artifactsByRun(
 }
 
 /**
+ * Which document each of these slugs resolves to **now**.
+ *
+ * A receipt pins the canonical hash of the version it ran (ruling 2026-09-10),
+ * and `spec_slug`/`spec_version` name an indirection — an edited document
+ * republishes under the same semver and the slug moves on. So "is this receipt
+ * still describing what runs today" is a comparison, and this is the half of it
+ * that has to come from rows.
+ *
+ * One query for the page rather than one per run: a receipts page is capped at
+ * 100 rows and they are nearly all the same handful of slugs.
+ */
+async function currentHashBySlug(
+	slugs: string[]
+): Promise<Map<string, string>> {
+	const out = new Map<string, string>()
+	const wanted = [...new Set(slugs)].filter(Boolean)
+	if (!wanted.length) return out
+	const rows = await db
+		.select({
+			slug: schema.pipelineSpecs.slug,
+			hash: schema.pipelineSpecVersions.canonicalHash
+		})
+		.from(schema.pipelineSpecs)
+		.innerJoin(
+			schema.pipelineSpecVersions,
+			eq(
+				schema.pipelineSpecVersions.id,
+				schema.pipelineSpecs.activeVersionId
+			)
+		)
+		.where(inArray(schema.pipelineSpecs.slug, wanted))
+	for (const r of rows as any[]) out.set(r.slug, r.hash)
+	return out
+}
+
+/**
+ * The document half of a run row, as the panel shows it.
+ *
+ * `isCurrent` is `false` for a receipt whose slug has moved on **and** for one
+ * that never recorded a hash — the second being every run that predates
+ * migration 0119, which backfilled them with whatever was current at the time.
+ * Saying "current" about those would be a claim the data cannot support.
+ */
+function specPinOf(
+	run: { specSlug: string; specVersion: string; specHash: string | null },
+	current: Map<string, string>
+) {
+	const now = current.get(run.specSlug) ?? null
+	return {
+		specVersion: run.specVersion,
+		specHash: run.specHash ?? null,
+		specHashIsCurrent: !!run.specHash && !!now && run.specHash === now
+	}
+}
+
+/**
  * Recent runs — the honest answer to "did that use the new path".
  *
  * Scoped to sessions the asker can reach — owner **or** guest, via
@@ -2644,12 +2908,16 @@ export const pipelinesRuns: Handler<
 		// One query for the whole page rather than one per row: a run's output
 		// is a handful of rows, and `limit` is capped at 100 above.
 		const artifacts = await artifactsByRun(rows.map((r: any) => r.id))
+		const current = await currentHashBySlug(
+			rows.map((r: any) => r.specSlug)
+		)
 
 		const res: Sockets.Pipelines.Runs.Response = {
 			runs: rows.map((r: any) => ({
 				id: r.id,
 				runId: r.runId,
 				specSlug: r.specSlug,
+				...specPinOf(r, current),
 				outcome: r.outcome,
 				haltNodeKey: r.haltNodeKey,
 				haltReason: r.haltReason,
@@ -2700,6 +2968,10 @@ export const pipelinesRun: Handler<
 				id: (r as any).id,
 				runId: (r as any).runId,
 				specSlug: (r as any).specSlug,
+				...specPinOf(
+					r as any,
+					await currentHashBySlug([(r as any).specSlug])
+				),
 				outcome: (r as any).outcome,
 				haltNodeKey: (r as any).haltNodeKey,
 				haltReason: (r as any).haltReason,
@@ -2757,6 +3029,8 @@ export const pipelinesRun: Handler<
 interface RetrievalEntryFacts {
 	id: number
 	typeId: string
+	/** The book it lives in, which is half the address of the entry. */
+	lorebookId: number
 	title: string | null
 	keys: string[]
 	constant: boolean
@@ -2954,8 +3228,7 @@ function retrievalCriterion(
 			// thing that happened rather than naming the curve.
 			return {
 				label: "Its keywords, close together",
-				detail:
-					"two or more of its keywords matched near each other rather than scattered across the scanned messages",
+				detail: "two or more of its keywords matched near each other rather than scattered across the scanned messages",
 				value
 			}
 		case "nameMatch":
@@ -3006,8 +3279,7 @@ function retrievalCriterion(
 			// this is the one the shipped reply pipeline reaches.
 			return {
 				label: "Similar in meaning",
-				detail:
-					"it is about what the conversation is about, without needing a word in common",
+				detail: "it is about what the conversation is about, without needing a word in common",
 				value
 			}
 		case "tfidf":
@@ -3068,14 +3340,26 @@ const ordinal = (n: number) => {
 function retrievalMarker(
 	candidate: any,
 	reason: string | undefined
-): { marker: string; markerKind: Sockets.Pipelines.RetrievalRow["markerKind"] } {
+): {
+	marker: string
+	markerKind: Sockets.Pipelines.RetrievalRow["markerKind"]
+} {
 	const foundBy = candidate?.payload?.foundBy
-	if (candidate?.pinned || reason === "reserved" || reason?.startsWith("excluded_pinned"))
+	if (
+		candidate?.pinned ||
+		reason === "reserved" ||
+		reason?.startsWith("excluded_pinned")
+	)
 		return { marker: "Always include", markerKind: "pinned" }
 	if (reason === "reserved_minimum")
 		return { marker: "Kept by a floor", markerKind: "floor" }
 	if (foundBy === "entity-search")
 		return { marker: "Shared entity", markerKind: "entity" }
+	// ⚠ Ahead of the `presetScore` fall-through below, which would otherwise
+	// call a graph tie a similarity — the graph read carries a score and no
+	// signals, which is exactly the shape that branch was written for.
+	if (foundBy === "relationships")
+		return { marker: "Narrative graph", markerKind: "graph" }
 	if (fusionRanks(foundBy).length > 1)
 		return { marker: "Both arms", markerKind: "semantic" }
 	if (num(candidate?.signals?.keyword))
@@ -3340,7 +3624,9 @@ function retrievalBudget(
 			...(detail ? { detail } : {})
 		}
 
-	const spending = bands.filter((b) => b.used > 0).sort((a, b) => b.used - a.used)
+	const spending = bands
+		.filter((b) => b.used > 0)
+		.sort((a, b) => b.used - a.used)
 	const lead = spending[0]
 	const pct = Math.round((lead.used / used) * 100)
 	const headline =
@@ -3391,6 +3677,13 @@ export function explainRetrieval(
 	// walk below: a stop sequence is a property of the SEND, and the loop that
 	// follows is about what went into the prompt.
 	const stops = stopsFromReceipt(nodes)
+	// Read off the node's accounting fields rather than its output, for the same
+	// reason it is read up front: what a call cost is a property of the SEND.
+	const promptCache = promptCacheFromReceipt(nodes)
+	// Off the receipt's own `meta`, not off a node: the substitution happened
+	// before the first node ran, so there is no trail entry that could carry it
+	// (ruled 2026-09-10).
+	const presetFallback = presetFallbackFromReceipt(receipt)
 	const rows: Sockets.Pipelines.RetrievalRow[] = []
 	const notes: string[] = []
 	const warnings: string[] = []
@@ -3567,6 +3860,17 @@ export function explainRetrieval(
 		if (typeof d.entityLink === "string")
 			note(`Entity links: ${d.entityLink}.`)
 		/**
+		 * The relationship mechanism's own line, for `vectorSearch`'s reason.
+		 *
+		 * A ceiling of 0, a session with no lorebook and a graph nobody has
+		 * opened all produce the same empty band, and only a sentence tells
+		 * them apart. Emitted regardless of scope — the barren fold below is
+		 * for bands whose *settings* are being described on a turn with nothing
+		 * to scan, and this one names what happened instead.
+		 */
+		if (typeof d.relationships === "string")
+			note(`Relationships: ${d.relationships}.`)
+		/**
 		 * Eager indexing — what a query node had to index before it could
 		 * search, and whether it got through it.
 		 *
@@ -3584,8 +3888,7 @@ export function explainRetrieval(
 		 * because a note every turn saying "nothing to do" is what teaches
 		 * people to stop reading the notes.
 		 */
-		if (typeof d.indexing === "string")
-			note(`Indexing: ${d.indexing}.`)
+		if (typeof d.indexing === "string") note(`Indexing: ${d.indexing}.`)
 		if (typeof d.entityIndexing === "string")
 			note(`Indexing: ${d.entityIndexing}.`)
 		if (Array.isArray(d.truncated) && d.truncated.length)
@@ -3605,7 +3908,9 @@ export function explainRetrieval(
 							? `${label} (the newest ${fetched} of ${available})`
 							: label
 					})
-					.join(", ")} whole, so the best match may be outside what was ` +
+					.join(
+						", "
+					)} whole, so the best match may be outside what was ` +
 					`scanned.`
 			)
 		if (d.disjoint && typeof d.warning === "string") warn(d.warning)
@@ -3671,14 +3976,22 @@ export function explainRetrieval(
 			const source = retrievalGroupOf(String(candidate.source ?? ""))
 			const id = candidate.id
 			const entry =
-				typeof id === "number" ? entries.get(`${source}:${id}`) : undefined
+				typeof id === "number"
+					? entries.get(`${source}:${id}`)
+					: undefined
 			const payload = (candidate.payload ?? {}) as Record<string, unknown>
 
 			const criteria: Sockets.Pipelines.RetrievalCriterion[] = []
 			for (const signal of RETRIEVAL_CRITERION_ORDER) {
 				const value = num((candidate.signals ?? {})[signal])
 				if (value === undefined) continue
-				const c = retrievalCriterion(signal, value, source, entry, payload)
+				const c = retrievalCriterion(
+					signal,
+					value,
+					source,
+					entry,
+					payload
+				)
 				if (c) criteria.push(c)
 			}
 			const priority = num(candidate.priority)
@@ -3695,7 +4008,45 @@ export function explainRetrieval(
 			const preset = num(candidate.presetScore)
 			if (preset !== undefined) {
 				const ranks = fusionRanks(payload.foundBy)
-				if (payload.foundBy === "entity-search") {
+				if (payload.foundBy === "relationships") {
+					/**
+					 * The graph read's three terms, in the order that ranked
+					 * them (ruling 2026-09-10, Q1) — scene presence,
+					 * then whether the speaker is party to the tie, then how
+					 * recently it changed.
+					 *
+					 * ⚠ **A term it does not have is left out**, rather than
+					 * rendered as "not in the scene". Every other criterion on
+					 * this panel is a reason something got where it is, and a
+					 * list of absences reads as a verdict against the entry
+					 * when the real answer is simply "nothing lifted it".
+					 * The recency line is always present, because every tie
+					 * has one.
+					 */
+					const rank = (payload.rank ?? {}) as Record<string, unknown>
+					if (rank.present === true)
+						criteria.push({
+							label: "In the scene",
+							detail: "someone on this tie is in the cast"
+						})
+					if (rank.touchesSpeaker === true)
+						criteria.push({
+							label: "The speaker's own",
+							detail: "the speaking character is party to it"
+						})
+					const at = num(rank.recencyRank)
+					const of = num(rank.of)
+					if (at !== undefined && of !== undefined)
+						// ⚠ No `value`. On this panel a criterion's number is a
+						// **contribution**, rendered to three decimals beside
+						// the sentence; a rank is an ordinal, and "2.000" under
+						// "2nd most recently changed of 6" is the same fact
+						// twice with one of them in the wrong units.
+						criteria.push({
+							label: "Recently changed",
+							detail: `${ordinal(at)} most recently changed of ${of}`
+						})
+				} else if (payload.foundBy === "entity-search") {
 					const shared = Array.isArray(payload.sharedEntities)
 						? (payload.sharedEntities as unknown[]).map(String)
 						: []
@@ -3754,8 +4105,7 @@ export function explainRetrieval(
 			 * claimed this is exactly what it always was.
 			 */
 			const drifted =
-				drift.provenance === "changed" ||
-				drift.provenance === "deleted"
+				drift.provenance === "changed" || drift.provenance === "deleted"
 			const title =
 				(drifted
 					? recordedTitle || liveTitle
@@ -3814,6 +4164,7 @@ export function explainRetrieval(
 							entry: {
 								id: entry.id,
 								typeId: entry.typeId as EntryTypeId,
+								lorebookId: entry.lorebookId,
 								constant: entry.constant,
 								enabled: entry.enabled,
 								keys: entry.keys
@@ -3880,6 +4231,7 @@ export function explainRetrieval(
 							entry: {
 								id: entry.id,
 								typeId: entry.typeId as EntryTypeId,
+								lorebookId: entry.lorebookId,
 								constant: entry.constant,
 								enabled: entry.enabled,
 								keys: entry.keys
@@ -3946,8 +4298,86 @@ export function explainRetrieval(
 		ranked,
 		omitted,
 		...(budget ? { budget } : {}),
-		...(stops ? { stops } : {})
+		...(stops ? { stops } : {}),
+		...(promptCache ? { promptCache } : {}),
+		...(presetFallback ? { presetFallback } : {})
 	}
+}
+
+/**
+ * The prompt-cache accounting a run recorded, read off its generate node.
+ *
+ * ⚠ **Off the NODE, not off `node.output`** — unlike the stops beside it. These
+ * are the executor's own accounting fields, written where a reader already looks
+ * for what a call cost (`tokens`); putting them on the output would have made
+ * them part of the value the next node receives.
+ *
+ * ⚠ **Three absences that are three different answers.** A run that never
+ * reached a provider says nothing and gets no row. A connection that reported
+ * the prompt total and no reuse gets a row that says so. A connection that
+ * reported `cached: 0` reused nothing, which is a finding rather than a silence
+ * — so zero is kept and only a non-number is dropped.
+ *
+ * Both TEXT pins are matched, and only those: `generate-with-tools` is the same
+ * node under a second id, and a tool loop is exactly the shape whose prompt is
+ * worth caching. A `generate-image` node earlier in the trail must not be picked
+ * instead — it reports none of this, and finding it would answer "nothing" for a
+ * run whose text node reported plenty.
+ */
+function promptCacheFromReceipt(
+	nodes: any[]
+): Sockets.Pipelines.RetrievalPromptCache | undefined {
+	const node = nodes.find((n) => {
+		const id = String(n?.typeId ?? "")
+		return (
+			id.startsWith("core:provider/generate-text") ||
+			id.startsWith("core:provider/generate-with-tools")
+		)
+	})
+	if (!node) return undefined
+	// Checked rather than cast, like `stopsFromReceipt`: the blob is JSON some
+	// build wrote, and a shape the panel cannot render is dropped here — where
+	// the answer is silence — rather than in a component, where it is a broken
+	// report.
+	const num = (v: unknown) =>
+		typeof v === "number" && Number.isFinite(v) ? v : undefined
+	const prompt = num(node.tokensPrompt)
+	const cached = num(node.tokensCached)
+	const write = num(node.tokensCacheWrite)
+	if (prompt === undefined && cached === undefined && write === undefined)
+		return undefined
+	return {
+		...(prompt !== undefined ? { prompt } : {}),
+		...(cached !== undefined ? { cached } : {}),
+		...(write !== undefined ? { write } : {})
+	}
+}
+
+/**
+ * The substitution a run was reached through, read off the receipt's `meta`.
+ *
+ * ⚠ Every field is checked rather than cast, for the reason `stopsFromReceipt`
+ * states one function down: the blob is JSON some build wrote, and a shape the
+ * panel cannot render is dropped here — where the answer is silence — rather
+ * than in a component, where the answer is a broken report.
+ *
+ * Carries no connection identity and nothing a non-admin may not see: four
+ * strings an administrator typed or a pipeline author chose.
+ */
+function presetFallbackFromReceipt(
+	receipt: any
+): NonNullable<
+	Sockets.Pipelines.RunExplain.Response["explanation"]
+>["presetFallback"] {
+	const raw = receipt?.meta?.preset
+	if (!raw || typeof raw !== "object" || raw.via !== "fallback")
+		return undefined
+	const str = (v: unknown) => (typeof v === "string" && v ? v : null)
+	const preset = str(raw.preset)
+	const event = str(raw.event)
+	const bound = str(raw.bound)
+	if (!preset || !event || !bound) return undefined
+	return { preset, event, bound, reason: str(raw.reason) ?? "" }
 }
 
 /**
@@ -3963,10 +4393,10 @@ export function explainRetrieval(
  * dropped here, where the answer is silence, rather than in a component, where
  * the answer is a broken report.
  *
- * Nothing here is connection identity — three kinds, some strings the user
- * themselves typed, and the wire mode — so `withoutConnectionIdentity` has
- * nothing to remove and a non-admin reading their own receipt sees the whole of
- * it, which is the point.
+ * The kinds and the strings are the reader's own — their template, their cast,
+ * their typed sequences — and they survive the projection. The wire MODE does
+ * not: `wire` is a connection-identity key, so a non-admin reads their own stop
+ * lists with the rule that decided them removed.
  */
 function stopsFromReceipt(
 	nodes: any[]
@@ -3981,7 +4411,11 @@ function stopsFromReceipt(
 		const out: Sockets.Pipelines.StopSequence[] = []
 		for (const s of v) {
 			if (!s || typeof s.value !== "string") continue
-			if (s.kind !== "format" && s.kind !== "speaker" && s.kind !== "explicit")
+			if (
+				s.kind !== "format" &&
+				s.kind !== "speaker" &&
+				s.kind !== "explicit"
+			)
 				continue
 			out.push({ value: s.value, kind: s.kind })
 		}
@@ -4070,6 +4504,7 @@ export async function retrievalEntriesFor(
 		entries.set(`${bandOfType(r.typeId)}:${r.id}`, {
 			id: r.id,
 			typeId: r.typeId,
+			lorebookId: session.lorebookId,
 			title: r.title?.trim() || datedTitle(r.fields),
 			keys: Array.isArray(r.keys) ? r.keys : [],
 			constant: !!r.constant,
@@ -4805,6 +5240,7 @@ export const pipelinesSessionEntryUsage: Handler<
 							entry: {
 								id: entry.id,
 								typeId: entry.typeId as EntryTypeId,
+								lorebookId: entry.lorebookId,
 								constant: entry.constant,
 								enabled: entry.enabled,
 								keys: entry.keys
@@ -5101,6 +5537,7 @@ export function registerPipelineHandlers(
 	register(socket, pipelinesGet, emitToUser)
 	register(socket, pipelinesSetOption, emitToUser)
 	register(socket, pipelinesClearOption, emitToUser)
+	register(socket, pipelinesResetConfig, emitToUser)
 	register(socket, pipelinesSetOptions, emitToUser)
 	register(socket, pipelinesRun, emitToUser)
 	register(socket, pipelinesRunExplain, emitToUser)
@@ -5122,6 +5559,7 @@ export function registerPipelineHandlers(
 	register(socket, pipelinesDeletePrompt, emitToUser)
 	register(socket, pipelinesLibrary, emitToUser)
 	register(socket, pipelinesPreviewTemplate, emitToUser)
+	register(socket, pipelinesValidateTemplate, emitToUser)
 	register(socket, pipelinesLibraryCreateTemplate, emitToUser)
 	register(socket, pipelinesLibraryCloneTemplate, emitToUser)
 	register(socket, pipelinesLibraryUpdateTemplate, emitToUser)

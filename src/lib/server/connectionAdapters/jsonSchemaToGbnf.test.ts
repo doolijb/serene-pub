@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest"
 import { jsonSchemaToGbnf, type JsonSchemaNode } from "./jsonSchemaToGbnf"
 import { buildPerspectiveSchema } from "$lib/server/utils/graphSchema"
+import {
+	ADVENTURE_KEEPER_SCHEMA,
+	ADVENTURE_PLAN_SCHEMA
+} from "@serene-pub/core-catalog"
 
 /**
  * Decodes a GBNF string literal back to the characters it matches, so the
@@ -110,14 +114,33 @@ describe("jsonSchemaToGbnf", () => {
 		})
 
 		test("an unsupported type rather than a silently looser grammar", () => {
+			// `null` rather than `number`: numbers and booleans arrived with the
+			// adventure keeper's schema, which needs an entry id and a delta.
+			// The rule this asserts is unchanged — a type this converter cannot
+			// express is refused, never approximated.
 			expect(() =>
 				jsonSchemaToGbnf({
 					type: "object",
 					additionalProperties: false,
 					required: ["n"],
-					properties: { n: { type: "number" } as never }
+					properties: { n: { type: "null" } as never }
 				})
-			).toThrow(/unsupported type "number"/)
+			).toThrow(/unsupported type "null"/)
+		})
+
+		test("a scalar nothing referenced is not emitted", () => {
+			// A grammar carrying an unreferenced rule is a golden file that
+			// moves whenever a scalar is added to the converter, which is a diff
+			// that says nothing about the schema it came from.
+			const grammar = jsonSchemaToGbnf({
+				type: "object",
+				additionalProperties: false,
+				required: ["n"],
+				properties: { n: { type: "integer" } }
+			})
+			expect(grammar).not.toContain("string ::=")
+			expect(grammar).not.toContain("number ::=")
+			expect(grammar).toContain("integer ::=")
 		})
 
 		test("const, which several services handle poorly", () => {
@@ -304,5 +327,73 @@ char ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\bfnrt] | "u" [0-9a-fA-F]{4})
 ws ::= | " " | "\n" [ \t]{0,20}
 `
 		)
+	})
+})
+
+/**
+ * The three scalars the adventure keeper's and planner's schemas need.
+ *
+ * Added under the converter's own terms — "add here WITH A TEST when a schema
+ * needs one" — and each is the rule llama.cpp's shipped `json.gbnf` uses, so the
+ * whitespace ownership is upstream's rather than this file's invention.
+ */
+describe("numbers and booleans", () => {
+	const grammar = jsonSchemaToGbnf({
+		type: "object",
+		additionalProperties: false,
+		required: ["entryId", "delta", "score", "needsLookup"],
+		properties: {
+			entryId: { type: "integer" },
+			delta: { type: "integer" },
+			score: { type: "number" },
+			needsLookup: { type: "boolean" }
+		}
+	})
+
+	test("emits one rule per scalar, each owning a single trailing ws", () => {
+		expect(grammar).toContain(
+			String.raw`number ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)? ws`
+		)
+		expect(grammar).toContain(
+			String.raw`integer ::= ("-"? ([0-9] | [1-9] [0-9]*)) ws`
+		)
+		expect(grammar).toContain(String.raw`boolean ::= ("true" | "false") ws`)
+	})
+
+	test("references them from the object rule, with no ws of its own", () => {
+		expect(grammar).toContain(
+			'"{" ws "\\"entryId\\"" ws ":" ws integer "," ws "\\"delta\\"" ws ":" ws integer "," ws "\\"score\\"" ws ":" ws number "," ws "\\"needsLookup\\"" ws ":" ws boolean "}" ws'
+		)
+	})
+
+	test("an integer is whole: no fraction, no exponent", () => {
+		const integerRule = grammar
+			.split("\n")
+			.find((line) => line.startsWith("integer ::="))!
+		expect(integerRule).not.toContain(".")
+		expect(integerRule).not.toContain("eE")
+	})
+})
+
+/**
+ * The shipped schemas, compiled.
+ *
+ * `core:provider/generate-json@1` hands a schema to whichever door a connection
+ * opens, and on the llama.cpp family that door is this converter. A schema
+ * outside its subset is REFUSED, so an adventure turn on KoboldCPP would fail at
+ * the request rather than produce a looser answer — which is the right failure
+ * and the wrong place to discover it.
+ */
+describe("the adventure genre's two schemas stay inside the subset", () => {
+	test.each([
+		["planner", ADVENTURE_PLAN_SCHEMA],
+		["state keeper", ADVENTURE_KEEPER_SCHEMA]
+	])("%s", (_name, schema) => {
+		const grammar = jsonSchemaToGbnf(schema as unknown as JsonSchemaNode)
+		expect(grammar).toContain("root ::=")
+		// The invariant worth guarding, on these two as on the golden above: a
+		// doubled `ws` is ambiguous rather than redundant, and pegs a core
+		// inside llama.cpp's grammar filter rather than failing.
+		expect(grammar).not.toMatch(/\bws ws\b/)
 	})
 })

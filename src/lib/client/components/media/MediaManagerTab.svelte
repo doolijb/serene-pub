@@ -26,6 +26,8 @@
 	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import EntityGalleryViewModal from "$lib/client/components/sessionMessages/EntityGalleryViewModal.svelte"
+	import AvatarCropEditor from "./AvatarCropEditor.svelte"
+	import type { MediaFrame } from "$lib/shared/media/frame"
 	import {
 		MediaVisibility,
 		MediaVisibilityLabels
@@ -52,6 +54,10 @@
 	let menuOpenFor = $state<number | null>(null)
 	let busyId = $state<number | null>(null)
 	let brokenIds = $state(new Set<number>())
+	/** The image whose crop is being edited, or null. Held until the editor
+	 *  reports the close, which is the only time it is safe to drop. */
+	let cropping = $state<Item | null>(null)
+	let cropOpen = $state(false)
 
 	/**
 	 * Which pipeline runs made this image, keyed by file id.
@@ -269,6 +275,17 @@
 		socket.emit("media:regenerateThumbnail", { mediaId: item.id })
 	}
 
+	function crop(item: Item) {
+		menuOpenFor = null
+		cropping = item
+		cropOpen = true
+	}
+
+	function saveCrop(frame: MediaFrame | null) {
+		if (!cropping) return
+		socket.emit("media:setFrame", { mediaId: cropping.id, frame })
+	}
+
 	function toggleVisibility(item: Item) {
 		menuOpenFor = null
 		socket.emit("media:setVisibility", {
@@ -320,6 +337,15 @@
 					? "Thumbnail regenerated"
 					: "Already at full size — the original is served"
 			})
+		}
+		const onSetFrame = (res: Sockets.Media.SetFrame.Response) => {
+			// Re-listed rather than patched in place: the thumbnail row is gone
+			// and `storedBytes` with it, and `refresh()` keeps whatever sort and
+			// filter this panel is showing.
+			toaster.success({
+				title: res.media.frame ? "Crop saved" : "Crop reset"
+			})
+			refresh()
 		}
 		const onDelete = (res: Sockets.Media.Delete.Response) =>
 			toaster.success({
@@ -389,6 +415,7 @@
 		socket.on("media:list", onList)
 		socket.on("pipelines:artifactRuns", onArtifactRuns)
 		socket.on("media:regenerateThumbnail", onRegen)
+		socket.on("media:setFrame", onSetFrame)
 		socket.on("media:delete", onDelete)
 		socket.on("media:cleanupPreview", onCleanup)
 		socket.on("media:cullDerived", onCullDerived)
@@ -396,6 +423,7 @@
 		socket.on("media:setCachePolicy", onCachePolicy)
 		socket.on("media:list:error" as any, onError)
 		socket.on("media:regenerateThumbnail:error" as any, onError)
+		socket.on("media:setFrame:error" as any, onError)
 		socket.on("media:delete:error" as any, onError)
 		socket.on("media:setVisibility:error" as any, onError)
 		socket.on("media:cleanupPreview:error" as any, onError)
@@ -410,6 +438,7 @@
 			socket.off("media:list", onList)
 			socket.off("pipelines:artifactRuns", onArtifactRuns)
 			socket.off("media:regenerateThumbnail", onRegen)
+			socket.off("media:setFrame", onSetFrame)
 			socket.off("media:delete", onDelete)
 			socket.off("media:cleanupPreview", onCleanup)
 			socket.off("media:cullDerived", onCullDerived)
@@ -417,6 +446,7 @@
 			socket.off("media:setCachePolicy", onCachePolicy)
 			socket.off("media:list:error" as any, onError)
 			socket.off("media:regenerateThumbnail:error" as any, onError)
+			socket.off("media:setFrame:error" as any, onError)
 			socket.off("media:delete:error" as any, onError)
 			socket.off("media:setVisibility:error" as any, onError)
 			socket.off("media:cleanupPreview:error" as any, onError)
@@ -511,6 +541,14 @@
 							<span>Download original</span>
 						</button>
 						{#if item.kind === "image"}
+							<button
+								type="button"
+								class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
+								onclick={() => crop(item)}
+							>
+								<Icons.Crop size={16} aria-hidden="true" />
+								<span>Crop</span>
+							</button>
 							<button
 								type="button"
 								class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
@@ -1194,3 +1232,16 @@
 		</Dialog.Positioner>
 	</Portal>
 </Dialog>
+
+<!-- Mounted whether or not it is open: a dialog torn down mid-close leaves its
+     machine reading state that went with it. `cropping` is dropped on the
+     editor's close report, so these expressions read defensively meanwhile. -->
+<AvatarCropEditor
+	open={cropOpen}
+	onOpenChange={(e) => (cropOpen = e.open)}
+	onClosed={() => (cropping = null)}
+	src={cropping?.originalUrl ?? ""}
+	frame={cropping?.frame ?? null}
+	subject={cropping ? displayName(cropping) : undefined}
+	onSave={saveCrop}
+/>

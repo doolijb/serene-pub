@@ -61,6 +61,7 @@ import {
 	toEntryRow,
 	type SelectLorebookEntry
 } from "$lib/server/utils/lorebookEntries"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 /**
  * A toy embedding: one axis per subject, so similarity is readable by eye.
@@ -80,9 +81,9 @@ function vectorFor(text: string): number[] {
 /**
  * The application database, pointed at the test one.
  *
- * Needed because `PromptBuilder`'s RAG gate reads `systemSettings.vectorizationEnabled`
- * from the **global** `db` rather than from the session it was handed. Without this
- * mock that read finds nothing, the gate closes, and the legacy path quietly
+ * Needed because the RAG gate now resolves the `text->embedding` star off the
+ * **global** `db` rather than from the session it was handed. Without this
+ * mock that lookup finds no star, the gate closes, and the legacy path quietly
  * runs the *keyword* engine instead — so a RAG fixture would compare the
  * pipeline's semantic mechanism against legacy's keyword mechanism and report a divergence
  * that is really a misconfiguration. See §18.
@@ -200,8 +201,32 @@ beforeAll(async () => {
 	await db.insert(schema.systemSettings).values({
 		id: 1,
 		defaultContextConfigId: contextConfig.id,
-		defaultPromptConfigId: promptConfig.id,
-		vectorizationEnabled: true
+		defaultPromptConfigId: promptConfig.id
+	})
+	// The star: no row in `connection_defaults` means embeddings are off,
+	// which would close the RAG gate the same way the old
+	// `vectorizationEnabled` flag being unset used to.
+	const [embeddingConn] = await db
+		.insert(schema.connections)
+		.values({
+			name: "RAG Parity Embeddings",
+			modality: "embeddings",
+			type: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+			model: "Xenova/all-MiniLM-L6-v2",
+			extraJson: {},
+			capabilities: {}
+		} as any)
+		.returning()
+	await db.insert(schema.connectionModels).values({
+		connectionId: embeddingConn.id,
+		model: "Xenova/all-MiniLM-L6-v2",
+		name: "Xenova/all-MiniLM-L6-v2",
+		isDefault: true
+	})
+	await db.insert(schema.connectionDefaults).values({
+		input: "text",
+		output: "embedding",
+		connectionId: embeddingConn.id
 	})
 
 	configs = {

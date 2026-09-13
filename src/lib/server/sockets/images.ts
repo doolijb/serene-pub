@@ -9,6 +9,10 @@ import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { buildImageRequest } from "$lib/server/imageGen/buildRequest"
 import { S } from "@serene-pub/sdk"
 import { capabilityDefault } from "$lib/server/connections/capabilityDefaults"
+import {
+	defaultConnectionModel,
+	mergeEndpointModel
+} from "$lib/server/connections/models"
 import { CONNECTION_REFUSAL } from "$lib/server/connections/visibility"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import type { ImageGenProgress } from "$lib/shared/imageGen/types"
@@ -142,10 +146,29 @@ export const imagesGenerate: Handler<
 
 		if (!params.prompt?.trim()) return fail("A prompt is required.")
 
-		const connection = await db.query.connections.findFirst({
+		const endpoint = await db.query.connections.findFirst({
 			where: (c, { eq }) => eq(c.id, params.connectionId)
 		})
-		if (!connection) return fail("Connection not found.")
+		if (!endpoint) return fail("Connection not found.")
+		/**
+		 * THE PAIR (0114), merged before anything reads a field off it.
+		 *
+		 * This is the FOURTH entry point into image generation and the only one
+		 * that does not go through `resolveCapabilityTarget` — it takes a
+		 * connection id straight from the client. So the merge has to happen
+		 * here, or `readyManagedTarget` below loads the ENDPOINT's legacy mirror
+		 * instead of the model, and the guard judges the endpoint instead of the
+		 * checkpoint.
+		 *
+		 * The default model, because this call names no model: the socket's
+		 * `connectionId` predates the split and means what every pre-0114
+		 * selection means. An endpoint with no models merges to itself, which is
+		 * exactly the row this used to load.
+		 */
+		const connection = mergeEndpointModel(
+			endpoint as SelectConnection,
+			await defaultConnectionModel(db, endpoint.id)
+		)
 		// The same guard the three dispatchers use, for the same reason: this is
 		// the fourth way into image generation, and it was the last one still
 		// asking what the connection *is* rather than what it can do. A KoboldCPP

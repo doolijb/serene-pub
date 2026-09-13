@@ -186,9 +186,9 @@ describe("BaseConnectionAdapter.promptTextFor()", () => {
 
 	test("opens a turn for the model when the payload does not already seed one", () => {
 		const adapter = makeAdapter() as any
-		expect(adapter.promptTextFor({ messages }).endsWith("### Assistant:\n")).toBe(
-			true
-		)
+		expect(
+			adapter.promptTextFor({ messages }).endsWith("### Assistant:\n")
+		).toBe(true)
 	})
 
 	test("does not open a second turn when the last message is the seed", () => {
@@ -278,5 +278,100 @@ describe("BaseConnectionAdapter's attachment limits", () => {
 		)
 		expect(plan.ok).toBe(true)
 		expect(plan.files.length).toBe(300)
+	})
+})
+
+describe("the exchange an adapter records", () => {
+	/**
+	 * What the inspector reads instead of a proxy: the request as the adapter
+	 * rendered it and the response as it arrived, with credentials replaced and
+	 * a cap on how much of a reply is kept.
+	 */
+	test("a credential in the body is replaced and named", async () => {
+		const { WireRecorder, WIRE_REDACTED } = await import(
+			"./BaseConnectionAdapter"
+		)
+		const wire = new WireRecorder({
+			url: "http://localhost:5001/api/v1/generate",
+			body: {
+				prompt: "hi",
+				api_key: "sk-do-not-keep",
+				nested: { authorization: "Bearer sk-do-not-keep" },
+				max_length: 100
+			}
+		})
+		wire.received({ results: [{ text: "ok" }] }, 200)
+		const body = wire.exchange.request.body as any
+		expect(body.api_key).toBe(WIRE_REDACTED)
+		expect(body.nested.authorization).toBe(WIRE_REDACTED)
+		expect(body.prompt).toBe("hi")
+		expect(body.max_length).toBe(100)
+		expect(wire.exchange.redacted).toEqual([
+			"body.api_key",
+			"body.nested.authorization"
+		])
+		expect(JSON.stringify(wire.exchange)).not.toContain("sk-do-not-keep")
+		expect(wire.exchange.response.status).toBe(200)
+		expect(wire.exchange.response.streamed).toBe(false)
+	})
+
+	test("a key in the URL is replaced too, and the rest of the URL kept", async () => {
+		const { WireRecorder, WIRE_REDACTED } = await import(
+			"./BaseConnectionAdapter"
+		)
+		const wire = new WireRecorder({
+			url: "https://api.example.com/v1/chat?api_key=sk-do-not-keep&model=x",
+			body: {}
+		})
+		expect(wire.exchange.request.url).toContain(
+			`api_key=${encodeURIComponent(WIRE_REDACTED)}`
+		)
+		expect(wire.exchange.request.url).toContain("model=x")
+		expect(wire.exchange.redacted).toEqual(["url.api_key"])
+	})
+
+	test("an attachment's bytes are noted, never copied", async () => {
+		const { WireRecorder } = await import("./BaseConnectionAdapter")
+		const bytes = "QUJDRA".repeat(2000)
+		const prose = "The archive is closed, but the door was open. ".repeat(
+			500
+		)
+		const wire = new WireRecorder({
+			url: "https://api.anthropic.com/v1/messages",
+			body: {
+				messages: [
+					{
+						role: "user",
+						content: [
+							{ type: "text", text: prose },
+							{
+								type: "image",
+								source: { media_type: "image/png", data: bytes }
+							}
+						]
+					}
+				]
+			}
+		})
+		const content = (wire.exchange.request.body as any).messages[0].content
+		// The prompt is the whole point of the record and is kept whole,
+		// however long it is.
+		expect(content[0].text).toBe(prose)
+		expect(content[1].source.data).toMatch(/KB of encoded bytes/)
+		expect(wire.exchange.redacted).toEqual([
+			"body.messages[0].content[1].source.data"
+		])
+	})
+
+	test("a response past the cap keeps the first 64 KB and says so", async () => {
+		const { WireRecorder, WIRE_RAW_LIMIT } = await import(
+			"./BaseConnectionAdapter"
+		)
+		const wire = new WireRecorder({ url: "http://x/api/chat", body: {} })
+		for (let i = 0; i < 100; i++) wire.frame("y".repeat(1024))
+		expect(wire.exchange.response.raw.length).toBe(WIRE_RAW_LIMIT)
+		expect(wire.exchange.response.truncated).toBe(true)
+		expect(wire.exchange.response.streamed).toBe(true)
+		expect(wire.exchange.response.chunks).toBe(100)
 	})
 })

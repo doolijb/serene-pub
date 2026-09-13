@@ -30,6 +30,8 @@
 
 import type { AdapterExports } from "$lib/server/connectionAdapters/BaseConnectionAdapter"
 import type { ImageAdapterExports } from "$lib/server/imageAdapters/BaseImageAdapter"
+import type { EmbeddingAdapterExports } from "$lib/server/embeddingAdapters/BaseEmbeddingAdapter"
+import type { NerAdapterExports } from "$lib/server/nerAdapters/BaseNerAdapter"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 /** The modules that serve one connection type. At least one is always present. */
@@ -38,6 +40,10 @@ export interface AdapterModules {
 	text?: () => Promise<AdapterExports>
 	/** Loads the image-family module — the one that can implement `generateImage`. */
 	image?: () => Promise<ImageAdapterExports>
+	/** Loads the embedding-family module — the one that can implement `embedText`. */
+	embedding?: () => Promise<EmbeddingAdapterExports>
+	/** Loads the NER-family module — the one that can implement `extractEntities`. */
+	ner?: () => Promise<NerAdapterExports>
 }
 
 export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
@@ -83,7 +89,8 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 		// Nothing here has to be started or loaded first, which is why it draws
 		// through the same `/sdapi/v1` adapter every other A1111-compatible
 		// backend uses.
-		image: async () => (await import("../imageAdapters/A1111Adapter")).default
+		image: async () =>
+			(await import("../imageAdapters/A1111Adapter")).default
 	},
 
 	[CONNECTION_TYPE.KOBOLDCPP_MANAGED]: {
@@ -108,7 +115,8 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 	// One adapter, four backends — KoboldCPP, AUTOMATIC1111, Forge and SD.Next
 	// all speak the same `/sdapi/v1` surface.
 	[CONNECTION_TYPE.A1111]: {
-		image: async () => (await import("../imageAdapters/A1111Adapter")).default
+		image: async () =>
+			(await import("../imageAdapters/A1111Adapter")).default
 	},
 
 	// The MANAGED image type renders through that same A1111 wire — its module
@@ -123,6 +131,51 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 		image: async () =>
 			(await import("../imageAdapters/KoboldCppManagedImageAdapter"))
 				.default
+	},
+
+	// ── Embeddings ──────────────────────────────────────────────────────────
+	//
+	// Three types, one action each, and no `text` module between them — which is
+	// the load-bearing absence here. An embedding endpoint that derived
+	// `text->text` from a text module would be offerable as the chat default and
+	// would fail every Send; `modalityAllows` closes the same hole from the
+	// other side for a row whose capabilities nobody has resolved yet.
+
+	[CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS]: {
+		// ⚠ The thunk matters more here than anywhere else in this map:
+		// `LocalOnnxEmbeddingAdapter` reaches `@huggingface/transformers`, whose
+		// `onnxruntime-node` native addon has no Android build at all.
+		embedding: async () =>
+			(await import("../embeddingAdapters/LocalOnnxEmbeddingAdapter"))
+				.default
+	},
+
+	[CONNECTION_TYPE.OPENAI_EMBEDDINGS]: {
+		embedding: async () =>
+			(await import("../embeddingAdapters/OpenAIEmbeddingAdapter"))
+				.default
+	},
+
+	[CONNECTION_TYPE.OLLAMA_EMBEDDINGS]: {
+		// `POST /api/embed`, not the `/v1/embeddings` shim — see the adapter.
+		embedding: async () =>
+			(await import("../embeddingAdapters/OllamaEmbeddingAdapter"))
+				.default
+	},
+
+	// ── Named entities ──────────────────────────────────────────────────────
+	//
+	// One type, one action, and no module from any other family — the same
+	// load-bearing absence the embedding block above has. An entity endpoint that
+	// derived `text->text` would be offerable as the chat default and would fail
+	// every Send.
+
+	[CONNECTION_TYPE.LOCAL_ONNX_NER]: {
+		// ⚠ The thunk matters as much here as for local embeddings:
+		// `LocalOnnxNerAdapter` reaches `@huggingface/transformers`, whose
+		// `onnxruntime-node` native addon has no Android build at all.
+		ner: async () =>
+			(await import("../nerAdapters/LocalOnnxNerAdapter")).default
 	}
 }
 

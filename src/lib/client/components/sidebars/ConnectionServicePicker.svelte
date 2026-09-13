@@ -9,12 +9,13 @@
 		filterConnectionServiceItemsByModality,
 		type ConnectionServiceItem
 	} from "$lib/shared/utils/connectionServiceItems"
+	import { CONNECTION_SECTIONS } from "$lib/shared/constants/connectionSections"
 
 	interface Props {
 		selectedItem: ConnectionServiceItem | undefined
 		label: string
-		/** Seed the Text/Image toggle (e.g. the Image Generation category). */
-		initialModality?: "text-gen" | "image-gen"
+		/** Seed the modality toggle (e.g. the Embeddings section). */
+		initialModality?: string
 	}
 	let { selectedItem = $bindable(), label, initialModality }: Props = $props()
 
@@ -23,13 +24,17 @@
 	// once rather than on every keystroke.
 	const ALL_ITEMS = buildConnectionServiceItems()
 
-	// Text vs Image generation — the two modalities share this picker but never
-	// mix, so a widget slot asking for one never offers the other. Seeded from
-	// the current selection so re-opening on an image connection stays on Image.
-	let modality = $state<"text-gen" | "image-gen">(
+	// One button per section. The modalities share this picker but never mix, so
+	// a slot asking for one never offers another. Seeded from the current
+	// selection so re-opening on an image connection stays on Image.
+	//
+	// ⚠ Built from `CONNECTION_SECTIONS`, not from a pair of hardcoded buttons:
+	// the hardcoded pair is what made embeddings a separate panel rather than a
+	// third entry.
+	let modality = $state<string>(
 		initialModality ?? selectedItem?.modality ?? "text-gen"
 	)
-	function setModality(m: "text-gen" | "image-gen") {
+	function setModality(m: string) {
 		if (m === modality) return
 		modality = m
 		// A selection from the other modality no longer belongs — clear it and
@@ -59,36 +64,27 @@
 	)
 </script>
 
-<!-- Modality toggle: Text vs Image generation. The two never mix in one picker. -->
+<!-- One button per section. The modalities never mix in one picker. -->
 <div
 	class="border-surface-300-700 mb-2 inline-flex overflow-hidden rounded-lg border"
 	role="group"
-	aria-label="Generation type"
+	aria-label="Connection type"
 >
-	<button
-		type="button"
-		class="flex items-center gap-1.5 px-3 py-1.5 text-sm {modality ===
-		'text-gen'
-			? 'preset-filled-primary-500'
-			: 'preset-tonal-surface'}"
-		aria-pressed={modality === "text-gen"}
-		onclick={() => setModality("text-gen")}
-	>
-		<Icons.Type size={14} />
-		Text
-	</button>
-	<button
-		type="button"
-		class="flex items-center gap-1.5 px-3 py-1.5 text-sm {modality ===
-		'image-gen'
-			? 'preset-filled-primary-500'
-			: 'preset-tonal-surface'}"
-		aria-pressed={modality === "image-gen"}
-		onclick={() => setModality("image-gen")}
-	>
-		<Icons.Image size={14} />
-		Image
-	</button>
+	{#each CONNECTION_SECTIONS as s (s.modality)}
+		{@const Icon = (Icons as any)[s.icon] ?? Icons.Cable}
+		<button
+			type="button"
+			class="flex items-center gap-1.5 px-3 py-1.5 text-sm {modality ===
+			s.modality
+				? 'preset-filled-primary-500'
+				: 'preset-tonal-surface'}"
+			aria-pressed={modality === s.modality}
+			onclick={() => setModality(s.modality)}
+		>
+			<Icon size={14} />
+			{s.label}
+		</button>
+	{/each}
 </div>
 
 <!-- `inputBehavior="autohighlight"` is not cosmetic. Without it, typing a filter

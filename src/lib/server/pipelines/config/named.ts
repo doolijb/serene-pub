@@ -45,10 +45,22 @@
  * the author default moved underneath it. That is the whole point of the layer
  * chain: an admin changing a default reaches everyone who has not opted out, and
  * stops at everyone who has (12 §2).
+ *
+ * ⚠ **"A value the user set" now means a row that is a DEVIATION** (ruled
+ * 2026-09-10). A row holding exactly what the current declaration declares is
+ * not a decision anybody made — it is what materializing every declared value
+ * at seed time used to leave behind — so the reconcile sweeps it, and the
+ * config inherits the declaration from then on. The asymmetry above is
+ * unchanged for every row that differs; what changed is that a config no longer
+ * carries a copy of the answer it was going to inherit anyway. See
+ * `config/deviations.ts` for the rule and what follows from it, and
+ * `drizzle/0115` for the migration that first applies it.
  */
 
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { isDeviation } from "$lib/server/pipelines/config/deviations"
+import { presetConfigForSpec } from "$lib/server/pipelines/entities/presetBindings"
 import {
 	declarations,
 	humanizeCamel,
@@ -58,7 +70,7 @@ import { defaultPromptFor } from "$lib/server/pipelines/boot/seedPrompts"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 import { defaultVariableTemplateFor } from "$lib/server/pipelines/boot/seedVariableTemplates"
 import { defaultContextTemplateFor } from "$lib/server/pipelines/boot/seedContextTemplates"
-import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
+import { defaultEngineOf } from "$lib/shared/pipelines/templateEngines"
 
 // `\u0000` as an escape, never the raw byte: a literal NUL makes git
 // classify this file as binary, and a patch generated without `--binary`
@@ -104,12 +116,18 @@ export interface EnsureDefaultResult {
  *
  * Shared by both callers rather than written twice, because the two disagreeing
  * about what a shipped default is would produce exactly that discrepancy again.
+ *
+ * `presetValues` is read by the `sampling-ref` branch alone, and only there
+ * because sampling is the one reference a document ADDRESSES rather than
+ * inherits: there is no per-node-type sampling pool for core to resolve a
+ * default out of, so the row a stage runs on is whichever one the author named.
  */
 async function refDefaults(
 	db: Db,
 	specId: number,
 	specSlug: string,
-	decls: Decl[]
+	decls: Decl[],
+	presetValues: Map<string, unknown>
 ): Promise<Map<string, unknown>> {
 	const out = new Map<string, unknown>()
 	// Per *pool*, not per spec — the correction pooling forced. This used to
@@ -127,6 +145,9 @@ async function refDefaults(
 	// Per *node type*, for the same reason: session reply and the narrator run the
 	// same assemble node, so core's story string is one row serving both.
 	const templates = new Map<string, number | null>()
+	// Per *seed key*: the same shipped row answers every stage that named it,
+	// and the adventure preset names one row from two stages.
+	const samplings = new Map<string, number | null>()
 
 	for (const d of decls) {
 		const key = addr(d.nodeKey, d.slot, d.path)
@@ -146,12 +167,15 @@ async function refDefaults(
 		}
 		if (d.control === "context-template-ref" && d.nodeTypeId) {
 			// The engine is half the template pool now, so it is half this
-			// cache key too. Keyed on the node type alone, a node declaring a
-			// jinja2 template slot would be handed whichever engine's row the
-			// first node of that type happened to resolve — the shipped config
-			// would then point a jinja2 slot at Handlebars source, and it would
-			// render as raw markup rather than fail.
-			const engine = d.engine ?? CORE_TEMPLATE_ENGINE
+			// cache key too. Keyed on the node type alone, a node declaring
+			// another language would be handed whichever engine's row the first
+			// node of that type happened to resolve — the shipped config would
+			// then point that slot at Handlebars source, and it would render as
+			// raw markup rather than fail.
+			//
+			// The slot's FIRST accepted engine, not the union: a default is one
+			// row, and a slot that accepts two languages still ships one.
+			const engine = defaultEngineOf(d)
 			const pool = `${d.nodeTypeId}#${engine}`
 			if (!templates.has(pool))
 				templates.set(
@@ -170,9 +194,127 @@ async function refDefaults(
 				)
 			const id = layouts.get(d.variableId)
 			if (id != null) out.set(key, id)
+			continue
+		}
+		if (d.control === "sampling-ref") {
+			const seedKey = samplingSeedKeyOf(presetValues.get(key))
+			if (!seedKey) continue
+			if (!samplings.has(seedKey))
+				samplings.set(seedKey, await samplingIdFor(db, seedKey))
+			const id = samplings.get(seedKey)
+			if (id == null) {
+				// Said out loud and then left unset, rather than thrown. A
+				// throw here takes every OTHER pipeline's configuration with
+				// it, because `reconcilePublishedConfigs` walks specs this
+				// instance does not control; an unset Sampling slot is the
+				// state every stage was in before a document could name one.
+				console.warn(
+					`[pipelines] ${specSlug}: no sampling config is seeded as ` +
+						`"${seedKey}", so ${d.nodeKey}'s Sampling slot ships unset`
+				)
+				continue
+			}
+			out.set(key, id)
 		}
 	}
 	return out
+}
+
+/**
+ * The seeded row an author preset named for a `sampling` slot, if it named one.
+ *
+ * A config value at a sampling address is an integer `sampling_configs.id`
+ * assigned by an identity sequence, so the number differs per install and a
+ * shipped document cannot write one. `{ seedKey: 'sampling-background' }` is
+ * what a document writes instead, and it is the only accepted spelling: a bare
+ * string would be indistinguishable from a name, and a bare number is already
+ * the id an admin's own selection stores.
+ */
+function samplingSeedKeyOf(value: unknown): string | null {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null
+	const seedKey = (value as { seedKey?: unknown }).seedKey
+	return typeof seedKey === "string" && seedKey ? seedKey : null
+}
+
+/** The row one seed key names, or null where this install has no such row. */
+async function samplingIdFor(db: Db, seedKey: string): Promise<number | null> {
+	const [row] = await db
+		.select({ id: schema.samplingConfigs.id })
+		.from(schema.samplingConfigs)
+		.where(eq(schema.samplingConfigs.seedKey, seedKey))
+		.limit(1)
+	return row?.id ?? null
+}
+
+/**
+ * The default author preset: its label, and its values keyed by address.
+ *
+ * Read by `ensureDefaultConfig`, which projects them, and by `reconcileConfigs`,
+ * which resolves the sampling references among them. Both read it through this,
+ * so the two cannot come to disagree about what the author shipped.
+ */
+async function presetValuesFor(
+	db: Db,
+	specVersionId: number
+): Promise<{ label: string | null; values: Map<string, unknown> }> {
+	const out = new Map<string, unknown>()
+
+	// The author preset marked default, if the document shipped one. Its values
+	// win over the bare declarations, because that is what shipping a preset
+	// means: this is how the author intends the pipeline to arrive.
+	const [preset] = await db
+		.select()
+		.from(schema.pipelinePresets)
+		.where(
+			and(
+				eq(schema.pipelinePresets.specVersionId, specVersionId),
+				eq(schema.pipelinePresets.isDefault, true)
+			)
+		)
+		.limit(1)
+	if (!preset) return { label: null, values: out }
+
+	const rows = await db
+		.select()
+		.from(schema.pipelinePresetValues)
+		.where(eq(schema.pipelinePresetValues.presetId, preset.id))
+	for (const r of rows as any[]) {
+		out.set(addrOf(r), r.value)
+		// A preset that sets a whole SLOT is also read per FIELD.
+		//
+		// `p.settings('render', { review: 'on' })` stores ONE row —
+		// `render|settings|null = {"review":"on"}` — because that is how the
+		// author wrote it. Declarations for a settings slot are per-field
+		// (`render|settings|review`), and the lookup below is by exact
+		// address, so the two spellings never met: every author preset that
+		// set `settings` was silently dropped and the config fell back to
+		// the author default.
+		//
+		// That was not a small miss. `core:spec/generate-image` ships
+		// `review-on` as its DEFAULT preset, labelled "Ask for the prompt" —
+		// so the shipped config was named after a preset whose one value
+		// never landed, and pressing Image rendered immediately instead of
+		// asking for a prompt. The summarize spec's `save` node had the same
+		// hole.
+		//
+		// Exploding here rather than at the writer because it also repairs
+		// preset rows already seeded on existing installs; the per-field
+		// entry is only added when the exact address is not already present,
+		// so an explicit per-field row always wins.
+		const wholeSlot = (r.path ?? "") === ""
+		const isPlainObject =
+			r.value !== null &&
+			typeof r.value === "object" &&
+			!Array.isArray(r.value)
+		if (wholeSlot && isPlainObject)
+			for (const [field, value] of Object.entries(
+				r.value as Record<string, unknown>
+			)) {
+				const key = addr(r.nodeKey, r.slot, field)
+				if (!out.has(key)) out.set(key, value)
+			}
+	}
+	return { label: preset.label ?? null, values: out }
 }
 
 /**
@@ -203,90 +345,59 @@ export async function ensureDefaultConfig(
 	if (existing) return { configId: existing.id, action: "present" }
 
 	const decls = await declarations(db, specVersionId)
-
-	// The author preset marked default, if the document shipped one. Its values
-	// win over the bare declarations, because that is what shipping a preset
-	// means: this is how the author intends the pipeline to arrive.
-	const [preset] = await db
-		.select()
-		.from(schema.pipelinePresets)
-		.where(
-			and(
-				eq(schema.pipelinePresets.specVersionId, specVersionId),
-				eq(schema.pipelinePresets.isDefault, true)
-			)
-		)
-		.limit(1)
-
-	const presetValues = new Map<string, unknown>()
-	if (preset) {
-		const rows = await db
-			.select()
-			.from(schema.pipelinePresetValues)
-			.where(eq(schema.pipelinePresetValues.presetId, preset.id))
-		for (const r of rows as any[]) {
-			presetValues.set(addrOf(r), r.value)
-			// A preset that sets a whole SLOT is also read per FIELD.
-			//
-			// `p.settings('render', { review: 'on' })` stores ONE row —
-			// `render|settings|null = {"review":"on"}` — because that is how the
-			// author wrote it. Declarations for a settings slot are per-field
-			// (`render|settings|review`), and the lookup below is by exact
-			// address, so the two spellings never met: every author preset that
-			// set `settings` was silently dropped and the config fell back to
-			// the author default.
-			//
-			// That was not a small miss. `core:spec/generate-image` ships
-			// `review-on` as its DEFAULT preset, labelled "Ask for the prompt" —
-			// so the shipped config was named after a preset whose one value
-			// never landed, and pressing Image rendered immediately instead of
-			// asking for a prompt. The summarize spec's `save` node had the same
-			// hole.
-			//
-			// Exploding here rather than at the writer because it also repairs
-			// preset rows already seeded on existing installs; the per-field
-			// entry is only added when the exact address is not already present,
-			// so an explicit per-field row always wins.
-			const wholeSlot = (r.path ?? "") === ""
-			const isPlainObject =
-				r.value !== null &&
-				typeof r.value === "object" &&
-				!Array.isArray(r.value)
-			if (wholeSlot && isPlainObject)
-				for (const [field, value] of Object.entries(
-					r.value as Record<string, unknown>
-				)) {
-					const key = addr(r.nodeKey, r.slot, field)
-					if (!presetValues.has(key)) presetValues.set(key, value)
-				}
-		}
-	}
+	const preset = await presetValuesFor(db, specVersionId)
+	const presetValues = preset.values
 
 	const [config] = await db
 		.insert(schema.pipelineConfigs)
 		.values({
 			specId,
 			seedKey,
-			name: preset?.label ?? "Default",
+			name: preset.label ?? "Default",
 			isImmutable: true,
 			isDefault: true
 		})
 		.returning()
 
-	const refs = await refDefaults(db, specId, specSlug, decls)
+	const refs = await refDefaults(db, specId, specSlug, decls, presetValues)
 
 	const values = decls
 		.map((d) => {
 			const key = addr(d.nodeKey, d.slot, d.path)
-			const value = presetValues.has(key)
-				? presetValues.get(key)
-				: (refs.get(key) ?? d.authorDefault)
+			// A seed reference is the AUTHOR'S spelling of a row id, so what
+			// lands in the config is `refDefaults`' resolution of it and never
+			// the reference itself: one that resolved to nothing leaves the
+			// slot unset, where falling through to the preset would store
+			// `{ seedKey: ... }` at an address every reader treats as an
+			// integer.
+			// Every other slot keeps the preset on top of the shipped row,
+			// which is what a document setting its own template relies on.
+			const seedRef =
+				d.control === "sampling-ref" &&
+				samplingSeedKeyOf(presetValues.get(key)) !== null
+			const value = seedRef
+				? refs.get(key)
+				: presetValues.has(key)
+					? presetValues.get(key)
+					: (refs.get(key) ?? d.authorDefault)
 			return { d, value }
 		})
 		// A declaration with no default and no preset value is a field the author
 		// left open. Writing a NULL row for it would make "never set" and "set to
 		// nothing" the same state, and the reconciler below distinguishes them.
 		.filter(({ value }) => value !== undefined)
+		// And the rule itself (2026-09-10): a value that IS the declaration is
+		// not a deviation, so it gets no row and the config inherits it.
+		//
+		// ⚠ This does not empty the shipped config. What survives is everything
+		// the declaration cannot supply: every `*-ref` (no author default at
+		// all — the whole of `refs` above) and every author-preset value that
+		// differs from the declared one. `core:spec/generate-image` is the case
+		// to keep in mind: its default preset sets `render|settings|review` to
+		// `on` where the synthesized declaration says `off`, so that row is a
+		// deviation and stays. Shipping a preset IS departing from the bare
+		// declaration; the row is how it says so.
+		.filter(({ d, value }) => isDeviation(d, value))
 		.map(({ d, value }) => ({
 			configId: config.id,
 			nodeKey: d.nodeKey,
@@ -379,7 +490,12 @@ export async function reconcileConfigs(
 	const declByAddr = new Map(
 		decls.map((d) => [addr(d.nodeKey, d.slot, d.path), d])
 	)
-	const refs = await refDefaults(db, specId, specSlug, decls)
+	// The preset is read here as well as inside `ensureDefaultConfig`, and it has
+	// to be: that one returns the moment the shipped config exists, so on every
+	// boot after the first it is this call that carries an author's sampling
+	// reference to a config written before the document named one.
+	const { values: presetValues } = await presetValuesFor(db, specVersionId)
+	const refs = await refDefaults(db, specId, specSlug, decls, presetValues)
 
 	const configs = await db
 		.select()
@@ -419,7 +535,6 @@ export async function reconcileConfigs(
 			.from(schema.pipelineConfigValues)
 			.where(eq(schema.pipelineConfigValues.configId, config.id))
 
-		const present = new Set((rows as any[]).map(addrOf))
 		const report: ReconcileReport = {
 			configId: config.id,
 			name: config.name,
@@ -460,6 +575,49 @@ export async function reconcileConfigs(
 			}))
 		}
 
+		// ── sweep: rows that hold exactly what the declaration declares ──
+		//
+		// Not a cull and deliberately not reported as one. A cull loses an
+		// answer — the address is gone and the value with it — which is why it
+		// leaves a notice naming what it took. This loses nothing: the address
+		// still exists, the declaration still supplies the same number, and
+		// every reader resolves it at the `author` layer the moment the row is
+		// gone. A notice per swept row would be a paragraph telling a person
+		// that a setting they never touched still says what it always said, on
+		// the one boot where every install has hundreds of them.
+		//
+		// ⚠ Runs on **every** boot rather than once behind a flag, and that is
+		// the point rather than a shortcut. `writeOption` cannot create one of
+		// these any more, so on a healthy install it matches nothing; what it
+		// catches is the two ways one can still appear — a database seeded by a
+		// build that materialized everything, and a declared default that MOVED
+		// underneath a row holding the old one. The second is what `0102`,
+		// `0110` and `0111` each hand-swept with a bespoke DELETE, and it is
+		// exactly the case the ruling makes safe.
+		const inert = (rows as any[]).filter((r) => {
+			const d = declByAddr.get(addrOf(r))
+			return d && !isDeviation(d, r.value)
+		})
+		if (inert.length)
+			await db.delete(schema.pipelineConfigValues).where(
+				inArray(
+					schema.pipelineConfigValues.id,
+					inert.map((r) => r.id)
+				)
+			)
+
+		// What the config still holds, after both removals. Computed here
+		// rather than off `rows` so a swept address counts as absent — the
+		// back-fill below then re-examines it and, finding the declaration's own
+		// value, writes nothing.
+		const gone = new Set([
+			...orphaned.map((r) => r.id),
+			...inert.map((r) => r.id)
+		])
+		const present = new Set(
+			(rows as any[]).filter((r) => !gone.has(r.id)).map(addrOf)
+		)
+
 		// ── back-fill: addresses this config has never held a value for ──
 		const missing = decls.filter(
 			(d) => !present.has(addr(d.nodeKey, d.slot, d.path))
@@ -477,6 +635,13 @@ export async function reconcileConfigs(
 				? fromDefault.value
 				: (d.authorDefault ?? refs.get(key))
 			if (value === undefined) continue
+			// The rule again, on the other side of the same coin: an address
+			// this config never held, whose answer is the declaration's own, is
+			// already answered — writing it would re-materialize precisely what
+			// the sweep above just removed, on the same boot. What still lands
+			// here is what the declaration cannot supply: the `*-ref` rows
+			// (`refs`) and whatever the shipped default deviates by.
+			if (!isDeviation(d, value)) continue
 			additions.push({
 				configId: config.id,
 				nodeKey: d.nodeKey,
@@ -598,8 +763,11 @@ export type SelectionScope = "session" | "instance"
 export interface SelectedConfig {
 	configId: number
 	name: string
-	/** Where the selection came from — `shipped` when nothing selected anything. */
-	source: SelectionScope | "shipped"
+	/**
+	 * Where the selection came from — `preset` when the session's preset named
+	 * it, `shipped` when nothing selected anything.
+	 */
+	source: SelectionScope | "preset" | "shipped"
 }
 
 /**
@@ -638,12 +806,25 @@ async function shippedDefault(db: Db, specId: number, specSlug: string) {
 /**
  * Which config applies, for this asker, on this pipeline.
  *
- * session → instance → whatever core shipped. The last step is the one that
- * makes the rest safe to be optional: a scope that has never chosen, a scope
- * whose choice was deleted (the FK nulls it), and a brand-new namespace all
- * resolve to the shipped default rather than to nothing. No user step (ruled
- * 2026-08-24): a person's choice of config is made per session, or it is the
- * instance's.
+ * session → **preset** → instance → whatever core shipped. The last step is
+ * the one that makes the rest safe to be optional: a scope that has never
+ * chosen, a scope whose choice was deleted (the FK nulls it), and a brand-new
+ * namespace all resolve to the shipped default rather than to nothing. No user
+ * step (ruled 2026-08-24): a person's choice of config is made per session, or
+ * it is the instance's.
+ *
+ * The preset layer (added 2026-09-10, closing a defect: the blob was validated
+ * at write and read by nothing) sits where it does because of what each
+ * neighbour means. Above it, the session's own row is a choice made *about this
+ * session* and must survive the bundle it started from. Below it, the instance
+ * default is what an install does when nobody said otherwise — and "started
+ * from a preset that names a configuration" is somebody saying otherwise.
+ *
+ * Keyed on the SPEC rather than on an event, because this function is handed a
+ * spec and a session and no event at all — and must stay that way: it is also
+ * the answer for the open `session-action` slot, whose pipelines a preset can
+ * only reach through `configSelections`, having no event binding to carry a
+ * config on.
  *
  * The seven `system_settings.default_*_config_id` columns this replaces could
  * express only the instance layer, and only for the namespaces core happened to
@@ -666,17 +847,33 @@ export async function resolveSelectedConfig(
 				r.scopeKind === kind && r.scopeId === id && r.configId != null
 		)?.configId as number | undefined
 
-	const chain: Array<[SelectionScope, number | undefined]> = [
-		["session", viewer.sessionId],
-		["instance", 0]
+	/**
+	 * The preset's answer is an id already, not a selection row — it is stored
+	 * on the preset rather than in `pipeline_config_selections`, so it joins
+	 * the chain as a value rather than through `at`.
+	 */
+	const fromPreset = await presetConfigForSpec(db, {
+		sessionId: viewer.sessionId,
+		specSlug
+	})
+
+	const chain: Array<[SelectedConfig["source"], number | undefined]> = [
+		[
+			"session",
+			viewer.sessionId != null
+				? at("session", viewer.sessionId)
+				: undefined
+		],
+		["preset", fromPreset ?? undefined],
+		["instance", at("instance", 0)]
 	]
 
-	for (const [kind, id] of chain) {
-		if (id == null) continue
-		const configId = at(kind, id)
+	for (const [kind, configId] of chain) {
 		if (configId == null) continue
 		// Confirm the row is still there and still belongs to this spec. The FK
-		// covers deletion; this covers a selection carried across a spec change.
+		// covers deletion; this covers a selection — or a preset's choice —
+		// carried across a spec change. Either way it falls through to the next
+		// layer rather than pinning values from another pipeline.
 		const [config] = await db
 			.select()
 			.from(schema.pipelineConfigs)
@@ -818,11 +1015,15 @@ export async function createConfig(
 }
 
 /**
- * A copy, values and all.
+ * A copy, deviations and all.
  *
  * Copying the values is the point: duplicating a configuration you like and
- * changing one thing is the whole workflow, and a duplicate that started empty
- * would silently inherit the *defaults* instead of what you were looking at.
+ * changing one thing is the whole workflow. Under the old model a duplicate
+ * that started empty would have inherited the bare *declarations* rather than
+ * what you were looking at; under this one an empty duplicate inherits exactly
+ * that — the declaration — which is what the source resolves to at every
+ * address it has no row for. So copying the rows is still the whole job, and
+ * the copy is now the same size as the difference.
  */
 export async function duplicateConfig(
 	db: Db,
@@ -842,9 +1043,36 @@ export async function duplicateConfig(
 		.from(schema.pipelineConfigValues)
 		.where(eq(schema.pipelineConfigValues.configId, source.id))
 
-	if (values.length)
+	// Filtered rather than copied wholesale, so a duplicate made *before* the
+	// boot sweep has reached the source does not carry a materialized default
+	// forward into a fresh config — where it would look for all the world like a
+	// choice somebody made while duplicating. On a swept source this matches
+	// everything and costs one declaration walk.
+	const [spec] = await db
+		.select({ activeVersionId: schema.pipelineSpecs.activeVersionId })
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.id, source.specId))
+		.limit(1)
+	const declByAddr = spec?.activeVersionId
+		? new Map(
+				(await declarations(db, spec.activeVersionId)).map((d) => [
+					addr(d.nodeKey, d.slot, d.path),
+					d
+				])
+			)
+		: new Map<string, Decl>()
+
+	const carried = (values as any[]).filter((v) => {
+		const d = declByAddr.get(addrOf(v))
+		// An address this version does not declare is carried as-is: the
+		// reconciler culls it with a notice, which is where that decision is
+		// made and reported. Swallowing it here would lose the notice.
+		return !d || isDeviation(d, v.value)
+	})
+
+	if (carried.length)
 		await db.insert(schema.pipelineConfigValues).values(
-			(values as any[]).map((v) => ({
+			carried.map((v) => ({
 				configId: (copy as any).id,
 				nodeKey: v.nodeKey,
 				slot: v.slot,

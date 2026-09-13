@@ -15,7 +15,12 @@
  * one, by `kind`.
  */
 import { describe, expect, test } from "vitest"
-import { composeStops, composeStopsFor, explicitStopsFrom } from "./stops"
+import {
+	composeStops,
+	composeStopsFor,
+	explicitStopsFrom,
+	trimAtSpeakerBoundary
+} from "./stops"
 import {
 	BLOCK_ROLES,
 	type CompletionTemplate,
@@ -121,6 +126,220 @@ describe("composeStops — the chat wire drops what has nothing to bite on", () 
 	})
 })
 
+/**
+ * A chat transcript whose message CONTENT carries `Name:` labels.
+ *
+ * The default context template renders `{{{name}}}: {{{message}}}` per line, so
+ * a chat request's `assistant`/`user` turns read as a transcript and the trailing
+ * seed turn is a bare `Ash:`. A model handed that continues it — writing the
+ * player's next line, and the next character's — unless the labels are on the
+ * wire as stop sequences. The roles carry structure; they do not carry WHOSE
+ * turn each line is once the label is inside the content.
+ */
+describe("composeStops — the chat wire, with inline speaker labels", () => {
+	/** What `parseSplitChatPrompt` hands an adapter for this cast. */
+	const TRANSCRIPT = [
+		{ role: "system", content: "You are Ash in this roleplay with Rook." },
+		{ role: "assistant", content: "Ash: The archive is closed." },
+		{ role: "user", content: "Rook: Good evening." },
+		{ role: "assistant", content: "Ash:" }
+	]
+
+	const chat = (messages?: any[]) =>
+		composeStops({
+			template: CUSTOM,
+			characters,
+			personas,
+			currentCharacterId: 1,
+			explicit: ["<<END>>"],
+			wire: "chat",
+			messages
+		})
+
+	test("the other participants' labels ride the wire, newline-prefixed", () => {
+		const { sent } = chat(TRANSCRIPT)
+		expect(valuesOf(sent)).toEqual(
+			expect.arrayContaining(["\nVell:", "\nV:", "\nRook:", "<<END>>"])
+		)
+		// A bare `Rook:` matches at position zero on a reply that opens with a
+		// name, which returns nothing at all. The newline makes it a LINE.
+		expect(valuesOf(sent)).not.toContain("Rook:")
+	})
+
+	test("the speaking character's own label is still never a stop", () => {
+		expect(valuesOf(chat(TRANSCRIPT).sent)).not.toContain("\nAsh:")
+	})
+
+	test("every entry says why it is where it is", () => {
+		const { sent, dropped } = chat(TRANSCRIPT)
+		expect(sent.find((s) => s.value === "\nRook:")?.why).toContain(
+			"inline speaker labels"
+		)
+		expect(sent.find((s) => s.value === "<<END>>")?.why).toContain("author")
+		// The template's delimiters have nothing to bite on here, and sending
+		// them overrides the model's native stop tokens.
+		expect(valuesOf(dropped)).toEqual(
+			expect.arrayContaining(["@@stop@@", "@@user@@"])
+		)
+		expect(dropped.find((s) => s.value === "@@stop@@")?.kind).toBe("format")
+		expect(dropped.find((s) => s.value === "@@stop@@")?.why).toBeTruthy()
+	})
+
+	test("a transcript with no inline labels holds the speaker stops back", () => {
+		const { sent, dropped } = chat([
+			{ role: "system", content: "You are Ash." },
+			{ role: "user", content: "Good evening." },
+			{ role: "assistant", content: "" }
+		])
+		expect(valuesOf(sent)).toEqual(["<<END>>"])
+		const held = dropped.find((s) => s.value === "Rook:")
+		expect(held?.kind).toBe("speaker")
+		expect(held?.why).toContain("no inline speaker labels")
+	})
+
+	test("a caller that hands over no messages holds them back too", () => {
+		// The honest answer for a caller with nothing to read: a stop that has
+		// nothing to match is a stop that overrides the model's own.
+		expect(valuesOf(chat(undefined).sent)).toEqual(["<<END>>"])
+	})
+
+	test("a name in the system card is not a transcript label", () => {
+		// The system turn carries the character cards as JSON, and a card names
+		// everyone in the scene. Only the turns the model reads as a transcript
+		// decide this.
+		const { sent } = chat([
+			{
+				role: "system",
+				content:
+					'Cast:\n```json\n[{"name": "Rook"}]\n```\nRook: a card, not a turn'
+			},
+			{ role: "user", content: "Good evening." }
+		])
+		expect(valuesOf(sent)).toEqual(["<<END>>"])
+	})
+})
+
+/**
+ * The completion wire, unchanged.
+ *
+ * Its prompt is one flat transcript, so the labels match as written and the
+ * newline form would miss a label the template puts at the very start of a
+ * block.
+ */
+describe("composeStops — the completion wire is untouched by the chat rule", () => {
+	test("the same session sends bare speaker labels and the format stops", () => {
+		const { sent, dropped } = composeStops({
+			template: CUSTOM,
+			characters,
+			personas,
+			currentCharacterId: 1,
+			explicit: ["<<END>>"],
+			wire: "completion",
+			messages: [
+				{ role: "assistant", content: "Ash: The archive is closed." },
+				{ role: "user", content: "Rook: Good evening." }
+			]
+		})
+		expect(dropped).toEqual([])
+		expect(valuesOf(sent)).toEqual(
+			expect.arrayContaining([
+				"@@stop@@",
+				"@@user@@",
+				"Vell:",
+				"V:",
+				"Rook:",
+				"<<END>>"
+			])
+		)
+		expect(valuesOf(sent).some((v) => v.startsWith("\n"))).toBe(false)
+		expect(sent.every((s) => Boolean(s.why))).toBe(true)
+	})
+})
+
+/**
+ * The cut at the reply boundary — the belt to the stop sequence's braces.
+ *
+ * A backend may ignore a stop list entirely (several do on their chat leg), and
+ * a reply that ran on into the next speaker's turn is the failure a reader sees
+ * as the model writing both sides of the conversation. The labels come off the
+ * composed list rather than from a second derivation, so the string the model
+ * was told to stop on and the string that ends its reply are one fact.
+ */
+describe("trimAtSpeakerBoundary — where a reply ends", () => {
+	const TRANSCRIPT = [
+		{ role: "assistant", content: "Ash: The archive is closed." },
+		{ role: "user", content: "Rook: Good evening." },
+		{ role: "assistant", content: "Ash:" }
+	]
+	const stops = () =>
+		composeStops({
+			template: CUSTOM,
+			characters,
+			personas,
+			currentCharacterId: 1,
+			explicit: [],
+			wire: "chat",
+			messages: TRANSCRIPT
+		})
+
+	test("cuts at the first line opening with another participant's label", () => {
+		const cut = trimAtSpeakerBoundary("*nods*\nRook: hi\nAsh: no", stops())
+		expect(cut.text).toBe("*nods*")
+		expect(cut.trimmedAt).toEqual({ label: "Rook:", offset: 6 })
+	})
+
+	test("a name mid-sentence is prose, and prose is kept", () => {
+		const line = "She said Rook: was late, and meant every word."
+		const cut = trimAtSpeakerBoundary(line, stops())
+		expect(cut.text).toBe(line)
+		expect(cut.trimmedAt).toBeUndefined()
+	})
+
+	test("a reply that never changes speaker is returned untouched", () => {
+		const reply = "*nods*\nAsh keeps reading.\n\nThe lamp gutters."
+		expect(trimAtSpeakerBoundary(reply, stops()).text).toBe(reply)
+	})
+
+	test("the speaker's own opening label is stripped once, and only there", () => {
+		expect(trimAtSpeakerBoundary("Ash: *nods*", stops(), "Ash").text).toBe(
+			"*nods*"
+		)
+		expect(
+			trimAtSpeakerBoundary("*nods* Ash: no", stops(), "Ash").text
+		).toBe("*nods* Ash: no")
+	})
+
+	test("a list carrying no speaker stops cuts nothing", () => {
+		// A chat transcript with no inline labels composes no speaker stops, so
+		// there is no label to end a reply on and nothing to cut.
+		const plain = composeStops({
+			template: CUSTOM,
+			characters,
+			personas,
+			currentCharacterId: 1,
+			explicit: [],
+			wire: "chat",
+			messages: [{ role: "user", content: "Good evening." }]
+		})
+		const reply = "*nods*\nRook: hi"
+		expect(trimAtSpeakerBoundary(reply, plain).text).toBe(reply)
+	})
+
+	test("the completion wire's bare labels cut the same boundary", () => {
+		const flat = composeStops({
+			template: { ...CUSTOM, stopStrings: [] },
+			characters,
+			personas,
+			currentCharacterId: 1,
+			explicit: [],
+			wire: "completion"
+		})
+		const cut = trimAtSpeakerBoundary("*nods*\n  Rook: hi", flat)
+		expect(cut.text).toBe("*nods*")
+		expect(cut.trimmedAt?.label).toBe("Rook:")
+	})
+})
+
 describe("composeStops — the housekeeping", () => {
 	test("a repeated value keeps its FIRST kind and appears once", () => {
 		const { sent } = composeStops({
@@ -221,7 +440,13 @@ describe("composeStopsFor — the derivation each construction site shares", () 
 			explicit: ["<<END>>"]
 		})
 		expect(valuesOf(sent)).toEqual(
-			expect.arrayContaining(["@@stop@@", "Vell:", "V:", "Rook:", "<<END>>"])
+			expect.arrayContaining([
+				"@@stop@@",
+				"Vell:",
+				"V:",
+				"Rook:",
+				"<<END>>"
+			])
 		)
 	})
 
@@ -258,7 +483,10 @@ describe("composeStopsFor — the derivation each construction site shares", () 
 		// The FKs are nullable with `onDelete: "set null"`, so a deleted
 		// character leaves a join row with nothing to stop on.
 		const { sent } = composeStopsFor(CONNECTION, {
-			sessionCharacters: [{ character: null }, { character: characters[1] }],
+			sessionCharacters: [
+				{ character: null },
+				{ character: characters[1] }
+			],
 			sessionPersonas: [{ persona: null }]
 		})
 		expect(valuesOf(sent)).toEqual([...CUSTOM.stopStrings, "Vell:", "V:"])

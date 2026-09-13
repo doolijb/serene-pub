@@ -216,6 +216,30 @@ async function toJimp(raster: RasterImage) {
 	} as any)
 }
 
+/**
+ * Cut a rectangle out of a raster, in source pixels.
+ *
+ * The caller guarantees the rectangle is inside the image — `clampFrame` is
+ * what does that, and doing it twice would hide a caller that skipped it.
+ * Copies rows straight out of the RGBA buffer rather than going through jimp:
+ * a crop is a memory move, and jimp's own is a decode round trip.
+ */
+export function cropRaster(
+	raster: RasterImage,
+	x: number,
+	y: number,
+	width: number,
+	height: number
+): RasterImage {
+	const data = new Uint8ClampedArray(width * height * 4)
+	const rowBytes = width * 4
+	for (let row = 0; row < height; row++) {
+		const from = ((y + row) * raster.width + x) * 4
+		data.set(raster.data.subarray(from, from + rowBytes), row * rowBytes)
+	}
+	return { data, width, height }
+}
+
 /** Resample to an exact size. Aspect is the caller's business — `makeThumbnail`
  *  computes the box, this just resamples into it. */
 export async function resizeRaster(

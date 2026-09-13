@@ -39,7 +39,6 @@
 	)
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
-	let disablingEmbeddings = $state(false)
 
 	// URL validation schema
 	const urlSchema = z
@@ -164,28 +163,6 @@
 		}
 	}
 
-	// Enabling embeddings needs a model chosen (local vs API, which model) —
-	// unlike the Ollama/KoboldCPP manager switches, there's no safe "just flip
-	// it on" action, so the switch only ever turns things off here; turning it
-	// on routes to the Connections sidebar's Embedding category setup flow
-	// instead.
-	function onEmbeddingsEnabledClick(event: { checked: boolean }) {
-		if (!userCtx.user?.isAdmin) {
-			toaster.error({
-				title: "Access denied",
-				description: "Admin privileges required"
-			})
-			return
-		}
-		if (event.checked) {
-			panelsCtx.digest.connectionsView = "embedding"
-			panelsCtx.openPanel({ key: "connections" })
-			return
-		}
-		disablingEmbeddings = true
-		socket?.emit("vectorization:disable", {})
-	}
-
 	async function onOllamaManagerEnabledClick(event: { checked: boolean }) {
 		if (!userCtx.user?.isAdmin) {
 			toaster.error({
@@ -200,8 +177,6 @@
 		})
 	}
 
-	// ── Summarization functions ──────────────────────────────────────────────
-
 	function handleScriptsEnabledClick(event: { checked: boolean }) {
 		if (!userCtx.user?.isAdmin) {
 			toaster.error({
@@ -211,19 +186,6 @@
 			return
 		}
 		socket?.emit("systemSettings:updateScriptsEnabled", {
-			enabled: event.checked
-		})
-	}
-
-	function handleSummarizationEnabledClick(event: { checked: boolean }) {
-		if (!userCtx.user?.isAdmin) {
-			toaster.error({
-				title: "Access denied",
-				description: "Admin privileges required"
-			})
-			return
-		}
-		socket?.emit("systemSettings:updateSummarizationEnabled", {
 			enabled: event.checked
 		})
 	}
@@ -494,15 +456,6 @@
 			}
 		}
 
-		const handleEmbeddingsDisabled = (message: any) => {
-			disablingEmbeddings = false
-			if (message.success) {
-				toaster.success({ title: "Embeddings disabled" })
-			} else {
-				toaster.error({ title: "Failed to disable embeddings" })
-			}
-		}
-
 		const handleAccountsEnabled = (message: any) => {
 			if (message.success) {
 				toaster.success({
@@ -623,7 +576,6 @@
 			"systemSettings:updateOllamaManagerEnabled",
 			handleOllamaManagerEnabled
 		)
-		socket.on("vectorization:disable", handleEmbeddingsDisabled)
 		socket.on("systemSettings:updateAccountsEnabled", handleAccountsEnabled)
 		;(socket as any).on(
 			"systemSettings:updateAccountsEnabled:error",
@@ -662,7 +614,6 @@
 				"systemSettings:updateOllamaManagerEnabled",
 				handleOllamaManagerEnabled
 			)
-			socket.off("vectorization:disable", handleEmbeddingsDisabled)
 			socket.off(
 				"systemSettings:updateAccountsEnabled",
 				handleAccountsEnabled
@@ -822,36 +773,41 @@
 				{/if}
 			</div>
 
-			<!-- Embeddings Settings -->
+			<!-- Embeddings -->
 			<div class="card preset-filled-surface-100-900 space-y-4 p-4">
 				<h3 class="text-lg font-semibold">Embeddings</h3>
 
 				<p class="text-muted-foreground text-sm">
 					Powers retrieval-augmented context (RAG) for lore, history,
-					and past messages. Turning this on opens the Embeddings
-					panel to choose a local or API-based model — there's no
-					in-place default to switch to.
+					and past messages.
 				</p>
 
-				<div class="flex items-center gap-2">
-					<Switch
-						name="embeddings-enabled"
-						checked={systemSettingsCtx.settings
-							?.vectorizationEnabled}
-						disabled={disablingEmbeddings}
-						onCheckedChange={onEmbeddingsEnabledClick}
-					>
-						<Switch.Control
-							class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-						>
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-						<Switch.Label class="font-semibold">
-							Enable Embeddings
-						</Switch.Label>
-					</Switch>
-				</div>
+				<!-- ⚠ There is no Enable switch here any more, and there must
+				     not be one. An embedding endpoint is a CONNECTION, and
+				     embeddings are on when one is starred for it: a switch
+				     beside that would be a second place the same fact is
+				     stored, which is exactly what
+				     `system_settings.vectorization_enabled` was. It also could
+				     never turn anything ON by itself, because "on" needs a
+				     model chosen, so it only ever read as a way to switch off
+				     something configured elsewhere. -->
+				<p class="text-muted-foreground text-sm">
+					Choose an embedding connection in the Connections panel. The
+					one marked "in use" is the one that runs; leaving none in
+					use turns retrieval back to keyword search.
+				</p>
+
+				<button
+					type="button"
+					class="btn preset-filled-primary-500"
+					onclick={() => {
+						panelsCtx.digest.connectionsModality = "embeddings"
+						panelsCtx.openPanel({ key: "connections" })
+					}}
+				>
+					<Icons.Zap class="h-4 w-4" />
+					Open embedding connections
+				</button>
 			</div>
 		{/if}
 
@@ -939,40 +895,6 @@
 				database still has the images it points at — this makes backups
 				much larger, which is why it is off by default.
 			</p>
-		</div>
-
-		<!-- Summarization Settings -->
-		<div class="card preset-filled-surface-100-900 space-y-4 p-4">
-			<h3 class="text-lg font-semibold">Summarization</h3>
-
-			<p class="text-muted-foreground text-sm">
-				When enabled, you can select a range of session messages and
-				generate a Scene Summary from them (via an LLM), which feeds the
-				Narrative Graph and can become a lorebook history entry. This is
-				a manual, per-session action — nothing runs automatically, and
-				the original messages are never removed or replaced during
-				prompt construction.
-			</p>
-
-			<div class="flex items-center gap-2">
-				<Switch
-					name="enable-summarization"
-					checked={systemSettingsCtx.settings?.summarizationEnabled}
-					onCheckedChange={handleSummarizationEnabledClick}
-				>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-					<Switch.Label class="font-semibold">
-						{systemSettingsCtx.settings?.summarizationEnabled
-							? "Summarization Enabled"
-							: "Enable Summarization"}
-					</Switch.Label>
-				</Switch>
-			</div>
 		</div>
 
 		<!-- Context Debugging -->

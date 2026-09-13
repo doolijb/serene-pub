@@ -39,19 +39,25 @@ describe("the boot that follows", () => {
 	}, 120_000)
 
 	it("is clean, with no type re-projection to do", async () => {
-		// The one way a column drop could kill an install. The entry-type
+		// The one way a column drop could disturb an install. The entry-type
 		// projection re-runs on every boot and puts CHECK constraints and a
 		// `NOT VALID` foreign key over this table; a tier-one column vanishing
-		// from underneath it would surface as `report.conflict` and an early
+		// from underneath it used to surface as `report.conflict` and an early
 		// return — no specs seeded, pipelines dead everywhere — which is the
-		// outcome 0203 had to delete four registry rows to avoid.
+		// outcome 0203 had to delete four registry rows to avoid. Since content
+		// addressing (ruling 2026-09-10) it would instead move four pointers, so
+		// what this asserts is `republished` staying empty rather than an
+		// absent conflict.
 		//
 		// Nothing declares this column, so nothing re-projects. That is the
 		// difference between a column change and a contract change, stated as a
 		// result rather than as reasoning: `registryHashes.test.ts` holds the
 		// four pins 0203 moved, and none of them moves again here.
 		const report = await bootstrapPipelines(db)
-		expect(report.conflict, JSON.stringify(report.conflict)).toBeFalsy()
+		expect(
+			report.types.republished,
+			"nothing declares this column, so no slug should move"
+		).toEqual([])
 		expect(report.specs.length).toBeGreaterThan(0)
 		expect(
 			await hasColumn(db, "lorebook_entries", "retrieval_strategy")

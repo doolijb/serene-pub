@@ -87,10 +87,29 @@ export const CONNECTION_IDENTITY_KEYS: ReadonlySet<string> = new Set([
 	"connectionName",
 	"connectionScripts",
 	"activeConnection",
+	// The exchange an adapter recorded on a run receipt
+	// (`nodes[].output.wire`): the base URL it posted to, the model id in the
+	// body, and the request itself. A request cannot be described without
+	// naming where it went, so the whole record is identity and the whole
+	// record goes.
+	//
+	// ⚠ It takes the wire MODE with it — `stops.wire`, the word `chat` or
+	// `completion` — because this list matches on the name at any depth. That
+	// is the right answer for the same reason: wire mode is a connection
+	// capability, and which shape the administrator's compute is called in is
+	// theirs. The stop lists themselves stay, which is what a reader needs to
+	// see why their reply ran on.
+	"wire",
 	// `system_settings.active_embedding_connection_id`, an FK to
-	// `connections.id` that rides along on `systemSettings:get` — an event
-	// with no role gate at all — because that handler sends the whole row.
-	// Nothing client-side has ever read it.
+	// `connections.id` that rode along on `systemSettings:get` — an event with
+	// no role gate at all — because that handler sends the whole row.
+	//
+	// ⚠ The COLUMN is gone (0127): the active embedding connection is the
+	// `text->embedding` row in `connection_defaults`, and `capabilityDefaults`
+	// above already strips a connection id out of every entry in that map. The
+	// key stays because this set is matched by NAME at any depth, so a payload
+	// from an older build, a restored export, or a plugin echoing its own state
+	// can still carry it — and a key that matches nothing costs nothing.
 	"activeEmbeddingConnectionId"
 ])
 

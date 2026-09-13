@@ -4,14 +4,19 @@
  * Three kinds of thing land here, and they are not the same kind of thing at
  * all — which is why they get three functions rather than one `seed()`:
  *
- * | kind | what it is | what a conflict means |
+ * | kind | what it is | what a changed declaration does |
  * |---|---|---|
- * | the type registry | a *fact about the running code* | the code and the rows disagree — refuse (`registrySync.ts`) |
- * | the event registry | a *fact about the running code* | same, but nothing pins an event, so a change is a change |
- * | core's spec documents | *content* | a published version is immutable — leave it alone |
+ * | the type registry | a *fact about the running code* | publishes under a new hash, and the slug's pointer moves (`registrySync.ts`) |
+ * | the event registry | a *fact about the running code* | overwrites the row, because nothing pins an event |
+ * | core's spec documents | *content* | publishes as a new version row, and the slug's pointer moves |
  *
- * The type registry's rule lives in `registrySync.ts` because it is the strict
- * one. The other two live here.
+ * The type registry's rule lives in `registrySync.ts` because that is where the
+ * archive is. The other two live here.
+ *
+ * ⚠ The first and third are one rule under two names: **a slug resolves to a
+ * content hash, and publishing moves the pointer** (ruling 2026-09-10). What
+ * makes them look like separate rules is that one archives declarations and the
+ * other archives documents.
  *
  * ## Why the spec list is a registry rather than an array in `bootstrap`
  *
@@ -22,8 +27,8 @@
  * pipeline makes that unrepresentable.
  */
 
-import { allTypes } from "@serene-pub/sdk"
-import { and, eq, ne } from "drizzle-orm"
+import { allTypes, canonicalHash } from "@serene-pub/sdk"
+import { and, asc, eq, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
 import { reconcileConfigs } from "$lib/server/pipelines/config/named"
@@ -258,16 +263,26 @@ export interface SpecSeedReport {
 }
 
 /**
- * Publish core's specs, once each.
+ * Publish core's specs, once per document.
  *
- * Matched on the authored slug and semver rather than on a row id, so this
- * answers *"has this build's version of this spec been published here"*
- * identically on a fresh install and on one upgraded four times.
+ * Matched on the authored slug, semver **and canonical hash** rather than on a
+ * row id, so this answers *"is this build's document the one this instance
+ * resolves that slug to"* identically on a fresh install and on one upgraded
+ * four times.
  *
- * A published version is immutable by construction (F3), which is why a match is
- * left alone rather than refreshed. Re-seeding one on every boot would either
- * clobber the version a run in flight resolved against, or need an exception in
- * a path whose whole rule is that there are none.
+ * ## Why the hash is in the match (ruling 2026-09-10)
+ *
+ * A published version is immutable by construction (F3), and matching on
+ * `(slug, semver)` alone therefore makes an edit under an unchanged semver
+ * unreachable: the pair already exists, the pass skips, and the instance keeps
+ * running a document the code does not describe, silently. The 0.6 version
+ * freeze leaves editing in place as the only way to ship a spec change, so that
+ * is not an edge case.
+ *
+ * With the hash in the match, the edited document lands as a new row, the row it
+ * supersedes stays for the receipts naming it, and the slug's pointer moves —
+ * which is what carries the edit to an install. Immutability is untouched; what
+ * the pointer resolves to is what moves.
  */
 export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 	const { saveDocument } = await import("$lib/server/pipelines/boot/store")
@@ -287,7 +302,11 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 	for (const entry of CORE_SPECS) {
 		const doc = entry.build()
 
-		const existing = await db
+		// Whether this instance already resolves the slug to *this* document —
+		// the row exists AND the spec's pointer is on it. Both halves: a hash
+		// this instance stored under an earlier boot but has since moved off is
+		// present without being current, and republishing it is a pointer move.
+		const [current] = await db
 			.select({ id: schema.pipelineSpecVersions.id })
 			.from(schema.pipelineSpecVersions)
 			.innerJoin(
@@ -297,12 +316,20 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 			.where(
 				and(
 					eq(schema.pipelineSpecs.slug, doc.id),
-					eq(schema.pipelineSpecVersions.semver, doc.version)
+					eq(schema.pipelineSpecVersions.semver, doc.version),
+					eq(
+						schema.pipelineSpecVersions.canonicalHash,
+						canonicalHash(doc)
+					),
+					eq(
+						schema.pipelineSpecVersions.id,
+						schema.pipelineSpecs.activeVersionId
+					)
 				)
 			)
 			.limit(1)
 
-		const action = existing.length > 0 ? "present" : "published"
+		const action = current ? "present" : "published"
 		if (action === "published")
 			await saveDocument(db, doc, { publish: true, name: entry.name })
 		else
@@ -343,27 +370,72 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 	// Runs for present specs as well as published ones, and that is the point:
 	// it establishes the shipped-config invariant on an instance upgraded from
 	// before configs existed, which no publish would ever trigger.
-	for (const report of out) {
-		const [spec] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, report.id))
-			.limit(1)
-		if (!spec?.activeVersionId) continue
+	const reconciled = await reconcilePublishedConfigs(db)
+	for (const report of out)
+		report.reconciled = reconciled.get(report.id) ?? []
 
-		const reports = await reconcileConfigs(
-			db,
-			spec.id,
-			spec.activeVersionId,
-			report.id
-		)
-		report.reconciled = reports.map((r) => ({
-			name: r.name,
-			culled: r.culled.length,
-			backfilled: r.backfilled.length
-		}))
+	return out
+}
+
+/**
+ * Establish the config invariant for **every published spec**, core's or not.
+ *
+ * ## The gap this closes
+ *
+ * `ensureDefaultConfig` guarantees that every pipeline has a shipped, immutable
+ * default — the row every other config is derived from and reconciled against —
+ * and it is reached from exactly one place: `reconcileConfigs`. Which, until
+ * this, was called only from `seedCoreSpecs`, over `CORE_SPECS`. So a plugin's
+ * pipeline or an imported document had **no configuration at all**: no shipped
+ * default, no cull notice when a republish dropped an option, no back-fill when
+ * one arrived. Migration 0115 states it in as many words while explaining why
+ * its own sweep found nothing to sweep — "*a non-core spec has no configuration
+ * at all today and therefore nothing materialized*" — and calls it a finding.
+ *
+ * Walking the rows rather than a list is what keeps it closed: a spec published
+ * by any route is a row, and the pass that reconciles configs should ask the
+ * table which pipelines exist rather than ask the code which ones core ships.
+ *
+ * Keyed by slug so `seedCoreSpecs` can pick its own out of the answer — one pass
+ * rather than two, because reconciling core's specs twice per boot would double
+ * the most expensive step in the sequence for a report field.
+ */
+export async function reconcilePublishedConfigs(
+	db: Db
+): Promise<Map<string, SpecSeedReport["reconciled"]>> {
+	const out = new Map<string, SpecSeedReport["reconciled"]>()
+	const specs = await db
+		.select()
+		.from(schema.pipelineSpecs)
+		.orderBy(asc(schema.pipelineSpecs.id))
+
+	for (const spec of specs as any[]) {
+		if (!spec.activeVersionId) continue
+		try {
+			const reports = await reconcileConfigs(
+				db,
+				spec.id,
+				spec.activeVersionId,
+				spec.slug
+			)
+			out.set(
+				spec.slug,
+				reports.map((r) => ({
+					name: r.name,
+					culled: r.culled.length,
+					backfilled: r.backfilled.length
+				}))
+			)
+		} catch (err) {
+			// One malformed plugin document must not stop core's pipelines
+			// getting their configs. The set this walks is not one core
+			// controls, so a member of it may be anything.
+			console.warn(
+				`[pipelines] could not reconcile configs for ${spec.slug}:`,
+				err
+			)
+		}
 	}
-
 	return out
 }
 

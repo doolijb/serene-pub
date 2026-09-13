@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, getContext } from "svelte"
+	import { embeddingsStarred } from "$lib/shared/constants/embeddings"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { announce } from "$lib/client/accessibility/state.svelte"
 
@@ -42,9 +43,6 @@
 		})
 	}
 
-	function toggleSummarization(enabled: boolean) {
-		socket.emit("systemSettings:updateSummarizationEnabled", { enabled })
-	}
 	function toggleContextDebugging(enabled: boolean) {
 		socket.emit("systemSettings:updateContextDebuggingEnabled", { enabled })
 	}
@@ -117,10 +115,6 @@
 		status = "KoboldCPP base URL saved."
 		announce(status)
 	}
-	function handleUpdateSummarizationEnabled() {
-		status = "Summarization setting saved."
-		announce(status)
-	}
 	function handleUpdateContextDebuggingEnabled() {
 		status = "Context debugging setting saved."
 		announce(status)
@@ -189,10 +183,6 @@
 		)
 		socket.on("koboldcpp:setBaseUrl", handleKoboldcppSetBaseUrl)
 		socket.on(
-			"systemSettings:updateSummarizationEnabled",
-			handleUpdateSummarizationEnabled
-		)
-		socket.on(
 			"systemSettings:updateContextDebuggingEnabled",
 			handleUpdateContextDebuggingEnabled
 		)
@@ -229,10 +219,6 @@
 				handleUpdateKoboldCppManagerEnabled
 			)
 			socket.off("koboldcpp:setBaseUrl", handleKoboldcppSetBaseUrl)
-			socket.off(
-				"systemSettings:updateSummarizationEnabled",
-				handleUpdateSummarizationEnabled
-			)
 			socket.off(
 				"systemSettings:updateContextDebuggingEnabled",
 				handleUpdateContextDebuggingEnabled
@@ -329,21 +315,6 @@
 		<button type="submit" class="a11y-btn a11y-btn-small">Save URL</button>
 	</form>
 
-	<h2>Summarization</h2>
-	<p class="a11y-hint">
-		Lets you select a range of session messages and generate a Scene Summary
-		from them — a manual, per-session action.
-	</p>
-	<div class="a11y-checkbox-field">
-		<input
-			id="a11y-sys-summarization"
-			type="checkbox"
-			checked={systemSettingsCtx.settings?.summarizationEnabled}
-			onchange={(e) => toggleSummarization(e.currentTarget.checked)}
-		/>
-		<label for="a11y-sys-summarization">Enable Summarization</label>
-	</div>
-
 	<h2>Context Debugging</h2>
 	<p class="a11y-hint">
 		Shows extra technical detail about what's sent to the AI model, for
@@ -363,10 +334,11 @@
 	<p class="a11y-hint">
 		Powers retrieval-augmented context (RAG) for lore, history, and past
 		messages. Status:
-		{systemSettingsCtx.settings?.vectorizationEnabled
-			? "Enabled"
-			: "Disabled"}. Setting up embeddings requires choosing a model and
-		isn't available in Document View yet — use the standard site.
+		{embeddingsStarred(systemSettingsCtx.capabilityDefaults)
+			? "In use"
+			: "Not in use"}. Embeddings run on whichever embedding connection is
+		marked in use; choosing one isn't available in Document View yet, so use
+		the standard site.
 	</p>
 
 	<h2>CharaVault</h2>

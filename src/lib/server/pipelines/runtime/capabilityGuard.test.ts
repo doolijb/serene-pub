@@ -98,17 +98,21 @@ describe("⚠ the undeclared-type guard", () => {
 	// Without `if (!declared) return cached`, intersecting a type no manifest
 	// entry describes collapses it to `{}` — which the emptiness test below reads
 	// as "nobody has determined this yet" and answers with the transitional
-	// modality fallback. `modalityAllows` says yes to everything that is not an
-	// image capability, so an EMBEDDINGS connection would quietly become
-	// acceptable for chat. `persistCapabilities` guards the identical hazard with
+	// modality fallback. `persistCapabilities` guards the identical hazard with
 	// the identical `declares` test; the comment there covers the other half.
+	//
+	// ⚠ The embedding types are no longer the worked example of an undeclared
+	// type: they have manifest entries now, because a star is a
+	// `connections:setDefault` and that judges every row with `capabilityRefusal`
+	// — a type nothing declares can be granted nothing. What is asserted below is
+	// therefore the intersection KEEPING a key the manifest does declare, which
+	// is the same outcome by a different route, plus the modality half in the
+	// suite above.
 	const EMBEDDINGS_ROW = row("openai-embeddings", {
 		"text->embedding": 1
 	})
 
-	test("a type nobody declares keeps its backfilled cache", () => {
-		// 0175 backfilled `text->embedding` for these rows from the old modality
-		// column and 0184 re-graded it, and no manifest entry describes their type.
+	test("a resolved embedding row keeps the key its manifest declares", () => {
 		expect(storedCapabilities(EMBEDDINGS_ROW)).toEqual({
 			"text->embedding": 1
 		})
@@ -116,10 +120,9 @@ describe("⚠ the undeclared-type guard", () => {
 	})
 
 	test("...and is still refused for chat, which is what the guard buys", () => {
-		// THE REGRESSION NET. Delete the `declared` check in `storedCapabilities`
-		// and this is the assertion that goes red: the set collapses to `{}`, the
-		// modality fallback takes over, and an embeddings endpoint is offered a
-		// chat slot.
+		// THE REGRESSION NET, from the cached side: the row carries no
+		// `text->text` and the manifest declares none, so there is nothing for the
+		// intersection to keep and nothing for `satisfies` to grant.
 		expect(capabilityRefusal(EMBEDDINGS_ROW, "text->text")).toMatch(
 			/cannot do Chat/i
 		)
@@ -129,6 +132,71 @@ describe("⚠ the undeclared-type guard", () => {
 		const onnx = row("local-onnx", { "text->embedding": 1 })
 		expect(capabilityRefusal(onnx, "text->embedding")).toBeNull()
 		expect(capabilityRefusal(onnx, "text->text")).toMatch(/cannot do Chat/i)
+	})
+})
+
+describe("⚠ an UNDETERMINED row is still judged by its modality", () => {
+	/**
+	 * The other half of the same hazard, and the one the embedding star opened.
+	 *
+	 * The rows above carry a backfilled cache, so the emptiness fallback is never
+	 * reached. A row created by migration 0127 does NOT: the singleton projects
+	 * into a connection with `capabilities = '{}'`, because SQL cannot run
+	 * `resolveConnectionCapabilities`. With the embedding types now DECLARED in
+	 * the manifest, `storedCapabilities` intersects that empty cache down to `{}`
+	 * and the modality fallback takes over — and the fallback used to answer
+	 * "yes" to every capability that is not `text->image`, which would make a
+	 * freshly migrated embeddings connection starrable as the chat default.
+	 *
+	 * So the fallback now asks the section table: a capability that is SOME
+	 * section's star belongs to that section's modality and to no other.
+	 * Everything else keeps the old permissive answer, which an undetermined text
+	 * row still depends on (vision, documents, speech).
+	 */
+	const undetermined = (type: string) => ({ name: "Fresh", type })
+
+	test("an embeddings row nobody has resolved is not offered chat", () => {
+		for (const type of [
+			CONNECTION_TYPE.OPENAI_EMBEDDINGS,
+			CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+			CONNECTION_TYPE.OLLAMA_EMBEDDINGS
+		]) {
+			expect(storedCapabilities(undetermined(type))).toEqual({})
+			expect(
+				capabilityRefusal(undetermined(type), "text->text"),
+				`${type} with no resolved set was offered the chat star.`
+			).toMatch(/cannot do Chat/i)
+			expect(
+				capabilityRefusal(undetermined(type), "text->image")
+			).toMatch(/cannot do/i)
+			// And is accepted for the one thing it is for, which is what keeps
+			// the migration's own star legal.
+			expect(
+				capabilityRefusal(undetermined(type), "text->embedding")
+			).toBeNull()
+		}
+	})
+
+	test("an undetermined text row is not offered the embedding star", () => {
+		// The same rule from the other side. `OpenAIChatAdapter` implements no
+		// `embedText`, so a chat endpoint registered for `text->embedding` would
+		// resolve to a loader that throws.
+		expect(
+			capabilityRefusal(
+				undetermined(CONNECTION_TYPE.OPENAI),
+				"text->embedding"
+			)
+		).toMatch(/cannot do Embeddings/i)
+	})
+
+	test("...while every capability that is nobody's star stays permissive", () => {
+		// The transitional behaviour this must not break: 0175 wrote an empty set
+		// for every row it could not resolve, and refusing those outright would
+		// break working setups on upgrade until each had been re-tested.
+		const fresh = undetermined(CONNECTION_TYPE.OPENAI)
+		expect(capabilityRefusal(fresh, "text+image->text")).toBeNull()
+		expect(capabilityRefusal(fresh, "text->audio")).toBeNull()
+		expect(capabilityRefusal(fresh, "tools")).toBeNull()
 	})
 })
 

@@ -17,6 +17,10 @@ import {
 	zoneGridStyle,
 	type WidgetConfig
 } from "./widgetGrid"
+import { ADVENTURE_LAYOUT } from "@serene-pub/core-catalog"
+import { loadArranged, unitPinned } from "./arrangedGeometry"
+import { resolveRailColumn } from "./sideRail"
+import { unitsOf } from "./tabGroups"
 
 const wid = (over: Partial<WidgetConfig> = {}): WidgetConfig => ({
 	id: "w",
@@ -174,6 +178,66 @@ describe("loadChatLayout — defensive rehydrate", () => {
 			widgets: [{ id: "messages", size: { w: "grow", h: "grow" } }]
 		})
 		expect(widgetsInZone(loaded, "middle").map((w) => w.id)).toEqual([
+			"messages",
+			"composer"
+		])
+	})
+})
+
+/**
+ * A preset's middle zone, as the live view resolves it. The shipped Adventure
+ * layout is the case that matters: its strip is a widget the built-in default
+ * has never heard of, and a rehydrate that only patched the default's own two
+ * widgets dropped it on the floor — the strip never rendered and the editor's
+ * tray still offered it as unplaced.
+ */
+describe("preset → effective middle zone", () => {
+	it("keeps the Adventure preset's world-state strip above the messages", () => {
+		const loaded = loadChatLayout(ADVENTURE_LAYOUT.widgetGrid)
+		expect(widgetsInZone(loaded, "middle").map((w) => w.id)).toEqual([
+			"world-state",
+			"messages",
+			"composer"
+		])
+		const strip = widgetsInZone(loaded, "middle")[0]
+		expect(strip.size).toEqual({ w: "grow", h: "fixed" })
+		expect(strip.required).toBeUndefined()
+	})
+
+	it("admits an unknown widget into the zone the blob names", () => {
+		const loaded = loadChatLayout({
+			version: 1,
+			cell: 44,
+			widgets: [
+				{
+					id: "plugin:widget/tracker",
+					zone: "right",
+					order: 0,
+					size: { w: "grow", h: "fixed" },
+					anchor: { top: true }
+				}
+			]
+		})
+		expect(widgetsInZone(loaded, "right").map((w) => w.id)).toEqual([
+			"plugin:widget/tracker"
+		])
+		// The anchor guarantee is untouched by a newcomer.
+		expect(widgetsInZone(loaded, "middle").map((w) => w.id)).toEqual([
+			"messages",
+			"composer"
+		])
+	})
+
+	it("ignores an entry that names neither a real zone nor a real size", () => {
+		const loaded = loadChatLayout({
+			version: 1,
+			cell: 44,
+			widgets: [
+				{ id: "nowhere", zone: "elsewhere", size: { w: "grow", h: "fixed" } },
+				{ id: "sizeless", zone: "middle" }
+			]
+		})
+		expect(loaded.widgets.map((w) => w.id)).toEqual([
 			"messages",
 			"composer"
 		])
@@ -360,5 +424,55 @@ describe("stackPlacements — the MVP zone stack", () => {
 		})
 		expect(messages.box.rows).toBeNull() // grow
 		expect(composer.box.rows).toBe(3)
+	})
+})
+
+/**
+ * The Adventure preset's RIGHT column, which a live session opened as a strip
+ * of icons the player had to click.
+ *
+ * A side is drawn from its arrangement when it has one, and a group in an
+ * arrangement is expanded exactly when it is pinned. Shipping no arrangement
+ * left that decision to the width ladder instead, so whether the party was
+ * docked or collapsed depended on what the session box happened to measure.
+ */
+describe("preset → the right column opens docked", () => {
+	const arranged = () => loadArranged(ADVENTURE_LAYOUT.arrangedGrid)
+
+	it("ships an arrangement for the side it docks", () => {
+		const right = arranged().right
+		expect(right?.items.map((i) => i.id)).toEqual([
+			"scene-portraits",
+			"stats",
+			"inventory"
+		])
+		expect(right?.cols).toBe(1)
+	})
+
+	it("pins every group, which is what open-by-default means", () => {
+		// Absent means pinned, and `true` is never written — so an arrangement
+		// saved before the field existed reads as all groups pinned.
+		for (const unit of unitsOf(arranged().right!.items))
+			expect(unitPinned(unit.members), unit.key).toBe(true)
+	})
+
+	it("expands all three in a column tall enough to hold them", () => {
+		const right = arranged().right!
+		const units = unitsOf(right.items)
+		const placed = resolveRailColumn({
+			columnPx: 900,
+			totalRows: right.rows,
+			groups: units.map((u) => ({
+				key: u.key,
+				rows: u.box.h,
+				pinned: unitPinned(u.members),
+				open: unitPinned(u.members)
+			}))
+		})
+		expect(placed.map((p) => p.state)).toEqual([
+			"expanded",
+			"expanded",
+			"expanded"
+		])
 	})
 })

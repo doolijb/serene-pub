@@ -267,6 +267,15 @@ export interface EntryExportRefs {
 	localId?: number
 	bindingLocalId?: number | null
 	scenes?: ExportedScene[]
+	/**
+	 * This entry's id in the document's **entry** space — its own numbering,
+	 * like the dated entries' `localId`. An edge endpoint of kind `entry` and
+	 * another entry's `anchorEntryLocalId` are the only things that read it, so
+	 * an entry nothing points at is given none. See `assignEntryLocalIds`.
+	 */
+	entryLocalId?: number
+	/** The `parent` role — the entry this one is filed under, in that space. */
+	anchorEntryLocalId?: number
 }
 
 export interface ExportedScene {
@@ -365,6 +374,12 @@ export function mapEntry(
 				...(refs.localId !== undefined
 					? { localId: refs.localId }
 					: {}),
+				...(refs.entryLocalId !== undefined
+					? { entryLocalId: refs.entryLocalId }
+					: {}),
+				...(refs.anchorEntryLocalId !== undefined
+					? { anchorEntryLocalId: refs.anchorEntryLocalId }
+					: {}),
 				...bag,
 				...(refs.bindingLocalId != null
 					? { bindingLocalId: refs.bindingLocalId }
@@ -413,6 +428,39 @@ export function assignHistoryEntryLocalIds(
 }
 
 /**
+ * Numbers the entries the document points at, 1-based, in the entries' own
+ * order.
+ *
+ * Two things point at an entry: another entry's `anchorEntryId` (the `parent`
+ * role, read off the rows themselves) and an edge endpoint of kind `entry`
+ * (`edgeEntryIds`, which only the caller holding the relationships knows). An
+ * entry neither names is given no id at all, so a book with no nesting and no
+ * entry edges exports exactly the bytes it did before entry endpoints existed
+ * — which is what lets its own re-import still report "unchanged".
+ *
+ * The numbering is its own space, deliberately separate from the document
+ * counter that numbers bindings, scenes and nodes: an `{ kind: "entry" }`
+ * endpoint and an `anchorEntryLocalId` both read this one, and nothing reads
+ * both spaces at once.
+ */
+export function assignEntryLocalIds(
+	entries: ExportableEntryWithPosition[],
+	edgeEntryIds: Iterable<number> = []
+): Map<number, number> {
+	const referenced = new Set<number>(edgeEntryIds)
+	for (const entry of entries) {
+		const anchorEntryId = entry.anchorEntryId as number | null | undefined
+		if (anchorEntryId != null) referenced.add(anchorEntryId)
+	}
+
+	const map = new Map<number, number>()
+	let next = 1
+	for (const entry of entries)
+		if (referenced.has(entry.id)) map.set(entry.id, next++)
+	return map
+}
+
+/**
  * Assembles the base spec-compliant shape from a lorebook's entries.
  *
  * One list in, grouped by declared type in the order the tabs read — world,
@@ -425,16 +473,23 @@ export function assignHistoryEntryLocalIds(
  * narrative graph layer additional `extensions.serenepub` keys onto this
  * function's output rather than being handled here, so it stays usable alone.
  *
- * `bindingLocalIdByRealId`, `scenesByEntryId` and `entryLocalIdByRealId` all
- * default to empty: a caller that does not resolve bindings, scenes or graph
- * refs can omit them, and dated entries still get correct, stable localIds from
- * the same sequential fallback `assignHistoryEntryLocalIds` would produce.
+ * Every map defaults to empty: a caller that does not resolve bindings,
+ * scenes, graph refs or entry references can omit them, and dated entries still
+ * get correct, stable localIds from the same sequential fallback
+ * `assignHistoryEntryLocalIds` would produce.
+ *
+ * ⚠ Two entry-keyed maps, two spaces: `historyEntryLocalIdByRealId` numbers
+ * the dated entries for the graph's `historyEntryLocalId`, and
+ * `entryLocalIdByRealId` numbers whichever entries the document points at for
+ * its anchors and entry endpoints. An entry can appear in both under different
+ * numbers; each key names the space it reads.
  */
 export function buildSpecV3Lorebook(
 	lorebook: LorebookLike,
 	entries: ExportableEntryWithPosition[],
 	bindingLocalIdByRealId: Map<number, number> = new Map(),
 	scenesByEntryId: Map<number, ExportedScene[]> = new Map(),
+	historyEntryLocalIdByRealId: Map<number, number> = new Map(),
 	entryLocalIdByRealId: Map<number, number> = new Map()
 ): SpecV3LorebookLike {
 	const specEntries: SpecV3Entry[] = []
@@ -448,19 +503,28 @@ export function buildSpecV3Lorebook(
 
 		group.forEach((entry, i) => {
 			const refs: EntryExportRefs = {}
-			// ⚠ A localId is the document's own cross-reference, minted for the
-			// types other parts of the document anchor to — which today is
-			// exactly the dated one (`narrativeGraph`'s `historyEntryLocalId`,
-			// and the scenes that nest under their entry). The `order` role is
-			// what says which that is. A second referenced type wants this to
-			// become an explicit list rather than a second proxy.
+			// ⚠ Two cross-references, and each belongs to whoever reads it.
+			// `localId` numbers the dated type alone, for `narrativeGraph`'s
+			// `historyEntryLocalId` and the scenes that nest under their entry;
+			// the `order` role is what says which type that is.
+			// `entryLocalId` numbers entries of any type, for the anchors and
+			// entry endpoints that name them.
 			//
-			// It is deliberately NOT the real DB `id`: an exported document
-			// must never leak or collide with this install's primary keys.
-			// `entry.id` below is only a lookup key into the caller's maps,
-			// which are naturally keyed by real ids.
+			// Neither is the real DB `id`: an exported document must never leak
+			// or collide with this install's primary keys. `entry.id` below is
+			// only a lookup key into the caller's maps, which are naturally
+			// keyed by real ids.
 			if (decl?.roles.order)
-				refs.localId = entryLocalIdByRealId.get(entry.id) ?? i + 1
+				refs.localId =
+					historyEntryLocalIdByRealId.get(entry.id) ?? i + 1
+			refs.entryLocalId = entryLocalIdByRealId.get(entry.id)
+			const anchorEntryId = entry.anchorEntryId as
+				| number
+				| null
+				| undefined
+			if (anchorEntryId != null)
+				refs.anchorEntryLocalId =
+					entryLocalIdByRealId.get(anchorEntryId)
 			if (decl?.roles.anchor) {
 				const bindingId = entry.lorebookBindingId as number | null
 				refs.bindingLocalId =
@@ -629,9 +693,26 @@ export function mapNarrativeNode(
 	}
 }
 
+/**
+ * One end of an edge, naming which kind of thing it is: a cast binding's node
+ * local id, or an entry's entry local id. A road between two places is an edge
+ * whose two ends are entries.
+ */
+export type ExportedEndpoint =
+	| { kind: "cast"; node: number }
+	| { kind: "entry"; entry: number }
+
 export interface ExportedNarrativeRelationship {
-	fromLocalId: number
-	toLocalId: number
+	from: ExportedEndpoint
+	to: ExportedEndpoint
+	/**
+	 * The flat cast spelling, written for a cast endpoint beside the kinded
+	 * one so an importer that reads only these still gets the cast graph. An
+	 * entry endpoint has no flat spelling, so such an importer skips the whole
+	 * row rather than reading half of it.
+	 */
+	fromLocalId?: number
+	toLocalId?: number
 	relationshipType: string
 	description: string
 	visibility: string
@@ -642,8 +723,10 @@ export interface ExportedNarrativeRelationship {
 }
 
 interface NarrativeRelationshipLike {
-	fromNodeId: number
-	toNodeId: number
+	fromNodeId: number | null
+	toNodeId: number | null
+	fromEntryId: number | null
+	toEntryId: number | null
 	relationshipType: string
 	description: string
 	visibility: string
@@ -653,22 +736,52 @@ interface NarrativeRelationshipLike {
 	sceneId: number | null
 }
 
+/** One endpoint as the file addresses it, or null when this export has no id for it. */
+function exportedEndpoint(
+	nodeId: number | null,
+	entryId: number | null,
+	nodeLocalIdByRealId: Map<number, number>,
+	entryLocalIdByRealId: Map<number, number>
+): ExportedEndpoint | null {
+	if (nodeId !== null) {
+		const node = nodeLocalIdByRealId.get(nodeId)
+		return node === undefined ? null : { kind: "cast", node }
+	}
+	if (entryId !== null) {
+		const entry = entryLocalIdByRealId.get(entryId)
+		return entry === undefined ? null : { kind: "entry", entry }
+	}
+	return null
+}
+
 export function mapNarrativeRelationship(
 	rel: NarrativeRelationshipLike,
 	nodeLocalIdByRealId: Map<number, number>,
 	historyEntryLocalIdByRealId: Map<number, number>,
-	sceneLocalIdByRealId: Map<number, number>
+	sceneLocalIdByRealId: Map<number, number>,
+	entryLocalIdByRealId: Map<number, number> = new Map()
 ): ExportedNarrativeRelationship | null {
-	const fromLocalId = nodeLocalIdByRealId.get(rel.fromNodeId)
-	const toLocalId = nodeLocalIdByRealId.get(rel.toNodeId)
-	// Both endpoints must resolve — a relationship pointing at a node this
-	// export didn't include (shouldn't normally happen, all of a lorebook's
-	// own nodes are always exported together) can't be represented.
-	if (fromLocalId === undefined || toLocalId === undefined) return null
+	const from = exportedEndpoint(
+		rel.fromNodeId,
+		rel.fromEntryId,
+		nodeLocalIdByRealId,
+		entryLocalIdByRealId
+	)
+	const to = exportedEndpoint(
+		rel.toNodeId,
+		rel.toEntryId,
+		nodeLocalIdByRealId,
+		entryLocalIdByRealId
+	)
+	// Both endpoints must resolve — a relationship pointing at a node or entry
+	// this export didn't include can't be represented.
+	if (from === null || to === null) return null
 
 	return {
-		fromLocalId,
-		toLocalId,
+		from,
+		to,
+		...(from.kind === "cast" ? { fromLocalId: from.node } : {}),
+		...(to.kind === "cast" ? { toLocalId: to.node } : {}),
 		relationshipType: rel.relationshipType,
 		description: rel.description,
 		visibility: rel.visibility,

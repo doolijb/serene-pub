@@ -23,6 +23,7 @@ import { and, eq } from "drizzle-orm"
 import {
 	buildSpecV3Lorebook,
 	type ExportableEntryWithPosition,
+	assignEntryLocalIds,
 	assignHistoryEntryLocalIds,
 	attachBoundEntities,
 	mapSceneForExport,
@@ -192,16 +193,36 @@ export async function buildLorebookExportData(
 		scenesByHistoryEntryId.set(scene.historyEntryId, existing)
 	})
 
+	// A `LorebookEntry` satisfies `ExportableEntry` field for field;
+	// TypeScript will not infer the index signature that type needs from an
+	// interface, which is the whole of the mismatch.
+	const exportableEntries =
+		entries as unknown as ExportableEntryWithPosition[]
+
+	// The edges are read before the entries are written: an entry is numbered
+	// exactly when the document points at it, and an endpoint is one of the
+	// things that does. Omitting the graph omits its edges from that question
+	// too — an anchor still numbers its target either way.
+	const narrativeRelationshipRows = includeNarrativeGraph
+		? await db.query.narrativeRelationships.findMany({
+				where: eq(schema.narrativeRelationships.lorebookId, lorebook.id)
+			})
+		: []
+	const entryLocalIdByRealId = assignEntryLocalIds(
+		exportableEntries,
+		narrativeRelationshipRows
+			.flatMap((rel) => [rel.fromEntryId, rel.toEntryId])
+			.filter((id): id is number => id !== null)
+	)
+
 	const specBook = attachBoundEntities(
 		buildSpecV3Lorebook(
 			lorebook,
-			// A `LorebookEntry` satisfies `ExportableEntry` field for field;
-			// TypeScript will not infer the index signature that type needs
-			// from an interface, which is the whole of the mismatch.
-			entries as unknown as ExportableEntryWithPosition[],
+			exportableEntries,
 			bindingLocalIdByRealId,
 			scenesByHistoryEntryId,
-			historyEntryLocalIdByRealId
+			historyEntryLocalIdByRealId,
+			entryLocalIdByRealId
 		),
 		characters,
 		personas,
@@ -218,11 +239,6 @@ export async function buildLorebookExportData(
 	// vestigial pre-merge and has no merged-schema equivalent.
 	let specBookWithGraph = specBook
 	if (includeNarrativeGraph) {
-		const narrativeRelationshipRows =
-			await db.query.narrativeRelationships.findMany({
-				where: eq(schema.narrativeRelationships.lorebookId, lorebook.id)
-			})
-
 		const nodeLocalIdByRealId = new Map<number, number>()
 		bindingRows.forEach((node) => {
 			nodeLocalIdByRealId.set(node.id, nextLocalId++)
@@ -265,7 +281,8 @@ export async function buildLorebookExportData(
 					rel,
 					nodeLocalIdByRealId,
 					historyEntryLocalIdByRealId,
-					sceneLocalIdByRealId
+					sceneLocalIdByRealId,
+					entryLocalIdByRealId
 				)
 			)
 			.filter((r): r is NonNullable<typeof r> => r !== null)

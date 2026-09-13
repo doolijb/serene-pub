@@ -1385,7 +1385,32 @@ describe("options arrive in the order they were declared", () => {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
-		const rank = v.steps.find((s) => /rank/i.test(s.label))
+
+		// By node id, not the step's rendered label: `gather.relationships.read`
+		// (a query, not this task) renders as "Relationships: ranked" and a
+		// label regex matched it first. `declarations()` names the rank-hybrid
+		// node's own key ("rank"), and `optionId` is the same address-to-id
+		// mapping `read.ts` used to mint every option's id, so the ids computed
+		// here from that nodeKey are exactly the ones on its step's options.
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		const { declarations } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		const rankOptionIds = new Set(
+			(await declarations(db, spec.activeVersionId!))
+				.filter((d: any) => d.nodeKey === "rank")
+				.map((d: any) => optionId(SECRET, d.nodeKey, d.slot, d.path))
+		)
+		expect(
+			rankOptionIds.size,
+			"no declarations on the rank node"
+		).toBeGreaterThan(0)
+		const rank = v.steps.find((s) =>
+			[...s.options, ...s.advanced].some((o) => rankOptionIds.has(o.id))
+		)
 		expect(rank, "no ranking step").toBeTruthy()
 		expect(
 			[...rank!.options, ...rank!.advanced].map((o) => o.label)

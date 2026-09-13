@@ -86,9 +86,25 @@ describe("the adapter gates the key space", () => {
 	})
 
 	test("a type no manifest entry declares renders nothing rather than guessing", () => {
-		const view = buildCapabilityRows({ type: "openai-embeddings" })
+		// ⚠ An out-of-tree id, not an embedding one. The three embedding types
+		// have manifest entries: `connections:setDefault` judges every star with
+		// `capabilityRefusal`, and a type the manifest does not describe can be
+		// granted nothing, so an embedding endpoint without an entry would be
+		// one nobody could register.
+		const view = buildCapabilityRows({ type: "acme:imaginary" })
 		expect(view.declared).toBe(false)
 		expect(view.transforms).toEqual([])
+		expect(view.features).toEqual([])
+	})
+
+	test("an embedding type renders exactly the one transform it declares", () => {
+		const view = buildCapabilityRows({
+			type: CONNECTION_TYPE.OPENAI_EMBEDDINGS
+		})
+		expect(view.declared).toBe(true)
+		expect(view.transforms.map((r) => r.id)).toEqual(["text->embedding"])
+		// No features: an embedding request has no response format to constrain,
+		// no tools and nothing to stream.
 		expect(view.features).toEqual([])
 	})
 })

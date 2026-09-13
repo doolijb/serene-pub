@@ -18,7 +18,11 @@ Under the hood every session is a `roleplay`-type session with an `isGroup` flag
 
 ## Starting a New Session
 
-Click the **+** button at the top of the Sessions sidebar to open the new-session form. Creating a session is three answers, stacked down one column, each appearing once the one above it is answered: first the **Genre** — what kind of session this is, which decides what systems exist for it (characters, personas, lorebooks, the composer) and stays with the session for its life; then the **Preset** — the bundle an administrator has enabled for that genre, which decides which pipelines answer its events and which actions come along; then the session's own **Settings**, pre-filled from whatever the preset supplies. A step with only one answer takes it silently rather than asking, so a stock install — one genre, one preset — shows you the settings form alone, exactly as it always has. If an administrator has enabled no preset for a genre, the form says so and **Create** is disabled: there is nothing to start the session from.
+Click the **+** button at the top of the Sessions sidebar to open the new-session form. Creating a session is three answers, stacked down one column, each appearing once the one above it is answered: first the **Genre** — what kind of session this is, which decides what systems exist for it (characters, personas, lorebooks, the composer) and stays with the session for its life; then the **Preset** — the bundle an administrator has enabled for that genre, which decides which pipelines answer its events and which actions come along; then the session's own **Settings**, pre-filled from whatever the preset supplies — switching presets before you save only fills in fields you haven't typed into yet, never overwriting something you've already entered. A step with only one answer takes it silently rather than asking, so a stock install — one genre, one preset — shows you the settings form alone, exactly as it always has. If an administrator has enabled no preset for a genre, the form says so and **Create** is disabled: there is nothing to start the session from.
+
+The preset is doing more than labelling the bundle: its **event bindings** are what decide which pipeline answers each of the genre's events — the reply, the greeting on creation, each action that comes along — and which named configuration that pipeline runs with, so two presets on one genre can differ entirely in what a turn actually does. Administrators set both of those, and the pre-filled values the settings step opens with, on the preset's own page under **Admin → Session presets** (bindings under _Event bindings_, the pre-fill under _Creation defaults_) — the latter only ever fills in fields the person creating the session hasn't already touched, so it can't clobber something they've typed.
+
+If a bound pipeline later stops being available — an upgrade republished it, a plugin that shipped it was removed — the session does **not** stop working: it runs the genre's default pipeline for that event instead, and says so. Everyone in the session sees a banner naming which event fell back (administrators also get the pipeline it was bound to and a link to fix it), the run's own report says which pipeline actually ran and why, and the preset is flagged in **Admin → Session presets** until the binding resolves again.
 
 The settings step requires:
 
@@ -160,8 +164,9 @@ Every message has a row of action buttons — shown inline on desktop (revealed 
 | Regenerate Response      | Refresh    | Only the newest character message, once idle                                | Owner, or whoever owns that character   |
 | Continue Response        | Down arrow | Only the newest character message, if it has content                        | Owner, or whoever owns that character   |
 | Edit Message             | Pencil     | Any message, unless something is generating or it's hidden                  | Owner, or the persona/character's owner |
-| Branch Session              | Git branch | Any message, unless something is generating                                 | Any participant with session access        |
-| Select for Summarization | Bookmark   | Any non-generating message, if summarization is enabled                     | Any participant with session access        |
+| Branch Session           | Git branch | Any message, unless something is generating                                 | Any participant with session access     |
+| Select for Summarization | Bookmark   | Any non-generating message                                                  | Any participant with session access     |
+| Inspect run              | Receipt    | Character or Narrator messages a pipeline run produced                      | Whoever triggered that run              |
 | View Prompt Details      | Info       | Character messages with recorded debug metadata, if context debugging is on | Anyone who can see the message          |
 | Hide / Unhide Message    | Ghost      | Any message                                                                 | Owner, or the persona/character's owner |
 | Delete Message           | Trash      | Any message                                                                 | Owner, or the persona/character's owner |
@@ -176,7 +181,8 @@ The sections below go through the less self-explanatory of these in more detail.
 - **Continue Response** (down-arrow icon) — only on the most recent character message that already has content. Resumes generation, appending to the existing text instead of replacing it — useful when a response was cut off. Same owner-or-character-owner rule as Regenerate.
 - **Edit Message** (pencil icon) — swaps the message body for an inline composer so you can rewrite it in place, with Cancel/Save controls replacing the row's action buttons while editing. Disabled while any message is generating or while the message is hidden.
 - **Branch Session** (git-branch icon) — opens a small modal asking for a new session title, then creates a full copy of the session (same characters, personas, guests, tags, scenario, lorebook, and reply strategy) containing every message up to and including this one, and navigates you into the new session. Available to any participant with access to the session, not just the owner.
-- **Select for Summarization** (bookmark icon) — only shown when summarization is enabled system-wide; enters summarization selection mode (see below). Not shown while a message is generating.
+- **Select for Summarization** (bookmark icon) — enters summarization selection mode (see below). Not shown while a message is generating.
+- **Inspect run** (receipt icon). Only on a reply a pipeline run produced, and only once it has finished generating. Opens the run inspector: one sentence saying what the run did, every stage in the order it ran, and for a selected stage the prompt it built, what it published, and which stop sequences went on the wire. See [Inspecting a run](./pipelines.md#inspecting-a-run).
 - **View Prompt Details** (info icon) — only shown with context debugging enabled and only once the message has recorded debug metadata; opens the same Prompt Details modal described under Statistics, scoped to that message's generation.
 - **Hide / Unhide Message** (ghost icon) — toggles `isHidden`; hidden messages are dimmed in the thread and excluded from what gets sent to the model, without deleting them.
 - **Delete Message** (trash icon) — opens a confirmation modal before permanently removing the message.
@@ -215,6 +221,75 @@ Continue, Trigger Character, and Regenerate are disabled while any message is cu
 
 Unlike Regenerate/Continue/Swipe on an existing message (which enforce the owner-or-character-owner rule server-side), **Trigger Character and the round-robin Continue button here have no server-side ownership check at all** — they're gated purely by this whole tab being hidden from guests client-side. In practice this only matters if a guest could somehow reach the tab; through the normal UI, guests never see it.
 
+## Chat
+
+**Chat** is the genre a new install drops you into, and it is deliberately the frugal one: one call to the model per turn, the cheaper non-model mechanisms wherever they will do the job, a lorebook only if you want one, and no setup beyond a persona and a character. Everything more elaborate is still available (the stats panels, the inventory, the narrator, the tool loop), but nothing in a chat session runs any of it on its own: a chat turn does exactly what you asked for and stops, and anything multi-step is a button you press.
+
+## Adventure
+
+**Adventure** is the flagship, and it is the opposite trade from Chat on purpose. Chat spends one model call a turn and leaves the elaborate things to buttons; an adventure turn spends four agents working in order, automatically, and asks more of your setup in exchange: a lorebook is required, and so is at least one character and one persona. The point of the shape is that each agent does one job well:
+
+- The **planner** reads what you just did, the scene so far and the world's current state, and decides what happens next and who has a reason to speak. It writes no prose at all, so it can run on a small, fast model.
+- The **narrator** writes the scene from that plan: what happens, what it looks like, what it costs. It narrates the world in the third person and never puts words in a character's mouth.
+- A **voice** speaks for each cast member the planner named, one per speaker, all at once. Each one knows only what that character knows.
+- The **state-keeper** reads the finished reply and writes down what it made true: a health change, a mood turning, the weather closing in, an item changing hands.
+
+### How each stage is asked
+
+The four agents are not four copies of the same request, and the difference is worth knowing because it is what keeps a turn from reading like one long reply.
+
+The planner and the state-keeper are asked a **question**, not given a turn. Their request names no speaker, ends with no line for a character to continue, and carries the shape of the answer itself: where your connection can enforce a shape, the list of beats and the list of changes are constrained on the wire rather than described in the instructions. Where it can only promise JSON, they ask for JSON; where it can do neither, they ask in words and the answer is read back the way it always was. Which of the three happened is on the turn's receipt, beside the stage that asked.
+
+Those two also read the conversation as **prose only**. If an earlier reply ended with a block of JSON, that block is cut out of what they are shown, so a planner never reads its own shape back out of the transcript and a state-keeper never answers in the planner's. Nothing is changed in the session itself: the cut happens on the way into the prompt, and the stored message is exactly what was written.
+
+The narrator and the voices are the two stages that ARE a turn. The narrator's prompt ends on the Narrator's own line, which is why the scene is narration rather than a character talking about themselves in the first person; each voice's prompt ends on that speaker's line, so two characters speaking in one turn are two different people rather than the same one twice.
+
+What you see is one reply, the narration followed by each character's turn, with a ledger of the state-keeper's changes underneath it.
+
+### What each agent is told
+
+Every agent in a turn is given the same anchor before it writes: where the scene is, what time it is, what the weather is doing, who is in the cast by name, and that the player is the persona you are playing. The narrator gets the planner's beats as the things that happen in this scene, and is told to invent no named characters, not to move the scene somewhere else unless a beat says so, and to leave the dialogue to the voices. Each voice gets the same place and the same cast, so a character cannot answer from a harbour the plan never mentioned. Both are shown the world as it stands, which is what "use the state as fact" means in the shipped instructions.
+
+The planner also says where this turn happens, what time it is and what the sky is doing, and those three become state changes like any other: a location the world has never been told lands as a proposal on the first turn, and a hint that repeats what the world already says proposes nothing.
+
+The state-keeper is shown the reply it is reporting on, because the conversation it is assembled with predates the scene that was just written. It is also shown the values this session tracks with what each one accepts, written out: "stamina: a whole number from 0 to 10", "mood: one of calm, wary, afraid, angry, hopeful". A value outside that is refused and recorded on the run's receipt rather than put in front of you as something to accept.
+
+### How a turn runs
+
+Send a turn and the whole pipeline runs, stage by stage, before anything is saved. A card appears above the composer naming the stage the turn is on and how many have finished (plan, scene, one per speaking character, keep state), with a stop button that ends the run wherever it has got to. The narrator's prose streams into the reply as it is written, so the longest stage is the one you can watch; the planner's and the state-keeper's answers are not prose, never appear on screen, and never end up inside the reply. When the last voice has spoken, the finished reply replaces the streamed text with the assembled version: the scene, then each character's turn in the order the planner listed them. The state-keeper runs after that, on the reply that now exists, which is why its changes stay attached to the message that caused them. Its lines appear under the reply as pending unless the session trusts the narrator, in which case they are already applied. Every stage, every prompt and every refusal is on the turn's receipt, readable from the run inspector afterwards.
+
+A chat turn does not work this way and is not meant to: one model call, sent and streamed by the connection itself. The difference is decided by the pipeline, not by the genre name, so a pipeline of your own with more than one generating step gets the staged treatment automatically.
+
+### Stats, the world and the ledger
+
+An Adventure session tracks seven things, and they are why the genre has widgets a chat does not. Each cast member carries **Health**, **Stamina**, **Mood** and **Trust** (how far they trust you, from hostile to loyal); the world carries a **Location**, a **Time of day** and the **Weather**. Nothing is stored until something changes it: a fresh session reads the defaults, and a character whose card says "Health, maximum 40" keeps that maximum.
+
+Nothing the model proposes takes effect on its own. Each change appears under the reply as a pending line with **Accept** and **Reject**, because a model that could set a number silently could rewrite your character between two messages with nothing you could refuse. The changes are anchored to the message that produced them, so regenerating or swiping a reply takes its changes back with it.
+
+### Session settings
+
+Three settings, on the session, under **Edit session**:
+
+| Setting                | What it does                                                                                                           |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Tone**               | Grounded, pulpy, grim or whimsical. The narrator's own instructions are written with it.                               |
+| **Difficulty**         | Story, normal or hard. The planner reads it when it decides what a scene costs you.                                    |
+| **Trust the narrator** | Off by default. On, the state-keeper's changes are applied as they are made instead of waiting for you to accept them. |
+
+### Buttons
+
+Three actions come with the genre, in the action row above the composer's tab strip:
+
+- **Look**: the narrator describes where you are, from the lore and the world state. It changes nothing, and it is the button to start a new adventure with, because creating a session deliberately makes no model call and the opening scene is yours to ask for.
+- **Rest**: the party stops. Stamina comes back, health comes back slowly and only somewhere safe, and the clock moves on.
+- **Time passes**: the world clock steps on one notch, and the weather may turn with it.
+
+Rest and Time passes write no message at all. That is not a failure: a clock tick is a ledger line, not a paragraph, and Look is the button for the paragraph.
+
+### What it needs
+
+The **lorebook** is where the world lives, and an item somebody is carrying is an entry in it, so an adventure without one has nothing to describe or to hand out. The genre also makes several model calls per turn rather than one, so it is the genre to point at a local model you are not paying per token for. Each stage has its own connection and sampling settings in the pipeline panel, so the planner and the state-keeper can run on a small model while the prose runs on a large one.
+
 ## Narrator Response
 
 **Narrator Response** is a manually-triggered message that narrates as the environment itself: weather, scenery, side characters, shopkeepers, monsters, or other third parties, rather than as any of the session's defined characters. It has no persistent identity of its own (no avatar, no character sheet) and is never auto-triggered: unlike ordinary character replies, a Narrator response never counts toward or interrupts round-robin turn order, and it's never suggested by the "ready to continue" banner.
@@ -242,7 +317,7 @@ When a session has a lorebook bound to it, the composer gains a **Lore** tab (bo
 
 - The current (most recent) history entry, with its scene count and an **Open in lorebook** shortcut.
 - A **+** button to start a new history entry (iterating from the latest one).
-- A **Summarize Scene** shortcut (when summarization is enabled) that drops you straight into summarization selection mode for capturing a scene.
+- A **Summarize Scene** shortcut that drops you straight into summarization selection mode for capturing a scene.
 - An **Extend Graph (N)** button when there are scenes that haven't been folded into the lorebook's relationship graph yet.
 - A **Recent Entries** list (up to five prior entries) for quick navigation back into lorebook history.
 

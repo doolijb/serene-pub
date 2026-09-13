@@ -14,7 +14,11 @@ import { jsonSchemaToGbnf } from "./jsonSchemaToGbnf"
 import { type CompiledPrompt } from "./types"
 import type { TextGenResult } from "$lib/server/adapters/actions"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
+import {
+	isReasoningKey,
+	koboldCppSamplingKeyMap,
+	reasoningOf
+} from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { fetchCurrentModelName } from "$lib/server/koboldcpp/kcppHttp"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
@@ -30,6 +34,14 @@ import {
 // works with Serene Pub's KoboldCPP Manager (subprocess lifecycle, model
 // swapping via the admin API), see KoboldCppManagedAdapter, which subclasses
 // this and only adds a preflight() step.
+/** What the model wrote, where the envelope counted it. */
+function completionTokensFrom(usage: unknown): { tokensCompletion?: number } {
+	const count = (usage as any)?.completion_tokens
+	return typeof count === "number" && Number.isFinite(count)
+		? { tokensCompletion: count }
+		: {}
+}
+
 export class KoboldCppAdapter extends BaseConnectionAdapter {
 	private _tokenCounter?: TokenCounters
 	private abortController?: AbortController
@@ -85,6 +97,10 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		// present IS the switch being on, so the key map is the only filter left.
 		for (const [key, value] of Object.entries(this.sampling)) {
 			if (koboldCppSamplingKeyMap[key]) {
+				// `enable_thinking` is not a sampler here: it lives inside a
+				// nested `chat_template_kwargs` on one of the two routes. See
+				// `enableThinkingFor`.
+				if (isReasoningKey(key)) continue
 				result[koboldCppSamplingKeyMap[key]] = value
 			}
 		}
@@ -97,6 +113,41 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		}
 
 		return result
+	}
+
+	/**
+	 * Whether this request asks the chat template to think — `null` for "say
+	 * nothing", which is the request this adapter has always sent.
+	 *
+	 * ⚠ **This read `extraJson.enableThinking` until the ruling of
+	 * 2026-09-12.** Reasoning effort is a sampling parameter chosen per stage,
+	 * not a property of the compute: a connection-level tri-state gave the
+	 * planner nobody reads and the prose the reader is waiting for the same
+	 * answer, and there was no way to say otherwise short of a second
+	 * connection to the same server. A stale `enableThinking` key left in
+	 * `extraJson` is now read by nothing — harmless, since that column is jsonb
+	 * and unread keys cost nothing, which is why no migration clears it.
+	 *
+	 * KoboldCPP has TWO states here and the vocabulary has four, so a level is
+	 * honoured as "on" and the precision is recorded as ignored rather than
+	 * quietly lost. `reasoningBudget` has no field at all on this service.
+	 *
+	 * Completion wire says nothing at all, and the branch below says why:
+	 * `enable_thinking` is a session-template variable, and the raw completion
+	 * endpoints never run the session-template pipeline.
+	 */
+	private enableThinkingFor(useSession: boolean): boolean | null {
+		const { level, budget } = reasoningOf(this.sampling)
+		if (!level) return null
+		if (budget !== undefined) this.noteIgnoredSampler("reasoningBudget")
+		if (!useSession) {
+			this.noteIgnoredSampler("reasoning")
+			return null
+		}
+		if (level === "off") return false
+		// On, and only on: the word itself could not travel.
+		this.noteIgnoredSampler("reasoning")
+		return true
 	}
 
 	getTokenCounter() {
@@ -139,7 +190,9 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		// whether to stream is a preference about this connection, not a claim
 		// about what the backend can express. Wire mode below was the one flag in
 		// here that WAS such a claim, which is why it left.
-		const stream = this.connection.extraJson?.stream ?? true
+		const stream = this.streamingOn(
+			this.connection.extraJson?.stream ?? true
+		)
 		const useMemory = this.connection.extraJson?.useMemory ?? false
 		/**
 		 * Which of KoboldCPP's two endpoints this request goes to.
@@ -163,7 +216,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		this.genKey = crypto.randomUUID()
 		// null = Auto (omit from request), true/false = explicit override
 		const enableThinking: boolean | null =
-			this.connection.extraJson?.enableThinking ?? null
+			this.enableThinkingFor(useSession)
 
 		// The stop sequences this request will send — composed by
 		// `connections/stops.ts` and handed over at construction, never built
@@ -309,6 +362,14 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 							? `${baseUrl}/v1/chat/completions`
 							: `${baseUrl}/api/extra/generate/stream`
 
+						// The record the inspector reads instead of a proxy:
+						// the request as this adapter built it, filled in below
+						// as the frames arrive.
+						const wire = this.beginExchange({
+							url: endpoint,
+							body: requestBody
+						})
+
 						const response = await fetch(endpoint, {
 							method: "POST",
 							headers: {
@@ -317,6 +378,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 							body: JSON.stringify(requestBody),
 							signal: this.abortController.signal
 						})
+						wire.status(response.status)
 
 						if (!response.ok) {
 							throw new Error(
@@ -342,7 +404,9 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 							idle.poke()
 							if (done) break
 
-							buffer += decoder.decode(value, { stream: true })
+							const text = decoder.decode(value, { stream: true })
+							wire.frame(text)
+							buffer += text
 							const lines = buffer.split("\n")
 							buffer = lines.pop() || ""
 
@@ -445,6 +509,13 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 					? `${baseUrl}/v1/chat/completions`
 					: `${baseUrl}/api/v1/generate`
 
+				// The same record the streaming branch opens, for the same
+				// reason — see the note there.
+				const wire = this.beginExchange({
+					url: endpoint,
+					body: requestBody
+				})
+
 				// No intermediate chunks to reset an idle timer against for a
 				// non-streaming response — this is a genuine, documented
 				// exception to the idle-based design used elsewhere in this
@@ -472,12 +543,16 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 
 				if (!response.ok) {
 					const error = await response.text()
+					// A refusal is a response, and the one a reader most wants
+					// to see.
+					wire.received(error, response.status)
 					throw new Error(
 						`KoboldCPP API error: ${response.status} ${error}`
 					)
 				}
 
 				const data = await response.json()
+				wire.received(data, response.status)
 
 				// A 200 response doesn't guarantee a real completion — eg. no
 				// model loaded (--nomodel, or nothing loaded yet) comes back as
@@ -523,7 +598,11 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 					completionResult: content,
 					compiledPrompt,
 					isAborted: false,
-					thinkingContent
+					thinkingContent,
+					// Only the OpenAI-compatible route carries a `usage` block;
+					// the native one answers with the text alone, so absent
+					// stays absent there (see `TextGenResult.tokensCompletion`).
+					...completionTokensFrom(data?.usage)
 				}
 			} catch (e: any) {
 				if (e.name === "AbortError") {

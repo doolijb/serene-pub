@@ -10,6 +10,7 @@
  * the layout's style pin.
  */
 export {
+	CORE_WIDGETS,
 	systemStyleSlug,
 	type WidgetDecl,
 	type WidgetDependency,

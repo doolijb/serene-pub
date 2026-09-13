@@ -70,3 +70,36 @@ export function presetBase(
 	const merged = { ...base, ...over }
 	return Object.keys(merged).length ? merged : undefined
 }
+
+/**
+ * The per-widget settings a session's widgets read: the ones the active preset
+ * pins, with this user's own stored values over the top.
+ *
+ * Merged per WIDGET and per FIELD, not wholesale: a preset that pins two fields
+ * of a widget keeps the one the user has not touched. `presetLayout` is the
+ * composed base (`presetBase`), so a `widgetSettings` key on either half of it
+ * lands here; both arguments are untrusted blobs, so anything that is not a
+ * plain object is read as absent rather than throwing.
+ *
+ * ⚠ A stored value equal to the widget's DECLARED default is pruned before it
+ * reaches storage, so it cannot currently override a preset that pins the same
+ * field to something else. Setting such a field back means changing the preset.
+ */
+export function presetWidgetSettings(
+	presetLayout: unknown,
+	userValues: unknown
+): Record<string, Record<string, unknown>> {
+	const pinned =
+		isPlainObject(presetLayout) &&
+		isPlainObject(presetLayout.widgetSettings)
+			? presetLayout.widgetSettings
+			: {}
+	const own = isPlainObject(userValues) ? userValues : {}
+	const out: Record<string, Record<string, unknown>> = {}
+	for (const [widgetId, values] of Object.entries(pinned))
+		if (isPlainObject(values)) out[widgetId] = { ...values }
+	for (const [widgetId, values] of Object.entries(own))
+		if (isPlainObject(values))
+			out[widgetId] = { ...(out[widgetId] ?? {}), ...values }
+	return out
+}

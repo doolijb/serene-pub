@@ -137,6 +137,35 @@ describe("seeded rows are keyed by seedKey", () => {
 		expect(def.enabled).toContain("contextTokens")
 	})
 
+	test("the background stages ship with reasoning switched off", async () => {
+		// Reasoning is a SAMPLING parameter (ruling 2026-09-12), so "this stage
+		// does not think" is something a config can say. These two say it: a
+		// structured extraction and a stage nobody reads both spend their whole
+		// response budget on the answer.
+		await sync()
+		const rows = await testDb.select().from(schema.samplingConfigs)
+		const precise = rows.find(
+			(r) => r.seedKey === "sampling-precise-extraction"
+		)!
+		const background = rows.find(
+			(r) => r.seedKey === "sampling-background"
+		)!
+
+		expect(background).toBeDefined()
+		expect(background.name).toBe("Background")
+		expect(background.isImmutable).toBe(true)
+		expect(background.shape).toBe("core:shape/text-gen@1")
+		// Precise's numbers, under a name that says when to reach for it.
+		expect(background.values).toEqual(precise.values)
+
+		for (const row of [precise, background]) {
+			expect(row.enabled, row.seedKey!).toContain("reasoning")
+			// Switched on and left at the shape's declared `off`, per the
+			// `values` rule in defaults.ts: a seed states what DIFFERS.
+			expect(row.values, row.seedKey!).not.toHaveProperty("reasoning")
+		}
+	})
+
 	test("every seeded row carries a seedKey, and user rows never do", async () => {
 		await sync()
 		const rows = await testDb.select().from(schema.samplingConfigs)

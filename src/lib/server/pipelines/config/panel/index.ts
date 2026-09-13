@@ -14,8 +14,9 @@
  * | `declarations.ts` | what the registry says can be configured |
  * | `choices.ts` | the rows a reference-valued slot may name |
  * | `scopes.ts` | who may write what, and where the write lands |
+ * | `deviations.ts` | what makes a value worth a row (one directory up) |
  * | `read.ts` | `listNamespaces` / `namespaceView` — resolved, with provenance |
- * | `write.ts` | `writeOption` / `clearOption` / `selectNamedConfig` |
+ * | `write.ts` | `writeOption` / `clearOption` / `resetConfig` / `selectNamedConfig` |
  *
  * This barrel is the public face: import from
  * `$lib/server/pipelines/config/panel`, not from the files behind it.
@@ -56,6 +57,7 @@ export {
 export {
 	writeOption,
 	clearOption,
+	resetConfig,
 	selectNamedConfig,
 	variableOptionGate,
 	contextTemplateOptionGate,

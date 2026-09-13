@@ -21,6 +21,10 @@
 	import ConnectionSamplingPicker from "../ConnectionSamplingPicker.svelte"
 	import SchemaForm from "../pipelines/SchemaForm.svelte"
 	import PipelineConfigOptions from "../pipelines/PipelineConfigOptions.svelte"
+	import {
+		resolvePresetFill,
+		type PresetFillState
+	} from "./applyPresetDefaults"
 
 	// The F29 floor (19 §2) — stated here rather than imported from the
 	// server-only sessionModes module. When "sessions:genres" returns nothing (a
@@ -1015,6 +1019,13 @@
 	let selectedSessionPresetId: number | null = $state(null)
 	/** The preset the current pre-fill came from, so a re-run never re-fills. */
 	let appliedPresetId: number | null = null
+	/**
+	 * What the currently-applied preset last put in each field (23 §9 fix) —
+	 * `resolvePresetFill`'s memory of "preset-supplied, not user-typed", so a
+	 * later preset switch fills only what's still pristine and never clobbers
+	 * a value the user has since edited.
+	 */
+	let presetFillState: PresetFillState = {}
 
 	// A build that registers exactly one genre has answered step 1 by itself,
 	// so the preset step asks about that genre rather than the standard id the
@@ -1095,36 +1106,35 @@
 	 * JSON with no authoring path yet, so only the keys this form actually
 	 * has are read, each type-checked — anything else in it is ignored
 	 * rather than guessed at.
+	 *
+	 * The decision of *whether* a field gets overwritten — fill only what's
+	 * still pristine, never a value the user already typed — lives in
+	 * `resolvePresetFill` (`./applyPresetDefaults.ts`) so it's testable apart
+	 * from this component's state wiring.
 	 */
 	function applyPresetDefaults(
 		preset: Sockets.SessionAdmin.PresetRow | undefined
 	) {
-		const d = preset?.defaults
-		if (!d || typeof d !== "object") return
-		if (typeof d.name === "string") name = d.name
-		if (typeof d.scenario === "string") scenario = d.scenario
-		if (
-			typeof d.groupReplyStrategy === "string" &&
-			GroupReplyStrategies.options.some(
-				(o) => o.value === d.groupReplyStrategy
-			)
+		const result = resolvePresetFill(
+			{
+				name,
+				scenario,
+				groupReplyStrategy,
+				lorebookId,
+				tags: selectedTags,
+				genreFields
+			},
+			presetFillState,
+			preset?.defaults
 		)
-			groupReplyStrategy = d.groupReplyStrategy
-		if (typeof d.lorebookId === "number" || d.lorebookId === null)
-			lorebookId = d.lorebookId as number | null
-		if (Array.isArray(d.tags))
-			selectedTags = d.tags.filter(
-				(t): t is string => typeof t === "string"
-			)
-		if (
-			!!d.genreFields &&
-			typeof d.genreFields === "object" &&
-			!Array.isArray(d.genreFields)
-		) {
-			genreFields = {
-				...genreFields,
-				...(d.genreFields as Record<string, unknown>)
-			}
+		presetFillState = result.fillState
+		name = result.fields.name
+		scenario = result.fields.scenario
+		groupReplyStrategy = result.fields.groupReplyStrategy
+		lorebookId = result.fields.lorebookId
+		selectedTags = result.fields.tags
+		if (result.fields.genreFields !== genreFields) {
+			genreFields = result.fields.genreFields
 			// Declared keys only — the same trim the commit applies.
 			reconcileToMode()
 		}

@@ -14,6 +14,10 @@
  */
 
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import {
+	MODALITY_FOR_STAR_CAPABILITY,
+	SECTION_STAR_CAPABILITIES
+} from "$lib/shared/constants/connectionSections"
 import { adapterCapabilities } from "$lib/shared/connectionAdapters/manifest"
 import {
 	capabilityLabel,
@@ -45,16 +49,19 @@ import {
  * revision stamp, no boot sweep — and it stays correct for every future key that
  * is ever withdrawn, which a one-time fix would not.
  *
- * ⚠ The `declared` guard is not optional, and skipping it is a live regression
- * rather than a theoretical one. `resolveConnectionCapabilities` returns `{}`
- * for a type no manifest entry declares, and `openai-embeddings` and
- * `local-onnx` are exactly that: 0175 backfilled `text->embedding` for those
- * rows from the old modality column, and no entry describes their
- * types. Intersecting an undeclared type down to `{}` would make the emptiness
- * test below read "not determined yet" and fall through to `modalityAllows`,
- * quietly making an embeddings connection acceptable for chat. `persistCapabilities`
- * guards the same hazard with the same `declares` test; the comment there
- * explains the other half of it.
+ * ⚠ The `declared` guard is not optional. `resolveConnectionCapabilities`
+ * returns `{}` for a type no manifest entry describes, and intersecting such a
+ * type down to `{}` makes the emptiness test below read "not determined yet" and
+ * fall through to `modalityAllows`, which is permissive by design.
+ * `persistCapabilities` guards the same hazard with the same `declares` test;
+ * the comment there explains the other half of it.
+ *
+ * ⚠ Every type a star can name MUST have a manifest entry.
+ * `connections:setDefault` judges the row with `capabilityRefusal`, and a type
+ * the manifest does not describe can be granted nothing — so the three embedding
+ * types are declared, their cached `text->embedding` survives the intersection
+ * on its own merits, and `modalityAllows` covers the emptiness half. See its own
+ * note.
  */
 export function storedCapabilities(connection: {
 	type: string
@@ -109,14 +116,32 @@ export function storedCapabilities(connection: {
  * nowhere else.
  *
  * It also cannot bear that weight even if it were allowed to: it is transitional
- * (see `capabilityRefusal` below) and permissive by design, so on an
- * undetermined row it answers yes to every non-image capability, `text->audio`
- * and `text->embedding` included.
+ * (see `capabilityRefusal` below) and permissive by design — on an undetermined
+ * row it still answers yes to `text->audio`, vision and every feature.
+ *
+ * ## What it is NOT permissive about: a section's star
+ *
+ * A capability that some section's star registers belongs to that section's
+ * modality and to no other, and this is the only place that has to say so for an
+ * undetermined row. ⚠ It must never be written as a comparison against one
+ * modality: a row created by SQL carries `capabilities = '{}'` (a migration
+ * cannot run `resolveConnectionCapabilities`), so every modality's rows reach
+ * this predicate undetermined, and an expression naming only images answers "yes,
+ * it can chat" for an embedding endpoint.
+ *
+ * Read from `CONNECTION_SECTIONS` rather than re-spelled here, so adding a
+ * modality closes its own half of this without an edit in a file about guards.
  */
-const modalityAllows = (type: string, capability: CapabilityId): boolean =>
-	capability === "text->image"
-		? CONNECTION_TYPE.isImage(type)
-		: !CONNECTION_TYPE.isImage(type)
+const modalityAllows = (type: string, capability: CapabilityId): boolean => {
+	const modality = CONNECTION_TYPE.modalityOf(type)
+	if (SECTION_STAR_CAPABILITIES.has(capability))
+		return MODALITY_FOR_STAR_CAPABILITY[capability] === modality
+	// Everything a section does not star keeps the old answer, which an
+	// undetermined TEXT row depends on: vision, documents, speech and every
+	// feature were permitted before the column existed and must stay permitted
+	// until something resolves the row.
+	return modality === "text-gen"
+}
 
 /**
  * The refusal sentence, or null when the connection can do it.

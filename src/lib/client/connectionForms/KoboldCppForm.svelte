@@ -11,6 +11,14 @@
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { z } from "zod"
 
+	/**
+	 * ⚠ `enableThinking` is gone from this form (ruling 2026-09-12): reasoning
+	 * is a SAMPLING parameter now, chosen per stage on the sampling config
+	 * rather than once for every stage this connection serves. A stale key in
+	 * an existing row's `extraJson` is read by nothing — the column is jsonb,
+	 * so an unread key costs nothing and no migration clears it. Do not re-add
+	 * the Auto/On/Off control here.
+	 */
 	interface ExtraFieldData {
 		stream: boolean
 		useMemory: boolean
@@ -21,7 +29,6 @@
 		grammarRetainState: boolean
 		logprobs: boolean
 		replaceInstructPlaceholders: boolean
-		enableThinking: boolean | null
 	}
 
 	interface ExtraJson {
@@ -34,7 +41,6 @@
 		grammarRetainState?: boolean
 		logprobs?: boolean
 		replaceInstructPlaceholders?: boolean
-		enableThinking?: boolean | null
 	}
 
 	// Zod validation schema
@@ -146,8 +152,7 @@
 			grammarRetainState: extraJson.grammarRetainState ?? false,
 			logprobs: extraJson.logprobs ?? false,
 			replaceInstructPlaceholders:
-				extraJson.replaceInstructPlaceholders ?? false,
-			enableThinking: extraJson.enableThinking ?? null
+				extraJson.replaceInstructPlaceholders ?? false
 		}
 	}
 
@@ -161,8 +166,7 @@
 			bypassEos: fields.bypassEos,
 			grammarRetainState: fields.grammarRetainState,
 			logprobs: fields.logprobs,
-			replaceInstructPlaceholders: fields.replaceInstructPlaceholders,
-			enableThinking: fields.enableThinking
+			replaceInstructPlaceholders: fields.replaceInstructPlaceholders
 		}
 	}
 
@@ -455,32 +459,6 @@
 					</Switch.Control>
 					<Switch.HiddenInput />
 				</Switch>
-				<div class="flex items-center justify-between gap-4">
-					<div>
-						<p class="font-semibold">Thinking / Reasoning</p>
-						<p class="text-muted-foreground text-xs">
-							Auto lets the model decide based on its template
-						</p>
-					</div>
-					<div
-						class="border-surface-300-700 flex overflow-hidden rounded border text-sm"
-					>
-						{#each [{ label: "Auto", value: null }, { label: "On", value: true }, { label: "Off", value: false }] as opt}
-							<button
-								type="button"
-								class="px-3 py-1 transition-colors {koboldCppFields.enableThinking ===
-								opt.value
-									? 'preset-filled-primary-500'
-									: 'preset-filled-surface-400-600'}"
-								onclick={() =>
-									(koboldCppFields!.enableThinking =
-										opt.value)}
-							>
-								{opt.label}
-							</button>
-						{/each}
-					</div>
-				</div>
 			</section>
 		{/if}
 	</details>

@@ -14,6 +14,11 @@ import { isAndroidWrapper } from "$lib/server/utils"
 import type { Handler } from "$lib/shared/events"
 import { loginRateLimit } from "$lib/server/services/loginRateLimit"
 import { resolveConnectionCapabilities } from "$lib/server/connections/resolve"
+import {
+	endpointIdsServingModel,
+	ensureDefaultModel,
+	forgetModelEverywhere
+} from "$lib/server/connections/models"
 
 // --- OLLAMA SPECIFIC FUNCTIONS ---
 
@@ -140,14 +145,14 @@ export const ollamaDeleteModelHandler: Handler<
 			}
 			emitToUser("ollama:deleteModel", res)
 
-			await db
-				.delete(schema.connections)
-				.where(
-					and(
-						eq(schema.connections.type, "ollama"),
-						eq(schema.connections.model, params.modelName)
-					)
-				)
+			// The MODEL, and the endpoint only if that empties it (0114). This
+			// was `DELETE FROM connections WHERE model = $1` — correct while an
+			// endpoint named exactly one model, and after the split a way to
+			// delete an Ollama endpoint serving four other models because one of
+			// them was pulled. For the one-model rows `connectModel` creates the
+			// outcome is identical, cascade release of `connection_defaults`
+			// included.
+			await forgetModelEverywhere(db, params.modelName, ["ollama"])
 
 			return res
 		} catch (error: any) {
@@ -168,10 +173,22 @@ export const ollamaConnectModelHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
-			let existingConnection = await db.query.connections.findFirst({
-				where: (c, { eq }) =>
-					and(eq(c.type, "ollama"), eq(c.model, params.modelName))
-			})
+			// Which endpoint already SERVES this model — asked of
+			// `connection_models` and not of the endpoint's mirror column
+			// (0114). An Ollama host can carry several models now, so the old
+			// `WHERE connections.model = $1` would answer "no connection for
+			// this one" while sitting right beside it in the same endpoint's
+			// list, and create a duplicate every time.
+			const serving = await endpointIdsServingModel(
+				db,
+				params.modelName,
+				["ollama"]
+			)
+			let existingConnection = serving.length
+				? await db.query.connections.findFirst({
+						where: (c, { eq }) => eq(c.id, serving[0])
+					})
+				: undefined
 
 			if (!existingConnection) {
 				// Parse and create a shorter name for the connection
@@ -199,6 +216,14 @@ export const ollamaConnectModelHandler: Handler<
 					.insert(schema.connections)
 					.values(data as InsertConnection)
 					.returning()
+				// The other half of the row this insert bypasses. A raw insert
+				// skips everything `connections:create` does, and after 0114
+				// that includes the model row — without which the new endpoint
+				// resolves to no model at all and the very next send fails with
+				// a sentence about a connection that looks perfectly configured.
+				// `ensureDefaultModel` also writes the mirror, so the column this
+				// handler used to set by hand stays in step.
+				await ensureDefaultModel(db, newConnection.id, params.modelName)
 				existingConnection = newConnection
 			}
 

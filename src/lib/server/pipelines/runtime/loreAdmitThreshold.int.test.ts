@@ -29,7 +29,10 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { and, eq, inArray } from "drizzle-orm"
-import type { TestDb } from "$lib/server/utils/testDb"
+import {
+	setConfigValue,
+	type TestDb
+} from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import { run } from "@serene-pub/sdk"
@@ -200,20 +203,16 @@ const selectedConfigId = async () => {
 }
 
 const setThreshold = async (value: number) =>
-	await db
-		.update(schema.pipelineConfigValues)
-		.set({ value })
-		.where(
-			and(
-				eq(
-					schema.pipelineConfigValues.configId,
-					await selectedConfigId()
-				),
-				eq(schema.pipelineConfigValues.nodeKey, WORLD_LORE_LANE),
-				eq(schema.pipelineConfigValues.slot, "params"),
-				eq(schema.pipelineConfigValues.path, "admitThreshold")
-			)
-		)
+	// ⚠ An upsert, not the `UPDATE` this was. A config stores **deviations**
+	// (ruled 2026-09-10), so at an untouched address there is no row to update
+	// — the old form matched nothing and the threshold stayed at its declared
+	// value on every case here.
+	await setConfigValue(
+		db,
+		await selectedConfigId(),
+		{ nodeKey: WORLD_LORE_LANE, slot: "params", path: "admitThreshold" },
+		value
+	)
 
 describe("the declared threshold and the engine's fallback are one number", () => {
 	it("every lore type declares what the scan would have used anyway", async () => {

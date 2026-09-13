@@ -126,6 +126,9 @@ export function updateWidget(
 function isPlainObject(x: unknown): x is Record<string, unknown> {
 	return !!x && typeof x === "object" && !Array.isArray(x)
 }
+function isZone(x: unknown): x is Zone {
+	return ZONES.includes(x as Zone)
+}
 function isSizeSpec(x: unknown): x is SizeSpec {
 	return (
 		x === "grow" ||
@@ -143,8 +146,15 @@ function isSizeSpec(x: unknown): x is SizeSpec {
  * hand-corrupted blob can never strand a session without its composer. A saved
  * widget only overrides the fields the editor writes (size/anchor/order/colSpan)
  * and only when they pass a shape check — anything malformed falls back to the
- * default for that field. Unknown persisted ids are ignored (nothing renders
- * them yet). `saved` is `unknown` because the blob is stored verbatim server-side.
+ * default for that field.
+ *
+ * An id the default does not carry is ADMITTED rather than dropped: a preset's
+ * own widget (the Adventure strip above the messages) and a plugin's panel both
+ * arrive that way, and the renderer resolves a widget id to its own content, so
+ * an id this function declines to place is a placement that silently disappears.
+ * A newcomer must name a real zone and a usable size to be admitted; it never
+ * inherits `required`, which is the default's guarantee and not a blob's to
+ * claim. `saved` is `unknown` because the blob is stored verbatim server-side.
  */
 export function loadChatLayout(saved: unknown): GridLayout {
 	const base = defaultChatLayout()
@@ -176,6 +186,24 @@ export function loadChatLayout(saved: unknown): GridLayout {
 			colSpan: typeof s.colSpan === "number" ? s.colSpan : b.colSpan
 		}
 	})
+	for (const [id, s] of savedById) {
+		if (base.widgets.some((b) => b.id === id)) continue
+		if (!isZone(s.zone)) continue
+		if (
+			!isPlainObject(s.size) ||
+			!isSizeSpec(s.size.w) ||
+			!isSizeSpec(s.size.h)
+		)
+			continue
+		widgets.push({
+			id,
+			zone: s.zone,
+			order: typeof s.order === "number" ? s.order : widgets.length,
+			size: { w: s.size.w as SizeSpec, h: s.size.h as SizeSpec },
+			anchor: isPlainObject(s.anchor) ? { ...(s.anchor as Anchor) } : {},
+			...(typeof s.colSpan === "number" ? { colSpan: s.colSpan } : {})
+		})
+	}
 	const cell =
 		typeof saved.cell === "number" && saved.cell > 0 ? saved.cell : base.cell
 	return { version: 1, cell, widgets }

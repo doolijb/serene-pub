@@ -4,7 +4,7 @@
  * a *view onto channels*; the grid is *placement by CSS var only*; the tier is
  * chosen by the **content box** width, not the viewport.
  */
-import type { PanelDecl } from "@serene-pub/sdk"
+import type { PanelDecl, SettingsSchema } from "@serene-pub/sdk"
 
 export type { PanelDecl }
 
@@ -53,6 +53,8 @@ export interface PanelInstance {
 	/** Resolved frame document URL (frame surfaces only). */
 	src?: string
 	channels: string[]
+	/** The per-instance settings this panel declares (shared/widgets/settings). */
+	settings?: SettingsSchema
 	layout: {
 		span: { ideal: number; min: number; max: number }
 		minInline: number

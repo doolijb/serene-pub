@@ -1,211 +1,193 @@
 /**
- * loadConfiguredEmbeddingModel() is the mode-aware "bring the configured
- * backend up from cold" helper, extracted so it has exactly one correct
- * implementation shared by loadSockets.server.ts's boot trigger (now just
- * startPeriodicVectorizationScan(), see vectorizationQueue.ts),
- * vectorizationQueue.ts's runQueue() on-demand load, and
- * loadConfiguredEmbeddingModelOpportunistically() below — previously
- * duplicated, and the copy inside runQueue() was mode-unaware (always
- * called loadEmbeddingModel() regardless of vectorizationConfigs.mode,
- * silently breaking API-backend setups the moment nothing else loaded the
- * correct backend first).
+ * `loadConfiguredEmbeddingModel()` — "bring the configured backend up from
+ * cold", and the one place that decides WHICH backend that is.
  *
- * loadConfiguredEmbeddingModel/loadConfiguredEmbeddingModelOpportunistically
- * call activateApiEmbedding()/loadEmbeddingModel() as same-module direct
- * function references, not through a re-import — vi.mock("./index", ...)
- * from an EXTERNAL test file cannot intercept that internal call the way it
- * can for a different module importing these functions (see
- * vectorization.apiKeyEncryption.int.test.ts for that pattern, which works
- * precisely because vectorization.ts is a different module). So these tests
- * exercise the real functions end-to-end, mocking only genuinely external
- * dependencies (openai's client) or using observable proxies (a DB-read
- * call count) rather than trying to mock same-module internals.
+ * It exists because that decision was once made twice: correctly in the
+ * boot-time auto-load, and mode-unaware in the queue's own `runQueue()`, which
+ * called the local loader regardless — silently breaking every host-backed setup
+ * the moment nothing else had loaded the right backend first.
+ *
+ * What it branches on has changed. It was `vectorization_configs.mode`, a column
+ * every handler had to keep "in step" with two others; it is now the starred
+ * CONNECTION'S TYPE, which is the same fact with nowhere to drift to — and it
+ * has to be the type rather than a local/api flag, because `openai-embeddings`
+ * and `ollama-embeddings` are both hosts and speak different routes.
+ *
+ * The resolution itself is `target.int.test.ts`, against a real database. What
+ * is checked here is the BRANCH — which backend comes up, and that it is
+ * validated with a real call before anything reports ready.
+ *
+ * ⚠ The idle TTL is applied before the load rather than after, because the timer
+ * starts at load time (`resetTtlTimer` runs at the end of activation) and a TTL
+ * set afterwards would leave the first window running on the previous value.
+ * That ordering has no observable consequence for a host-backed star — see the
+ * last case — and the value itself is asserted where it is read.
  */
+
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
 vi.mock("$lib/server/db", () => ({
-	getCryptoSecretKey: () => "test-crypto-secret-key"
+	getCryptoSecretKey: () => "test-crypto-secret-key",
+	db: {}
 }))
 
-const testEmbedCreate = vi.fn(async () => ({
-	data: [{ embedding: Array(384).fill(0.1) }]
+/** What the star resolves to. Set per test. */
+let target: any = null
+vi.mock("./target", async (orig) => {
+	const actual = (await orig()) as any
+	return { ...actual, resolveEmbeddingTarget: async () => target }
+})
+
+const embedText = vi.fn(async () => ({
+	vectors: [Array(384).fill(0.1)],
+	model: "m",
+	dimensions: 384
 }))
-
-vi.mock("openai", () => ({
-	OpenAI: class {
-		embeddings = { create: testEmbedCreate }
-	}
-}))
-
-// eq(schema.systemSettings.id, 1) is constructed for real (drizzle-orm
-// itself isn't mocked) but never actually sent anywhere — every findFirst
-// below is a vi.fn() that ignores its `where` argument and returns a
-// canned row — so the stub only needs `.id` to exist, not a real column.
-// `db` and `schema` are BOTH top-level named exports of "$lib/server/db"
-// (`const { db } = await import(...)`, separately `const { schema } =
-// await import(...)`) — schema is not a property of db.
-const fakeSchema = {
-	systemSettings: { id: "system_settings_id" },
-	vectorizationConfigs: { id: "vectorization_configs_id" }
-}
-
-/** Full "$lib/server/db" module mock shape for a given pair of canned rows. */
-function dbModuleMock(rows: {
-	systemSettings?: any
-	vectorizationConfigs?: any
-}) {
-	return {
-		schema: fakeSchema,
-		db: {
-			query: {
-				systemSettings: {
-					findFirst: vi.fn(async () => rows.systemSettings)
-				},
-				vectorizationConfigs: {
-					findFirst: vi.fn(async () => rows.vectorizationConfigs)
-				}
+const built: string[] = []
+vi.mock("$lib/server/utils/getEmbeddingAdapter", () => ({
+	getEmbeddingAdapter: async (type: string) => {
+		built.push(type)
+		return {
+			Adapter: class {
+				constructor(public connection: any) {}
+				embedText = embedText
 			}
 		}
 	}
-}
+}))
 
-async function freshImport() {
-	vi.resetModules()
-	return await import("./index")
-}
+const apiTarget = (type: string) => ({
+	connectionId: 7,
+	connectionName: "Embeddings",
+	type,
+	mode: "api" as const,
+	modelId: `api::http://host/v1::${type}-model`,
+	ttlMinutes: 11,
+	apiBaseUrl: "http://host/v1",
+	apiKey: null,
+	apiModel: `${type}-model`,
+	connection: {
+		id: 7,
+		name: "Embeddings",
+		type,
+		baseUrl: "http://host/v1",
+		model: `${type}-model`,
+		extraJson: {}
+	}
+})
 
-describe("loadConfiguredEmbeddingModel", () => {
-	beforeEach(() => {
-		testEmbedCreate.mockClear()
-	})
+beforeEach(() => {
+	target = null
+	built.length = 0
+	embedText.mockClear()
+})
 
-	test("no-ops when vectorization is disabled — neither backend is touched", async () => {
-		vi.doMock("$lib/server/db", () =>
-			dbModuleMock({ systemSettings: { vectorizationEnabled: false } })
-		)
-		const mod = await freshImport()
+afterEach(async () => {
+	const { unloadEmbeddingModel } = await import("./index")
+	unloadEmbeddingModel()
+})
 
-		await mod.loadConfiguredEmbeddingModel()
-
-		expect(mod.getLoadedModelId()).toBeNull()
-		expect(mod.isModelReady()).toBe(false)
-		expect(testEmbedCreate).not.toHaveBeenCalled()
-	})
-
-	test('mode: "api" activates the API backend, not the local pipeline', async () => {
-		vi.doMock("$lib/server/db", () =>
-			dbModuleMock({
-				systemSettings: {
-					vectorizationEnabled: true,
-					embeddingModelName:
-						"api::https://api.example.com::text-embedding-3-small"
-				},
-				vectorizationConfigs: {
-					embeddingModelTtlMinutes: 5,
-					mode: "api",
-					apiBaseUrl: "https://api.example.com",
-					apiKey: null,
-					apiKeyIv: null,
-					apiKeyAuthTag: null,
-					apiModel: "text-embedding-3-small"
-				}
-			})
-		)
-		const mod = await freshImport()
-
-		await mod.loadConfiguredEmbeddingModel()
-
-		expect(testEmbedCreate).toHaveBeenCalledTimes(1)
-		expect(mod.isModelReady()).toBe(true)
-		expect(mod.getLoadedModelId()).toBe(
-			mod.buildApiModelId(
-				"https://api.example.com",
-				"text-embedding-3-small"
-			)
-		)
-	})
-
-	test("mode unset (local/default) takes the loadEmbeddingModel() path, not activateApiEmbedding() — proven by the local-path-specific error, not the API one", async () => {
-		vi.doMock("$lib/server/db", () =>
-			dbModuleMock({
-				systemSettings: {
-					vectorizationEnabled: true,
-					// A name no local model definition recognizes —
-					// loadEmbeddingModel()'s findModel() lookup rejects this
-					// with an error distinct from anything activateApiEmbedding()
-					// would ever throw, so which branch ran is unambiguous.
-					embeddingModelName: "not-a-real-local-model-id"
-				},
-				vectorizationConfigs: {
-					embeddingModelTtlMinutes: 5,
-					mode: "local",
-					apiBaseUrl: null,
-					apiKey: null,
-					apiKeyIv: null,
-					apiKeyAuthTag: null,
-					apiModel: null
-				}
-			})
-		)
-		const mod = await freshImport()
-
-		await expect(mod.loadConfiguredEmbeddingModel()).rejects.toThrow(
-			/Unknown embedding model/
-		)
-		expect(testEmbedCreate).not.toHaveBeenCalled()
+describe("with no star", () => {
+	test("loads nothing and does not throw", async () => {
+		const { loadConfiguredEmbeddingModel, isModelReady, getLoadedModelId } =
+			await import("./index")
+		await loadConfiguredEmbeddingModel()
+		expect(built).toEqual([])
+		expect(isModelReady()).toBe(false)
+		expect(getLoadedModelId()).toBeNull()
 	})
 })
 
-describe("loadConfiguredEmbeddingModelOpportunistically", () => {
-	afterEach(() => {
-		testEmbedCreate.mockClear()
+describe("a host-backed star", () => {
+	test("builds the adapter for the connection's OWN type", async () => {
+		// Not "api" — the mode says a host is involved and says nothing about
+		// which route. Ollama's `/api/embed` and an OpenAI-compatible
+		// `/embeddings` are both `api`.
+		target = apiTarget("ollama-embeddings")
+		const { loadConfiguredEmbeddingModel } = await import("./index")
+		await loadConfiguredEmbeddingModel()
+		expect(built).toEqual(["ollama-embeddings"])
+
+		const { unloadEmbeddingModel } = await import("./index")
+		unloadEmbeddingModel()
+		built.length = 0
+		target = apiTarget("openai-embeddings")
+		await loadConfiguredEmbeddingModel()
+		expect(built).toEqual(["openai-embeddings"])
 	})
 
-	test("a second call within ttlMinutes of the first is suppressed (cooldown)", async () => {
-		const mockModule = dbModuleMock({
-			systemSettings: { vectorizationEnabled: false }
-		})
-		vi.doMock("$lib/server/db", () => mockModule)
-		const mod = await freshImport()
-
-		await mod.loadConfiguredEmbeddingModelOpportunistically()
-		await mod.loadConfiguredEmbeddingModelOpportunistically()
-
-		// The DB read is the observable proxy for "an attempt happened" —
-		// loadConfiguredEmbeddingModel() always starts with it, so a
-		// suppressed second call means it's never invoked at all.
-		expect(
-			mockModule.db.query.systemSettings.findFirst
-		).toHaveBeenCalledTimes(1)
-	})
-
-	test("isModelReady() short-circuits — no load attempted once the backend is already warm", async () => {
-		vi.doMock("$lib/server/db", () =>
-			dbModuleMock({
-				systemSettings: {
-					vectorizationEnabled: true,
-					embeddingModelName: "api::https://api.example.com::m"
-				},
-				vectorizationConfigs: {
-					embeddingModelTtlMinutes: 5,
-					mode: "api",
-					apiBaseUrl: "https://api.example.com",
-					apiKey: null,
-					apiKeyIv: null,
-					apiKeyAuthTag: null,
-					apiModel: "m"
-				}
-			})
+	test("validates with a real embed call before reporting ready", async () => {
+		// A config that fails validation must never reach "ready", or the RAG
+		// gate skips nothing and every retrieval surfaces empty context.
+		target = apiTarget("openai-embeddings")
+		const { loadConfiguredEmbeddingModel, isModelReady, getLoadedModelId } =
+			await import("./index")
+		await loadConfiguredEmbeddingModel()
+		expect(embedText).toHaveBeenCalledTimes(1)
+		expect(isModelReady()).toBe(true)
+		// The identity every embedded row will be stamped with.
+		expect(getLoadedModelId()).toBe(
+			"api::http://host/v1::openai-embeddings-model"
 		)
-		const mod = await freshImport()
+	})
 
-		// Bring the backend up for real first (a genuine, non-opportunistic load).
-		await mod.loadConfiguredEmbeddingModel()
-		expect(mod.isModelReady()).toBe(true)
-		testEmbedCreate.mockClear()
+	test("is not ready when the probe call fails", async () => {
+		target = apiTarget("openai-embeddings")
+		embedText.mockRejectedValueOnce(new Error("401 Unauthorized") as never)
+		const { loadConfiguredEmbeddingModel, isModelReady, getLoadError } =
+			await import("./index")
+		await expect(loadConfiguredEmbeddingModel()).rejects.toThrow(/401/)
+		expect(isModelReady()).toBe(false)
+		expect(getLoadError()).toMatch(/401/)
+	})
 
-		await mod.loadConfiguredEmbeddingModelOpportunistically()
+	test("is never idle-unloaded: the TTL is a LOCAL concern", async () => {
+		// `resetTtlTimer` starts nothing without a resident pipeline, and that is
+		// right — there is no memory to reclaim from a host, and unloading would
+		// only mean paying the validation round trip again on the next embed.
+		// The knob is still per-connection (see `target.int.test.ts`); it simply
+		// has nothing to do on a row of this kind, which is what the old panel's
+		// "no-op in API mode" note said out loud.
+		vi.useFakeTimers()
+		try {
+			target = apiTarget("openai-embeddings")
+			const { loadConfiguredEmbeddingModel, isModelReady } = await import(
+				"./index"
+			)
+			await loadConfiguredEmbeddingModel()
+			expect(isModelReady()).toBe(true)
+			vi.advanceTimersByTime(60 * 60 * 1000)
+			expect(isModelReady()).toBe(true)
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+})
 
-		expect(testEmbedCreate).not.toHaveBeenCalled()
+describe("a local star", () => {
+	test("never reaches the adapter registry", async () => {
+		// The in-process pipeline is not an adapter call, and building one for a
+		// local model would try to speak HTTP to a connection with no base URL.
+		target = {
+			connectionId: 3,
+			connectionName: "Local",
+			type: "local-onnx",
+			mode: "local" as const,
+			modelId: "Xenova/not-a-real-model",
+			ttlMinutes: 5,
+			localModelName: "Xenova/not-a-real-model",
+			connection: {
+				id: 3,
+				type: "local-onnx",
+				model: "Xenova/not-a-real-model",
+				extraJson: {}
+			}
+		}
+		const { loadConfiguredEmbeddingModel } = await import("./index")
+		// It refuses — the model is in neither the catalogue nor the registry,
+		// or the platform cannot load ONNX at all — and either way the point
+		// stands: it went down the local path.
+		await expect(loadConfiguredEmbeddingModel()).rejects.toThrow()
+		expect(built).toEqual([])
 	})
 })

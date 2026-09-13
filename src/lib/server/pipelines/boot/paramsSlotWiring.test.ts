@@ -62,11 +62,13 @@
  *
  * The catalog is **not** clean today. The first run of this walk found 17
  * declared-and-unwired slots across the shipped specs, in three distinct
- * shapes, and fixing them is spec work rather than test work. Eight of them —
- * every instance of shapes 1 and 2 — are closed by `drizzle/0111`, so the
- * ledger stands at **nine** — six shape 3 (a slot whose fix is a reader or a
- * deleted declaration, not a `slot.*()`) and three that became shape 1 when the
- * stop-sequence reader landed and are waiting on the catalog. They are written down in
+ * shapes, and fixing them is spec work rather than test work. Eleven of them are
+ * now closed — every instance of shapes 1 and 2, eight by `drizzle/0111` and the
+ * last three by `drizzle/0115`, which carries the catalog's
+ * `params: slot.params()` on the three reply specs' `generate` node to an
+ * install. So the ledger stands at **six**, and every one of them is shape 3: a
+ * slot whose fix is a reader or a deleted declaration, not a `slot.*()`. They
+ * are written down in
  * `LEDGER` below, one line each, with what a person setting that control is
  * actually getting — and asserted in **both** directions plus by count, so a
  * ledger line cannot outlive its debt, a new instance cannot hide behind one,
@@ -232,7 +234,7 @@ const shipped = (): WalkableDoc[] =>
  * cannot hide behind one. Nothing may be added here without the sentence that
  * says what a person setting the control is actually getting.
  *
- * Three distinct shapes were in here. **Shapes 1 and 2 are closed** — eight
+ * Three distinct shapes were in here. **Shapes 1 and 2 are closed** — eleven
  * entries, deleted below rather than annotated, because a ledger that outlives
  * its debt is an exemption nobody decided to grant:
  *
@@ -255,48 +257,33 @@ const shipped = (): WalkableDoc[] =>
  *     `contextBudget` and `prompt` — which read the same slots by reference —
  *     followed the pick. `runtime/samplingSlotDispatch.int.test.ts` is where
  *     that is asserted end to end.
- *  3. **Slots with no reader at all** — the nine that remain, and the only
- *     shape naming the slot does not fix. `core:provider/embed-text@1`'s
- *     `connection` is never consulted — `host.ts` embeds through the local
- *     model (`embeddingApi()`), which is what the "embedding models become
- *     connections" work exists to change. `core:provider/generate-text@1`'s
- *     `params.stopSequences` **has a reader now** and is still unwired — which
- *     makes it the one entry here whose remaining half is a `slot.*()` after
- *     all, so it is no longer shape 3.
+ *  3. **Slots with no reader at all** — the six that remain, and the only shape
+ *     naming the slot does not fix. `core:provider/embed-text@1`'s `connection`
+ *     is never consulted — `host.ts` embeds through the local model
+ *     (`embeddingApi()`), which is what the "embedding models become
+ *     connections" work exists to change. Naming it would resolve a value into a
+ *     port nobody reads, so its fix is a reader or a deleted declaration, not a
+ *     `slot.*()`.
  *
- *     ⚠ **Read the direction of travel before reading its ledger lines.** What
- *     this entry was waiting for is done. The ruling of 2026-09-10 settled the
- *     open question — an author's EXPLICIT sequence rides either wire, while
- *     the completion template's delimiters and the scene's speaker labels ride
- *     the completion wire only — and with it: the five local compositions
- *     became one (`connections/stops.ts`), `DispatchRequest` carries
- *     `stopSequences`, `BaseConnectionAdapter` gained a `withStops` seam beside
- *     `withCompiledPrompt`/`withAttachments`, and the binding reads
- *     `input?.params?.stopSequences`.
- *
- *     What is left is the SPEC half, and it is not in this repo: the three
- *     reply specs live in `@serene-pub/core-catalog` and still call
- *     `C.generateText.v1({…})` without `params: slot.params()`, so
- *     `resolveInput` never resolves the key and the reader sees `undefined`.
- *     These three lines close the moment the catalog names the slot.
- *
- *     `core:provider/embed-text@1`'s `connection` is the surviving shape 3:
- *     naming it would resolve a value into a port nobody reads, so its fix is
- *     a reader or a deleted declaration, not a `slot.*()`.
+ * ⚠ **`generate-text`'s `params.stopSequences` was the third shape-1 group and
+ * it is closed.** It is worth keeping the sequence, because the halves landed
+ * months apart and the gap between them is the whole subject of this file. The
+ * ruling of 2026-09-10 settled the open question — an author's EXPLICIT
+ * sequence rides either wire, while the completion template's delimiters and the
+ * scene's speaker labels ride the completion wire only — and with it: the five
+ * local compositions became one (`connections/stops.ts`), `DispatchRequest`
+ * carries `stopSequences`, `BaseConnectionAdapter` gained a `withStops` seam
+ * beside `withCompiledPrompt`/`withAttachments`, and the binding reads
+ * `input?.params?.stopSequences`. Every piece existed except the spec half,
+ * which is not in this repo: the three reply specs live in
+ * `@serene-pub/core-catalog` and called `C.generateText.v1({…})` with no
+ * `params: slot.params()`, so `resolveInput` never formed the key and the reader
+ * saw `undefined` on every turn. They name it now, and `drizzle/0115` is what
+ * carries the rewritten documents to an install that has already booted — see
+ * the wired-side assertion below, which is what tells a fix apart from a
+ * deleted ledger line.
  */
 const LEDGER = new Map<string, string>([
-	[
-		'core:spec/respond node "generate" slot "params"',
-		"shape 1 — generate-text params.stopSequences has a reader; the catalog spec must name the slot"
-	],
-	[
-		'core:spec/narrate node "generate" slot "params"',
-		"shape 1 — generate-text params.stopSequences has a reader; the catalog spec must name the slot"
-	],
-	[
-		'core:spec/narrate-character node "generate" slot "params"',
-		"shape 1 — generate-text params.stopSequences has a reader; the catalog spec must name the slot"
-	],
 	[
 		'core:spec/respond node "semantic.arm.embed" slot "connection"',
 		"shape 3 — embed-text embeds through the local model; the slot has no reader"
@@ -428,24 +415,25 @@ describe("every declared slot is named by the spec that uses it", () => {
 	 * and it is the assertion that made closing shapes 1 and 2 a visible event
 	 * rather than eight quiet deletions.
 	 *
-	 * ⚠ **9, and every one of them is shape 3.** 17 → 9 as of `drizzle/0111`.
-	 * The number may only go DOWN without a ruling: a shape-3 entry is a slot
-	 * with no reader anywhere in the app, so adding one means shipping a control
-	 * that is inert by construction.
+	 * ⚠ **6, and every one of them is shape 3.** 17 → 9 as of `drizzle/0111`,
+	 * 9 → 6 as of `drizzle/0115`. The number may only go DOWN without a ruling:
+	 * a shape-3 entry is a slot with no reader anywhere in the app, so adding
+	 * one means shipping a control that is inert by construction.
 	 */
-	it("stands at nine open entries", () => {
+	it("stands at six open entries", () => {
 		expect(
 			LEDGER.size,
 			"the ledger's size moved. Down is a fix — say which shape closed in " +
 				"the header. Up is a new inert control, and needs the ruling that " +
 				"decided to ship one."
-		).toBe(9)
+		).toBe(6)
 		const kindOf = new Map(result.findings.map((f) => [f.key, f.slotKind]))
-		// Two members and no third: `embed-text.connection` (six, one per arm
-		// per spec, still shape 3) and `generate-text.params.stopSequences`
-		// (three, one per reply spec, shape 1 since its reader landed). Spelled
-		// out so a regression cannot be absorbed by a line that merely looks
-		// plausible.
+		// One member and no second: `embed-text.connection`, six of them, one
+		// per arm per spec. Spelled out so a regression cannot be absorbed by a
+		// line that merely looks plausible — and `parameters` is asserted at
+		// ZERO rather than left unmentioned, because that is the group
+		// `drizzle/0115` emptied and an entry creeping back into it is exactly
+		// what this pair exists to catch.
 		expect(
 			[...LEDGER.keys()].filter((k) => kindOf.get(k) === "connection")
 				.length
@@ -453,16 +441,16 @@ describe("every declared slot is named by the spec that uses it", () => {
 		expect(
 			[...LEDGER.keys()].filter((k) => kindOf.get(k) === "parameters")
 				.length
-		).toBe(3)
+		).toBe(0)
 	})
 
 	/**
-	 * The half that proves 0111 landed in the documents rather than only in the
-	 * ledger. A deleted ledger line and a wired slot look identical to the two
-	 * assertions above — both leave `findings` short — so the six slots shape 2
-	 * closed are named here on the WIRED side.
+	 * The half that proves 0111 and 0115 landed in the documents rather than
+	 * only in the ledger. A deleted ledger line and a wired slot look identical
+	 * to the two assertions above — both leave `findings` short — so the nine
+	 * slots shapes 1 and 2 closed on this node are named here on the WIRED side.
 	 */
-	it("all three reply specs wire the generate node's connection and sampling", () => {
+	it("all three reply specs wire the generate node's connection, sampling and params", () => {
 		const wired = new Set(result.wired.map((f) => f.key))
 		const missing = [
 			"core:spec/respond",
@@ -470,7 +458,7 @@ describe("every declared slot is named by the spec that uses it", () => {
 			"core:spec/narrate-character"
 		]
 			.flatMap((slug) =>
-				["connection", "sampling"].map(
+				["connection", "sampling", "params"].map(
 					(s) => `${slug} node "generate" slot "${s}"`
 				)
 			)
@@ -480,7 +468,9 @@ describe("every declared slot is named by the spec that uses it", () => {
 			"the reply step's own Connection/Sampling pick reaches `dispatch` " +
 				"only through these — without them `refId(p.connection)` is null " +
 				"and `resolveCapabilityTarget` falls to the instance default, " +
-				"while `contextBudget` and `prompt` follow the pick."
+				"while `contextBudget` and `prompt` follow the pick. `params` is " +
+				"the same shape one slot along: without it the stop sequences a " +
+				"person typed reach `input?.params?.stopSequences` as `undefined`."
 		).toEqual([])
 	})
 
@@ -496,6 +486,24 @@ describe("every declared slot is named by the spec that uses it", () => {
 				`${node} does not name its params slot — capRelationships is ` +
 					`back to being called with undefined on every turn`
 			).toBe(true)
+	})
+
+	/**
+	 * The image render's `params`, which arrived with the slot itself.
+	 *
+	 * `core:provider/generate-image@1` declared no parameters slot at all, so
+	 * `streaming` is the first thing a person can set on this node — and the
+	 * spec naming it is the whole of what makes the control live. Unnamed, the
+	 * panel would draw the picker, the scope chain would store `off`, and
+	 * `input?.params` would be `undefined` on every render.
+	 */
+	it("the image spec wires the render node's params slot", () => {
+		const wired = new Set(result.wired.map((f) => f.key))
+		expect(
+			wired.has('core:spec/generate-image node "render" slot "params"'),
+			"the render node does not name its params slot — `streaming` is a " +
+				"control that stores and is never read"
+		).toBe(true)
 	})
 })
 

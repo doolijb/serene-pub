@@ -52,7 +52,10 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { and, eq } from "drizzle-orm"
-import type { TestDb } from "$lib/server/utils/testDb"
+import {
+	setConfigValue,
+	type TestDb
+} from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import { run } from "@serene-pub/sdk"
@@ -255,17 +258,16 @@ const setThreshold = async (value: number) => {
 		{ sessionId }
 	)
 	expect(selected, "the reply spec resolves to no configuration").toBeTruthy()
-	await db
-		.update(schema.pipelineConfigValues)
-		.set({ value })
-		.where(
-			and(
-				eq(schema.pipelineConfigValues.configId, selected!.configId),
-				eq(schema.pipelineConfigValues.nodeKey, WORLD_LORE_LANE),
-				eq(schema.pipelineConfigValues.slot, "params"),
-				eq(schema.pipelineConfigValues.path, "admitThreshold")
-			)
-		)
+	// ⚠ An upsert, not the `UPDATE` this was. A config stores **deviations**
+	// (ruled 2026-09-10), so at an untouched address there is no row to update
+	// — the old form matched nothing and every case ran at the declared
+	// threshold.
+	await setConfigValue(
+		db,
+		selected!.configId,
+		{ nodeKey: WORLD_LORE_LANE, slot: "params", path: "admitThreshold" },
+		value
+	)
 }
 
 describe("the host hands retrieval the book's roster, not just the room", () => {

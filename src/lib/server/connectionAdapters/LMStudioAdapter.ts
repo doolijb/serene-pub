@@ -19,7 +19,11 @@ import {
 	type OngoingPrediction
 } from "@lmstudio/sdk"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-import { lmStudioSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
+import {
+	isReasoningKey,
+	lmStudioSamplingKeyMap,
+	reasoningOf
+} from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import {
@@ -57,6 +61,14 @@ function splitReasoning(result: {
 		}
 	}
 	return { content: result.content || "", thinkingContent: undefined }
+}
+
+/** What the model wrote, as this SDK's prediction stats count it. */
+function completionTokensFrom(result: unknown): { tokensCompletion?: number } {
+	const count = (result as any)?.stats?.predictedTokensCount
+	return typeof count === "number" && Number.isFinite(count)
+		? { tokensCompletion: count }
+		: {}
 }
 
 class LMStudioAdapter extends BaseConnectionAdapter {
@@ -107,6 +119,9 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		for (const [key, value] of Object.entries(this.sampling)) {
 			if (lmStudioSamplingKeyMap[key]) {
 				if (key === "streaming") continue
+				// Translated below rather than copied — the level has a word
+				// for "off" that is not the word the config uses.
+				if (isReasoningKey(key)) continue
 				// Defensive: skip if value is undefined or not a primitive (unless you expect an object)
 				if (value === undefined) continue
 				// If you expect only primitives, skip objects:
@@ -115,6 +130,26 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			}
 		}
 		return result
+	}
+
+	/**
+	 * `reasoning_effort`, in the OpenAI spelling LM Studio's own server speaks.
+	 *
+	 * Nothing at all when the sampler is switched off, which keeps every
+	 * request this adapter has ever sent byte-identical — see the twin of this
+	 * method on `OpenAIChatAdapter`, which carries the full argument for
+	 * sending `"none"` rather than withholding it.
+	 *
+	 * It rides in `options` beside the rest of `mapSamplingConfig`, which is
+	 * where this file has always put a key the SDK may or may not forward.
+	 * `reasoningBudget` has no field in this format at all, so a config
+	 * carrying one is recorded as ignored.
+	 */
+	private reasoningParams(): Record<string, string> {
+		const { level, budget } = reasoningOf(this.sampling)
+		if (!level) return {}
+		if (budget !== undefined) this.noteIgnoredSampler("reasoningBudget")
+		return { reasoning_effort: level === "off" ? "none" : level }
 	}
 
 	// --- LM Studio client instance ---
@@ -191,7 +226,9 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		const modelName =
 			this.connection.model ??
 			CONNECTION_DEFAULTS[CONNECTION_TYPE.LM_STUDIO].baseUrl
-		const stream = this.connection!.extraJson?.stream || false
+		const stream = this.streamingOn(
+			this.connection!.extraJson?.stream || false
+		)
 		if (typeof modelName !== "string")
 			throw new Error("LMStudioAdapter: model must be a string")
 
@@ -244,6 +281,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			maxTokens: this.sampling.responseTokens || 250,
 			contextOverflowPolicy: "truncateMiddle",
 			...this.mapSamplingConfig(),
+			...this.reasoningParams(),
 			// LM Studio's SDK takes the constraint as a `structured` option
 			// rather than a request field. `{ type: "json" }` is its
 			// any-valid-JSON mode — the SDK also accepts a jsonSchema here if a
@@ -263,6 +301,21 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		// --- LM Studio SDK integration ---
 		const modelClient = await this.getModelClient(modelName)
 
+		// The record the inspector reads instead of a proxy. This SDK speaks its
+		// own transport rather than HTTP, so the call it makes stands where a
+		// method would: `respond` takes turns, `complete` takes one string.
+		const wire = this.beginExchange({
+			url:
+				normalizeBaseUrl(this.connection.baseUrl) ||
+				CONNECTION_DEFAULTS[CONNECTION_TYPE.LM_STUDIO].baseUrl,
+			method: useSession ? "respond" : "complete",
+			body: {
+				model: modelName,
+				...(useSession ? { messages } : { prompt }),
+				options
+			}
+		})
+
 		if (stream) {
 			return {
 				completionResult: async (
@@ -277,6 +330,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 					// Native reasoning, LM Studio's way: there is no wire field
 					// to read, because the SDK tags every FRAGMENT instead.
 					const route = (part: LLMPredictionFragment | undefined) => {
+						wire.frame(part)
 						if (!part?.content) return
 						switch (part.reasoningType) {
 							case "reasoning":
@@ -354,6 +408,11 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 					if (useSession && messages) {
 						this.prediction = modelClient.respond(messages, options)
 						const result = await this.prediction
+						wire.received(result)
+						// Through the adapter's usage seam rather than the
+						// result object: this SDK reports counts on its own
+						// `stats`, and the caller reads both places.
+						this.recordStreamedUsage(completionTokensFrom(result))
 						if (
 							result &&
 							typeof result === "object" &&
@@ -368,6 +427,11 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 					} else {
 						this.prediction = modelClient.complete(prompt, options)
 						const result = await this.prediction
+						wire.received(result)
+						// Through the adapter's usage seam rather than the
+						// result object: this SDK reports counts on its own
+						// `stats`, and the caller reads both places.
+						this.recordStreamedUsage(completionTokensFrom(result))
 						if (
 							result &&
 							typeof result === "object" &&

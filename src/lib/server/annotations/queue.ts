@@ -6,22 +6,27 @@
  * autostart, its own force-start. Not a mode flag on one queue and not a second
  * copy of the loop.
  *
- * ## This lane has no model, and that is not a temporary state
+ * ## This lane runs with a model or without one, and *without* is the default
  *
- * The entity extractor is **dictionary-based and deliberately model-free**, so
- * the zero-setup path keeps working: a lorebook with no keywords, no embedding
- * model and nothing downloaded still gets its names matched. The optional ONNX
- * mention detector (retrieval plan phase 9) is not built. So this lane declares
- * `role: null` and `modelFreeBroker` answers *"none"* to every residency
- * question, which the loop treats as an ordinary answer rather than a reason to
- * stop.
+ * The entity extractor is **dictionary-based and works with nothing
+ * configured**, so the zero-setup path keeps working: a lorebook with no
+ * keywords, no model and nothing downloaded still gets its names matched. On top
+ * of that, and only when a `text->entities` connection is starred, `nerBroker`
+ * loads that connection's model and the extractor gets a third tier
+ * (`ranking/entities.ts`, tier zero).
  *
- * That is the same requirement as the lane contract's third constraint —
- * *nothing may assume a model is immediately available* — arrived at from the
- * other direction. **"No model configured for this lane" is a first-class
- * normal state**, and the shape it replaces is the old vectorization queue's
- * `if (!candidateModel) break`, which would have made a model-free feature
- * impossible to run inside it.
+ * ⚠ The conditional runs THAT way round and must keep running that way round.
+ * With no star the broker answers `{kind: "none"}` — the arm the loop treats as
+ * an ordinary answer — and never `unconfigured`, which is the arm it reads as
+ * *stop*. A star whose model cannot load degrades to the same `none` rather than
+ * halting the lane; see the broker, which explains why taking the lexical tier
+ * down with a broken model is the one outcome forbidden here.
+ *
+ * That is the lane contract's third constraint — *nothing may assume a model is
+ * immediately available* — arrived at from the other direction. **"No model
+ * configured for this lane" is a first-class normal state**, and the shape it
+ * replaces is the old vectorization queue's `if (!candidateModel) break`, which
+ * would have made a model-free feature impossible to run inside it.
  *
  * ## What is stale, and how it is found without recomputing a hash
  *
@@ -57,7 +62,6 @@ import * as schema from "$lib/server/db/schema"
 import { EXTRACTOR_VERSION } from "$lib/server/pipelines/ranking/entities"
 import {
 	IndexingLane,
-	modelFreeBroker,
 	registerLane,
 	type LaneItem,
 	type LaneItemRef,
@@ -72,19 +76,20 @@ import {
 	loadVocabulary,
 	type AnnotationVocabulary
 } from "./index"
+import { nerBroker } from "$lib/server/ner/broker"
 
 // db is the global Db — see db/types.d.ts
 
 /**
- * The lane's TTL, as a per-lane value rather than a shared constant.
+ * ⚠ There is no `ANNOTATION_MODEL_TTL_MINUTES` here any more.
  *
- * Nothing unloads today because nothing is loaded. It is declared anyway, and
- * declared *here* rather than in the loop, because it is the number the optional
- * mention detector will be governed by and the number an admin *Servers* page
- * has to be able to read and set per lane. Zero would have been a lie in the
- * other direction — "unload immediately" is not what this lane wants.
+ * It was a module constant standing in for a number nothing could set. The TTL
+ * is now a property of the STARRED CONNECTION (`extraJson.nerModelTtlMinutes`,
+ * edited on its own form, defaulted by `DEFAULT_NER_TTL_MINUTES`), which is what
+ * lets two entity connections want two windows — and a constant here would be a
+ * second spelling of that number that an admin surface could read and never
+ * change. `nerBroker.spec.ttlMinutes` reports whichever value is in force.
  */
-export const ANNOTATION_MODEL_TTL_MINUTES = 5
 
 /** Item sources this lane understands. Also the `ref.source` vocabulary. */
 export const ENTRY_ANNOTATION = "entryAnnotation"
@@ -159,10 +164,7 @@ const messageNeedsAnnotation = (db: Db, gazetteerHash: string) =>
 			.from(schema.messageAnnotations)
 			.where(
 				and(
-					eq(
-						schema.messageAnnotations.messageId,
-						schema.messages.id
-					),
+					eq(schema.messageAnnotations.messageId, schema.messages.id),
 					eq(
 						schema.messageAnnotations.extractorVersion,
 						EXTRACTOR_VERSION
@@ -180,12 +182,24 @@ const messageNeedsAnnotation = (db: Db, gazetteerHash: string) =>
 // Items
 // ---------------------------------------------------------------------------
 
+/**
+ * ⚠ `modelId` is the lane's residency key, and passing it through is what makes
+ * the model tier happen at all.
+ *
+ * A non-null `modelId` on an item is what makes the loop take a LEASE before
+ * processing it (see `IndexingLane.run`), so the model is resident by the time
+ * `annotateEntry` asks for spans; a null one is the model-free pass, unchanged.
+ * The same value then reaches `annotateEntry`, which will only use a resident
+ * model whose identity matches — so a model that was swapped between the lease
+ * and the write contributes nothing rather than contributing the wrong thing.
+ */
 const entryItem = (
 	db: Db,
 	entryId: number,
 	lorebookId: number,
 	title: string | null,
-	vocabulary: AnnotationVocabulary
+	vocabulary: AnnotationVocabulary,
+	modelId: string | null
 ): LaneItem => ({
 	ref: { source: ENTRY_ANNOTATION, id: entryId },
 	label: {
@@ -193,25 +207,26 @@ const entryItem = (
 		label: `Entry names: ${title || entryId}`
 	},
 	lorebookId,
-	modelId: null,
+	modelId,
 	process: async () => {
-		await annotateEntry(db, entryId, vocabulary)
+		await annotateEntry(db, entryId, vocabulary, modelId)
 	}
 })
 
 const messageItem = (
 	db: Db,
 	messageId: number,
-	vocabulary: AnnotationVocabulary
+	vocabulary: AnnotationVocabulary,
+	modelId: string | null
 ): LaneItem => ({
 	ref: { source: MESSAGE_ANNOTATION, id: messageId },
 	label: {
 		type: MESSAGE_ANNOTATION,
 		label: `Message names: #${messageId}`
 	},
-	modelId: null,
+	modelId,
 	process: async () => {
-		await annotateMessage(db, messageId, vocabulary)
+		await annotateMessage(db, messageId, vocabulary, modelId)
 	}
 })
 
@@ -222,6 +237,7 @@ const messageItem = (
 async function pickStaleEntry(
 	db: Db,
 	lorebookId: number,
+	modelId: string | null,
 	onlyId?: number
 ): Promise<LaneItem | null> {
 	const vocabulary = await vocabularyFor(db, lorebookId)
@@ -246,7 +262,8 @@ async function pickStaleEntry(
 		rows[0].id,
 		lorebookId,
 		rows[0].title ?? null,
-		vocabulary
+		vocabulary,
+		modelId
 	)
 }
 
@@ -261,6 +278,7 @@ async function pickStaleMessage(
 	db: Db,
 	sessionId: number,
 	lorebookId: number | null,
+	modelId: string | null,
 	onlyId?: number
 ): Promise<LaneItem | null> {
 	const vocabulary = lorebookId
@@ -283,7 +301,7 @@ async function pickStaleMessage(
 		.orderBy(desc(schema.messages.id))
 		.limit(1)
 	if (!rows.length) return null
-	return messageItem(db, rows[0].id, vocabulary)
+	return messageItem(db, rows[0].id, vocabulary, modelId)
 }
 
 // ---------------------------------------------------------------------------
@@ -298,10 +316,10 @@ export interface AnnotationPromotionContext {
 
 function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 	return {
-		async fromGroup(group: PriorityGroup) {
+		async fromGroup(group: PriorityGroup, modelId: string | null) {
 			const db = await getDb()
 			for (const lorebookId of group.lorebookIds) {
-				const entry = await pickStaleEntry(db, lorebookId)
+				const entry = await pickStaleEntry(db, lorebookId, modelId)
 				if (entry) return entry
 			}
 			/**
@@ -324,7 +342,8 @@ function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 				const message = await pickStaleMessage(
 					db,
 					group.sessionId,
-					session?.lorebookId ?? null
+					session?.lorebookId ?? null,
+					modelId
 				)
 				if (message) return message
 			}
@@ -344,14 +363,14 @@ function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 		 * reached through the group the entity arm enqueues for the session it
 		 * is actually in, which is bounded to that session and asked for.
 		 */
-		async global() {
+		async global(modelId: string | null) {
 			const db = await getDb()
 			const books = await db
 				.select({ id: schema.lorebooks.id })
 				.from(schema.lorebooks)
 				.orderBy(asc(schema.lorebooks.id))
 			for (const book of books) {
-				const item = await pickStaleEntry(db, book.id)
+				const item = await pickStaleEntry(db, book.id, modelId)
 				if (item) return item
 			}
 			return null
@@ -363,7 +382,7 @@ function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 		 * the annotation must be written under, and rebuilding it per item
 		 * would be the same query over and over.
 		 */
-		async specific(ref: LaneItemRef, _modelId, context: unknown) {
+		async specific(ref: LaneItemRef, modelId, context: unknown) {
 			const db = await getDb()
 			const ctx = (context ?? {}) as Partial<AnnotationPromotionContext>
 			if (ref.source === ENTRY_ANNOTATION) {
@@ -398,7 +417,8 @@ function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 					rows[0].id,
 					rows[0].lorebookId,
 					rows[0].title ?? null,
-					ctx.vocabulary
+					ctx.vocabulary,
+					modelId
 				)
 			}
 			if (ref.source === MESSAGE_ANNOTATION) {
@@ -418,7 +438,7 @@ function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 					)
 					.limit(1)
 				if (!rows.length) return null
-				return messageItem(db, rows[0].id, ctx.vocabulary)
+				return messageItem(db, rows[0].id, ctx.vocabulary, modelId)
 			}
 			return null
 		}
@@ -440,12 +460,15 @@ export const annotationLane = registerLane(
 		key: "annotation",
 		label: "annotation",
 		/**
-		 * Constraint 2 — the lane's model need, as data. `role: null` says
-		 * *this lane needs nothing loaded*, which an admin surface can read
-		 * off `annotationLane.declaration` alongside the embedding lane's
-		 * `role: "embedding"` without either loop being consulted.
+		 * Constraint 2 — the lane's model need, as data. `role: "ner"` says
+		 * *this lane's model is an entity model*, which an admin surface can
+		 * read off `annotationLane.declaration` alongside the embedding lane's
+		 * `role: "embedding"` without either loop being consulted. Whether one
+		 * is CONFIGURED is the broker's `peek`, not the declaration: a role that
+		 * flipped to null when nothing was starred would make the lane's
+		 * identity depend on a setting.
 		 */
-		model: modelFreeBroker(ANNOTATION_MODEL_TTL_MINUTES),
+		model: nerBroker,
 		work: makeWorkSource(getDb),
 		/**
 		 * ⚠ Unconditionally enabled, and that is the design rather than an

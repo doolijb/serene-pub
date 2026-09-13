@@ -221,18 +221,10 @@ describe("the recorded span only ever widens", () => {
 			}
 		]
 
-		await reconcileSuggestions(
-			db,
-			lorebook.id,
-			candidate(early, late)
-		)
+		await reconcileSuggestions(db, lorebook.id, candidate(early, late))
 		// A second scan that can only see the middle of the range — the lane has
 		// not re-reached the oldest source, or its text moved.
-		await reconcileSuggestions(
-			db,
-			lorebook.id,
-			candidate(late, late)
-		)
+		await reconcileSuggestions(db, lorebook.id, candidate(late, late))
 
 		const [row] = await listSuggestions(
 			db,

@@ -31,7 +31,6 @@
 	let personas: Sockets.Personas.List.Response["personaList"] = $state([])
 	let sessions: Sockets.Sessions.List.Response["sessionList"] = $state([])
 	let setupData: {
-		summarizationStepComplete: boolean
 		ragStepComplete: boolean
 	} | null = $state(null)
 	let loaded = $state(false)
@@ -52,7 +51,7 @@
 		// user straight into a blank form instead of showing what they
 		// already made).
 		doneHref?: string
-		skippable?: "summarization" | "rag"
+		skippable?: "rag"
 	}
 	let steps = $derived.by((): Step[] => {
 		const list: Step[] = []
@@ -93,14 +92,6 @@
 		})
 		if (isAdmin) {
 			list.push({
-				id: "summarization",
-				label: "Summarization (optional)",
-				description:
-					"Generate lore summaries from session history. Can be configured later in System Settings.",
-				done: setupData?.summarizationStepComplete ?? false,
-				skippable: "summarization"
-			})
-			list.push({
 				id: "rag",
 				label: "Retrieval-augmented context / embeddings (optional)",
 				description:
@@ -113,7 +104,7 @@
 	})
 	let allStepsComplete = $derived(loaded && steps.every((s) => s.done))
 
-	function skipStep(step: "summarization" | "rag") {
+	function skipStep(step: "rag") {
 		socket.emit("setup:markComplete", { step })
 	}
 

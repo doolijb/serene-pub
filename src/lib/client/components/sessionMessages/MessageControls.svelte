@@ -1,6 +1,8 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { runInspector } from "$lib/client/stores/runInspector.svelte"
 
 	interface Props {
 		msg: SelectSessionMessage
@@ -81,6 +83,48 @@
 	function closeMenu() {
 		onOpenChange(false)
 	}
+
+	/* ── which run produced this reply ──────────────────────────────────
+	 *
+	 * A message is linked to a run through `pipeline_run_artifacts`, read by
+	 * `pipelines:artifactRuns` — a message can be the artifact of several runs
+	 * (regenerated, continued), and the one worth explaining is the one that
+	 * sent something, so a non-preview wins over a newer preview.
+	 *
+	 * Asked only while this menu is OPEN, and only for a reply. One message's
+	 * menu is open at a time (the list enforces it), so this is one listener
+	 * and one query rather than one per message in the thread.
+	 */
+
+	const socket = useTypedSocket()
+	const isReply = $derived(!!msg.characterId || !!msg.isNarratorResponse)
+	let runId = $state<string | null>(null)
+	/** Plain, not `$state`: the effect writes it and must not depend on it. */
+	let askedFor: number | null = null
+
+	const onArtifactRuns = (res: Sockets.Pipelines.ArtifactRuns.Response) => {
+		if (res.kind !== "message" || res.entityId !== msg.id) return
+		runId =
+			res.runs.find((r) => !r.isPreview)?.runId ??
+			res.runs[0]?.runId ??
+			null
+	}
+
+	$effect(() => {
+		if (!open || !isReply) return
+		socket.on("pipelines:artifactRuns", onArtifactRuns)
+		if (askedFor !== msg.id) {
+			askedFor = msg.id
+			runId = null
+			socket.emit("pipelines:artifactRuns", {
+				kind: "message",
+				entityId: msg.id
+			})
+		}
+		// Named handler, always: `off(event)` with no handler removes every
+		// listener on that event, app-wide.
+		return () => socket.off("pipelines:artifactRuns", onArtifactRuns)
+	})
 
 	/** `book-open-text` → `BookOpenText`, resolved against the lucide set. */
 	function triggerIcon(name?: string) {
@@ -214,6 +258,19 @@
 									aria-hidden="true"
 								/>
 								<span>Select for Summarization</span>
+							</button>
+						{/if}
+						{#if runId && !msg.isGenerating}
+							<button
+								class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
+								title="See what the pipeline did for this reply"
+								onclick={() => {
+									closeMenu()
+									runInspector.open(runId!)
+								}}
+							>
+								<Icons.Receipt size={16} aria-hidden="true" />
+								<span>Inspect run</span>
 							</button>
 						{/if}
 						{#if onShowDebugMeta && debugMeta && !msg.isGenerating}

@@ -158,6 +158,20 @@
 	const engines = $derived(view?.engines ?? [])
 
 	/**
+	 * An engine id as the name of a language.
+	 *
+	 * `core:template/handlebars@1` is a pinned id nobody chose; "Handlebars" is
+	 * the word on the page. Falls back to the id when the shape is unfamiliar,
+	 * because a plugin may publish anything and a confident wrong guess reads
+	 * worse than an id.
+	 */
+	const languageOf = (engineId: string): string => {
+		const name = engineId.split("/")[1]?.split("@")[0]
+		if (!name) return engineId
+		return name.charAt(0).toUpperCase() + name.slice(1)
+	}
+
+	/**
 	 * A pool key's two halves, split back apart.
 	 *
 	 * The grouping key is `<node type or variable>#<engine>` — see the header.
@@ -447,9 +461,18 @@
 	const onWrite = (res: {
 		library?: Sockets.Pipelines.Library.Response
 		error?: string
+		warnings?: Sockets.Pipelines.TemplateWarning[]
 	}) => {
 		if (res.error || !res.library) return
 		view = res.library
+		// The save succeeded — these are names the template references that
+		// the step does not supply, each of which renders as nothing. Shown
+		// after the fact rather than as a confirmation dialog, because the
+		// template is valid and the person may well mean it.
+		for (const w of res.warnings ?? [])
+			toaster.warning({
+				title: w.line ? `Line ${w.line}: ${w.message}` : w.message
+			})
 	}
 	// The server's refusals are written for a person — "'Grim tone' is still
 	// selected somewhere" — so they are shown rather than replaced by a status.
@@ -927,14 +950,26 @@
 											readonly={row.isImmutable}
 											value={d.source}
 											scope={scopeFor(tab, poolId)}
+											engine={d.engine}
 											oninput={(source) =>
 												edit(kind, row.id, { source })}
 										/>
 									</label>
 									{#if engines.length > 1 && !row.isImmutable}
-										<!-- Only when there is a choice to
-										     make: with core's engine alone, a
-										     picker with one option is chrome.
+										<!-- The language is chosen while the
+										     row is still empty, and not after.
+
+										     Storing the same text under a
+										     different engine id does not
+										     translate it: every tag in it
+										     becomes literal output. So the
+										     picker is offered on a blank row —
+										     which is what "New" makes — and the
+										     engine is read-only once there is
+										     anything to rewrite. The server
+										     refuses the switch either way; this
+										     is so the refusal is never a
+										     surprise.
 
 										     The chosen id is saved as itself.
 										     It used to map core's id back to
@@ -955,39 +990,64 @@
 											class="flex flex-col gap-1 text-xs font-medium"
 										>
 											Engine
-											<select
-												class="select w-full"
-												value={d.engine}
-												onchange={(e) =>
-													edit(kind, row.id, {
-														engine: e.currentTarget
-															.value
-													})}
-											>
-												{#each engines as eng (eng.id)}
-													<option value={eng.id}>
-														{eng.id}
-														{eng.owner === "core"
-															? "(built in)"
-															: `(${eng.owner})`}
-													</option>
-												{/each}
-											</select>
-											{#if d.engine !== (row.engine ?? CORE_ENGINE)}
-												<span
-													class="text-muted text-xs"
-												>
+											{#if (row.source ?? "").trim()}
+												<input
+													class="input w-full"
+													value={languageOf(
+														row.engine ?? CORE_ENGINE
+													)}
+													readonly
+												/>
+												<span class="text-muted text-xs">
 													<Icons.Info
 														size={11}
 														class="inline"
 													/>
-													Saving moves this out of
-													<strong>
-														{group.label}
-													</strong>
-													and in under the new language's
-													heading. The text is not translated.
+													Written in {languageOf(
+														row.engine ?? CORE_ENGINE
+													)}. Switching languages is a
+													rewrite, not a setting —
+													duplicate this and rewrite the
+													copy.
 												</span>
+											{:else}
+												<select
+													class="select w-full"
+													value={d.engine}
+													onchange={(e) =>
+														edit(kind, row.id, {
+															engine: e
+																.currentTarget
+																.value
+														})}
+												>
+													{#each engines as eng (eng.id)}
+														<option value={eng.id}>
+															{languageOf(eng.id)}
+															{eng.owner === "core"
+																? "(built in)"
+																: `(${eng.owner})`}
+														</option>
+													{/each}
+												</select>
+												{#if d.engine !== (row.engine ?? CORE_ENGINE)}
+													<span
+														class="text-muted text-xs"
+													>
+														<Icons.Info
+															size={11}
+															class="inline"
+														/>
+														Saving moves this out of
+														<strong>
+															{group.label}
+														</strong>
+														and in under the new language's
+														heading. A step has to render
+														that language for the row to be
+														selectable there.
+													</span>
+												{/if}
 											{/if}
 										</label>
 									{/if}

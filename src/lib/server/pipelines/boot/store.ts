@@ -19,7 +19,7 @@
  * parity corpus is byte-identical (08 §5b, docs-dev/INTEGRATING.md).
  */
 
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, eq, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	canonicalHash,
@@ -32,6 +32,8 @@ export interface SavedSpec {
 	specId: number
 	specVersionId: number
 	canonicalHash: string
+	/** False when the document was already stored under this hash. */
+	written: boolean
 }
 
 /**
@@ -41,6 +43,20 @@ export interface SavedSpec {
  * a half-written spec version is a pipeline that validates (its nodes exist)
  * and then fails mid-run on a missing edge, which is the least debuggable
  * outcome available.
+ *
+ * ## A version is `(spec, semver, hash)` (ruling 2026-09-10)
+ *
+ * The hash is part of the key, so an edited document is a **new row**: the row
+ * it supersedes stays for the run in flight, the receipt and the config notice
+ * that name it, the new one becomes active, and the row the pointer moves off is
+ * retired so `status = 'published'` still means "the one this slug resolves to".
+ * Re-saving an identical document writes nothing.
+ *
+ * Without the hash in the key an edited document has nowhere to land but on top
+ * of the row those three are naming — which leaves only two answers, destroying
+ * it or skipping the edit, and skipping means the edit reaches no install that
+ * has already booted. See `docs/pipelines.md`, *Specs and types are
+ * content-addressed*.
  */
 export async function saveDocument(
 	db: Db,
@@ -69,23 +85,32 @@ export async function saveDocument(
 					.returning()
 			)[0]
 
-		// Re-saving the same semver replaces that version's rows. Publishing is a
-		// separate act — a pointer move on the spec (02 §3) — so a draft being
-		// edited never disturbs the version a run in flight is using.
-		const prior = await tx
+		// This exact document, if this instance already holds it. Matched on the
+		// hash, so re-saving what is already stored is a no-op and an *edit*
+		// under the same semver falls through to a new row.
+		const [stored] = await tx
 			.select()
 			.from(schema.pipelineSpecVersions)
 			.where(
 				and(
 					eq(schema.pipelineSpecVersions.specId, spec.id),
-					eq(schema.pipelineSpecVersions.semver, doc.version)
+					eq(schema.pipelineSpecVersions.semver, doc.version),
+					eq(schema.pipelineSpecVersions.canonicalHash, hash)
 				)
 			)
 			.limit(1)
-		if (prior[0])
-			await tx
-				.delete(schema.pipelineSpecVersions)
-				.where(eq(schema.pipelineSpecVersions.id, prior[0].id))
+		if (stored) {
+			// Publishing an already-stored document is a pointer move and
+			// nothing else — the rows below it are the same rows.
+			if (opts.publish && spec.activeVersionId !== stored.id)
+				await publishVersion(tx, spec.id, stored.id)
+			return {
+				specId: spec.id,
+				specVersionId: stored.id,
+				canonicalHash: hash,
+				written: false
+			}
+		}
 
 		const version = (
 			await tx
@@ -239,21 +264,56 @@ export async function saveDocument(
 				}))
 			)
 
-		await tx
-			.update(schema.pipelineSpecs)
-			.set(
-				opts.publish
-					? { activeVersionId: version.id }
-					: { activeVersionId: spec.activeVersionId ?? null }
-			)
-			.where(eq(schema.pipelineSpecs.id, spec.id))
+		if (opts.publish) await publishVersion(tx, spec.id, version.id)
 
 		return {
 			specId: spec.id,
 			specVersionId: version.id,
-			canonicalHash: hash
+			canonicalHash: hash,
+			written: true
 		}
 	})
+}
+
+/**
+ * Move a slug's pointer to one of its versions.
+ *
+ * Publishing is a pointer move and has been since 02 §3 — what is new is the
+ * second half. Every *other* version of the spec that still says `published` is
+ * retired, because with the hash in the key a slug can hold several rows that
+ * were each published in their turn, and a reader asking for `status =
+ * 'published'` has to keep getting exactly one.
+ *
+ * ⚠ It also corrects a case that predates content addressing: publishing 1.20.0
+ * over a published 1.19.0 left **both** rows saying `published`, and
+ * `loadPublished` took the lowest id — so on an install that had upgraded, the
+ * "published document" was the oldest one still on the books rather than the
+ * active one. Two readers (`sessionGenres`, `entities/bindings`) select on
+ * status alone and were seeing both.
+ */
+async function publishVersion(
+	tx: Db,
+	specId: number,
+	versionId: number
+): Promise<void> {
+	await tx
+		.update(schema.pipelineSpecVersions)
+		.set({ status: "retired" })
+		.where(
+			and(
+				eq(schema.pipelineSpecVersions.specId, specId),
+				eq(schema.pipelineSpecVersions.status, "published"),
+				ne(schema.pipelineSpecVersions.id, versionId)
+			)
+		)
+	await tx
+		.update(schema.pipelineSpecVersions)
+		.set({ status: "published", publishedAt: new Date() })
+		.where(eq(schema.pipelineSpecVersions.id, versionId))
+	await tx
+		.update(schema.pipelineSpecs)
+		.set({ activeVersionId: versionId })
+		.where(eq(schema.pipelineSpecs.id, specId))
 }
 
 /**

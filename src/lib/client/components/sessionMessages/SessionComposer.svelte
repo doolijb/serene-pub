@@ -1,11 +1,12 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import { embeddingsStarred } from "$lib/shared/constants/embeddings"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import MessageComposer from "$lib/client/components/sessionMessages/MessageComposer.svelte"
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import RagNotice from "$lib/client/components/sessionMessages/RagNotice.svelte"
 	import RunProgressCard from "$lib/client/components/pipelines/RunProgressCard.svelte"
-	import { getContext } from "svelte"
+	import { getContext, type Snippet } from "svelte"
 
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
@@ -38,6 +39,15 @@
 			control: any
 			content: any
 		}>
+		/**
+		 * The genre's contributed session actions (19 §4), as a row of buttons.
+		 *
+		 * A row rather than a tab: an action the genre contributes IS how that
+		 * genre is played, so it has to be reachable without first finding a tab
+		 * and opening it. Passed only when the genre contributes at least one,
+		 * so a genre that contributes none grows no row.
+		 */
+		actions?: Snippet
 		/** A `composer: 'none'` mode (19 §2): triggers only, no text input. */
 		hideCompose?: boolean
 	}
@@ -57,6 +67,7 @@
 		onAddPersonaClick,
 		onAbortLastMessage,
 		extraTabs = [],
+		actions,
 		hideCompose = false
 	}: Props = $props()
 
@@ -109,12 +120,22 @@
 			<RunProgressCard sessionId={session.id} />
 		{/if}
 
-		{#if session?.id && systemSettingsCtx.settings?.vectorizationEnabled}
+		{#if session?.id && embeddingsStarred(systemSettingsCtx.capabilityDefaults)}
 			<div class="rag-notice">
 				<RagNotice
 					sessionId={session.id}
 					totalMessages={session.sessionMessages?.length ?? 0}
 				/>
+			</div>
+		{/if}
+
+		{#if actions}
+			<div
+				class="session-actions"
+				role="group"
+				aria-label="Session actions"
+			>
+				{@render actions()}
 			</div>
 		{/if}
 
@@ -268,3 +289,23 @@
 		</MessageComposer>
 	{/if}
 </div>
+
+<style>
+	/* A single line of buttons that scrolls sideways rather than stacking: the
+	   composer's height is the message field's, and an action row that wraps
+	   takes it from the field on the narrowest screens. */
+	.session-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.375rem;
+		padding-block: 0.4rem 0.15rem;
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+	.session-actions::-webkit-scrollbar {
+		display: none;
+	}
+	.session-actions > :global(*) {
+		flex: 0 0 auto;
+	}
+</style>

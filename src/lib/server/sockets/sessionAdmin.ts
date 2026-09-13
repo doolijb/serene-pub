@@ -10,7 +10,7 @@
  */
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { asc, desc, eq, sql } from "drizzle-orm"
+import { asc, desc, eq, inArray, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { listSessionGenres } from "$lib/server/pipelines/entities/sessionGenres"
 
@@ -18,8 +18,40 @@ const adminOnly = (socket: any) => {
 	if (!socket.user?.isAdmin) throw new Error("Unauthorized")
 }
 
+/**
+ * The notices the boot reconcile left, in the shape every surface repeats.
+ *
+ * Read as a batch and attached to the rows rather than fetched per preset: the
+ * list renders every preset on the instance, and a query each would be the
+ * classic N+1 on a screen that exists to be scanned.
+ */
+async function staleBindingsByPreset(
+	presetIds: number[]
+): Promise<Map<number, Sockets.SessionAdmin.StaleBinding[]>> {
+	const out = new Map<number, Sockets.SessionAdmin.StaleBinding[]>()
+	if (!presetIds.length) return out
+	const rows = (await db
+		.select()
+		.from(schema.sessionPresetNotices)
+		.where(inArray(schema.sessionPresetNotices.presetId, presetIds))
+		.orderBy(asc(schema.sessionPresetNotices.event))) as any[]
+	for (const r of rows) {
+		const list = out.get(r.presetId) ?? []
+		list.push({
+			event: r.event,
+			bound: r.boundSpec,
+			reason: r.reason,
+			fallbackSpec: r.fallbackSpec ?? null,
+			firstSeenAt: new Date(r.firstSeenAt).toISOString()
+		})
+		out.set(r.presetId, list)
+	}
+	return out
+}
+
 const presetRow = (
-	p: typeof schema.sessionPresets.$inferSelect
+	p: typeof schema.sessionPresets.$inferSelect,
+	stale?: Sockets.SessionAdmin.StaleBinding[]
 ): Sockets.SessionAdmin.PresetRow => ({
 	id: p.id,
 	name: p.name,
@@ -32,10 +64,14 @@ const presetRow = (
 	primarySlug: p.primarySlug ?? null,
 	configSelections: (p.configSelections ?? {}) as Record<string, number>,
 	includedActions: (p.includedActions ?? null) as string[] | null,
-	defaults: (p.defaults ?? null) as Record<string, unknown> | null,
+	defaults: (p.defaults ?? null) as Sockets.SessionAdmin.PresetDefaults | null,
 	enabled: p.enabled,
 	isDefault: p.isDefault,
-	isImmutable: p.isImmutable
+	isImmutable: p.isImmutable,
+	// Absent rather than empty: "the reconcile found nothing" and "nobody
+	// asked" are the same answer to a reader, and an empty array on every row
+	// would put a shape on the wire that means neither.
+	...(stale?.length ? { staleBindings: stale } : {})
 })
 
 /* ── types ──────────────────────────────────────────────────────────── */
@@ -212,6 +248,10 @@ export const sessionGenresDetail: Handler<
 		const createSpecSlug =
 			active.find((r) => r.inputEvent === "session-created")?.slug ?? null
 
+		const staleByPreset = await staleBindingsByPreset(
+			(presetRows as any[]).map((p) => p.id)
+		)
+
 		const res: Sockets.SessionAdmin.GenreDetail.Response = {
 			genre: {
 				genreId: genre.genreId,
@@ -222,7 +262,9 @@ export const sessionGenresDetail: Handler<
 				createSpecSlug
 			},
 			slots,
-			presets: (presetRows as any[]).map(presetRow),
+			presets: (presetRows as any[]).map((p) =>
+				presetRow(p, staleByPreset.get(p.id))
+			),
 			sessionCount: (sessions as any[])[0]?.n ?? 0
 		}
 		emitToUser("sessionGenres:detail", res)
@@ -242,7 +284,12 @@ export const sessionPresetsList: Handler<
 			.select()
 			.from(schema.sessionPresets)
 			.orderBy(asc(schema.sessionPresets.id))
-		let out = (rows as any[]).map(presetRow)
+		const staleByPreset = await staleBindingsByPreset(
+			(rows as any[]).map((r) => r.id)
+		)
+		let out = (rows as any[]).map((r) =>
+			presetRow(r, staleByPreset.get(r.id))
+		)
 		// The picker's cut: a non-admin sees only what they may start.
 		if (!socket.user?.isAdmin) {
 			const settings = await db.select().from(schema.sessionGenreSettings)
@@ -251,8 +298,19 @@ export const sessionPresetsList: Handler<
 					.filter((s) => !s.enabled)
 					.map((s) => s.genreId)
 			)
+			// Withdrawn beside enabled (0119): a plugin's preset that lost its
+			// plugin drops out of the picker the same way a disabled one does,
+			// while staying in the admin list and on the sessions that named it.
+			const withdrawn = new Set(
+				(rows as any[])
+					.filter((r) => r.withdrawnAt != null)
+					.map((r) => r.id)
+			)
 			out = out.filter(
-				(p) => p.enabled && !disabledTypes.has(p.genreId)
+				(p) =>
+					p.enabled &&
+					!disabledTypes.has(p.genreId) &&
+					!withdrawn.has(p.id)
 			)
 		}
 		const res = { presets: out }
@@ -379,6 +437,10 @@ export const sessionPresetsCreate: Handler<
 			}
 			base.bindings = bindings
 		}
+		// Stated beats copied: `fromPresetId` seeds the whole bundle, and an
+		// explicit `defaults` on the create is the caller overruling that one
+		// part of it.
+		if (params.defaults !== undefined) base.defaults = params.defaults
 		const [row] = await db
 			.insert(schema.sessionPresets)
 			.values({
@@ -449,12 +511,29 @@ export const sessionPresetsUpdate: Handler<
 				patch.configSelections = params.configSelections
 			if (params.includedActions !== undefined)
 				patch.includedActions = params.includedActions
+			// The creation pre-fill (23 §9). `null` clears it; absent leaves it
+			// alone — the same reset-is-explicit rule the rest of this patch
+			// follows, so "the admin cleared every field" and "the admin sent
+			// no opinion" stay distinguishable.
+			if (params.defaults !== undefined) patch.defaults = params.defaults
 		}
-		const [row] = await db
-			.update(schema.sessionPresets)
-			.set(patch)
-			.where(eq(schema.sessionPresets.id, params.id))
-			.returning()
+		/**
+		 * A patch naming nothing answers with the row.
+		 *
+		 * Every field on this handler is optional, so "no fields" is a shape a
+		 * client can send by construction — a form saved with nothing changed,
+		 * a retry that lost its body, an immutable preset whose whole patch the
+		 * branch above dropped. An empty SET is refused by the driver, so the
+		 * caller received a raw exception for a request that asked for nothing;
+		 * the honest answer to "change none of this" is the row as it stands.
+		 */
+		const [row] = Object.keys(patch).length
+			? await db
+					.update(schema.sessionPresets)
+					.set(patch)
+					.where(eq(schema.sessionPresets.id, params.id))
+					.returning()
+			: [existing]
 		// One default per type: setting it clears the others.
 		if (params.isDefault) {
 			await db

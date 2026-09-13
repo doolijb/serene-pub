@@ -18,6 +18,10 @@
 
 import { and, asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import {
+	presetEventSpec,
+	type PresetFallback
+} from "$lib/server/pipelines/entities/presetBindings"
 import type { SessionShape } from "@serene-pub/sdk"
 
 /** The F29 floor: always present, the default and the backfill (24 §3). */
@@ -486,6 +490,20 @@ export async function listGenreTriggers(
 }
 
 /**
+ * The event a function key is the same question as (24 §4).
+ *
+ * Only `respond` has one: it is the intrinsic function, and `message-respond`
+ * is the slot a preset binds for it, so the two must never answer differently.
+ * Every other function is a contributed trigger answering the OPEN
+ * `session-action` slot, which a preset curates through `includedActions` and
+ * `configSelections` rather than through an event binding — `validateBindings`
+ * refuses an event binding on an open slot for exactly that reason.
+ */
+const EVENT_FOR_FUNCTION: Record<string, string> = {
+	respond: "message-respond"
+}
+
+/**
  * Which spec serves a function for sessions of a mode.
  *
  * `respond` is intrinsic: its contributors are the bucket — live published
@@ -500,17 +518,58 @@ export async function listGenreTriggers(
  * companion rule made deterministic: a contributor in the mode owner's
  * namespace first, then first-published.
  *
- * Returns null when nothing serves — including when the registry never
+ * `spec` is null when nothing serves — including when the registry never
  * synced — so callers keep their own floor (the F29 posture: routing failing
  * must degrade to the built-in behaviour, never block the turn).
+ *
+ * `fallback` is the one thing that must not travel as silence: the session's
+ * preset named a pipeline for this function's event and that pipeline no
+ * longer answers, so the layers below chose instead (ruled 2026-09-10).
  */
-export async function resolveFunctionSpec(
+export interface FunctionResolution {
+	spec: string | null
+	/**
+	 * Set when the session's preset bound this function's event to something
+	 * this instance cannot resolve, so the layers below decided instead. Carried
+	 * rather than swallowed for the reason the whole verdict exists: the
+	 * substitution has to be sayable.
+	 */
+	fallback?: PresetFallback
+}
+
+export async function resolveFunctionVerdict(
 	db: Db,
 	genreId: string,
 	functionKey: string,
 	scope?: { sessionId?: number | null }
-): Promise<string | null> {
+): Promise<FunctionResolution> {
+	let fallback: PresetFallback | undefined
 	try {
+		/**
+		 * The session's preset answers first (24 §1), through the same reader
+		 * `resolveSessionEventSpec` uses — two doors onto one fact, so a reply
+		 * and a dispatched event can never route differently. Only the keys
+		 * with an event of their own; see `EVENT_FOR_FUNCTION`.
+		 *
+		 * A binding that stopped resolving carries on to the layers below and
+		 * takes its account with it (ruled 2026-09-10): the reply still
+		 * happens, on whatever the bucket would have chosen, and every surface
+		 * says which and why.
+		 */
+		const boundEvent = EVENT_FOR_FUNCTION[functionKey]
+		if (boundEvent) {
+			const verdict = await presetEventSpec(db, {
+				sessionId: scope?.sessionId,
+				genreId,
+				event: boundEvent
+			})
+			if (verdict.via === "preset") return { spec: verdict.spec }
+			if (verdict.via === "fallback") {
+				const { via: _via, spec: _spec, ...rest } = verdict
+				fallback = rest
+			}
+		}
+
 		/**
 		 * A genre id carries no `@`; a transitional input-type genre does.
 		 * Dispatch for genre ids keys on the input lock — (genre, event) as
@@ -618,7 +677,8 @@ export async function resolveFunctionSpec(
 			}
 		}
 
-		if (!candidates.length) return null
+		if (!candidates.length)
+			return { spec: null, ...(fallback ? { fallback } : {}) }
 
 		// The binding selects (19 §3, simplified 2026-08-24): session >
 		// instance, eligibility re-checked — a bound spec must still be a
@@ -648,14 +708,32 @@ export async function resolveFunctionSpec(
 			)
 			if (!row) continue
 			const slug = slugBySpecId.get(row.specId)
-			if (slug && eligible.has(slug)) return slug
+			if (slug && eligible.has(slug))
+				return { spec: slug, ...(fallback ? { fallback } : {}) }
 		}
 
 		const companion = candidates.find((c) => c.namespace === genreNamespace)
-		return (companion ?? candidates[0]!).slug
+		return {
+			spec: (companion ?? candidates[0]!).slug,
+			...(fallback ? { fallback } : {})
+		}
 	} catch {
-		return null
+		// Routing infrastructure failing still degrades to the caller's floor
+		// (F29). So does a preset binding pointing at nothing — the difference
+		// is that the second one is *reported*, on the verdict, all the way
+		// out to the receipt and the screens.
+		return { spec: null, ...(fallback ? { fallback } : {}) }
 	}
+}
+
+/** The same answer, for the callers that only need the slug. */
+export async function resolveFunctionSpec(
+	db: Db,
+	genreId: string,
+	functionKey: string,
+	scope?: { sessionId?: number | null }
+): Promise<string | null> {
+	return (await resolveFunctionVerdict(db, genreId, functionKey, scope)).spec
 }
 
 // ── Which of a mode's functions a session actually has (19 §3) ─────────────────
@@ -687,7 +765,10 @@ export interface SessionFunction extends GenreTrigger {
 }
 
 /**
- * The preset governing a session, and the actions it includes.
+ * The preset governing a session, the actions it includes, and the
+ * configuration the session's pipeline runs with.
+ *
+ * Exported for the regression that pins `configId` — see the note inside.
  *
  * "The session's preset" is the config selected for the pipeline that actually
  * serves `respond` for this mode — the one running the session's turns. Not the
@@ -753,13 +834,28 @@ export async function sessionPipeline(
 	}
 }
 
-async function presetActionsFor(
+export async function presetActionsFor(
 	db: Db,
 	sessionId: number,
 	genreId: string,
 	userId?: number | null
 ): Promise<{ configId: number | null; included: string[] | null }> {
 	try {
+		/**
+		 * The serving pipeline's configuration — resolved for EVERY session,
+		 * whether or not it names a preset.
+		 *
+		 * ⚠ It used to be skipped entirely the moment a session had a preset,
+		 * and the preset branch returned `configId: null`. That said a
+		 * preset-born session had no configuration at all, where a preset-less
+		 * one got the shipped default — the two halves of one fact
+		 * disagreeing, and it stayed invisible only because this field had no
+		 * reader (found 2026-09-10). `resolveSelectedConfig` is itself
+		 * preset-aware now, so this one call answers for both kinds of session.
+		 */
+		const pipeline = await sessionPipeline(db, sessionId, genreId, userId)
+		const configId = pipeline?.configId ?? null
+
 		// The session preset is the ruled home of action curation (24 §1,
 		// admin IA 2026-08-28): a session born from a preset reads that
 		// preset's list. The config-row path below survives as the fallback
@@ -780,14 +876,13 @@ async function presetActionsFor(
 			if (preset) {
 				const raw = preset.includedActions
 				return {
-					configId: null,
+					configId,
 					included: Array.isArray(raw) ? raw.map(String) : null
 				}
 			}
 		}
 
-		const pipeline = await sessionPipeline(db, sessionId, genreId, userId)
-		if (!pipeline?.configId) return { configId: null, included: null }
+		if (configId == null) return { configId: null, included: null }
 
 		const [config] = await db
 			.select({
@@ -795,7 +890,7 @@ async function presetActionsFor(
 				includedActions: schema.pipelineConfigs.includedActions
 			})
 			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.id, pipeline.configId))
+			.where(eq(schema.pipelineConfigs.id, configId))
 			.limit(1)
 
 		const raw = config?.includedActions

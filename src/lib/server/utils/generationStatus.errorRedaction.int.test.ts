@@ -229,3 +229,58 @@ describe("a stored generation error", () => {
 		).toMatchObject({ id: 7, name: "Studio", model: "sd-1.5" })
 	})
 })
+
+/**
+ * Which row a failure is allowed to land on.
+ *
+ * `isGenerating` is true again the moment a regenerate starts, so it cannot be
+ * the whole fence: a detached or superseded run's late failure would stop the
+ * generation that replaced it and show its error instead of the reply being
+ * written. The queue item is the run's claim on the row, and only the holder
+ * may fail it.
+ */
+describe("a failure lands only on the row its run still owns", () => {
+	test("writes nothing when the row has moved on to another run", async () => {
+		const { persistGenerationErrorRow } = await import("./generationStatus")
+		const { session, message } = await scenario("fenced")
+		// The run generating NOW, which is not the one about to fail.
+		await testDb
+			.update(schema.sessionMessages)
+			.set({ queueItemId: "queue-item-B" })
+			.where(eq(schema.sessionMessages.id, message.id))
+
+		const { io, received } = makeIoSpy()
+		await persistGenerationErrorRow(
+			io,
+			session.id,
+			message.id,
+			new Error(SERVICE_TEXT),
+			"queue-item-A"
+		)
+
+		const [untouched] = await testDb
+			.select()
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.id, message.id))
+		expect(untouched.error).toBeNull()
+		expect(untouched.isGenerating).toBe(true)
+		expect(untouched.queueItemId).toBe("queue-item-B")
+		expect(Object.keys(received)).toEqual([])
+
+		// And the holder still fails it, so the fence narrows nothing else.
+		await persistGenerationErrorRow(
+			io,
+			session.id,
+			message.id,
+			new Error(SERVICE_TEXT),
+			"queue-item-B"
+		)
+		const [failed] = await testDb
+			.select()
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.id, message.id))
+		expect(failed.error).toBeTruthy()
+		expect(failed.isGenerating).toBe(false)
+		expect(failed.queueItemId).toBeNull()
+	}, 60_000)
+})

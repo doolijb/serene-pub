@@ -5,18 +5,22 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { z } from "zod"
 
+	/**
+	 * ⚠ `thinking` and `thinkingBudget` are gone from this form (ruling
+	 * 2026-09-12): reasoning is a SAMPLING parameter now, chosen per stage on
+	 * the sampling config rather than once for every stage this connection
+	 * serves. Stale keys in an existing row's `extraJson` are read by nothing —
+	 * the column is jsonb, so an unread key costs nothing and no migration
+	 * clears them. Do not re-add the toggle here.
+	 */
 	interface ExtraFieldData {
 		stream: boolean
 		apiKey: string
-		thinking: boolean
-		thinkingBudget: number
 	}
 
 	interface ExtraJson {
 		stream?: boolean
 		apiKey?: string
-		thinking?: boolean
-		thinkingBudget?: number
 	}
 
 	const schema = z.object({
@@ -32,9 +36,7 @@
 	const socket = useTypedSocket()
 	const defaultExtraJson: ExtraFieldData = {
 		stream: true,
-		apiKey: "",
-		thinking: false,
-		thinkingBudget: 8000
+		apiKey: ""
 	}
 
 	let availableModels: any[] = $state([])
@@ -85,18 +87,14 @@
 	function extraJsonToFields(extraJson: ExtraJson): ExtraFieldData {
 		return {
 			stream: extraJson.stream ?? true,
-			apiKey: extraJson.apiKey || "",
-			thinking: extraJson.thinking ?? false,
-			thinkingBudget: extraJson.thinkingBudget ?? 8000
+			apiKey: extraJson.apiKey || ""
 		}
 	}
 
 	function fieldsToExtraJson(f: ExtraFieldData): ExtraJson {
 		return {
 			stream: f.stream,
-			apiKey: f.apiKey,
-			thinking: f.thinking,
-			thinkingBudget: f.thinkingBudget
+			apiKey: f.apiKey
 		}
 	}
 
@@ -219,46 +217,6 @@
 				</Switch.Control>
 				<Switch.HiddenInput />
 			</Switch>
-			<Switch
-				name="thinking"
-				checked={fields.thinking}
-				onCheckedChange={(e) => (fields!.thinking = e.checked)}
-				class="flex items-center justify-between gap-4"
-			>
-				<div>
-					<Switch.Label class="font-semibold">
-						Extended Thinking
-					</Switch.Label>
-					<p class="text-muted-foreground text-xs">
-						Requires Claude 3.7+ models
-					</p>
-				</div>
-				<Switch.Control
-					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-				>
-					<Switch.Thumb />
-				</Switch.Control>
-				<Switch.HiddenInput />
-			</Switch>
-			{#if fields.thinking}
-				<div class="flex flex-col gap-1">
-					<label class="font-semibold" for="thinkingBudget">
-						Thinking Budget Tokens
-					</label>
-					<input
-						id="thinkingBudget"
-						type="number"
-						min="1024"
-						max="32000"
-						step="1024"
-						bind:value={fields.thinkingBudget}
-						class="input"
-					/>
-					<p class="text-muted-foreground text-xs">
-						Max tokens the model can use for thinking (1024–32000)
-					</p>
-				</div>
-			{/if}
 		</section>
 	</details>
 {/if}

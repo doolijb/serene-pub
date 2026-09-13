@@ -218,6 +218,7 @@
 		socket.on("pipelines:setPresetActions:error", onConfigError)
 		socket.on("pipelines:runs", onRuns)
 		socket.on("pipelines:setOptions:error", onBatchError)
+		socket.on("pipelines:resetConfig:error", onConfigError)
 		socket.on("sessions:genres", onModes)
 		socket.emit("pipelines:detail", { slug })
 		socket.emit("pipelines:runs", { limit: 100 })
@@ -234,6 +235,7 @@
 		socket.off("pipelines:setPresetActions:error", onConfigError)
 		socket.off("pipelines:runs", onRuns)
 		socket.off("pipelines:setOptions:error", onBatchError)
+		socket.off("pipelines:resetConfig:error", onConfigError)
 		socket.off("sessions:genres", onModes)
 	})
 
@@ -315,6 +317,43 @@
 	function discardAll() {
 		pending = {}
 		pendingClears = []
+	}
+
+	/**
+	 * Reset the whole configuration — every deviation at once (ruled
+	 * 2026-09-10).
+	 *
+	 * ⚠ **This writes immediately, where an option edit drafts.** Deliberate,
+	 * and it follows the page's existing line rather than crossing it: choosing,
+	 * creating, renaming and deleting a configuration all write straight
+	 * through, because they are acts on the configuration itself; only edits to
+	 * a SETTING draft. Emptying a configuration belongs on the first side.
+	 *
+	 * And it is one server-side delete rather than a queue of clears over the
+	 * rows on screen. A client-side loop can only reach the deviations this view
+	 * loaded, which is the half a person means least to keep — the addresses
+	 * they cannot see.
+	 *
+	 * Refused server-side for a shipped configuration, which has nothing to
+	 * reset because it IS the reset.
+	 */
+	function resetAll() {
+		const config = selected
+		if (!config || config.readOnly) return
+		const n = changeRows.filter((r) => r.state === "saved").length
+		if (!n) return
+		if (
+			!confirm(
+				`Reset ${n} change${n === 1 ? "" : "s"} in “${config.name}”? ` +
+					`Every setting goes back to what this pipeline ships, and ` +
+					`that cannot be undone.`
+			)
+		)
+			return
+		// A draft over rows that are about to be deleted would apply on top of
+		// the reset and half-undo it.
+		discardAll()
+		socket.emit("pipelines:resetConfig", { slug, configId: config.id })
 	}
 
 	/** Unsaved edits waiting on a step — the amber dot in both navigators. */
@@ -423,7 +462,15 @@
 			for (const o of [...s.options, ...s.advanced]) {
 				const isPend = o.id in pending
 				const isClear = pendingClears.includes(o.id)
-				if (!o.overriddenHere && !isPend && !isClear) continue
+				// `changed`, not `overriddenHere` (ruled 2026-09-10). The two
+				// coincide on this page — the builder writes at config scope,
+				// where a row in the configuration IS the thing an edit lands
+				// in — but they answer different questions, and this list is
+				// asking the configuration's: what does it depart from the
+				// shipped default by. `overriddenHere` follows the write scope
+				// and would start describing a session's overrides the day this
+				// panel is opened from inside one.
+				if (!o.changed && !isPend && !isClear) continue
 				out.push({
 					option: o,
 					stepKey: s.key,
@@ -1023,8 +1070,13 @@
 		{:else if tab === "changes"}
 			<ChangesPanel
 				rows={changeRows}
+				configName={selected?.name}
+				canResetAll={!!selected &&
+					!selected.readOnly &&
+					changeRows.some((r) => r.state === "saved")}
 				onJump={jumpToOption}
 				onQueueReset={draftClear}
+				onResetAll={resetAll}
 			/>
 		{:else if tab === "runs"}
 			<p class="text-surface-600-400 text-sm">

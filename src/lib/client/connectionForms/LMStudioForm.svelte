@@ -62,9 +62,15 @@
 	let validationErrors: ValidationErrors = $state({})
 
 	// Initialize extraFields from connection.extraJson, but don't make it reactive to connection changes
+	/**
+	 * ⚠ `think` is gone from here (ruling 2026-09-12): reasoning is a SAMPLING
+	 * parameter now, chosen per stage on the sampling config rather than once
+	 * for every stage this connection serves. It was doubly dead, since no LM
+	 * Studio adapter ever read `extraJson.think`, but a commented-out control
+	 * is still a thing somebody uncomments. Do not re-add it.
+	 */
 	let extraFields = $state({
 		stream: connection.extraJson?.stream ?? true,
-		think: connection.extraJson?.think ?? false,
 		ttl: connection.extraJson?.ttl ?? 60,
 		raw: connection.extraJson?.raw ?? true
 	})
@@ -203,20 +209,6 @@
 		/>
 	</div>
 	<!-- <div class="flex gap-4">
-		<label class="flex items-center gap-2">
-			<input
-				type="checkbox"
-				bind:checked={extraFields.think}
-				onchange={() => {
-					connection.extraJson = {
-						...connection.extraJson,
-						think: extraFields.think
-					}
-					handleChange()
-				}}
-			/>
-			Think
-		</label>
 		<label class="flex items-center gap-2">
 			<input
 				type="checkbox"

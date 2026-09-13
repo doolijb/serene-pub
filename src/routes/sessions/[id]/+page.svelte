@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { avatarSrc } from "$lib/client/utils/media"
+	import { avatarSrc, withRevisedAvatar } from "$lib/client/utils/media"
+	import { embeddingsStarred } from "$lib/shared/constants/embeddings"
+	import { messageSpeaker } from "$lib/client/utils/messageSpeaker"
 	import RunProgressCard from "$lib/client/components/pipelines/RunProgressCard.svelte"
 	import { runProgress } from "$lib/client/stores/runProgress.svelte"
 	import type { RunProgress } from "$lib/shared/sockets/progress"
@@ -41,6 +43,12 @@
 	import SessionLayout from "$lib/client/sessionLayout/SessionLayout.svelte"
 	import { presetBase } from "$lib/shared/sessionLayout/presets"
 	import { setWidgetStylePins } from "$lib/client/stores/widgetStyles.svelte"
+	import {
+		setWidgetSettingBase,
+		setWidgetSettingValues,
+		setWidgetSettingsWriter
+	} from "$lib/client/stores/widgetSettings.svelte"
+	import { CORE_WIDGETS } from "$lib/shared/widgets/types"
 	import { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 	import type { LayoutBlob } from "$lib/client/surfaces/types"
 
@@ -71,16 +79,16 @@
 	// is open and whether it already has a lorebook, without a fetch of their own.
 	$effect(() => {
 		openSessionCtx.sessionId = session?.id ?? null
+		openSessionCtx.sessionName = session?.name ?? null
 		openSessionCtx.lorebookId = session?.lorebookId ?? null
 		openSessionCtx.isOwner =
 			!!session && session.userId === userCtx.user?.id
 	})
 
-	let summarizationEnabled = $derived(
-		!!systemSettingsCtx.settings?.summarizationEnabled
-	)
+	// The star is the switch: embeddings are on when something is registered
+	// for `text->embedding`.
 	let vectorizationEnabled = $derived(
-		!!systemSettingsCtx.settings?.vectorizationEnabled
+		embeddingsStarred(systemSettingsCtx.capabilityDefaults)
 	)
 
 	// ── Typing indicator ──────────────────────────────────────────────────────
@@ -209,6 +217,14 @@
 	let modeTriggers: Sockets.Sessions.Triggers.Response["triggers"] = $state(
 		[]
 	)
+	/**
+	 * The contributed actions the composer shows as its own row. A genre that
+	 * contributes none gets no row at all, which is what keeps the composer of a
+	 * genre with nothing to press exactly as wide as its message field.
+	 */
+	let sessionActions = $derived(
+		modeTriggers.filter((t) => t.kind === "button")
+	)
 
 	// The session's frame surfaces (20 §12): a mode-declared session-view
 	// replaces core's log wholesale (the total-conversion lane); panels are
@@ -249,13 +265,16 @@
 	// untouched. `{}` composes to `undefined` — i.e. no base at all.
 	let layoutPresets = $state<Sockets.Sessions.LayoutPreset[]>([])
 	let layoutPresetId = $state<number | null>(null)
-	let layoutPresetBase = $state<Record<string, unknown> | undefined>(undefined)
+	let layoutPresetBase = $state<Record<string, unknown> | undefined>(
+		undefined
+	)
 	// The answer to "how many sessions are on this preset?", held for exactly
 	// one pending delete confirmation. `null` = nothing asked, or still asking.
 	let layoutPresetUsage = $state<{ id: number; sessions: number } | null>(
 		null
 	)
 	let layoutSettings = $state<Record<string, unknown>>({})
+	let widgetSettings = $state<Record<string, Record<string, unknown>>>({})
 
 	// PLAN 25: the per-widget style pins ride `layoutSettings.widgetStyles`.
 	// They are pushed into the widget-style store rather than threaded as
@@ -263,6 +282,37 @@
 	// inside Panel, several layers below anything this page hands down.
 	$effect(() => {
 		setWidgetStylePins(layoutSettings?.widgetStyles)
+	})
+
+	/**
+	 * Per-instance widget settings (PLAN 25), pushed to the same store lane and
+	 * for the same reason: the settings overlay is inside a `WidgetHost`. They
+	 * ride their OWN key on the layout round trip rather than `layoutSettings`,
+	 * so the writer here needs nothing but the current blob.
+	 *
+	 * The active preset's own `widgetSettings` are the floor under them: a
+	 * layout that docks a widget usually has an opinion about how that widget is
+	 * configured, and a preset whose settings nothing read would be half a
+	 * layout. See `presetWidgetSettings` for the merge rule.
+	 */
+	$effect(() => {
+		setWidgetSettingBase(layoutPresetBase)
+	})
+	$effect(() => {
+		setWidgetSettingValues(widgetSettings)
+	})
+	$effect(() => {
+		const id = sessionId
+		if (id == null) return
+		setWidgetSettingsWriter((next) => {
+			widgetSettings = next
+			socket.emit("sessions:panelLayout:set", {
+				sessionId: id,
+				layout: surfaceManager.toBlob() as Record<string, unknown>,
+				widgetSettings: next
+			})
+		})
+		return () => setWidgetSettingsWriter(null)
 	})
 
 	/**
@@ -292,6 +342,19 @@
 	 * (plan 21) that exercise the framework. A custom mode's own panels arrive
 	 * via `sessions:view.modePanels` and are merged on top (mode wins by id).
 	 */
+	/**
+	 * A core widget's declared settings, by id.
+	 *
+	 * The panel and the widget are one declaration in two places: core
+	 * announces the settings (`CORE_WIDGETS`), and a panel entry has to carry
+	 * them for the settings card to draw a control. Read rather than retyped,
+	 * so a field added to the announcement reaches the panel with it.
+	 */
+	const declaredSettings = (id: string) =>
+		CORE_WIDGETS.find((w) => w.id === id)?.settings as
+			| Record<string, unknown>
+			| undefined
+
 	const CORE_DEFAULT_PANELS: Sockets.Sessions.View.ModePanel[] = [
 		{
 			id: "scene-portraits",
@@ -300,7 +363,42 @@
 			role: "secondary",
 			surface: { kind: "native", component: "scene-portraits" },
 			layout: { span: { ideal: 1 }, minInline: 200 },
+			settings: declaredSettings("scene-portraits"),
 			defaultActive: true
+		},
+		/* Stats, inventory and world state (docs/stats-and-states.md). Offered,
+		   never on: a genre that declares no slots would otherwise seat three
+		   empty panels in every chat session, and a newcomer must never see a
+		   bar. A genre that wants them docked ships a layout preset. */
+		{
+			id: "stats",
+			title: "Stats",
+			icon: "HeartPulse",
+			role: "secondary",
+			surface: { kind: "native", component: "stats" },
+			layout: { span: { ideal: 1 }, minInline: 220 },
+			settings: declaredSettings("stats"),
+			defaultActive: false
+		},
+		{
+			id: "inventory",
+			title: "Inventory",
+			icon: "Backpack",
+			role: "secondary",
+			surface: { kind: "native", component: "inventory" },
+			layout: { span: { ideal: 1 }, minInline: 220 },
+			settings: declaredSettings("inventory"),
+			defaultActive: false
+		},
+		{
+			id: "world-state",
+			title: "World State",
+			icon: "CloudSun",
+			role: "secondary",
+			surface: { kind: "native", component: "world-state" },
+			layout: { span: { ideal: 2 }, minInline: 240, minBlock: 60 },
+			settings: declaredSettings("world-state"),
+			defaultActive: false
 		},
 		{
 			id: "sample-map",
@@ -431,6 +529,7 @@
 		layoutPresets = res.presets ?? []
 		layoutPresetId = res.layoutPresetId ?? null
 		layoutSettings = res.layoutSettings ?? {}
+		widgetSettings = res.widgetSettings ?? {}
 		layoutPresetBase = presetBase(res.presetLayout, layoutSettings)
 		panelLayoutLoaded = true
 		initSurfaceManagerIfReady()
@@ -576,6 +675,35 @@
 		!modeShape ||
 			(!!modeShape.characters && (modeShape.characters.max ?? 1) !== 0)
 	)
+	/**
+	 * Whether this session runs what its preset says (ruled 2026-09-10).
+	 *
+	 * A binding whose pipeline has gone never stops the turn — the genre's
+	 * default runs — so the only thing standing between that and silence is
+	 * this banner. Sourced from the same verdict the run resolves against, by
+	 * way of `sessions:presetStatus`, so the sentence and the substitution
+	 * cannot disagree.
+	 */
+	let presetStatus: Sockets.Sessions.PresetStatus.Response | undefined =
+		$state()
+	/**
+	 * Dismissed for this view only, deliberately.
+	 *
+	 * Nothing is written down: the condition is still true tomorrow, and a
+	 * dismissal that outlived the tab would let a person hide a session
+	 * running a pipeline nobody chose. Cleared on every session change below,
+	 * because a dismissal is about the banner you just read.
+	 */
+	let presetBannerDismissed = $state(false)
+	let presetStale = $derived(presetStatus?.stale ?? [])
+
+	const handlePresetStatus = (
+		res: Sockets.Sessions.PresetStatus.Response
+	) => {
+		if (res.sessionId !== sessionId) return
+		presetStatus = res
+	}
+
 	let sessionResponseOrder:
 		| Sockets.Sessions.GetResponseOrder.Response
 		| undefined = $state()
@@ -921,40 +1049,12 @@
 		socket.emit("sessions:getResponseOrder", { sessionId })
 	}
 
-	// Display-name precedence for a message's speaker: prefer the LIVE
-	// character/persona if it still exists (so a rename propagates to past
-	// messages too, same as everywhere else in the app), falling back to the
-	// `removedName` snapshot taken at removal time only once the entity is
-	// itself globally deleted (its FK on the sessionCharacters/sessionPersonas row
-	// nulls out via onDelete: "set null"). A removed-but-still-existing
-	// participant's row is found here too (session.sessionCharacters/sessionPersonas
-	// is deliberately unfiltered client-side, see getSessionFromDB), so this
-	// already resolves the common case for free — the removedName fallback
-	// only ever matters once .character/.persona is null.
+	// The resolution itself is in `messageSpeaker` so it can be tested without
+	// a page; this keeps the prop name every child already binds to.
 	function getMessageCharacter(
 		msg: SelectSessionMessage
 	): SelectCharacter | SelectPersona | undefined {
-		if (msg.personaId) {
-			const cp = session?.sessionPersonas?.find(
-				(p: SelectSessionPersona) => p.personaId === msg.personaId
-			)
-			return (
-				cp?.persona ??
-				(cp?.removedName
-					? ({ name: cp.removedName } as SelectPersona)
-					: undefined)
-			)
-		} else if (msg.characterId) {
-			const cc = session?.sessionCharacters?.find(
-				(c: SelectSessionCharacter) => c.characterId === msg.characterId
-			)
-			return (
-				cc?.character ??
-				(cc?.removedName
-					? ({ name: cc.removedName } as SelectCharacter)
-					: undefined)
-			)
-		}
+		return messageSpeaker(session, msg)
 	}
 
 	function openDeleteMessageModal(message: SelectSessionMessage) {
@@ -1065,9 +1165,13 @@
 			layoutPresets = []
 			layoutPresetId = null
 			layoutSettings = {}
+			widgetSettings = {}
 			layoutPresetBase = undefined
 			layoutPresetUsage = null
+			presetStatus = undefined
+			presetBannerDismissed = false
 			socket.emit("sessions:get", { id: sessionId, limit: 25 })
+			socket.emit("sessions:presetStatus", { sessionId })
 			socket.emit("sessions:view", { sessionId })
 			socket.emit("sessions:panelLayout:get", { sessionId })
 			// console.log('Debug - Emitting getSessionResponseOrder for sessionId:', sessionId)
@@ -1280,9 +1384,11 @@
 	}
 
 	function handleOpenEntry(lorebookId: number, historyEntryId: number) {
-		panelsCtx.digest.lorebookId = lorebookId
-		panelsCtx.digest.historyEntryId = historyEntryId
-		panelsCtx.digest.historyEntryTab = "content"
+		panelsCtx.digest.lore = {
+			lorebookId,
+			scope: "history",
+			entryId: historyEntryId
+		}
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
 
@@ -1714,6 +1820,36 @@
 		}
 	}
 
+	/**
+	 * A media row whose bytes changed while keeping its id — a re-cut
+	 * thumbnail, or a display pointer moved by a cull.
+	 *
+	 * Nothing was written to the character or persona wearing that file, so no
+	 * `characters:update` fires and every avatar on screen keeps the `<img src>`
+	 * it already has. Re-addressing the link's entity is what makes the URL
+	 * differ, which is the only thing a browser's image cache answers to.
+	 */
+	function handleMediaChanged(msg: Sockets.Media.Changed.Response) {
+		if (!session) return
+		let touched = false
+		const sessionCharacters = session.sessionCharacters.map((cc) => {
+			if (!cc.character) return cc
+			const character = withRevisedAvatar(cc.character, msg)
+			if (character === cc.character) return cc
+			touched = true
+			return { ...cc, character }
+		})
+		const sessionPersonas = session.sessionPersonas.map((cp) => {
+			if (!cp.persona) return cp
+			const persona = withRevisedAvatar(cp.persona, msg)
+			if (persona === cp.persona) return cp
+			touched = true
+			return { ...cp, persona }
+		})
+		if (!touched) return
+		session = { ...session, sessionCharacters, sessionPersonas }
+	}
+
 	function handleSessionsPromptTokenCount(
 		msg: Sockets.Sessions.PromptTokenCount.Response
 	) {
@@ -1948,6 +2084,7 @@
 		}, 1000)
 
 		socket.on("sessions:get", handleSessionsGet)
+		socket.on("sessions:presetStatus", handlePresetStatus)
 		socket.on("sessionMessage", handleSessionMessage)
 		socket.on("sessionMessage:error", handleSessionMessageError)
 		socket.on("lorebooks:bindingList", handleLorebookBindingList)
@@ -1959,6 +2096,7 @@
 		socket.on("sessions:summarize:error", handleSessionSummarizeError)
 		socket.on("characters:update", handleCharactersUpdate)
 		socket.on("personas:update", handlePersonasUpdate)
+		socket.on("media:changed", handleMediaChanged)
 		socket.on("sessions:promptTokenCount", handleSessionsPromptTokenCount)
 		socket.on("sessionMessages:delete", handleSessionMessagesDelete)
 		socket.on("sessions:getResponseOrder", handleSessionsGetResponseOrder)
@@ -2015,6 +2153,7 @@
 			socket.off("personas:list", handlePersonasList)
 			socket.off("sessions:userTyping", handleSessionsUserTyping)
 			socket.off("sessions:get", handleSessionsGet)
+			socket.off("sessions:presetStatus", handlePresetStatus)
 			socket.off("sessionMessage", handleSessionMessage)
 			socket.off("sessionMessage:error", handleSessionMessageError)
 			socket.off("lorebooks:bindingList", handleLorebookBindingList)
@@ -2022,6 +2161,7 @@
 			socket.off("sessions:summarize:error", handleSessionSummarizeError)
 			socket.off("characters:update", handleCharactersUpdate)
 			socket.off("personas:update", handlePersonasUpdate)
+			socket.off("media:changed", handleMediaChanged)
 			socket.off(
 				"sessions:promptTokenCount",
 				handleSessionsPromptTokenCount
@@ -2138,6 +2278,7 @@
 	onDestroy(() => {
 		sceneImages.set({ left: null, right: null })
 		openSessionCtx.sessionId = null
+		openSessionCtx.sessionName = null
 		openSessionCtx.lorebookId = null
 		openSessionCtx.isOwner = false
 	})
@@ -2261,9 +2402,11 @@
 							historyEntryId,
 							lorebookId
 						}) => {
-							panelsCtx.digest.lorebookId = lorebookId
-							panelsCtx.digest.historyEntryId = historyEntryId
-							panelsCtx.digest.historyEntryTab = "content"
+							panelsCtx.digest.lore = {
+								lorebookId,
+								scope: "history",
+								entryId: historyEntryId
+							}
 							panelsCtx.openPanel({
 								key: "lorebooks",
 								toggle: false
@@ -2274,18 +2417,22 @@
 							historyEntryId,
 							lorebookId
 						}) => {
-							panelsCtx.digest.lorebookId = lorebookId
-							panelsCtx.digest.historyEntryId = historyEntryId
-							panelsCtx.digest.historyEntryTab = "scenes"
-							panelsCtx.digest.sceneId = sceneId
+							panelsCtx.digest.lore = {
+								lorebookId,
+								scope: "scenes",
+								entryId: historyEntryId,
+								sceneId
+							}
 							panelsCtx.openPanel({
 								key: "lorebooks",
 								toggle: false
 							})
 						}}
 						onNewHistoryEntry={({ lorebookId }) => {
-							panelsCtx.digest.lorebookId = lorebookId
-							panelsCtx.digest.historyEntryTab = "content"
+							panelsCtx.digest.lore = {
+								lorebookId,
+								scope: "history"
+							}
 							panelsCtx.openPanel({
 								key: "lorebooks",
 								toggle: false
@@ -2311,8 +2458,7 @@
 								isSelected={selectedMessageIds.has(
 									props.msg.id
 								)}
-								onStartSummarization={summarizationEnabled &&
-								!isSummarizationMode
+								onStartSummarization={!isSummarizationMode
 									? enterSummarizationMode
 									: undefined}
 								menuTriggers={modeTriggers.filter(
@@ -2458,9 +2604,7 @@
 											{continueRefusal}
 											onAbortMessage={props.onAbortMessage}
 											onBranchMessage={props.onBranchMessage}
-											onStartSummarization={summarizationEnabled
-												? enterSummarizationMode
-												: undefined}
+											onStartSummarization={enterSummarizationMode}
 											debugMeta={systemSettingsCtx
 												.settings
 												?.contextDebuggingEnabled
@@ -2505,7 +2649,72 @@
 					</SessionContainer>
 				{/snippet}
 				{#snippet composerChildren()}
-					{#if isSummarizationMode && summarizationEnabled}
+					<!-- The session's preset binds an event to a pipeline that
+					     is not here any more (ruled 2026-09-10). It runs the
+					     genre's default instead, and this is the only place a
+					     person in the session would ever find that out.
+					     Dismissible per view, never persisted — the condition
+					     outlives the tab, so a stored dismissal would be a way
+					     to hide it from yourself. Above the composer chain
+					     rather than inside it: it is true whether or not the
+					     session is in summarization mode or read-only. -->
+					{#if presetStale.length && !presetBannerDismissed}
+						<div
+							class="preset-tonal-warning flex items-start gap-3 p-3 lg:rounded-t-lg"
+							role="status"
+						>
+							<Icons.Replace size={18} class="mt-0.5 shrink-0" />
+							<div class="min-w-0 flex-1 text-sm">
+								{#if userCtx.user?.isAdmin}
+									<p>
+										This session runs the default pipeline:
+										preset
+										<strong>
+											{presetStatus?.presetName}
+										</strong>
+										binds
+									</p>
+									<ul class="my-1 flex flex-col gap-0.5">
+										{#each presetStale as b (b.event)}
+											<li class="text-xs">
+												<code class="font-mono">
+													{b.event}
+												</code>
+												to
+												<code class="font-mono">
+													{b.bound}
+												</code>
+												— which is not available.
+											</li>
+										{/each}
+									</ul>
+									<a
+										class="underline"
+										href="/admin/session-presets/{presetStatus?.presetId}#bindings"
+									>
+										Fix the binding
+									</a>
+								{:else}
+									<p>
+										This session is running the default
+										pipeline for
+										{presetStale
+											.map((b) => b.event)
+											.join(", ")}.
+									</p>
+								{/if}
+							</div>
+							<button
+								class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+								title="Dismiss"
+								aria-label="Dismiss"
+								onclick={() => (presetBannerDismissed = true)}
+							>
+								<Icons.X size={14} />
+							</button>
+						</div>
+					{/if}
+					{#if isSummarizationMode}
 						<div
 							class="preset-tonal-secondary flex flex-wrap items-center gap-2 p-3 lg:rounded-t-lg"
 						>
@@ -2643,6 +2852,9 @@
 								showAddPersonaModal = true
 							}}
 							onAbortLastMessage={handleAbortLastMessage}
+							actions={!isGuest && sessionActions.length
+								? sessionActionsRow
+								: undefined}
 							extraTabs={isGuest
 								? []
 								: [
@@ -2890,8 +3102,8 @@
 										Format: <span
 											class="text-surface-300-700"
 										>
-											{promptDetails.meta
-												.promptFormat || "—"}
+											{promptDetails.meta.promptFormat ||
+												"—"}
 										</span>
 									</span>
 									{#if promptDetails.meta.templateName}
@@ -3040,7 +3252,8 @@
 														<span
 															class="text-surface-700-300 shrink-0"
 														>
-															{b.source} · {b.tokens} tok
+															{b.source} · {b.tokens}
+															tok
 														</span>
 													</div>
 													{#if b.why?.length}
@@ -3409,9 +3622,7 @@
 				lorebookId={session.lorebookId}
 				{sceneList}
 				onOpenEntry={handleOpenEntry}
-				onEnterSummarizationMode={summarizationEnabled
-					? enterSummarizationModeEmpty
-					: undefined}
+				onEnterSummarizationMode={enterSummarizationModeEmpty}
 			/>
 
 			<!--
@@ -3509,41 +3720,45 @@
 				<Icons.RefreshCw size={14} />
 				Regenerate
 			</button>
-			<!-- The contributed trigger set (19 §4): rendered from rows, so a
-			     retired contributor takes its button with it. The narrate
-			     function keeps its bespoke presentation — the resolved
-			     narrator name and its instructions modal — mapped on the
-			     function key. -->
-			{#each modeTriggers.filter((t) => t.kind === "button") as t (t.specSlug + t.function)}
-				<!-- `narrate-character` deliberately falls through to the
-				     generic branch: `fireTrigger` routes it to the same modal,
-				     whose first step is the choice between the two. A second
-				     bespoke button here would be a second place to keep in
-				     step with the narrator's resolved name. -->
-				{#if t.function === "narrate"}
-					<button
-						class="btn btn-sm preset-tonal-success"
-						title="Trigger Narrator Response"
-						onclick={handleTriggerNarratorResponse}
-						disabled={!session || lastMessage?.isGenerating}
-					>
-						<Icons.CloudSun size={14} />
-						{narratorName}
-					</button>
-				{:else}
-					{@const TriggerIconComponent = triggerIcon(t.icon)}
-					<button
-						class="btn btn-sm preset-tonal-success"
-						title={t.name}
-						onclick={() => fireTrigger(t.function)}
-						disabled={!session || lastMessage?.isGenerating}
-					>
-						<TriggerIconComponent size={14} />
-						{t.name}
-					</button>
-				{/if}
-			{/each}
 		</div>
+	{/snippet}
+
+	<!-- The contributed trigger set (19 §4): rendered from rows, so a retired
+	     contributor takes its button with it. It is the composer's own action
+	     row rather than a tab panel, because an action the genre contributes is
+	     how that genre is played and must not need a tab opened first. The
+	     narrate function keeps its bespoke presentation — the resolved narrator
+	     name and its instructions modal — mapped on the function key. -->
+	{#snippet sessionActionsRow()}
+		{#each sessionActions as t (t.specSlug + t.function)}
+			<!-- `narrate-character` deliberately falls through to the generic
+			     branch: `fireTrigger` routes it to the same modal, whose first
+			     step is the choice between the two. A second bespoke button
+			     here would be a second place to keep in step with the
+			     narrator's resolved name. -->
+			{#if t.function === "narrate"}
+				<button
+					class="btn btn-sm preset-tonal-success"
+					title="Trigger Narrator Response"
+					onclick={handleTriggerNarratorResponse}
+					disabled={!session || lastMessage?.isGenerating}
+				>
+					<Icons.CloudSun size={14} />
+					{narratorName}
+				</button>
+			{:else}
+				{@const TriggerIconComponent = triggerIcon(t.icon)}
+				<button
+					class="btn btn-sm preset-tonal-success"
+					title={t.name}
+					onclick={() => fireTrigger(t.function)}
+					disabled={!session || lastMessage?.isGenerating}
+				>
+					<TriggerIconComponent size={14} />
+					{t.name}
+				</button>
+			{/if}
+		{/each}
 	{/snippet}
 
 	{#snippet statisticsButton()}

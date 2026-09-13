@@ -22,7 +22,13 @@
  * plugin that can exfiltrate an API key by describing an effect, and the review
  * gate would show a perfectly innocent-looking node.
  *
- * What comes back is the completion, whether it was aborted, and token counts.
+ * What comes back is the completion, whether it was aborted, and token counts —
+ * plus, under the key `wire`, the exchange the adapter recorded. That one field
+ * IS connection material: a request cannot be described without naming where it
+ * went. It is safe on the same terms `connection` on a node output is safe —
+ * `withoutConnectionIdentity` removes the key at every egress, so only an
+ * administrator reads it, and no out-port declares it, so no node downstream can
+ * take it off the port and write it somewhere durable.
  *
  * ## Attachments: references in, bytes out, resolved HERE
  *
@@ -58,8 +64,12 @@ import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
-import { capabilityRefusal } from "$lib/server/pipelines/runtime/capabilityGuard"
+import {
+	capabilityRefusal,
+	storedCapabilities
+} from "$lib/server/pipelines/runtime/capabilityGuard"
 import type { AttachmentInput } from "$lib/server/adapters/attachments"
+import type { ToolCall, ToolDeclaration } from "$lib/server/adapters/actions"
 import type { MediaRef } from "@serene-pub/sdk"
 import {
 	ComposedError,
@@ -68,8 +78,19 @@ import {
 import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
 import {
 	composeStopsFor,
-	type ComposedStops
+	trimAtSpeakerBoundary,
+	type CompiledMessagesProbe,
+	type ComposedStops,
+	type ReplyTrim
 } from "$lib/server/connections/stops"
+import type { StreamingMode } from "$lib/server/connections/streaming"
+import {
+	chooseStructuredMode,
+	JSON_INSTRUCTION,
+	type StructuredChoice
+} from "$lib/server/connections/structuredOutput"
+import type { JsonSchemaNode } from "$lib/server/connectionAdapters/jsonSchemaToGbnf"
+import type { WireExchange } from "$lib/server/connectionAdapters/BaseConnectionAdapter"
 import { resolveThinking } from "$lib/shared/utils/thinkingDelimiters"
 
 /**
@@ -117,6 +138,12 @@ export interface DispatchRequest {
 	 */
 	connectionId?: number | null
 	/**
+	 * The MODEL half of the `connection` slot's pair (0114). Null means the
+	 * endpoint's default model, which is what every slot authored before the
+	 * split says and what every registration the backfill left behind means.
+	 */
+	connectionModelId?: number | null
+	/**
 	 * The files travelling with this request, as the graph carries them:
 	 * references, in the order they are to be sent. Resolved to bytes below —
 	 * see the header for why that happens here and nowhere lower.
@@ -134,6 +161,46 @@ export interface DispatchRequest {
 	 * `connections/stops.ts` exists to remove. See `composeStops`.
 	 */
 	stopSequences?: readonly string[] | null
+	/**
+	 * How the author wants this step sent — the `streaming` parameter off the
+	 * provider node's `params` slot.
+	 *
+	 * Absent and `auto` are the same request: the connection decides, which is
+	 * what it has always done. `off` is the only value that reaches the adapter,
+	 * and it reaches it as `withStreaming('off')` rather than as a flag on the
+	 * payload, because the per-service default it overrides lives in the adapter
+	 * class and must not be resolved twice.
+	 */
+	streaming?: StreamingMode | null
+	/**
+	 * The tool declarations this request offers the model — `advertise-tools`'
+	 * `native` port, normalized (20 §9).
+	 *
+	 * Empty or absent on every request that is not a tool loop's, which is
+	 * almost all of them. When present it is REFUSED rather than dropped if
+	 * the connection may not use tools or its adapter has no code that sends
+	 * them: a model that was never offered a tool and a model that declined
+	 * one return the same empty answer, so a silently stripped request reads
+	 * as the model choosing not to call.
+	 */
+	tools?: readonly ToolDeclaration[]
+	/**
+	 * A request for STRUCTURE rather than prose — `core:provider/generate-json@1`
+	 * and nothing else sets it.
+	 *
+	 * Present means "constrain the answer as far as this connection can", and
+	 * how far that is is decided HERE rather than by the binding, for the reason
+	 * the header gives about the connection: a binding never sees one, so it
+	 * cannot know whether the row takes a schema, takes plain JSON mode, or takes
+	 * neither. `chooseStructuredMode` walks that ladder and the door it chose
+	 * comes back on the result, because a step that asked for a schema and got a
+	 * sentence produced its answer by a different route and a reader has to be
+	 * able to tell.
+	 *
+	 * Absent on every other request, so `generate-text`'s wire is byte-identical
+	 * to what it always was.
+	 */
+	structured?: { schema?: unknown } | null
 	/** Called with each chunk when the adapter streams. */
 	onChunk?: (chunk: string) => void
 	onThinking?: (chunk: string) => void
@@ -164,8 +231,79 @@ export interface DispatchResult {
 	 * matches at position zero means an empty reply. Both read as a bad model.
 	 * `dropped` is the half that answers "why is my stop sequence not working" —
 	 * it names the entries the wire rule held back, with the kind that decided.
+	 *
+	 * `trimmedAt` is the other half of the same answer: where the reply was cut
+	 * at a speaker boundary the backend ran past. Absent when nothing was cut,
+	 * so a truncation is never silent.
 	 */
-	stops: ComposedStops & { hit?: string }
+	stops: ComposedStops & { hit?: string; trimmedAt?: ReplyTrim }
+	/**
+	 * The tool the model called, read off the structured field its API
+	 * answered in — never parsed out of the prose. Null when it called none,
+	 * and on every request that carried no tools.
+	 */
+	toolCall?: ToolCall | null
+	/**
+	 * Which structured-output door this request went out through, when it asked
+	 * for one at all.
+	 *
+	 * On the receipt for the same reason `stops` is: the failure it explains has
+	 * no error attached to it. A reply that ignored a schema and a reply that was
+	 * never sent one read identically from the text alone.
+	 *
+	 * Names no connection — a door and a capability id, both of which the
+	 * `wire` beside it is already precedent for.
+	 */
+	structured?: {
+		mode: StructuredChoice["mode"]
+		capability: StructuredChoice["capability"]
+	}
+	/**
+	 * What the adapter actually put on the wire, and what came back.
+	 *
+	 * ⚠ **The one piece of connection material this returns**, and the
+	 * exception is deliberate rather than a relaxation of the rule above: a
+	 * request cannot be described without naming where it went. It rides under
+	 * `wire` on the node's OUTPUT — a key `withoutConnectionIdentity` removes
+	 * at every egress, the same arrangement `connection` has, and no declared
+	 * out-port — so a receipt reader who is an administrator sees the request
+	 * body and the raw reply, and nobody else sees either.
+	 *
+	 * `calls[]` where a node made more than one call; the exchange itself where
+	 * it made one. Absent on an adapter that recorded nothing.
+	 */
+	wire?: WireExchange | { calls: WireExchange[] }
+	/**
+	 * What the prompt cost and how much of it the service reused, where it says.
+	 *
+	 * ⚠ **Recorded and nothing else** (ruled "later, non-disruptive"). No
+	 * request is reordered, no prefix is placed and no cache control is sent on
+	 * account of these numbers; they exist so a reader can find out whether the
+	 * caching they are paying for is happening.
+	 *
+	 * Absent is not zero — see `TextGenResult.tokensCached`. KoboldCPP reports
+	 * nothing at all and Ollama reports the total only, and both must read as
+	 * "this connection does not say" rather than "nothing was reused".
+	 */
+	tokensPrompt?: number
+	tokensCached?: number
+	tokensCacheWrite?: number
+	/**
+	 * What this request carried of the sampling config, and what it could not.
+	 *
+	 * The same `applied`/`ignored` channel an image render already reports, for
+	 * the same reason: a sampler a person switched ON and a request that does
+	 * not carry it is a silence with no error attached to it. The config
+	 * panel's "not sent to this backend" note answers the question one level
+	 * up, per connection TYPE, before anything is sent; these are the ones only
+	 * the send knows — a reasoning level a model does not take in words,
+	 * temperature on an Anthropic request that turned thinking on.
+	 *
+	 * Both absent when the adapter left nothing out, so a result from one is
+	 * identical to what it always was.
+	 */
+	samplingApplied?: Record<string, unknown>
+	samplingIgnored?: string[]
 }
 
 /**
@@ -365,6 +503,34 @@ const idsOf = (payload: any, included: boolean): number[] =>
 		.filter((id: unknown): id is number => typeof id === "number")
 
 /**
+ * The instruction door: say it in words, because the connection has no field.
+ *
+ * The last thing in the prompt, on either wire, because the last thing is what a
+ * model is answering. On a chat wire it is a `system` turn, which is the shape
+ * the post-history reminder already takes; on a completion wire it is a line at
+ * the end of the rendered string, where the model continues from.
+ *
+ * Applied to the COMPILED payload rather than to the assembled context, so the
+ * two wires are one branch on a shape this module has already normalised.
+ */
+export function withJsonInstruction(compiled: any, instruction: string): any {
+	if (Array.isArray(compiled?.messages))
+		return {
+			...compiled,
+			messages: [
+				...compiled.messages,
+				{ role: "system", content: instruction }
+			]
+		}
+	if (typeof compiled?.prompt === "string")
+		return {
+			...compiled,
+			prompt: `${compiled.prompt.replace(/\s+$/, "")}\n\n${instruction}\n`
+		}
+	return compiled
+}
+
+/**
  * Media references → the bytes an adapter can put on a wire, in order.
  *
  * The read is the ORIGINAL (falling back to the display form when the original
@@ -457,6 +623,98 @@ export async function resolveAttachments(
 	return inputs
 }
 
+/**
+ * The token accounting this generation reported, from whichever branch had it.
+ *
+ * ⚠ **Absent stays absent.** Only the keys a service actually named are put on
+ * the result, so "this connection does not report reuse" never becomes a zero on
+ * a receipt — the one way this number could actively mislead (see
+ * `TextGenResult.tokensCached`).
+ *
+ * The non-streaming branch reports on the result object; a stream reports on its
+ * last chunks and so lands on the adapter, the same seam `stopHit` uses. Result
+ * first: an adapter that somehow filled both is answering about the request it
+ * returned from.
+ */
+function usageOf(
+	result: {
+		tokensPrompt?: number
+		tokensCached?: number
+		tokensCacheWrite?: number
+	},
+	adapter: {
+		streamedUsage?: {
+			tokensPrompt?: number
+			tokensCached?: number
+			tokensCacheWrite?: number
+		}
+	}
+): {
+	tokensPrompt?: number
+	tokensCached?: number
+	tokensCacheWrite?: number
+} {
+	const streamed = adapter.streamedUsage ?? {}
+	const out: Record<string, number> = {}
+	for (const key of [
+		"tokensPrompt",
+		"tokensCached",
+		"tokensCacheWrite"
+	] as const) {
+		// Named one at a time rather than merged wholesale: `result` is the
+		// whole `TextGenResult`, and spreading it would carry the compiled
+		// prompt and the completion into a field set that is meant to hold
+		// three integers.
+		const value = result[key] ?? streamed[key]
+		if (typeof value === "number" && Number.isFinite(value))
+			out[key] = value
+	}
+	return out
+}
+
+/**
+ * The exchanges an adapter recorded, in the shape a receipt carries.
+ *
+ * One call answers as itself so the overwhelming case reads plainly; two or
+ * more answer as a list, because a node that called twice and kept only the
+ * last would report the second as the whole of what it did. An adapter that
+ * recorded nothing answers with nothing, which is not the same as an empty
+ * list.
+ */
+export function recordedWire(adapter: {
+	exchanges?: readonly WireExchange[]
+	lastExchange?: WireExchange
+}): WireExchange | { calls: WireExchange[] } | undefined {
+	const calls = adapter.exchanges ?? []
+	if (calls.length > 1) return { calls: [...calls] }
+	return calls[0] ?? adapter.lastExchange
+}
+
+/**
+ * What the adapter carried of the sampling config, and what it could not.
+ *
+ * Read STRUCTURALLY and defensively, exactly like `recordedWire` above: a test
+ * fake standing in for a model implements `generateText` and nothing else, and
+ * a dispatch that required a base-class getter would fail on every one of them
+ * for a reason that has nothing to do with what they are standing in for.
+ *
+ * Undefined when the adapter left nothing out, so a result from one that
+ * carried everything is identical to what it always was.
+ */
+function samplingReportOf(adapter: {
+	ignoredSamplers?: readonly string[]
+	samplingReport?: { applied: Record<string, unknown>; ignored: string[] }
+}):
+	| { samplingApplied: Record<string, unknown>; samplingIgnored: string[] }
+	| undefined {
+	if (!adapter.ignoredSamplers?.length) return undefined
+	const report = adapter.samplingReport
+	return {
+		samplingApplied: report?.applied ?? {},
+		samplingIgnored: report?.ignored ?? [...adapter.ignoredSamplers]
+	}
+}
+
 export async function dispatchGeneration(
 	request: DispatchRequest
 ): Promise<DispatchResult> {
@@ -492,6 +750,7 @@ export async function dispatchGeneration(
 		// hands these to `resolveCapabilityTarget` so all three tiers are walked
 		// by the one resolver rather than two of them here and one elsewhere.
 		pipelineConnectionId: request.connectionId ?? null,
+		pipelineConnectionModelId: request.connectionModelId ?? null,
 		pipelineSamplingId: request.samplingId ?? null
 	})
 
@@ -532,31 +791,83 @@ export async function dispatchGeneration(
 		generatingMessageMetadata: request.generatingMessageMetadata ?? {}
 	})
 
-	// The stop sequences, composed ONCE and handed over (ruling 2026-09-10).
+	// The stop sequences, composed by the host and handed over (ruling
+	// 2026-09-10).
 	//
-	// ⚠ Composed HERE rather than in the adapter, and the difference is the
-	// whole of the ruling: five adapters each built their own list and applied
-	// their own wire rule, so a completion template's role labels went out on
-	// Ollama's CHAT request — where they override the model's native
-	// `<|im_end|>` and truncate the reply — while OpenAI and llama.cpp
-	// deliberately withheld them and KoboldCPP sent nothing at all. One
-	// composition point cannot disagree with itself.
+	// ⚠ Composed OUTSIDE the adapter, and that is the whole of the ruling: five
+	// adapters each built their own list and applied their own wire rule, so a
+	// completion template's role labels went out on Ollama's CHAT request —
+	// where they override the model's native `<|im_end|>` and truncate the
+	// reply — while OpenAI and llama.cpp deliberately withheld them and
+	// KoboldCPP sent nothing at all. One composer cannot disagree with itself.
 	//
-	// The template is dereferenced the same way `BaseConnectionAdapter`
-	// dereferences it, so the markers the prompt is wrapped in and the strings
-	// it stops on cannot come from two different resolutions.
+	// `composeStopsFor` reads the connection's template and wire mode with the
+	// same two expressions `BaseConnectionAdapter` evaluates for the RENDER, so
+	// the markers a prompt is wrapped in and the strings it stops on cannot come
+	// from two different resolutions.
+	//
+	// The payload rides along for the one question the chat wire asks of it: does
+	// the message CONTENT carry `Name:` labels? `toCompiledPrompt` passes
+	// `messages` through untouched on both of its branches, so reading it here —
+	// before the conversion below — is the same array the adapter sends.
 	const stops = composeStopsFor(connection, session, {
 		currentCharacterId: request.currentCharacterId ?? null,
-		explicit: request.stopSequences
+		explicit: request.stopSequences,
+		messages:
+			(
+				request.compiledPrompt as {
+					messages?: CompiledMessagesProbe
+				} | null
+			)?.messages ?? null
 	})
 	adapter.withStops(stops)
 
+	// How this step is sent, when the author said. Handed over only for `off`:
+	// `auto` is the adapter's own answer, so telling it to decide as it already
+	// decides would be a second spelling of the same thing and a second place
+	// for the per-service default to be re-litigated.
+	if (request.streaming === "off") adapter.withStreaming("off")
+
+	/**
+	 * Structure, as far as this connection can carry it.
+	 *
+	 * Decided here because this is where the connection is — see
+	 * `DispatchRequest.structured`. Three doors, and the weakest of them is a
+	 * sentence in the prompt, which is why an absence costs fidelity rather than
+	 * the step: every backend there is can be asked in words.
+	 *
+	 * The adapters already translate `responseFormat`/`responseSchema` into
+	 * whatever their service calls it and ignore what it cannot express, so
+	 * nothing below branches per backend.
+	 */
+	const structured: StructuredChoice | undefined = request.structured
+		? chooseStructuredMode(storedCapabilities(connection), {
+				schema: request.structured.schema
+			})
+		: undefined
+	if (structured && structured.mode !== "instruction") {
+		adapter.responseFormat = "json"
+		// ⚠ Only on the schema door. On the `json_object` door the shape was
+		// never asked for, and handing the adapter a schema it would then send
+		// is the difference between the two doors.
+		if (structured.mode === "schema")
+			// The port carries arbitrary JSON and the adapters take a narrower
+			// node: the llama.cpp family REFUSES what it cannot compile, and the
+			// services that take a schema natively judge it themselves. Neither
+			// answer is improved by this module pre-judging the document.
+			adapter.responseSchema = request.structured!
+				.schema as JsonSchemaNode
+	}
+
 	// After this line the adapter builds nothing. Everything below is the same
 	// code the legacy path runs.
+	const compiled = toCompiledPrompt(request.compiledPrompt, connection, {
+		currentCharacterId: request.currentCharacterId ?? null
+	})
 	adapter.withCompiledPrompt(
-		toCompiledPrompt(request.compiledPrompt, connection, {
-			currentCharacterId: request.currentCharacterId ?? null
-		})
+		structured?.mode === "instruction"
+			? withJsonInstruction(compiled, JSON_INSTRUCTION)
+			: compiled
 	)
 
 	// The files this request carries, references turned into bytes — see the
@@ -600,6 +911,41 @@ export async function dispatchGeneration(
 				connectionIdentity(connection)
 			)
 		adapter.withAttachments(attachments)
+	}
+
+	/**
+	 * The tools, handed over under the same two questions attachments are —
+	 * and in the same order, for the same reason.
+	 *
+	 * First the user's own setting: `capabilityRefusal` is the app's single
+	 * answer to "may this connection do that", permissive on a row nobody has
+	 * determined yet so an untested connection is not refused. Then the purely
+	 * mechanical one: is there code in this adapter class that would send
+	 * them? A KoboldCPP connection grades `tools` as `emulated` — which is the
+	 * PROMPT door, supplied by this app over a backend that never heard of
+	 * tools and needing no adapter code at all — so a spec wiring native
+	 * declarations at it is a wiring mistake worth reporting rather than a
+	 * request to send stripped.
+	 */
+	const tools = request.tools ?? []
+	if (tools.length) {
+		const refusal = capabilityRefusal(connection, "tools")
+		if (refusal)
+			throw new DispatchError(
+				`${refusal} This request offers ${tools.length} tool${tools.length === 1 ? "" : "s"}, ` +
+					`which would have gone out unseen.`,
+				connectionIdentity(connection)
+			)
+
+		if (!adapter.consumesTools)
+			throw new DispatchError(
+				`this request offers ${tools.length} tool${tools.length === 1 ? "" : "s"}, and the ` +
+					`configured adapter has no code that sends them. The model would answer as if it had none, ` +
+					`which is indistinguishable from it choosing not to call one — so it is refused instead. ` +
+					`Wire the advertisement's prompt door instead, or bind a connection whose adapter sends tools.`,
+				connectionIdentity(connection)
+			)
+		adapter.withTools(tools)
 	}
 
 	// An abort has to reach the adapter's own flag; the signal alone would stop
@@ -660,8 +1006,23 @@ export async function dispatchGeneration(
 		// accumulate-then-parse shape exists to avoid.
 		const resolved = resolveThinking(text, thinking)
 
+		/**
+		 * The speaker boundary, held whatever the backend honoured.
+		 *
+		 * Several services ignore a stop list on their chat leg, and a model
+		 * handed a labelled transcript continues it — the reply carries the next
+		 * participant's line, which reads as this app writing both sides of the
+		 * conversation. The labels come off `stops.sent`, so a request that asked
+		 * for no speaker stop is cut by nothing.
+		 *
+		 * ⚠ After `resolveThinking`, never before: a reasoning trace is prose a
+		 * model talks to itself in, and a `Name:` line inside one would otherwise
+		 * take the real reply with it.
+		 */
+		const bounded = trimAtSpeakerBoundary(resolved.content, stops)
+
 		return {
-			text: resolved.content,
+			text: bounded.text,
 			thinking: resolved.thinking,
 			isAborted: Boolean(result.isAborted),
 			via: connection.type,
@@ -671,8 +1032,42 @@ export async function dispatchGeneration(
 			// loop above is running, long after `generateText()` returned.
 			stops: {
 				...stops,
-				...(adapter.stopHit ? { hit: adapter.stopHit } : {})
-			}
+				...(adapter.stopHit ? { hit: adapter.stopHit } : {}),
+				...(bounded.trimmedAt ? { trimmedAt: bounded.trimmedAt } : {})
+			},
+			// Whatever the adapter read out of its own structured field. Absent
+			// on every adapter with no tool code, which is what makes it safe
+			// to read unconditionally.
+			//
+			// `streamedToolCall` is the SAME fact off the other branch, and it
+			// is read here for the same reason `stopHit` is read here: a
+			// streaming adapter only learns of the call while the loop above is
+			// running, long after `generateText()` returned. Without it a
+			// connection with `extraJson.stream` surfaced no call, the loop's
+			// predicate never fired, and the loop ran to its ceiling.
+			toolCall: result.toolCall ?? adapter.streamedToolCall ?? null,
+			// What the adapter rendered this request into, and what the service
+			// answered — absent on an adapter that recorded nothing, so a
+			// result from one is byte-identical to what it always was.
+			...(recordedWire(adapter) ? { wire: recordedWire(adapter) } : {}),
+			// Which door, for a reader diagnosing an answer that did not keep
+			// its shape. Absent on every request that asked for no structure.
+			...(structured
+				? {
+						structured: {
+							mode: structured.mode,
+							capability: structured.capability
+						}
+					}
+				: {}),
+			// Read AFTER the send, like `stopHit` above: an adapter only learns
+			// what it could not carry while it is building the request, and a
+			// streaming one while the loop above is running. Omitted entirely
+			// when nothing was left out.
+			...(samplingReportOf(adapter) ?? {}),
+			// Same seam, same reason: the accounting a stream reports arrives
+			// on its last chunks. Recorded only — see `DispatchResult` above.
+			...usageOf(result, adapter)
 		}
 	} finally {
 		request.signal?.removeEventListener("abort", onAbort)

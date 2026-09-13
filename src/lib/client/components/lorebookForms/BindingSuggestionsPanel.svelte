@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * Suggested bindings — names the story used that resolve to nothing.
+	 * Suggested cast members: names the story used that resolve to nothing.
 	 *
 	 * ## Why this lives in the Bindings tab
 	 *
@@ -177,7 +177,7 @@
 			class="text-surface-600-400 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 		>
 			<Icons.Sparkles size={13} aria-hidden="true" />
-			Suggested bindings{pending.length ? ` (${pending.length})` : ""}
+			Suggested cast members{pending.length ? ` (${pending.length})` : ""}
 		</p>
 		<button
 			type="button"
@@ -209,7 +209,7 @@
 					{outstanding}
 					{outstanding === 1 ? "source is" : "sources are"} waiting on
 					the background pass that reads entries and messages for names.
-					Suggestions appear here once it has run — this is not the same
+					Suggestions appear here once it has run. That is not the same
 					as “nothing to add”.
 				{:else}
 					There is nothing in this lorebook to read yet. Add an entry
@@ -224,14 +224,14 @@
 				<Icons.Clock size={12} aria-hidden="true" />
 				{outstanding}
 				{outstanding === 1 ? "source has" : "sources have"} not been scanned
-				yet — more may appear.
+				yet. More may appear.
 			</p>
 		{/if}
 
 		{#if pending.length === 0}
 			<p class="text-surface-500 text-xs">
-				Every name this lorebook uses already resolves to a binding or
-				an entry.
+				Every name this lorebook uses already resolves to a cast member
+				or an entry.
 			</p>
 		{:else}
 			<div class="flex flex-col gap-1.5">
@@ -264,7 +264,7 @@
 						{#if renamingId === s.id}
 							<div class="mt-2 flex flex-wrap items-center gap-2">
 								<label class="sr-only" for="bsug-name-{s.id}">
-									Name for the new binding
+									Name for the new cast member
 								</label>
 								<input
 									id="bsug-name-{s.id}"
@@ -283,7 +283,7 @@
 									onclick={() => confirmAdd(s.id)}
 								>
 									<Icons.Check size={12} aria-hidden="true" />
-									Create binding
+									Add to cast
 								</button>
 								<button
 									type="button"
@@ -301,14 +301,14 @@
 									onclick={() => startAdd(s)}
 								>
 									<Icons.Plus size={12} aria-hidden="true" />
-									Add binding
+									Add to cast
 								</button>
 								<button
 									type="button"
 									class="text-surface-500 hover:underline disabled:opacity-40"
 									disabled={busy.has(s.id)}
 									onclick={() => ignore(s.id)}
-									title="Keep it in the log below — this can be undone"
+									title="Keep it in the log below. This can be undone"
 								>
 									Dismiss
 								</button>
@@ -351,9 +351,8 @@
 							>
 								<span class="text-surface-600-400">
 									<span class="font-medium">
-										{s.surface || s.name}
+										{s.surface || s.name}:
 									</span>
-									—
 									{STATUS_LABEL[s.status] ?? s.status}
 									{#if s.decidedAt}
 										{when(s.decidedAt)}

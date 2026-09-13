@@ -51,7 +51,10 @@
 		if (sessionId == null) return filteredSessions
 		const active = filteredSessions.filter((s) => s.id === sessionId)
 		if (!active.length) return filteredSessions
-		return [...active, ...filteredSessions.filter((s) => s.id !== sessionId)]
+		return [
+			...active,
+			...filteredSessions.filter((s) => s.id !== sessionId)
+		]
 	})
 
 	// Named so `off` can name them too, and so onDestroy can remove them at
@@ -127,9 +130,9 @@
 	}
 
 	function handleViewLorebook(lorebookId: number) {
-		// Same deep-link the Activity sidebar uses: stash the id and open the
-		// Lorebooks panel, which consumes the digest to land on that book.
-		panelsCtx.digest.lorebookId = lorebookId
+		// Same deep-link the Activity sidebar uses: stash one address and open
+		// the Lorebooks panel, which consumes the digest to land on that book.
+		panelsCtx.digest.lore = { lorebookId, scope: "all" }
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
 

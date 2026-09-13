@@ -1,25 +1,34 @@
 /**
- * The frozen-type guard, as a checked-in fact.
+ * What each shipped slug resolves to, as a checked-in fact.
  *
- * `syncTypeRegistry` refuses to republish a type version whose content changed,
- * which is the right rule — a spec that pinned `@1` would otherwise keep
- * compiling and start behaving differently. But look at what the refusal *does*
- * on a running instance: `bootstrapPipelines` catches `TypeRegistryConflictError`,
- * puts the message in `report.conflict`, and **returns early**
- * (`bootstrap.ts:90-96`). Specs are never seeded, the legacy migration never
- * runs, and pipelines quietly stop working. Nothing in the test suite notices,
- * because a fresh test database has no prior rows to conflict with — the
- * conflict only exists on databases that booted the *previous* build.
+ * A type slug is an indirection to a content hash (ruling 2026-09-10): the
+ * registry row for `id@version` carries whichever declaration the slug resolves
+ * to now, `pipeline_type_declarations` keeps every one it has ever resolved to,
+ * and a boot that finds a changed declaration publishes it and moves the
+ * pointer. So an edited descriptor no longer stops anything — which removes the
+ * *disaster* this file was written for and leaves the *question* it exists to
+ * ask.
  *
- * So the failure mode is: add a parameter to a descriptor, all tests pass, ship
- * it, and every existing install loses pipelines on the next restart with a
- * message only the diagnostics screen shows.
+ * The question is: **did you mean to change what that pin means?** A hash moving
+ * is a normal, shippable event; a hash moving without anyone noticing is not.
+ * Nothing else in the suite can tell the difference, because a fresh test
+ * database publishes whatever the code currently says and passes either way.
  *
- * This file is the thing that notices. It records what each published type
- * hashes to today. Editing a descriptor changes its hash, this test fails on a
- * clean database, and the failure message says which of the three legitimate
- * answers applies. It is a snapshot on purpose: the whole point is that it can
- * only be updated deliberately.
+ * So this stays a snapshot, and updating a line stays deliberate — what changed
+ * is the cost of the answer. Where the three answers used to be *bump the
+ * version*, *it was only display text*, or *write a re-projection migration*,
+ * the third is gone: an edit is carried to every install by the pointer move
+ * alone. Update the line in the same commit as the edit, and the diff shows a
+ * declaration and its hash changing together.
+ *
+ * ⚠ **A version bump is still the honest answer to a breaking change.** Content
+ * addressing removed the boot failure, not the judgement: moving a port under
+ * `@1` still changes what every spec pinning `@1` does, and this file is where
+ * that becomes visible enough to argue about.
+ *
+ * That a slug's row actually *carries* the recorded hash after a boot — the
+ * database half of the same fact — is asserted by
+ * `contentAddressing.int.test.ts`, which is where a database is available.
  */
 
 import { describe, it, expect } from "vitest"
@@ -49,27 +58,35 @@ import "@serene-pub/contracts"
 import "@serene-pub/core-catalog"
 
 /**
- * `pin -> contentHash`, for every type this build publishes.
+ * `pin -> contentHash`, for every slug this build publishes.
  *
  * **Do not update a line here to make a test pass.** A changed hash means the
- * contract of an already-published type version moved, and there are exactly
- * three correct responses:
+ * declaration behind an already-published pin moved, and there are three correct
+ * responses:
  *
  * 1. **Bump the version.** Publish `@2` and leave `@1` in place for the specs
- *    pinning it. This is the default answer for a real contract change — a port,
- *    a parameter's default, a range, an enum's options.
- * 2. **You changed only display text.** Labels (`i18n`) and `description` are
- *    stripped before hashing precisely so they can change freely. If the hash
- *    moved, you changed something else too — find it.
- * 3. **You wrote a re-projection migration.** Migrations 0099 and 0106 delete
- *    the affected registry rows so the next boot re-projects them. That is
- *    deliberately narrow, only safe pre-1.0 while the versions in question have
- *    no third-party pins, and must not become the habit. If that is what you
- *    did, update the hash here in the same commit as the migration.
+ *    pinning it. This is the answer whenever the change would break them — a
+ *    removed port, a narrowed range, an enum option withdrawn. Content
+ *    addressing does not make this optional; it makes it a judgement rather than
+ *    a boot failure.
+ * 2. **You changed only display text.** Labels (`i18n`, `label`) and
+ *    `description` are stripped before hashing precisely so they can change
+ *    freely. If the hash moved, you changed something else too — find it.
+ * 3. **The edit is a correction, and the pointer carries it.** A declared port
+ *    that was always supplied, a widened range, a default that was wrong: the
+ *    next boot publishes the new declaration, moves the slug's pointer to it,
+ *    and keeps the old one under its hash. Record the new hash here in the same
+ *    commit as the edit, and say in a comment what moved and why it does not
+ *    break the pins.
  *
- * Adding a *new* type is safe and needs no migration — just add its line.
+ * ⚠ **Answer 3 used to require a migration and no longer does.** Migrations
+ * 0099, 0106 and 0113 each delete registry rows so the next boot could re-project
+ * them — the comments below that name one are history, not instructions. Nothing
+ * written from now on needs the migration half.
  *
- * ## Migration 0176 — answer 3, fourteen entries at once
+ * Adding a *new* type is safe and needs nothing — just add its line.
+ *
+ * ## Migration 0176 — answer 3 as it used to be written, fourteen entries at once
  *
  * Every type with a `connection` slot gained `requires`: the capability ids that
  * connection must satisfy, e.g. `['text->image']` on `generate-image`. Scattered
@@ -149,7 +166,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Re-projected by 0170 (policy answer 3): the type gained a multimodal
 	// contract — an `attachments` in-port, a `parts` out-port, and a declared
 	// `media` capability — before any release shipped it.
-	"core:provider/generate-text@1": "1afa3a513d82c1",
+	// Gained `params.streaming` (`auto | off`): a per-node say in whether the
+	// request is sent as a stream, beside `stopSequences`. Additive with a
+	// declared default, so a config that has never held the address resolves
+	// `auto` and every existing pipeline sends what it sent.
+	"core:provider/generate-text@1": "867d5d06400c5",
 	"core:provider/graph-node-description@1": "175a464ce58684",
 	"core:provider/graph-node-resolution@1": "15e22620687cf1",
 	"core:provider/graph-perspective@1": "200c0141d4ebf",
@@ -245,6 +266,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// number is a separate decision against the measure corpus.
 	// (was "2272f3cfb8f4b")
 	"core:query/session-history@1": "24ce875b04648",
+	"core:query/session-state@1": "138a9731c106d9",
 	// ⚠ `core:query/graph-context@1` was here, and is gone rather than frozen.
 	// It split into the two below, because one node emitting both directions of
 	// the graph gave them one heading, one layout and one switch. Removing a
@@ -289,6 +311,14 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:query/relationships-perspectives@1": "1cb5dd5736dd89",
 	// (was "1a709dd0599745")
 	"core:query/relationships-known@1": "feb131426e5",
+	// The graph as a ranked retrieval mechanism (ruling 2026-09-10, Q1) — the
+	// same three layers the two nodes above publish as keyed sections, read
+	// instead as candidates in the `relationships` budget band and ordered
+	// scene presence → speaker → recency. A **new** type, so nothing is
+	// re-projected: it has never been published, and the two above are
+	// untouched. It reuses their `relationshipSlots`, so the ceiling means the
+	// same three things here as it does there.
+	"core:query/relationship-search@1": "1a07eb0bde9fac",
 	"core:query/graph-scenes@1": "93cf67e05eb1",
 	// The third gather branch, added in 0.6 after its absence was found: the
 	// split into world and character lore left `history` with no node, so those
@@ -433,11 +463,50 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// and reads it nowhere else, so every byte `render` walks is unchanged —
 	// the parity corpus is identical across the change. What fills in is the
 	// receipt's `sources`, empty on every run until now.
-	"core:task/assemble@2": "5b36779daf6e2",
+	//
+	// Moved again 2026-09-10 by the blocks-parameters lane, and this is the
+	// **first entry recorded under content addressing** — so it is the worked
+	// example of what a moved hash costs now. There is no migration beside it
+	// and there is no version bump: the slug's pointer moves to the new
+	// declaration at the next boot, the declaration it moved off stays in
+	// `pipeline_type_declarations`, and a receipt naming the old hash still
+	// resolves. All that is required is this line, changed in the same commit
+	// as the edit, which is what keeps the move visible in review.
+	//
+	// Moved again 2026-09-10: the template slot declares a SET of engines
+	// (`engines: [handlebars, liquid]`) where it declared one, so Liquid is
+	// selectable for the story string. Handlebars stays first, which is what
+	// a new template here is still written in — the parity corpus is
+	// byte-identical and no shipped row changes pool.
+	"core:task/assemble@2": "1d97d036a0a3e4",
 	// Tool calling's pure halves (20 §9), added 2026-08-26. New types — a
 	// row inserts and conflicts with nothing.
 	"core:task/advertise-tools@1": "b3b15a945f7e2",
 	"core:task/parse-tool-call@1": "213e18d434bbb",
+	// The three the tool loop needed beside them (20 §9, 01 §4a), added
+	// 2026-09-10. All new types — a row inserts and conflicts with nothing, so
+	// no migration. `run-tool` is the impure middle the two pure halves sit
+	// either side of; `available-tools` is what the advertisement is built
+	// from, a Query because which extensions are enabled is not a property of
+	// a spec; `join-text` is the reduce a repeated block has always needed —
+	// `map` and `loop` publish a list and every write takes a scalar.
+	"core:query/available-tools@1": "426517ae42329",
+	"core:provider/run-tool@1": "cc2a5c5df7d10",
+	"core:task/join-text@1": "1d3d05a12133fa",
+	// The native door (20 §9). `core:provider/generate-text@1` is published and
+	// frozen, so a `tools` in-port and a `toolCall` out-port are a NEW pin
+	// rather than two more lines on that one — which would move its hash and
+	// need a re-projection on every install, for a capability most connections
+	// do not have. One binding serves both.
+	// Gained `params.streaming` with the other three providers.
+	"core:provider/generate-with-tools@1": "b8e60704bfb8e",
+	// The structured door, on the same terms as the tools one above and for the
+	// same reason: `generate-text@1` is published and frozen, and this node does
+	// not make the same request anyway. It asks a question rather than taking a
+	// turn, so it declares no speaker and no attachments, takes a `schema`, and
+	// publishes the parsed document instead of prose.
+	// Gained `params.streaming` with the other three providers.
+	"core:provider/generate-json@1": "7bac9bd9068a5",
 	// Re-projected by **0102** (policy answer 3): a `sampling` slot, so the cut
 	// can be clamped to the window the batch is actually sent against — the
 	// binding read no sampling config at all, and there is no truncation on
@@ -469,7 +538,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// carries the name and the card; the id stays where the host can act on
 	// it. (Its absence is also what keeps it out of `UNFILLED_IN_PORTS` —
 	// there is no port to excuse.)
-	"core:task/build-side-character-context@1": "1587c3a0574d15",
+	// ⚠ MOVED: two declared in-ports, `state` and `plan`, both unwired on the
+	// pipeline that had this node first (`core:spec/narrate-character`), so
+	// nothing it does changes. A voice built with no place in front of it
+	// answered from whatever the transcript suggested.
+	"core:task/build-side-character-context@1": "4db3df67c3a47",
 	// Gained the `variables` slot in 0.6-preview (migration 0107), a
 	// `speakerRelationships` layout when the graph query was wired in
 	// (migration 0111), and lost `narratorName` from its `prompts` slot when
@@ -493,8 +566,39 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// declared on this type rather than in the shared `contextPorts`: the
 	// narrator has no speaker's perspective to build graph context from, so
 	// widening the shared map would give it ports it must leave empty forever.
-	"core:task/build-template-context@1": "1abaa59a2046d6",
+	// Moved by the `state` in-port: templates read `state.world.weather` off
+	// the resolved session state, which nothing could supply before.
+	"core:task/build-template-context@1": "6b960498d9527",
+	/**
+	 * The Adventure genre's three agent surfaces onto that same builder.
+	 *
+	 * New types, not edits — nothing above moves for them. They exist because a
+	 * shipped prompt is resolved per (node type, slot) per spec: four agents
+	 * sharing one context type would ship four agents one set of instructions,
+	 * so four surfaces is four pools is four editable prompts. `build-scene-
+	 * context@1` is the one with a `plan` port and `build-keeper-context@1` the
+	 * one with `reply` and the `afterWrite` ordering edge.
+	 */
+	"core:task/build-planner-context@1": "8c4e2af04a8e5",
+	"core:task/build-scene-context@1": "126ff7b99d32ac",
+	"core:task/build-keeper-context@1": "46cff3ca4db9a",
 	"core:task/chunk-text@1": "5cef916d3eef",
+	/**
+	 * A model's JSON answer, read back as data — the other half of asking for
+	 * structure. `optional`, so a reply nobody can read subtracts the structure
+	 * and not the turn.
+	 */
+	"core:task/parse-json@1": "626dd0656d27b",
+	"core:task/set-state@1": "9628110ba5c34",
+	/**
+	 * The names a model used, resolved against this session's cast. A Query
+	 * because resolving a name is a read; the same `ownerFor`/`slotFor` the
+	 * three state tools use, reached from a JSON block instead of a tool call.
+	 */
+	// ⚠ MOVED: one declared in-port, `plan`, carrying the planner's world hints
+	// — a required part of the plan's schema that no node read, so a turn that
+	// planned a location left the world strip empty.
+	"core:query/resolve-state-changes@1": "16e758af287e3d",
 	"core:task/context-budget@1": "efdd9a915c681",
 	"core:task/first-json@1": "13093e6bda129",
 	// Re-projected by 0191 (policy answer 3). Two changes, one hash move: the
@@ -523,6 +627,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// sent an empty seed, got a fresh reply, and the socket glued the partial on
 	// afterwards. The declaration is what was missing (ruling 2026-09-08, D-2).
 	"core:task/process-messages@1": "1078354c939461",
+	// The same conversation for a step that READS it: no seed line, and no JSON
+	// blocks left by an earlier turn for the next model to imitate. Both are
+	// properties of the transcript rather than of the request, which is why they
+	// are a node and not a flag on a provider: by the time a completion prompt is
+	// rendered the seed is an open block inside one string.
+	"core:task/prose-transcript@1": "1fce15d9ff8c59",
 	"core:task/query-windows@1": "184fdf6f3a0762",
 	// Re-projected by **0201**, and it is the one type in that migration nobody
 	// set out to touch. Ruling R6 removes per-source floors — *"lore competes on
@@ -647,7 +757,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:script:cast/transform@1": "16b4355ec1eb01",
 	// Local image generation: the modality twin of generate-text, same node kind,
 	// its shape naming which one. A new type — inserts a row, needs no migration.
-	"core:provider/generate-image@1": "1982c58b43b9ea",
+	// Gained a `params` slot, holding `streaming` alone — the node had none, so
+	// the slot moves with the parameter. `off` means one request with no
+	// progress polling and no previews.
+	"core:provider/generate-image@1": "13b10d1a1ac974",
 	// ── Entry types (Part 1) ────────────────────────────────────────────
 	//
 	// A lorebook row's kind, declared and versioned instead of being the table
@@ -682,14 +795,17 @@ const current = (): Record<string, string> => {
 }
 
 const WHAT_TO_DO =
-	"\n\nA published type version is frozen. Bump the version, or ship a registry " +
-	"re-projection migration (see 0099/0106) and update the hash in the same commit. " +
+	"\n\nA pin now means something different from what it meant at this commit. " +
+	"That is shippable — the slug's pointer moves at the next boot and no " +
+	"migration is involved — but it must be deliberate: either bump the version " +
+	"(the honest answer when the change breaks the specs pinning it), or record " +
+	"the new hash here in the same commit as the edit. " +
 	"Read the comment above PUBLISHED_HASHES before editing it."
 
 describe("published type content hashes", () => {
 	const now = current()
 
-	it("has not changed under any already-published pin", () => {
+	it("resolves every recorded pin to the hash recorded for it", () => {
 		const drifted = Object.entries(PUBLISHED_HASHES)
 			.filter(([pin, hash]) => pin in now && now[pin] !== hash)
 			.map(([pin, hash]) => `${pin}: recorded ${hash}, code ${now[pin]}`)
@@ -753,9 +869,12 @@ describe("published type content hashes", () => {
 	 * alias, and those sit inside `slots[].schema`. The SDK's descriptor
 	 * registry has stripped `label` since `refuseUnlessIdentical` was written
 	 * (`DESCRIPTOR_DISPLAY_KEYS`); core hashed it. So re-declaring a descriptor
-	 * with a renamed parameter was a no-op in the SDK and a
-	 * `TypeRegistryConflictError` here — which `bootstrapPipelines` catches by
-	 * returning early, silently stopping every pipeline on the install.
+	 * with a renamed parameter was a no-op in the SDK and, here, a
+	 * `TypeRegistryConflictError` that `bootstrapPipelines` caught by returning
+	 * early — silently stopping every pipeline on the install. The stop is gone
+	 * (the slug's pointer moves instead), and the strips must still agree: two
+	 * answers to *is this the same declaration?* would now silently move a
+	 * pointer for a translated label.
 	 *
 	 * ⚠ **No shipped type carries a `label` today**, which is why the
 	 * disagreement was latent and why closing it moved no recorded hash above.
@@ -788,7 +907,9 @@ describe("published type content hashes", () => {
 			return copy
 		}
 		const coreHash = (d: unknown) =>
-			typeContentHash(snapshotRegistry([d as any], { release: "test" })[0]!)
+			typeContentHash(
+				snapshotRegistry([d as any], { release: "test" })[0]!
+			)
 		const sdkHash = (d: unknown) =>
 			declarationHash(d, DESCRIPTOR_DISPLAY_KEYS)
 

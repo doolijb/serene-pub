@@ -11,8 +11,8 @@
  *    per subscription (11 §4). Also a fact about the code.
  * 3. **Core's own spec documents** — the pipelines core ships, published so a
  *    session can run one. This is *content*, and the difference matters at the next
- *    line of code: the registry sync raises on conflict, and spec publishing is
- *    idempotent by version.
+ *    line of code: a type is published per declaration and a spec per document,
+ *    and both are idempotent on the content hash.
  *
  * What each seeds under, and why the three rules differ, is in `seed.ts`.
  *
@@ -27,10 +27,13 @@
  *
  * ## What happens when the code and the database disagree
  *
- * The registry sync refuses rather than reconciling. A type whose ports changed
- * under a document that already uses it is not a merge; it is a spec that means
- * something different than it did when someone approved it, and the honest
- * response is to stop and say so. See `registrySync.ts`.
+ * The slug's pointer moves, and the declaration it moved off is kept (ruling
+ * 2026-09-10). The guarantee that buys — **a stored hash always resolves to
+ * what it named** — is what makes publishing an edited declaration safe to do
+ * unattended: nothing that pinned the old one is orphaned by the move. Refusing
+ * instead would protect the same guarantee by stopping the boot, which costs
+ * every pipeline on the install and a migration per edit to undo. See
+ * `registrySync.ts`.
  */
 
 import { allTypes, allScriptTypes } from "@serene-pub/sdk"
@@ -59,14 +62,12 @@ export {
 } from "$lib/server/pipelines/specs/respond"
 import { RESPOND_VERSION } from "$lib/server/pipelines/specs/respond"
 import { loadDocument } from "$lib/server/pipelines/boot/store"
-import {
-	syncTypeRegistry,
-	TypeRegistryConflictError
-} from "$lib/server/pipelines/boot/registrySync"
+import { syncTypeRegistry } from "$lib/server/pipelines/boot/registrySync"
 import {
 	projectEntryConstraints,
 	type EntryProjectionReport
 } from "$lib/server/pipelines/boot/entryProjection"
+import type { PresetReconcileReport } from "$lib/server/pipelines/boot/presetReconcile"
 import { seedVariableTemplates } from "$lib/server/pipelines/boot/seedVariableTemplates"
 import { seedContextTemplates } from "$lib/server/pipelines/boot/seedContextTemplates"
 import {
@@ -77,7 +78,18 @@ import * as schema from "$lib/server/db/schema"
 import { eq, and } from "drizzle-orm"
 
 export interface BootstrapReport {
-	types: { inserted: number; unchanged: number }
+	types: {
+		inserted: number
+		unchanged: number
+		/**
+		 * Slugs whose pointer moved to a declaration this install had not seen
+		 * (ruling 2026-09-10). Empty on a fresh install and on any boot that
+		 * changed nothing; a line in the boot log when it is not, because a pin
+		 * quietly meaning something new is the one event here worth correlating
+		 * an incident with.
+		 */
+		republished: string[]
+	}
 	/** Core's event set, materialized so `affects_user` is queryable (11 §4). */
 	events: { inserted: number; updated: number; unchanged: number }
 	/** The shipped variable layouts every config's default points at. */
@@ -96,22 +108,24 @@ export interface BootstrapReport {
 	 * derived from types core just declined to publish would describe nothing.
 	 */
 	entryProjection?: EntryProjectionReport
-	/** Set when the registry refused; the app still boots, pipelines do not run. */
-	conflict?: string
+	/**
+	 * Which preset bindings this instance can still honour, and the notices
+	 * that fact left behind.
+	 */
+	presetBindings?: PresetReconcileReport
 }
 
 /**
  * Bring the pipeline tables in line with this build.
  *
- * Returns a report rather than throwing on a registry conflict. A type-hash
- * conflict means *pipelines* cannot run safely; it does not mean the session app
- * cannot start, and taking the whole instance down over a subsystem nobody has
- * opted into yet would be the wrong trade. The conflict travels in the report so
- * the diagnostics screen can say what is wrong and the caller can decide.
+ * Returns a report rather than a bare success. Nothing here refuses any more —
+ * a changed declaration publishes and the slug moves — but what moved is a fact
+ * the boot log and a diagnostics screen both want, and a report is how it
+ * travels without this function deciding who is listening.
  */
 export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 	const report: BootstrapReport = {
-		types: { inserted: 0, unchanged: 0 },
+		types: { inserted: 0, unchanged: 0, republished: [] },
 		events: { inserted: 0, updated: 0, unchanged: 0 },
 		variableTemplates: { created: 0, present: 0 },
 		contextTemplates: { created: 0, present: 0 },
@@ -127,7 +141,7 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		}
 	}
 
-	try {
+	{
 		// The hook contract check (24 §11): the catalog declares, core
 		// implements, and a mismatch in either direction refuses the boot
 		// before anything seeds — a packaging error, not a runtime state.
@@ -135,6 +149,20 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 			"$lib/server/pipelines/boot/coreHooks"
 		)
 		assertHookCompleteness()
+
+		// The same check one construct over, and for the identical reason:
+		// core declares its node types in the contracts and implements them in
+		// `bindings.ts`, and a binding key is a **string literal no compiler
+		// checks** — so a renamed type leaves its handler bound to nothing,
+		// and the node halts with "no binding registered" pointing at the
+		// wrong file. Structural compatibility (ruling 2026-09-10) is the rule
+		// being applied: a handler may be bound to any type that supplies
+		// everything it reads. See `bindingCompat.ts` for what this can and
+		// cannot see.
+		const { assertCoreBindingsCompatible } = await import(
+			"$lib/server/pipelines/boot/bindingCompat"
+		)
+		assertCoreBindingsCompatible()
 
 		// The same shape of check, one construct over: every declared entry
 		// type must name a budget band the ranker's weight map actually
@@ -175,29 +203,22 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		const synced = await syncTypeRegistry(
 			db,
 			// Script types go through the same sync, and that is the design
-			// rather than a convenience: 18 §2 puts them "under the same sync,
-			// conflict-refusal and re-projection rules as node types", so a
-			// second projection path would be a second set of rules to keep in
-			// step. `snapshotRegistry` branches on the id.
+			// rather than a convenience: 18 §2 puts them "under the same sync
+			// and publishing rules as node types", so a second projection path
+			// would be a second set of rules to keep in step.
+			// `snapshotRegistry` branches on the id.
 			[...allTypes(), ...allScriptTypes()],
 			{ release: RESPOND_VERSION }
 		)
 		report.types = {
 			inserted: synced.inserted.length,
-			unchanged: synced.unchanged.length
+			unchanged: synced.unchanged.length,
+			republished: synced.republished
 		}
-	} catch (err) {
-		if (err instanceof TypeRegistryConflictError) {
-			report.conflict = err.message
-			return report
-		}
-		throw err
 	}
 
-	// Straight after the type sync, and inside its success path: the projection
-	// derives DDL from the registry *rows*, so it has to run once they are in
-	// step with this build — and must not run at all when core just declined to
-	// publish them.
+	// Straight after the type sync: the projection derives DDL from the registry
+	// *rows*, so it has to run once they are in step with this build.
 	//
 	// It cannot fail the boot. Constraints are added NOT VALID and every step
 	// collects its own errors, because the alternative — a declaration change
@@ -205,9 +226,9 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 	// cannot afford.
 	report.entryProjection = await projectEntryConstraints(db)
 
-	// After the type sync and inside its success path: the DATA half of the
-	// event set is read off the same descriptors, so an event registry written
-	// while the types are in conflict would describe a build core just refused.
+	// After the type sync: the DATA half of the event set is read off the same
+	// descriptors, so an event registry written before them would describe a
+	// build whose types this instance has not published yet.
 	const events = await syncEventRegistry(db)
 	report.events = {
 		inserted: events.inserted.length,
@@ -244,6 +265,17 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 	)
 	await seedSessionPresets(db)
 
+	// Straight after the presets, and the order is the whole point: the seed
+	// back-fills bindings from the locks this boot just published, so a
+	// reconcile run before it would report a slot as stale that the very next
+	// statement fills in. It records what an upgrade or a plugin removal left
+	// pointing at nothing — the run itself falls back regardless (ruled
+	// 2026-09-10); this is what tells the administrator.
+	const { reconcilePresetBindings } = await import(
+		"$lib/server/pipelines/boot/presetReconcile"
+	)
+	report.presetBindings = await reconcilePresetBindings(db)
+
 	// Last, and only once. Everything it writes references a spec, a prompt or a
 	// config that the three steps above had to create first.
 	report.migration = await migrateLegacyToPipelines(db)
@@ -257,20 +289,39 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 }
 
 /**
- * The published document for a spec id, or null.
+ * The published version a spec slug resolves to, or null.
  *
  * Loaded from rows every time rather than cached at module scope: the rows are
  * the system of record (F3), and a cache would mean an admin publishing a new
  * version has to restart the process for it to take effect — which is the kind
  * of thing that gets discovered in production.
+ *
+ * ⚠ **Resolved through `active_version_id`, which is the pointer** — not through
+ * `status = 'published' ORDER BY id`, which is what stood here. That took the
+ * *lowest* id, so on any install that had upgraded past a version bump it
+ * returned the oldest document still on the books rather than the live one. It
+ * was invisible because publishing left the previous row saying `published` and
+ * a fresh test database only ever has one. `publishVersion` now retires the row
+ * the pointer moves off, so the two agree; this reads the pointer because the
+ * pointer is the answer.
  */
-export async function loadPublished(db: Db, specId: string) {
+export async function publishedVersionOf(
+	db: Db,
+	specId: string
+): Promise<{ id: number; semver: string; canonicalHash: string } | null> {
 	const [row] = await db
-		.select({ id: schema.pipelineSpecVersions.id })
-		.from(schema.pipelineSpecVersions)
+		.select({
+			id: schema.pipelineSpecVersions.id,
+			semver: schema.pipelineSpecVersions.semver,
+			canonicalHash: schema.pipelineSpecVersions.canonicalHash
+		})
+		.from(schema.pipelineSpecs)
 		.innerJoin(
-			schema.pipelineSpecs,
-			eq(schema.pipelineSpecVersions.specId, schema.pipelineSpecs.id)
+			schema.pipelineSpecVersions,
+			eq(
+				schema.pipelineSpecVersions.id,
+				schema.pipelineSpecs.activeVersionId
+			)
 		)
 		.where(
 			and(
@@ -278,8 +329,13 @@ export async function loadPublished(db: Db, specId: string) {
 				eq(schema.pipelineSpecVersions.status, "published")
 			)
 		)
-		.orderBy(schema.pipelineSpecVersions.id)
 		.limit(1)
-	if (!row) return null
-	return await loadDocument(db, row.id)
+	return row ?? null
+}
+
+/** The published document for a spec id, or null. */
+export async function loadPublished(db: Db, specId: string) {
+	const version = await publishedVersionOf(db, specId)
+	if (!version) return null
+	return await loadDocument(db, version.id)
 }

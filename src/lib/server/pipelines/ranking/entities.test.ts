@@ -169,9 +169,9 @@ describe("a contraction is not a name", () => {
 			"Wasn't",
 			"Couldn't"
 		])
-			expect(names(`She heard "${word} coming" through the door.`)).toEqual(
-				[]
-			)
+			expect(
+				names(`She heard "${word} coming" through the door.`)
+			).toEqual([])
 	})
 
 	it("still names somebody whose name contains an apostrophe", () => {
@@ -184,9 +184,9 @@ describe("a contraction is not a name", () => {
 		 * false negative bought with a false positive is not a fix.
 		 */
 		expect(names("He met D'Angelo at the gate.")).toEqual(["D'Angelo"])
-		expect(names("The letter was for O'Brien. He met O'Brien later.")).toEqual(
-			["O'Brien"]
-		)
+		expect(
+			names("The letter was for O'Brien. He met O'Brien later.")
+		).toEqual(["O'Brien"])
 		/**
 		 * ⚠ The cases that actually kill the loose rule, and the reason the two
 		 * above are not enough on their own: over-stripping only costs a name
@@ -450,6 +450,132 @@ describe("the gazetteer tier", () => {
 		expect(keys("Vell answered.", g)).toEqual([
 			entityKey({ kind: "character", id: 3 })
 		])
+	})
+})
+
+describe("the model tier", () => {
+	const gaz = buildGazetteer([
+		{ name: "Alice", ref: { kind: "character", id: 7 } },
+		{ name: "Al", ref: { kind: "character", id: 7 } }
+	])
+
+	/** What a NER adapter hands back: a located span with the model's label. */
+	const span = (text: string, label: string, start: number, score = 0.9) => ({
+		text,
+		label,
+		start,
+		end: start + text.length,
+		score
+	})
+
+	it("resolves a model span that lands on a name the world knows", () => {
+		// The whole reason the merge is by SPAN rather than by string: a model
+		// that finds "Alice" must produce the SAME entity the gazetteer does,
+		// or a resolved person and an unresolved string would be counted twice
+		// and would never meet each other in the entity arm.
+		const text = "Alice went north."
+		const { entities } = extractEntities(text, gaz, [
+			span("Alice", "PER", 0, 0.98)
+		])
+		expect(entities.map((e) => e.key)).toEqual(["character:7"])
+		expect(entities[0]!.ref).toEqual({ kind: "character", id: 7 })
+	})
+
+	it("keeps an unknown name as an unresolved entity carrying its label", () => {
+		const text = "Kestrel Vane crossed the bridge."
+		const { entities } = extractEntities(text, gaz, [
+			span("Kestrel Vane", "PER", 0, 0.91)
+		])
+		expect(entities).toHaveLength(1)
+		expect(entities[0]).toMatchObject({
+			key: "open:kestrel vane",
+			text: "Kestrel Vane",
+			tier: "model",
+			label: "PER",
+			confidence: 0.91,
+			count: 1
+		})
+		expect(entities[0]!.ref).toBeUndefined()
+	})
+
+	it("keys an unresolved model span exactly as the open tier keys it", () => {
+		// ⚠ Not a `ner:` prefix of its own. Both sides of the entity arm are
+		// extractions, but one row can be annotated by the model and another by
+		// the heuristic (a passage the model finds nothing in, a row annotated
+		// before the star moved), and a second key space would mean those two
+		// rows never match on a name they both contain.
+		// A passage the heuristic tier also answers on, so the two keys can be
+		// compared at all.
+		const text = "I saw Kestrel today."
+		const withModel = extractEntities(text, gaz, [
+			span("Kestrel", "PER", 6)
+		])
+		const withoutModel = extractEntities(text, gaz)
+		expect(withoutModel.entities[0]!.key).toBe("open:kestrel")
+		expect(withModel.entities[0]!.key).toBe(withoutModel.entities[0]!.key)
+	})
+
+	it("finds a lower-case name the heuristic tier cannot see", () => {
+		// The gap tier two is documented as unable to close, and the reason the
+		// model tier exists at all.
+		const text = "the ashguard riders came at dusk."
+		expect(extractEntities(text, gaz).entities).toEqual([])
+		const { entities } = extractEntities(text, gaz, [
+			span("ashguard riders", "ORG", 4, 0.77)
+		])
+		expect(entities.map((e) => e.key)).toEqual(["open:ashguard riders"])
+		expect(entities[0]!.confidence).toBeCloseTo(0.77)
+	})
+
+	it("counts repeats and keeps every span", () => {
+		const text = "Kestrel waited. Kestrel left."
+		const { entities } = extractEntities(text, gaz, [
+			span("Kestrel", "PER", 0, 0.9),
+			span("Kestrel", "PER", 16, 0.8)
+		])
+		expect(entities[0]!.count).toBe(2)
+		expect(entities[0]!.spans).toEqual([
+			{ start: 0, end: 7 },
+			{ start: 16, end: 23 }
+		])
+		// The most confident mention is what the row records — a mention the
+		// model was sure of is not made less certain by a later hedge.
+		expect(entities[0]!.confidence).toBeCloseTo(0.9)
+	})
+
+	it("does not let the open tier claim a span the model already took", () => {
+		// Tier 0 claims first, so one name is one entity rather than an open
+		// duplicate sitting beside the model's.
+		const text = "Kestrel Vane crossed the bridge."
+		const { entities } = extractEntities(text, gaz, [
+			span("Kestrel Vane", "PER", 0)
+		])
+		expect(entities.map((e) => e.text)).toEqual(["Kestrel Vane"])
+		expect(entities.map((e) => e.tier)).toEqual(["model"])
+	})
+
+	it("leaves a gazetteer hit resolved even when the model disagrees about its label", () => {
+		// Tier one resolved it to a row; a model label is not evidence against
+		// a name the world declared.
+		const text = "Al answered."
+		const { entities } = extractEntities(text, gaz, [
+			span("Al", "ORG", 0, 0.99)
+		])
+		expect(entities).toHaveLength(1)
+		expect(entities[0]!.tier).toBe("gazetteer")
+		expect(entities[0]!.ref).toEqual({ kind: "character", id: 7 })
+	})
+
+	it("ignores a span whose offsets do not describe the text", () => {
+		// An offset from a normalised copy of the passage would claim the wrong
+		// words. Dropping it costs one entity; trusting it puts a wrong key in
+		// the store — and leaves the heuristic tier to answer, which it does.
+		const text = "I saw Kestrel today."
+		const { entities } = extractEntities(text, gaz, [
+			{ text: "Vane", label: "PER", start: 0, end: 4, score: 0.9 }
+		])
+		expect(entities.map((e) => e.text)).toEqual(["Kestrel"])
+		expect(entities[0]!.tier).toBe("open")
 	})
 })
 

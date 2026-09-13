@@ -31,7 +31,11 @@
 import { describe, it, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { and, eq, inArray } from "drizzle-orm"
-import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
+import {
+	createTestDb,
+	setConfigValue,
+	type TestDb
+} from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { DEFAULT_BATCH_TOKENS } from "$lib/server/utils/summarizer/batchBudget"
 
@@ -82,7 +86,10 @@ async function booted(): Promise<TestDb> {
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	const report = await bootstrapPipelines(db)
-	expect(report.conflict, report.conflict ?? "").toBeUndefined()
+	expect(
+		report.specs.length,
+		"the boot did not get as far as seeding the specs"
+	).toBeGreaterThan(0)
 	return db
 }
 
@@ -166,6 +173,38 @@ const storedBatchTokens = (db: TestDb) =>
 			)
 		)
 
+/**
+ * Seed one `batches` parameter into every summarize config, the way a database
+ * that booted the previous build holds it.
+ *
+ * ⚠ **Written, where these tests used to `UPDATE` rows that were already
+ * there.** A config materialized every declared value until the deviation
+ * ruling (2026-09-10); it stores only what departs from the declaration now, so
+ * a fresh boot holds nothing at these addresses and an `UPDATE` moved zero
+ * rows — which left every fixture below asserting against an empty table.
+ */
+async function seedBatchParam(db: TestDb, path: string, value: unknown) {
+	const configs = await db
+		.select({ id: schema.pipelineConfigs.id })
+		.from(schema.pipelineConfigs)
+		.innerJoin(
+			schema.pipelineSpecs,
+			eq(schema.pipelineSpecs.id, schema.pipelineConfigs.specId)
+		)
+		.where(inArray(schema.pipelineSpecs.slug, SUMMARIZE_SLUGS))
+	expect(
+		configs.length,
+		"no summarize configuration exists to seed a stored value into"
+	).toBeGreaterThan(0)
+	for (const config of configs)
+		await setConfigValue(
+			db,
+			config.id,
+			{ nodeKey: "batches", slot: "params", path },
+			value
+		)
+}
+
 async function reboot(db: TestDb) {
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
@@ -174,7 +213,10 @@ async function reboot(db: TestDb) {
 	// A conflict here is the failure the whole file exists to prevent: it is
 	// caught, reported, and `bootstrapPipelines` returns early, so pipelines
 	// silently stop on every upgraded install.
-	expect(report.conflict, report.conflict ?? "").toBeUndefined()
+	expect(
+		report.specs.length,
+		"the boot did not get as far as seeding the specs"
+	).toBeGreaterThan(0)
 }
 
 describe("0102 is ordered so an upgrade actually runs it", () => {
@@ -323,41 +365,36 @@ describe("0102 clears the stored copy of the old author default", () => {
 	it("back-fills the new default in its place, and leaves a chosen value alone", async () => {
 		const db = await booted()
 
-		const seeded = await storedBatchTokens(db)
-		// ⚠ The regression: `reconcileConfigs` back-fills an author default and
-		// never revisits an address that still exists, so without the statement
-		// every booted database keeps running the old number while the code says
-		// otherwise.
-		expect(seeded.length).toBeGreaterThan(0)
+		// ⚠ **A fresh database stores nothing here now** (deviation ruling,
+		// 2026-09-10): 2560 is the declared value, so a config that agrees with
+		// it holds no row. The regression this file names is unchanged — a
+		// stored copy of the OLD number outlives the declaration that wrote it
+		// — but the copy has to be put there rather than found.
+		expect(
+			await storedBatchTokens(db),
+			"a fresh boot materialized the declared batch size, which is the " +
+				"copy this migration exists to remove"
+		).toEqual([])
 
-		// A fresh database boots against the CURRENT declaration, so it stores
-		// 2560. The state this migration exists for is a database that booted the
-		// PREVIOUS build, which stored 2048 — written here by hand, the same way
-		// 0099's test seeds the session overrides it sweeps.
-		await db
-			.update(schema.pipelineConfigValues)
-			.set({ value: 2048 })
-			.where(
-				and(
-					eq(schema.pipelineConfigValues.nodeKey, "batches"),
-					eq(schema.pipelineConfigValues.slot, "params"),
-					eq(schema.pipelineConfigValues.path, "batchTokens")
-				)
-			)
+		// The state this migration exists for: a database that booted the
+		// PREVIOUS build, which stored 2048 — written here by hand, the same
+		// way 0099's test seeds the session overrides it sweeps.
+		await seedBatchParam(db, "batchTokens", 2048)
+		const seeded = await storedBatchTokens(db)
+		expect(
+			seeded.length,
+			"the fixture seeded no stored batch size, so everything below is " +
+				"vacuous"
+		).toBeGreaterThan(0)
 
 		// One config where somebody actually chose a size. It must survive.
 		const chosen = seeded[0]!.configId
-		await db
-			.update(schema.pipelineConfigValues)
-			.set({ value: 4000 })
-			.where(
-				and(
-					eq(schema.pipelineConfigValues.configId, chosen),
-					eq(schema.pipelineConfigValues.nodeKey, "batches"),
-					eq(schema.pipelineConfigValues.slot, "params"),
-					eq(schema.pipelineConfigValues.path, "batchTokens")
-				)
-			)
+		await setConfigValue(
+			db,
+			chosen,
+			{ nodeKey: "batches", slot: "params", path: "batchTokens" },
+			4000
+		)
 
 		await applyMigration(db)
 		const after = await storedBatchTokens(db)
@@ -368,13 +405,20 @@ describe("0102 clears the stored copy of the old author default", () => {
 
 		await reboot(db)
 		const rebuilt = await storedBatchTokens(db)
-		expect(rebuilt.length).toBe(seeded.length)
 		expect(
 			rebuilt.find((r) => r.configId === chosen)?.value,
 			"a deliberately chosen batch size was overwritten"
 		).toBe(4000)
-		for (const row of rebuilt.filter((r) => r.configId !== chosen))
-			expect(row.value).toBe(DEFAULT_BATCH_TOKENS)
+		// And every OTHER config comes back holding nothing: the deviation
+		// survives, its neighbours inherit. Before the ruling this read
+		// `toBe(DEFAULT_BATCH_TOKENS)`, which was the same claim about a copy —
+		// and the copy is what made correcting the number need this migration.
+		expect(
+			rebuilt.filter((r) => r.configId !== chosen),
+			"a config that chose nothing came back holding a copy of the " +
+				"declared batch size"
+		).toEqual([])
+		expect(DEFAULT_BATCH_TOKENS).toBe(2560)
 	}, 60_000)
 
 	it("leaves other controls' stored values alone", async () => {
@@ -401,18 +445,14 @@ describe("0102 clears the stored copy of the old author default", () => {
 						)
 					)
 				)
+		// Seeded rather than updated, for the reason `seedBatchParam` gives.
+		await seedBatchParam(db, "minBatchMessages", 2048)
 		const before = (await sibling()).length
-		expect(before).toBeGreaterThan(0)
-		await db
-			.update(schema.pipelineConfigValues)
-			.set({ value: 2048 })
-			.where(
-				and(
-					eq(schema.pipelineConfigValues.nodeKey, "batches"),
-					eq(schema.pipelineConfigValues.slot, "params"),
-					eq(schema.pipelineConfigValues.path, "minBatchMessages")
-				)
-			)
+		expect(
+			before,
+			"no sibling parameter was seeded, so the `path` predicate is " +
+				"being asserted against an empty table"
+		).toBeGreaterThan(0)
 
 		await applyMigration(db)
 		expect((await sibling()).length).toBe(before)

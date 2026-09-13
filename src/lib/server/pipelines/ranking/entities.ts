@@ -11,7 +11,7 @@
  * `extractEntities` takes text plus the world's own vocabulary and returns
  * structured entities with spans, which is the shape an annotation row wants.
  *
- * ## Two tiers, and the first one is the point
+ * ## Three tiers, and the FIRST one is still the point
  *
  * This is not open-domain NER, because Serene Pub already knows most of its own
  * entity vocabulary. So:
@@ -23,6 +23,23 @@
  *      entity rather than two.
  *   2. **Open.** Capitalised runs the gazetteer did not claim, filtered by a
  *      stoplist and a sentence-start rule. These stay **unresolved strings**.
+ *
+ * and, when and only when a `text->entities` connection is starred, tier
+ * **zero** in front of both:
+ *
+ *   0. **Model.** Spans a NER model located in this same string, each with the
+ *      model's own label and confidence. A span that lands on a name the
+ *      gazetteer resolved stays that resolved entity; anything else becomes an
+ *      unresolved entity **keyed exactly as the open tier keys it**, because one
+ *      row may be annotated by the model and another by the heuristic and a key
+ *      space of its own would stop those two ever matching on a name they both
+ *      contain.
+ *
+ * ⚠ Tier zero is an ARGUMENT, not a dependency: this module imports no adapter,
+ * reads no connection and loads nothing. The caller that has a model resident
+ * passes the spans; every caller that has not passes none and gets exactly the
+ * two-tier answer it always got. That is what keeps the zero-setup path from
+ * depending on a download, and it is what makes the merge testable without one.
  *
  * The split maps onto plan Part 2's *"references that don't resolve yet"*:
  * resolution is enrichment, not a precondition. An unresolved entity is a
@@ -117,7 +134,14 @@ export interface EntityRef {
 	id: number
 }
 
-export type EntityTier = "gazetteer" | "open"
+/**
+ * Which tier claimed this entity.
+ *
+ * ⚠ Stored verbatim in `entry_annotations.tier` / `message_annotations.tier`,
+ * beside the sentinel's `"none"`. A reader compares these strings, so renaming
+ * one is a data change rather than a refactor.
+ */
+export type EntityTier = "gazetteer" | "open" | "model"
 
 /** One thing a passage names. */
 export interface Entity {
@@ -132,6 +156,23 @@ export interface Entity {
 	text: string
 	tier: EntityTier
 	ref?: EntityRef
+	/**
+	 * The model's own label — `PER`, `LOC`, `ORG`, … Model tier only.
+	 *
+	 * ⚠ Carried untranslated. A mapping onto `EntityRef.kind` would be a guess —
+	 * an `ORG` is as likely to be a lorebook entry as a character — where the
+	 * gazetteer match above is an answer.
+	 */
+	label?: string
+	/**
+	 * What the model said it was worth, 0..1. Model tier only.
+	 *
+	 * The other tiers have no such number — a dictionary hit is a match and a
+	 * capitalised run is a rule — so their priors live with the annotation
+	 * writer (`CONFIDENCE` in `annotations/index.ts`) rather than being invented
+	 * here.
+	 */
+	confidence?: number
 	/** How many times it was named. */
 	count: number
 	/** Character offsets of each mention, for an annotation row to record. */
@@ -674,6 +715,24 @@ export function gazetteerSpans(
 // ── Extraction ──────────────────────────────────────────────────────────────
 
 /**
+ * One located mention from a NER model — tier zero's input.
+ *
+ * Structurally `EntitySpan` from `$lib/server/adapters/actions`, declared again
+ * here rather than imported, because this module is the extractor and must stay
+ * free of the adapter surface: importing it would pull the action types, and
+ * through them the image and media shapes, into a file that is also reached from
+ * the ranking graph. The two shapes are checked against each other where they
+ * meet, in `annotations/index.ts`, which is the one place both are in scope.
+ */
+export interface ModelSpan {
+	text: string
+	label: string
+	start: number
+	end: number
+	score: number
+}
+
+/**
  * The entities a passage names.
  *
  * Tier one runs first and claims its spans; tier two is capitalised runs that
@@ -698,17 +757,28 @@ export function gazetteerSpans(
  *      never absorbs the punctuation beside it — the rule that stopped
  *      `"Lowmarket," Cade said` producing the single entity `Lowmarket," Cade`.
  *
- * ## The caveat this cannot fix
+ * ## The caveat tier two cannot fix, and who closes it
  *
  * A proper noun written in lower case is invisible to tier two unless the
  * gazetteer knows it. "the ashguard" is an entity to a reader and a common noun
- * to this. That is the gap tier one exists to cover for everything the world
- * has a row for, `evidence`'s vocabulary term covers statistically, and a real
- * NER model — plan phase 9 — would close.
+ * to this. That is the gap tier one covers for everything the world has a row
+ * for, `evidence`'s vocabulary term covers statistically, and `modelSpans`
+ * closes for an install that has starred a `text->entities` connection.
  */
 export function extractEntities(
 	text: string,
-	gazetteer: Gazetteer = EMPTY_GAZETTEER
+	gazetteer: Gazetteer = EMPTY_GAZETTEER,
+	/**
+	 * Tier zero, from whoever had a model resident. Empty on every install that
+	 * has starred nothing, which is the two-tier behaviour unchanged.
+	 *
+	 * ⚠ `start`/`end` must be offsets into THIS `text`. A span whose offsets do
+	 * not spell its own surface is dropped rather than trusted: the caller's
+	 * model may have been handed a truncated or normalised copy, and a span
+	 * claiming the wrong words puts a key in the store that the passage does not
+	 * say.
+	 */
+	modelSpans: readonly ModelSpan[] = []
 ): Extraction {
 	const found = new Map<string, Entity>()
 	const claimed: Array<{ start: number; end: number }> = []
@@ -747,6 +817,59 @@ export function extractEntities(
 
 	const overlapsClaim = (start: number, end: number) =>
 		claimed.some((c) => start < c.end && c.start < end)
+
+	// ── tier zero: what a model located in this same string ──────────────
+	//
+	// After tier one, deliberately. A span that lands on a name the world
+	// declared is ALREADY the resolved entity: skipping it there keeps one name
+	// one entity, and counting it again would inflate the mention count that
+	// decides what the scene is about. Before tier two, equally deliberately —
+	// the spans it claims are the ones the capitalisation rules must not claim
+	// again, which is what "tier zero" means.
+	for (const span of modelSpans) {
+		if (span.end <= span.start) continue
+		// The offsets have to describe their own surface. See the parameter.
+		if (text.slice(span.start, span.end) !== span.text) continue
+		if (overlapsClaim(span.start, span.end)) continue
+
+		const name = normalise(stripPossessive(span.text))
+		if (name.length < MIN_ALIAS_LENGTH) continue
+
+		/**
+		 * A name the world knows, found somewhere the matcher did not claim.
+		 *
+		 * Rare — tier one runs over the whole passage first — but reachable: the
+		 * matcher wants word boundaries and the model does not. When it happens
+		 * the ROW wins, because a resolution is an answer and a label is a
+		 * guess, and the entity is filed under the key everything else uses for
+		 * that character.
+		 */
+		const ref = gazetteer.byName.get(name)
+		const key = ref ? entityKey(ref) : `open:${name}`
+		const existing = found.get(key)
+		if (existing) {
+			existing.count++
+			existing.spans.push({ start: span.start, end: span.end })
+			// The most confident mention is what the row records: a mention the
+			// model was sure of is not made less certain by a later hedge.
+			if (existing.tier === "model")
+				existing.confidence = Math.max(
+					existing.confidence ?? 0,
+					span.score
+				)
+		} else {
+			found.set(key, {
+				key,
+				text: span.text,
+				tier: ref ? "gazetteer" : "model",
+				...(ref ? { ref } : { label: span.label }),
+				...(ref ? {} : { confidence: span.score }),
+				count: 1,
+				spans: [{ start: span.start, end: span.end }]
+			})
+		}
+		claimed.push({ start: span.start, end: span.end })
+	}
 
 	// ── tier two, pass 1: every capitalised word and where it sat ────────
 	type Word = {

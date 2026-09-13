@@ -6,8 +6,7 @@
 		edgeCountColor,
 		edgeCountWidth,
 		EDGE_BASE_WIDTH,
-		NODE_RADIUS,
-		CURVE_SPACING
+		NODE_RADIUS
 	} from "./edgeGeometry"
 	/**
 	 * Force-directed graph visualization using plain SVG.
@@ -15,25 +14,42 @@
 	 *
 	 * Features:
 	 *  - Draggable nodes
+	 *  - ⌥-drag from one node to another to name a relationship
 	 *  - Scroll-to-zoom, drag-to-pan
 	 *  - Fullscreen toggle
 	 *  - Perspective-scoping: click a node to focus; out-of-scope nodes dim
-	 *  - Hop-limited traversal: 1 / 2 / 3 / ∞ hops from focal node
+	 *
+	 * ⚠ **A node is addressed by key, not by id.** Cast members and entries are
+	 * separate id spaces that collide at the same number, so identity here is
+	 * `cast#3` / `entry#3`. The geometry underneath is keyed on a numeric slot
+	 * instead, which is this drawing's own ordinal and means nothing outside it.
 	 */
 	import { onMount, onDestroy } from "svelte"
 	import * as Icons from "@lucide/svelte"
-
-	type NarrativeNode = Sockets.NarrativeGraph.NarrativeNode
-	type NarrativeRelationship = Sockets.NarrativeGraph.NarrativeRelationship
+	import type {
+		GraphEdge,
+		GraphNode
+	} from "$lib/client/lorebooks/graphs/graphModel"
 
 	interface Props {
-		nodes: NarrativeNode[]
-		relationships: NarrativeRelationship[]
-		onNodeClick?: (node: NarrativeNode) => void
-		onRelClick?: (rel: NarrativeRelationship) => void
+		nodes: GraphNode[]
+		edges: GraphEdge[]
+		/** The node the side panel is open on, ringed so the two agree. */
+		selectedKey?: string | null
+		onNodeClick?: (node: GraphNode) => void
+		onEdgeClick?: (edge: GraphEdge) => void
+		/** ⌥-drag landed on a second node: name what joins them. */
+		onLinkDraw?: (from: GraphNode, to: GraphNode) => void
 	}
 
-	let { nodes, relationships, onNodeClick, onRelClick }: Props = $props()
+	let {
+		nodes,
+		edges,
+		selectedKey = null,
+		onNodeClick,
+		onEdgeClick,
+		onLinkDraw
+	}: Props = $props()
 
 	// ── Container / SVG refs ──────────────────────────────────────────────────
 	let containerEl = $state<HTMLDivElement | undefined>(undefined)
@@ -43,7 +59,10 @@
 
 	// ── Simulation state ──────────────────────────────────────────────────────
 	interface SimNode {
+		/** This drawing's own ordinal, which the geometry bundles on. */
 		id: number
+		key: string
+		kind: "cast" | "entry"
 		x: number
 		y: number
 		vx: number
@@ -57,7 +76,7 @@
 	interface SimEdge {
 		source: number
 		target: number
-		rel: NarrativeRelationship
+		edge: GraphEdge
 	}
 
 	let simNodes = $state<SimNode[]>([])
@@ -123,41 +142,44 @@
 	}
 
 	// ── Perspective scope ─────────────────────────────────────────────────────
-	let perspectiveNodeId = $state<number | null>(null)
+	let perspectiveKey = $state<string | null>(null)
 
 	/** Direct neighbors of the focal node (1-hop, both directions). */
-	let inScopeIds = $derived.by((): Set<number> | null => {
-		if (perspectiveNodeId === null) return null
-		const ids = new Set<number>([perspectiveNodeId])
-		for (const r of relationships) {
-			if (r.fromNodeId === perspectiveNodeId) ids.add(r.toNodeId)
-			else if (r.toNodeId === perspectiveNodeId) ids.add(r.fromNodeId)
+	let inScopeKeys = $derived.by((): Set<string> | null => {
+		if (perspectiveKey === null) return null
+		const keys = new Set<string>([perspectiveKey])
+		for (const e of edges) {
+			if (e.fromKey === perspectiveKey) keys.add(e.toKey)
+			else if (e.toKey === perspectiveKey) keys.add(e.fromKey)
 		}
-		return ids
+		return keys
 	})
 
-	function inScope(id: number): boolean {
-		return inScopeIds === null || inScopeIds.has(id)
+	function inScope(key: string): boolean {
+		return inScopeKeys === null || inScopeKeys.has(key)
 	}
 
 	/** Only show edges that directly touch the focal node. */
-	function edgeInScope(src: number, tgt: number): boolean {
-		if (inScopeIds === null) return true
-		return src === perspectiveNodeId || tgt === perspectiveNodeId
+	function edgeInScope(srcSlot: number, tgtSlot: number): boolean {
+		if (inScopeKeys === null) return true
+		return (
+			keyOfSlot(srcSlot) === perspectiveKey ||
+			keyOfSlot(tgtSlot) === perspectiveKey
+		)
 	}
 
 	function clearPerspective() {
-		perspectiveNodeId = null
+		perspectiveKey = null
 	}
 
 	/**
 	 * Edge labels are shown when the view is actually readable, not always.
 	 *
-	 * Fanning parallel edges apart stopped a pair's own labels from landing on
-	 * top of each other, but it cannot help with the other half of the problem:
-	 * in a dense cluster, labels belonging to *different* pairs still crowd,
-	 * because they compete for the same middle of the graph. Drawing every one
-	 * of them at every zoom level is what made the default view unreadable.
+	 * Fanning parallel edges apart stops a pair's own labels from landing on top
+	 * of each other, but it cannot help with the other half of the problem: in a
+	 * dense cluster, labels belonging to *different* pairs still crowd, because
+	 * they compete for the same middle of the graph. Drawing every one of them at
+	 * every zoom level makes the default view unreadable.
 	 *
 	 * So the structure is shown by default and the vocabulary on demand —
 	 * either by focusing a node (which already dims everything unrelated, so
@@ -166,7 +188,7 @@
 	 */
 	const LABEL_ZOOM_THRESHOLD = 1.4
 	let showEdgeLabels = $derived(
-		perspectiveNodeId !== null || zoom >= LABEL_ZOOM_THRESHOLD
+		perspectiveKey !== null || zoom >= LABEL_ZOOM_THRESHOLD
 	)
 
 	/**
@@ -182,7 +204,7 @@
 			simEdges.map((e) => ({
 				source: e.source,
 				target: e.target,
-				status: e.rel.status
+				status: e.edge.status
 			}))
 		)
 		// Fan the two directions of a pair apart using the same bundling rule
@@ -204,14 +226,17 @@
 	// ── Simulation ────────────────────────────────────────────────────────────
 	function initSim() {
 		iter = 0
-		const nodeMap = new Map<number, SimNode>()
+		const slots = new Map<string, number>()
 		const angleStep = (2 * Math.PI) / Math.max(nodes.length, 1)
 
 		simNodes = nodes.map((n, i) => {
 			const angle = i * angleStep
 			const r = Math.min(width, height) * 0.35
-			const node: SimNode = {
-				id: n.id,
+			slots.set(n.key, i)
+			return {
+				id: i,
+				key: n.key,
+				kind: n.kind,
 				x: width / 2 + r * Math.cos(angle) + (Math.random() - 0.5) * 30,
 				y:
 					height / 2 +
@@ -220,17 +245,19 @@
 				vx: 0,
 				vy: 0,
 				label: n.name,
-				nodeState: n.nodeState ?? "active",
-				nodeVisibility: n.nodeVisibility ?? "normal",
+				nodeState: n.state ?? "active",
+				nodeVisibility: n.visibility ?? "normal",
 				pinned: false
 			}
-			nodeMap.set(n.id, node)
-			return node
 		})
 
-		simEdges = relationships
-			.filter((r) => nodeMap.has(r.fromNodeId) && nodeMap.has(r.toNodeId))
-			.map((r) => ({ source: r.fromNodeId, target: r.toNodeId, rel: r }))
+		simEdges = edges
+			.filter((e) => slots.has(e.fromKey) && slots.has(e.toKey))
+			.map((e) => ({
+				source: slots.get(e.fromKey)!,
+				target: slots.get(e.toKey)!,
+				edge: e
+			}))
 
 		startSimulation()
 	}
@@ -305,14 +332,61 @@
 		}
 	}
 
+	// ── Drawing a relationship ────────────────────────────────────────────────
+	/**
+	 * ⌥-drag names a relationship; a plain drag moves a node.
+	 *
+	 * The modifier is read at pointerdown and held for the gesture: releasing
+	 * the key mid-drag must not turn a link being drawn into a node being
+	 * flung across the canvas.
+	 */
+	let linkFrom = $state<SimNode | null>(null)
+	let linkX = $state(0)
+	let linkY = $state(0)
+
+	/** The node a drop would land on, or nothing when it lands on nowhere. */
+	const HIT_RADIUS = NODE_RADIUS * 1.5
+
+	function nodeAt(x: number, y: number, except?: SimNode): SimNode | null {
+		let best: SimNode | null = null
+		let bestDist = HIT_RADIUS
+		for (const n of simNodes) {
+			if (except && n.id === except.id) continue
+			const dist = Math.hypot(n.x - x, n.y - y)
+			if (dist > bestDist) continue
+			best = n
+			bestDist = dist
+		}
+		return best
+	}
+
+	let linkTarget = $derived(linkFrom ? nodeAt(linkX, linkY, linkFrom) : null)
+
+	function finishLink() {
+		const from = linkFrom
+		const target = linkTarget
+		linkFrom = null
+		if (!from || !target) return
+		const a = nodes.find((n) => n.key === from.key)
+		const b = nodes.find((n) => n.key === target.key)
+		if (a && b) onLinkDraw?.(a, b)
+	}
+
 	// ── Drag ──────────────────────────────────────────────────────────────────
 	function onNodePointerDown(e: PointerEvent, node: SimNode) {
 		e.stopPropagation()
 		if (!svgEl) return
-		dragNode = node
-		node.pinned = true
 		const [vx, vy] = clientToViewBox(e.clientX, e.clientY)
 		const [sx, sy] = viewBoxToSim(vx, vy)
+		if (e.altKey && onLinkDraw) {
+			e.preventDefault()
+			linkFrom = node
+			linkX = sx
+			linkY = sy
+			return
+		}
+		dragNode = node
+		node.pinned = true
 		dragOffsetX = sx - node.x
 		dragOffsetY = sy - node.y
 		if (rafId === null) rafId = requestAnimationFrame(tick)
@@ -323,7 +397,7 @@
 	let pointerMoved = false
 
 	function onSvgPointerDown(e: PointerEvent) {
-		if (e.button !== 0 || dragNode) return
+		if (e.button !== 0 || dragNode || linkFrom) return
 		isPanning = true
 		pointerMoved = false
 		panStartClientX = e.clientX
@@ -333,7 +407,12 @@
 	}
 
 	function onSvgPointerMove(e: PointerEvent) {
-		if (dragNode && svgEl) {
+		if (linkFrom && svgEl) {
+			const [vx, vy] = clientToViewBox(e.clientX, e.clientY)
+			const [sx, sy] = viewBoxToSim(vx, vy)
+			linkX = sx
+			linkY = sy
+		} else if (dragNode && svgEl) {
 			const [vx, vy] = clientToViewBox(e.clientX, e.clientY)
 			const [sx, sy] = viewBoxToSim(vx, vy)
 			dragNode.x = sx - dragOffsetX
@@ -353,7 +432,9 @@
 	}
 
 	function onSvgPointerUp(_e: PointerEvent) {
-		if (dragNode) {
+		if (linkFrom) {
+			finishLink()
+		} else if (dragNode) {
 			dragNode.pinned = false
 			dragNode = null
 			iter = 0
@@ -397,7 +478,7 @@
 
 	$effect(() => {
 		nodes.length
-		relationships.length
+		edges.length
 		initSim()
 	})
 
@@ -421,6 +502,9 @@
 		departed: "#f59e0b"
 	}
 
+	/** An entry is a place or a thing rather than somebody, and reads apart. */
+	const ENTRY_COLOR = "#0ea5e9"
+
 	const REL_STATUS_DASH: Record<string, string> = {
 		active: "none",
 		resolved: "4 2",
@@ -428,20 +512,23 @@
 		evolved: "6 2 2 2"
 	}
 
-	function nodeColor(state: string) {
-		return NODE_STATE_COLORS[state] ?? "#6366f1"
+	function nodeColor(node: { kind: string; nodeState: string }) {
+		if (node.kind === "entry") return ENTRY_COLOR
+		return NODE_STATE_COLORS[node.nodeState] ?? "#6366f1"
 	}
 	function edgeDash(s: string) {
 		return REL_STATUS_DASH[s] ?? "none"
 	}
-	function getSimNode(id: number) {
-		return simNodes.find((n) => n.id === id)
+	function getSimNode(slot: number) {
+		return simNodes.find((n) => n.id === slot)
+	}
+	function keyOfSlot(slot: number): string | null {
+		return getSimNode(slot)?.key ?? null
 	}
 
 	// ── Parallel edge bundling ────────────────────────────────────────────────
 
 	let indexedEdges = $derived.by(() => {
-		const relLookup = new Map(relationships.map((r) => [r.id, r]))
 		const totals = new Map<string, number>()
 		for (const edge of simEdges) {
 			const key = edgeBundleKey(edge.source, edge.target)
@@ -452,20 +539,15 @@
 			const key = edgeBundleKey(edge.source, edge.target)
 			const idx = counters.get(key) ?? 0
 			counters.set(key, idx + 1)
-			const liveRel = relLookup.get(edge.rel.id) ?? edge.rel
-			return {
-				edge: { ...edge, rel: liveRel },
-				idx,
-				total: totals.get(key) ?? 1
-			}
+			return { edge, idx, total: totals.get(key) ?? 1 }
 		})
 	})
 
 	// Focal node name for toolbar display
 	let perspectiveNodeName = $derived(
-		perspectiveNodeId === null
+		perspectiveKey === null
 			? null
-			: (nodes.find((n) => n.id === perspectiveNodeId)?.name ?? null)
+			: (nodes.find((n) => n.key === perspectiveKey)?.name ?? null)
 	)
 </script>
 
@@ -478,7 +560,7 @@
 		class="pointer-events-none absolute top-2 right-2 left-2 z-10 flex items-center gap-1.5"
 	>
 		<!-- Perspective pill -->
-		{#if perspectiveNodeId !== null}
+		{#if perspectiveKey !== null}
 			<div
 				class="bg-surface-200-800/90 pointer-events-auto flex items-center gap-1 rounded px-2 py-1 backdrop-blur-sm"
 			>
@@ -524,6 +606,7 @@
 		class="h-full w-full {isPanning ? 'cursor-grabbing' : 'cursor-grab'}"
 		viewBox="0 0 {width} {height}"
 		preserveAspectRatio="xMidYMid meet"
+		data-graph-canvas
 		onpointerdown={onSvgPointerDown}
 		onpointermove={onSvgPointerMove}
 		onpointerup={onSvgPointerUp}
@@ -599,11 +682,12 @@
 							stroke="#6b7280"
 							stroke-width={EDGE_BASE_WIDTH}
 							stroke-opacity={scoped ? 0.55 : 0.1}
-							stroke-dasharray={edgeDash(edge.rel.status)}
+							stroke-dasharray={edgeDash(edge.edge.status)}
 							fill="none"
 							marker-end="url(#arrowhead)"
 							class="cursor-pointer transition-opacity"
-							onclick={() => onRelClick?.(edge.rel)}
+							data-graph-edge={edge.edge.id}
+							onclick={() => onEdgeClick?.(edge.edge)}
 						/>
 						{#if scoped && showEdgeLabels}
 							<text
@@ -614,28 +698,54 @@
 								fill="#9ca3af"
 								class="pointer-events-none select-none"
 							>
-								{edge.rel.relationshipType}
+								{edge.edge.label}
 							</text>
 						{/if}
 					{/if}
 				{/each}
 			{/if}
 
+			<!-- The relationship being drawn, until it lands on something -->
+			{#if linkFrom}
+				<line
+					x1={linkFrom.x}
+					y1={linkFrom.y}
+					x2={linkX}
+					y2={linkY}
+					stroke="#f59e0b"
+					stroke-width="2"
+					stroke-dasharray="5 3"
+					class="pointer-events-none"
+				/>
+				{#if linkTarget}
+					<circle
+						cx={linkTarget.x}
+						cy={linkTarget.y}
+						r={NODE_RADIUS + 7}
+						fill="none"
+						stroke="#f59e0b"
+						stroke-width="2"
+						class="pointer-events-none"
+					/>
+				{/if}
+			{/if}
+
 			<!-- Nodes -->
 			{#each simNodes as node}
-				{@const scoped = inScope(node.id)}
-				{@const isFocal = node.id === perspectiveNodeId}
-				{@const color = nodeColor(node.nodeState)}
+				{@const scoped = inScope(node.key)}
+				{@const isFocal = node.key === perspectiveKey}
+				{@const color = nodeColor(node)}
 				<!-- svelte-ignore a11y_click_events_have_key_events -->
 				<g
 					class="cursor-pointer"
+					data-graph-node={node.key}
 					onclick={() => {
-						if (perspectiveNodeId === node.id) {
+						if (perspectiveKey === node.key) {
 							clearPerspective()
 						} else {
-							perspectiveNodeId = node.id
+							perspectiveKey = node.key
 						}
-						const origNode = nodes.find((n) => n.id === node.id)
+						const origNode = nodes.find((n) => n.key === node.key)
 						if (origNode) onNodeClick?.(origNode)
 					}}
 					onpointerdown={(e) => onNodePointerDown(e, node)}
@@ -644,7 +754,7 @@
 				>
 					<title>{node.label} ({node.nodeState})</title>
 					<!-- Focal dashed ring -->
-					{#if isFocal}
+					{#if isFocal || node.key === selectedKey}
 						<circle
 							cx={node.x}
 							cy={node.y}
@@ -668,15 +778,33 @@
 							opacity="0.9"
 						/>
 					{/if}
-					<circle
-						cx={node.x}
-						cy={node.y}
-						r={NODE_RADIUS}
-						fill={color}
-						stroke="rgba(255,255,255,0.25)"
-						stroke-width="1.5"
-						opacity={node.nodeVisibility === "hidden" ? 0.4 : 0.9}
-					/>
+					{#if node.kind === "entry"}
+						<!-- An entry is a square so the two kinds are told apart
+						     without reading a label. -->
+						<rect
+							x={node.x - NODE_RADIUS * 0.85}
+							y={node.y - NODE_RADIUS * 0.85}
+							width={NODE_RADIUS * 1.7}
+							height={NODE_RADIUS * 1.7}
+							rx="5"
+							fill={color}
+							stroke="rgba(255,255,255,0.25)"
+							stroke-width="1.5"
+							opacity="0.9"
+						/>
+					{:else}
+						<circle
+							cx={node.x}
+							cy={node.y}
+							r={NODE_RADIUS}
+							fill={color}
+							stroke="rgba(255,255,255,0.25)"
+							stroke-width="1.5"
+							opacity={node.nodeVisibility === "hidden"
+								? 0.4
+								: 0.9}
+						/>
+					{/if}
 					<!-- Deceased X mark -->
 					{#if node.nodeState === "deceased"}
 						<line
@@ -810,6 +938,20 @@
 						/>
 					</svg>
 					<span class="text-surface-300">legendary</span>
+				</div>
+				<div class="mt-0.5 flex items-center gap-1.5">
+					<svg width="16" height="16" class="shrink-0">
+						<rect
+							x="2"
+							y="2"
+							width="12"
+							height="12"
+							rx="3"
+							fill={ENTRY_COLOR}
+							opacity="0.9"
+						/>
+					</svg>
+					<span class="text-surface-300">entry</span>
 				</div>
 			</div>
 			<div class="border-surface-600 space-y-1 border-t pt-2">

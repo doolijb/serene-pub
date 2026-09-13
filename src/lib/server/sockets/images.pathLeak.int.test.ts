@@ -92,7 +92,17 @@ vi.mock("$lib/server/db", () => ({
 		query: {
 			connections: { findFirst: async () => imageConnection },
 			samplingConfigs: { findFirst: async () => undefined }
-		}
+		},
+		// `defaultConnectionModel` asks which model this endpoint means (0114).
+		// Answering with NOTHING is the case worth having here: an endpoint with
+		// no model rows merges to itself, so `imageConnection` above reaches the
+		// adapter exactly as it did before the split — and this file's subject,
+		// the on-disk path in `model`, is still the endpoint's own.
+		select: () => ({
+			from: () => ({
+				where: () => ({ limit: async () => [] })
+			})
+		})
 	}
 }))
 

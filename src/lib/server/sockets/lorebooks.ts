@@ -2,6 +2,7 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray, sql } from "drizzle-orm"
 import {
+	resolveOrCreateBindingRow,
 	syncLorebookBindingsForCharacter,
 	syncLorebookBindingsForPersona
 } from "$lib/server/utils/characterBindingSync"
@@ -14,6 +15,7 @@ import {
 	entryTypeIdOf,
 	normalizeLegacyLorebookData,
 	parseImportedLorebook,
+	resolveAnchorEntryLinks,
 	resolveParentNodeLinks,
 	type ParsedImportedLorebook
 } from "$lib/server/utils/lorebookImportMapper"
@@ -210,12 +212,9 @@ export const lorebooksCreateHandler: Handler<
 		try {
 			const userId = socket.user!.id
 
-			const [newBook] = await db
+			const [lorebook] = await db
 				.insert(schema.lorebooks)
-				.values({
-					name: params.name,
-					userId
-				})
+				.values({ name: params.name, userId })
 				.returning()
 
 			// Refresh lorebook list
@@ -226,10 +225,10 @@ export const lorebooksCreateHandler: Handler<
 					emitToUser
 				)
 				emitToUser("lorebooks:list", lorebookListResult)
-				emitToUser("lorebooks:create", { lorebook: newBook })
+				emitToUser("lorebooks:create", { lorebook })
 			}
 
-			return { lorebook: newBook }
+			return { lorebook }
 		} catch (error) {
 			console.error("Error creating lorebook:", error)
 			throw error
@@ -683,35 +682,72 @@ export const createLorebookBindingHandler: Handler<
 			params.lorebookBinding.lorebookId
 		)
 
-		let binding = await db.transaction(async (tx) => {
-			const token = await deriveNextBindingToken(
-				params.lorebookBinding.lorebookId,
-				tx
+		// One binding per person per book (ruling 2026-09-12). A second
+		// create for a character or persona this book already holds answers
+		// with the row it already has rather than minting a rival: a rival
+		// row shows one person twice in the cast panel and splits their lore
+		// across two anchors.
+		//
+		// resolveOrCreateBindingRow owns the check-and-insert under the
+		// lorebook's advisory lock, and syncs a fresh row's name/aliases from
+		// the bound entity. An existing row is returned untouched — that is
+		// what returning it means.
+		//
+		// A background row (both ids null) has no entity to resolve through
+		// and keeps the bare insert: names are deduped for those by
+		// lorebooks:resolveOrCreateBindingByName, which is the path binding
+		// suggestions use.
+		let binding: typeof schema.lorebookBindings.$inferSelect
+		let existing = false
+		if (isBound) {
+			const { id, created } = await resolveOrCreateBindingRow(
+				{
+					lorebookId: params.lorebookBinding.lorebookId,
+					characterId: params.lorebookBinding.characterId ?? null,
+					personaId: params.lorebookBinding.personaId ?? null
+				},
+				db
 			)
-			const [inserted] = await tx
-				.insert(schema.lorebookBindings)
-				.values({ ...safeInsert, binding: token })
-				.returning()
-			return inserted
-		})
-
-		// Attach-time sync: a fresh characterId/personaId attachment should
-		// pull in that entity's name/aliases immediately. Re-fetch afterward
-		// so the response/emitted row reflects the synced name/aliases
-		// rather than the pre-sync (empty) values captured by the INSERT's
-		// own .returning().
-		if (binding.characterId) {
-			await syncLorebookBindingsForCharacter(binding.characterId)
+			existing = !created
+			// Any other column the client supplied belongs to the row this
+			// call meant to create, so it is written only when this call
+			// actually created one.
+			if (created) {
+				const {
+					lorebookId: _lorebookId,
+					characterId: _characterId,
+					personaId: _personaId,
+					...rest
+				} = safeInsert as Record<string, unknown>
+				const extra = Object.fromEntries(
+					Object.entries(rest).filter(([, v]) => v !== undefined)
+				)
+				if (Object.keys(extra).length > 0) {
+					await db
+						.update(schema.lorebookBindings)
+						.set(extra)
+						.where(eq(schema.lorebookBindings.id, id))
+				}
+			}
+			// Re-read rather than trust the insert's own .returning(): the
+			// sync above writes name/aliases after it, so the returned values
+			// would be the pre-sync (empty) ones.
 			;[binding] = await db
 				.select()
 				.from(schema.lorebookBindings)
-				.where(eq(schema.lorebookBindings.id, binding.id))
-		} else if (binding.personaId) {
-			await syncLorebookBindingsForPersona(binding.personaId)
-			;[binding] = await db
-				.select()
-				.from(schema.lorebookBindings)
-				.where(eq(schema.lorebookBindings.id, binding.id))
+				.where(eq(schema.lorebookBindings.id, id))
+		} else {
+			binding = await db.transaction(async (tx) => {
+				const token = await deriveNextBindingToken(
+					params.lorebookBinding.lorebookId,
+					tx
+				)
+				const [inserted] = await tx
+					.insert(schema.lorebookBindings)
+					.values({ ...safeInsert, binding: token })
+					.returning()
+				return inserted
+			})
 		}
 
 		// Refresh binding list
@@ -725,7 +761,8 @@ export const createLorebookBindingHandler: Handler<
 		}
 
 		const res: Sockets.Lorebooks.CreateBinding.Response = {
-			lorebookBinding: binding
+			lorebookBinding: binding,
+			existing
 		}
 
 		if (emitToUser) {
@@ -1238,13 +1275,17 @@ async function resolveOrOverwriteEmbeddedPersona(
  * per-entry via `entryTypeIdOf()`. Shared by both the "create new" and
  * "overwrite" import paths.
  */
-interface RestoredHistoryRefs {
+interface RestoredEntryRefs {
 	// Export-assigned history-entry localId -> real lorebook_entries.id.
 	historyEntryLocalIdToRealId: Map<number, number>
 	// Export-assigned scene localId -> real scenes.id (scenes nest under
 	// their owning history entry on export, but narrativeGraph nodes/
 	// relationships reference them by their own localId).
 	sceneLocalIdToRealId: Map<number, number>
+	// Export-assigned entry localId -> real lorebook_entries.id. Its own
+	// space, carrying whichever entries the document points at: an edge
+	// endpoint of kind `entry`, and an entry's own parent.
+	entryLocalIdToRealId: Map<number, number>
 }
 
 async function insertLorebookEntries(
@@ -1252,7 +1293,7 @@ async function insertLorebookEntries(
 	entries: any[],
 	bindingLocalIdToRealId: Map<number, number>,
 	dbOrTx: Db = db
-): Promise<RestoredHistoryRefs> {
+): Promise<RestoredEntryRefs> {
 	// Position is per `(lorebook, type)`, so each type counts from zero —
 	// which is what the three counters this replaces were doing.
 	const positions = new Map<EntryTypeId, number>(
@@ -1261,13 +1302,35 @@ async function insertLorebookEntries(
 	const queries: Promise<any>[] = []
 	const historyEntryLocalIdToRealId = new Map<number, number>()
 	const sceneLocalIdToRealId = new Map<number, number>()
+	const entryLocalIdToRealId = new Map<number, number>()
+	// An entry's parent is written after every entry exists: a district can be
+	// filed before its city is inserted, and these rows go in concurrently.
+	const pendingAnchors: Array<{
+		realId: number
+		localId: number | null
+		anchorLocalId: number
+	}> = []
+
+	/** What the document points at this row with, once the row has an id. */
+	const recordEntryRefs = (meta: any, realId: number) => {
+		const localId =
+			typeof meta?.entryLocalId === "number" ? meta.entryLocalId : null
+		if (localId !== null) entryLocalIdToRealId.set(localId, realId)
+		if (typeof meta?.anchorEntryLocalId === "number")
+			pendingAnchors.push({
+				realId,
+				localId,
+				anchorLocalId: meta.anchorEntryLocalId
+			})
+	}
 
 	for (const entry of entries) {
 		const typeId = entryTypeIdOf(entry)
 		const position = positions.get(typeId)!
 		positions.set(typeId, position + 1)
 
-		const bindingLocalId = entry.extensions?.serenepub?.bindingLocalId
+		const meta = entry.extensions?.serenepub ?? {}
+		const bindingLocalId = meta.bindingLocalId
 		const values = entryInsert({
 			...(mapImportedEntry(entry, typeId, position) as any),
 			typeId,
@@ -1280,15 +1343,22 @@ async function insertLorebookEntries(
 					: null
 		})
 
-		// Only the dated type carries nested scenes and a document-local id, so
-		// only it needs the row back. Everything else is fire-and-forget, which
-		// is what let these run concurrently in the first place.
+		// Only the dated type carries nested scenes, so only it does more than
+		// record the id it got back. These still run concurrently; what each
+		// one returns is a single id.
 		if (typeId !== HISTORY_TYPE_ID) {
-			queries.push(dbOrTx.insert(schema.lorebookEntries).values(values))
+			queries.push(
+				(async () => {
+					const [row] = await dbOrTx
+						.insert(schema.lorebookEntries)
+						.values(values)
+						.returning({ id: schema.lorebookEntries.id })
+					recordEntryRefs(meta, row.id)
+				})()
+			)
 			continue
 		}
 
-		const meta = entry.extensions?.serenepub ?? {}
 		queries.push(
 			(async () => {
 				const [historyRow] = await dbOrTx
@@ -1299,6 +1369,7 @@ async function insertLorebookEntries(
 				if (typeof meta.localId === "number") {
 					historyEntryLocalIdToRealId.set(meta.localId, historyRow.id)
 				}
+				recordEntryRefs(meta, historyRow.id)
 
 				// Nested scenes — each still gets its own document-scoped
 				// localId (see mapEntry) so narrativeGraph can reference one.
@@ -1362,7 +1433,55 @@ async function insertLorebookEntries(
 	}
 
 	await Promise.all(queries)
-	return { historyEntryLocalIdToRealId, sceneLocalIdToRealId }
+
+	// The `parent` role, once every row it could name exists. A link the file
+	// states but this import cannot honour (a missing parent, a cycle) leaves
+	// the entry at the top level rather than failing the import, which is this
+	// whole function's rule for a reference it cannot resolve.
+	for (const { realId, anchorRealId } of resolveAnchorEntryLinks(
+		pendingAnchors,
+		entryLocalIdToRealId
+	)) {
+		await dbOrTx
+			.update(schema.lorebookEntries)
+			.set({ anchorEntryId: anchorRealId })
+			.where(eq(schema.lorebookEntries.id, realId))
+	}
+
+	return {
+		historyEntryLocalIdToRealId,
+		sceneLocalIdToRealId,
+		entryLocalIdToRealId
+	}
+}
+
+/**
+ * One end of an imported edge, in whichever spelling the file used: the kinded
+ * `{ kind, node | entry }` one, or the flat cast local id a file written before
+ * entry endpoints carries. Null when the file names something this import did
+ * not restore — the caller drops the whole edge, since half an edge is a
+ * dangling half.
+ */
+function resolveEdgeEndpoint(
+	endpoint: any,
+	flatLocalId: unknown,
+	nodeLocalIdToRealId: Map<number, number>,
+	entryLocalIdToRealId: Map<number, number>
+):
+	| { nodeId: number; entryId: null }
+	| { nodeId: null; entryId: number }
+	| null {
+	if (endpoint?.kind === "entry" && typeof endpoint.entry === "number") {
+		const entryId = entryLocalIdToRealId.get(endpoint.entry)
+		return entryId === undefined ? null : { nodeId: null, entryId }
+	}
+	const localId =
+		endpoint?.kind === "cast" && typeof endpoint.node === "number"
+			? endpoint.node
+			: flatLocalId
+	if (typeof localId !== "number") return null
+	const nodeId = nodeLocalIdToRealId.get(localId)
+	return nodeId === undefined ? null : { nodeId, entryId: null }
 }
 
 /**
@@ -1400,7 +1519,7 @@ async function restoreNarrativeGraph(
 	serenepub: any,
 	userId: number,
 	bindingLocalIdToRealId: Map<number, number>,
-	historyRefs: RestoredHistoryRefs,
+	entryRefs: RestoredEntryRefs,
 	boundEntityByRealId: Map<
 		number,
 		{ characterId: number | null; personaId: number | null }
@@ -1433,13 +1552,13 @@ async function restoreNarrativeGraph(
 						: null
 				const historyEntryId =
 					typeof node?.historyEntryLocalId === "number"
-						? (historyRefs.historyEntryLocalIdToRealId.get(
+						? (entryRefs.historyEntryLocalIdToRealId.get(
 								node.historyEntryLocalId
 							) ?? null)
 						: null
 				const sceneId =
 					typeof node?.sceneLocalId === "number"
-						? (historyRefs.sceneLocalIdToRealId.get(
+						? (entryRefs.sceneLocalIdToRealId.get(
 								node.sceneLocalId
 							) ?? null)
 						: null
@@ -1533,27 +1652,39 @@ async function restoreNarrativeGraph(
 
 		for (const rel of rawRelationships) {
 			try {
-				const fromNodeId = nodeLocalIdToRealId.get(rel?.fromLocalId)
-				const toNodeId = nodeLocalIdToRealId.get(rel?.toLocalId)
-				// Both endpoints must resolve to a node actually restored above.
-				if (!fromNodeId || !toNodeId) continue
+				const from = resolveEdgeEndpoint(
+					rel?.from,
+					rel?.fromLocalId,
+					nodeLocalIdToRealId,
+					entryRefs.entryLocalIdToRealId
+				)
+				const to = resolveEdgeEndpoint(
+					rel?.to,
+					rel?.toLocalId,
+					nodeLocalIdToRealId,
+					entryRefs.entryLocalIdToRealId
+				)
+				// Both endpoints must resolve to a row actually restored above.
+				if (!from || !to) continue
 				const historyEntryId =
 					typeof rel?.historyEntryLocalId === "number"
-						? (historyRefs.historyEntryLocalIdToRealId.get(
+						? (entryRefs.historyEntryLocalIdToRealId.get(
 								rel.historyEntryLocalId
 							) ?? null)
 						: null
 				const sceneId =
 					typeof rel?.sceneLocalId === "number"
-						? (historyRefs.sceneLocalIdToRealId.get(
+						? (entryRefs.sceneLocalIdToRealId.get(
 								rel.sceneLocalId
 							) ?? null)
 						: null
 
 				await db.insert(schema.narrativeRelationships).values({
 					lorebookId,
-					fromNodeId,
-					toNodeId,
+					fromNodeId: from.nodeId,
+					fromEntryId: from.entryId,
+					toNodeId: to.nodeId,
+					toEntryId: to.entryId,
 					relationshipType: rel?.relationshipType || "neutral",
 					description: rel?.description || "",
 					visibility: rel?.visibility || "acknowledged",
@@ -1638,7 +1769,7 @@ async function createLorebookFromParsedCard(
 	const {
 		book,
 		bindingLocalIdToRealId,
-		historyRefs,
+		entryRefs,
 		syncCharacterIds,
 		syncPersonaIds,
 		boundEntityByRealId
@@ -1673,7 +1804,7 @@ async function createLorebookFromParsedCard(
 			userId,
 			tx
 		)
-		const historyRefs = await insertLorebookEntries(
+		const entryRefs = await insertLorebookEntries(
 			book.id,
 			card.entries,
 			bindingLocalIdToRealId,
@@ -1682,7 +1813,7 @@ async function createLorebookFromParsedCard(
 		return {
 			book,
 			bindingLocalIdToRealId,
-			historyRefs,
+			entryRefs,
 			syncCharacterIds,
 			syncPersonaIds,
 			boundEntityByRealId
@@ -1700,7 +1831,7 @@ async function createLorebookFromParsedCard(
 		card.extensions?.serenepub,
 		userId,
 		bindingLocalIdToRealId,
-		historyRefs,
+		entryRefs,
 		boundEntityByRealId
 	)
 	return fetchCompletedLorebook(book.id)
@@ -1727,7 +1858,7 @@ async function overwriteLorebookFromParsedCard(
 	// sync calls stay outside this transaction.
 	const {
 		bindingLocalIdToRealId,
-		historyRefs,
+		entryRefs,
 		syncCharacterIds,
 		syncPersonaIds,
 		boundEntityByRealId
@@ -1770,7 +1901,7 @@ async function overwriteLorebookFromParsedCard(
 			userId,
 			tx
 		)
-		const historyRefs = await insertLorebookEntries(
+		const entryRefs = await insertLorebookEntries(
 			existingId,
 			card.entries,
 			bindingLocalIdToRealId,
@@ -1778,7 +1909,7 @@ async function overwriteLorebookFromParsedCard(
 		)
 		return {
 			bindingLocalIdToRealId,
-			historyRefs,
+			entryRefs,
 			syncCharacterIds,
 			syncPersonaIds,
 			boundEntityByRealId
@@ -1796,7 +1927,7 @@ async function overwriteLorebookFromParsedCard(
 		card.extensions?.serenepub,
 		userId,
 		bindingLocalIdToRealId,
-		historyRefs,
+		entryRefs,
 		boundEntityByRealId
 	)
 	return fetchCompletedLorebook(existingId)
@@ -1916,6 +2047,62 @@ export const lorebookImportHandler: Handler<
 }
 
 /**
+ * A copy of a book, made the way a file is: export it, import the result.
+ *
+ * ⚠ **One copier, and it is the one the file format already has.** A second
+ * one would copy whatever it remembered to — the scenes but not their cast, the
+ * cast edges but not the entry ones — and drift from the exporter on every
+ * widening. So what a copy carries is exactly what a file carries: entries with
+ * their anchors, bindings, edges of both endpoint kinds, scenes and their cast.
+ * Annotations and embeddings are absent from both, because both are derived:
+ * the scanners and the vectorizer refill them for the new rows.
+ *
+ * Owner only, the same rule as delete: `buildLorebookExportData` scopes its
+ * read by `userId` and refuses a book this caller does not own. The copy takes
+ * a fresh uuid rather than the source's, which is what
+ * `createLorebookFromParsedCard` does when it is given none.
+ */
+export const lorebooksDuplicateHandler: Handler<
+	Sockets.Lorebooks.Duplicate.Params,
+	Sockets.Lorebooks.Duplicate.Response
+> = {
+	event: "lorebooks:duplicate",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			const userId = socket.user!.id
+
+			const { name, specBookWithGraph } = await buildLorebookExportData(
+				params.lorebookId,
+				userId
+			)
+			const card = {
+				...parseImportedLorebook(specBookWithGraph),
+				name: params.name?.trim() || `${name} (copy)`
+			}
+			const completedBook = await createLorebookFromParsedCard(
+				card,
+				specBookWithGraph,
+				userId
+			)
+
+			await lorebooksListHandler.handler(socket, {}, emitToUser)
+
+			const res: Sockets.Lorebooks.Duplicate.Response = {
+				lorebook: completedBook
+			}
+			emitToUser("lorebooks:duplicate", res)
+			return res
+		} catch (error: any) {
+			console.error("Error duplicating lorebook:", error)
+			emitToUser("lorebooks:duplicate:error", {
+				error: error.message || "Failed to duplicate lorebook."
+			})
+			throw error
+		}
+	}
+}
+
+/**
  * Carries out the user's choice after lorebooks:import returned a
  * "conflict" status — either overwrite the existing (uuid-matched) lorebook
  * in place, or import the payload as a brand-new lorebook with a fresh uuid.
@@ -2012,6 +2199,7 @@ export function registerLorebookHandlers(
 	register(socket, lorebooksGetHandler, emitToUser)
 	register(socket, lorebooksUpdateHandler, emitToUser)
 	register(socket, lorebooksDeleteHandler, emitToUser)
+	register(socket, lorebooksDuplicateHandler, emitToUser)
 
 	// Lorebook binding handlers
 	register(socket, lorebookBindingListHandler, emitToUser)

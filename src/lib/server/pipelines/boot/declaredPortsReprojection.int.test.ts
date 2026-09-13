@@ -173,7 +173,10 @@ const bootstrap = async (db: TestDb) => {
 async function booted(): Promise<TestDb> {
 	const db = await createTestDb()
 	const report = await bootstrap(db)
-	expect(report.conflict, report.conflict ?? "").toBeUndefined()
+	expect(
+		report.specs.length,
+		"the boot did not get as far as seeding the specs"
+	).toBeGreaterThan(0)
 	return db
 }
 
@@ -182,7 +185,10 @@ async function reboot(db: TestDb) {
 	// A conflict here is the failure the whole file exists to prevent: it is
 	// caught, reported, and `bootstrapPipelines` returns early, so pipelines
 	// silently stop on every upgraded install.
-	expect(report.conflict, report.conflict ?? "").toBeUndefined()
+	expect(
+		report.specs.length,
+		"the boot did not get as far as seeding the specs"
+	).toBeGreaterThan(0)
 }
 
 const registryRows = (db: TestDb) =>
@@ -381,19 +387,31 @@ describe("0113 re-projects the six declarations that gained ports", () => {
 		await asPreviousBuild(db)
 		await withoutGroupsEdge(db)
 
-		// ⚠ The regression, first and loudest. Without the migration this is
-		// what every upgrading install gets: `syncTypeRegistry` raises,
-		// `bootstrapPipelines` catches it and returns early, specs are never
-		// seeded, and pipelines stop with a message only the diagnostics screen
-		// shows.
-		const refused = await bootstrap(db)
+		// ⚠ The regression this migration was written for, as it now presents.
+		//
+		// When 0113 was written, a database holding the previous build's type
+		// rows **refused to boot**: `syncTypeRegistry` raised,
+		// `bootstrapPipelines` caught it and returned early, specs were never
+		// seeded, and pipelines stopped with a message only the diagnostics
+		// screen showed. Deleting the rows was the only way to get past it.
+		//
+		// Content addressing (ruling 2026-09-10) removed the refusal: the same
+		// database now republishes the six declarations and moves their
+		// pointers, unattended. The fixture still has to *reach* that state or
+		// everything below it is vacuous, so the assertion moved from "it
+		// refused" to "it had six declarations to move" — which is the same
+		// fact about the fixture, said in the vocabulary that now applies.
+		const moved = await bootstrap(db)
 		expect(
-			refused.conflict,
-			"a database holding the previous build's type rows booted cleanly — " +
-				"the fixture no longer reproduces the state this migration exists " +
-				"for, so everything below it is vacuous"
-		).toBeTruthy()
-		expect(refused.conflict).toContain("already exists with different content")
+			moved.types.republished,
+			"a database holding the previous build's type rows had nothing to " +
+				"republish — the fixture no longer reproduces the state this " +
+				"migration exists for, so everything below it is vacuous"
+		).toEqual(
+			expect.arrayContaining(
+				MOVED.map((m) => `${m.typeId}@${m.version}`)
+			)
+		)
 
 		await applyMigration(db)
 		expect(await registryRows(db)).toEqual([])

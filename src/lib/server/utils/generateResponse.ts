@@ -26,22 +26,30 @@ import {
 import { buildThinkingMetadata } from "$lib/server/messages/thinkingMetadata"
 import { joinContinuation } from "$lib/server/messages/continuation"
 import { resolveThinking } from "$lib/shared/utils/thinkingDelimiters"
+import {
+	trimAtSpeakerBoundary,
+	type ComposedStops,
+	type ReplyTrim
+} from "$lib/server/connections/stops"
+import { streamingModeFrom } from "$lib/server/connections/streaming"
 import type { Receipt } from "@serene-pub/sdk"
+import type { ReplyOutcome } from "$lib/server/pipelines/runtime/receipts"
 
 /**
  * The `params` slot as the run resolved it for the generate node.
  *
- * ⚠ Read off the RECEIPT, and only this path has to. A reply halts at the
- * pre-call substrate (`preview: true`), so `core:provider/generate-text@1`'s
- * binding — the reader of `params.stopSequences` on every other path — never
- * runs. What does happen before the halt is `resolveInput`, whose output the
+ * ⚠ Read off the RECEIPT, and only this path has to. A reply on the adapter
+ * road halts at the pre-call substrate (`preview: true`), so
+ * `core:provider/generate-text@1`'s binding — the reader of
+ * `params.stopSequences` on every other path, the multi-stage road included —
+ * never runs. What does happen before the halt is `resolveInput`, whose output the
  * executor records as the node's `input`; so the value an author set is on the
  * receipt even though nothing consumed it there.
  *
- * Undefined is the ordinary answer today and not a failure: `resolveInput`
- * resolves only the config keys a spec NAMES, and the three shipped reply specs
- * do not name this node's `params` slot yet (see `paramsSlotWiring.test.ts`'s
- * ledger). This reader is what makes naming it take effect.
+ * Undefined is not a failure: `resolveInput` resolves only the config keys a
+ * spec NAMES, so a spec that does not name this node's `params` slot leaves
+ * nothing here to read (`paramsSlotWiring.test.ts` is what keeps the shipped
+ * ones honest about it).
  */
 function generateNodeParams(receipt: Receipt): Record<string, unknown> | null {
 	const node = receipt.nodes?.find((n) =>
@@ -53,9 +61,33 @@ function generateNodeParams(receipt: Receipt): Record<string, unknown> | null {
 		: null
 }
 
-type GenerateExecuteResult =
+/** What the adapter reported about the call it just made. Absent stays absent — see `recordGenerateCacheUsage`. */
+interface GenerateCacheUsage {
+	tokensPrompt?: number
+	tokensCached?: number
+	tokensCacheWrite?: number
+	/**
+	 * What the model wrote, as the service counted it — the other half of what
+	 * a reply cost, and the only one the prompt-cache row has no place for. It
+	 * rides here because one read (`usageToRecord`) answers for both patches.
+	 */
+	tokensCompletion?: number
+	/**
+	 * How much of that the model spent reasoning, where the service breaks it
+	 * out. A BREAKDOWN of `tokensCompletion` and never an addition to it, so
+	 * nothing sums the two.
+	 */
+	tokensReasoning?: number
+}
+
+type GenerateExecuteResult = (
 	| { kind: "silentFail" }
 	| { kind: "normal"; isAborted: boolean }
+) & {
+	usage?: GenerateCacheUsage
+	/** The reply as it reached the row, for the receipt's record of it. */
+	text?: string
+}
 
 export async function generateResponse({
 	socket,
@@ -264,6 +296,123 @@ export async function generateResponse({
 		return false
 	}
 
+	/**
+	 * Which spec serves this turn, and which of the two reply roads it takes.
+	 *
+	 * Resolved HERE, above the connection, because the road is the spec's
+	 * property and the second road resolves its connections per stage — each
+	 * Provider owns its own `connection` and `sampling` slots, which is the whole
+	 * point of a genre being able to put a small model on the planner and a large
+	 * one on the prose. Resolving one connection first and then discarding it
+	 * would be this function asserting a single-model turn.
+	 */
+	const { NARRATE_SPEC_ID, NARRATE_CHARACTER_SPEC_ID } = await import(
+		"$lib/server/pipelines/specs/narrate"
+	)
+	const { RESPOND_SPEC_ID } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
+	// Function routing (19 §3, U-C3): the trigger names a function, the
+	// mode's contributors answer it — respond from the bucket, narrate
+	// from the narrate spec's own contributed trigger. The hardcoded
+	// spec choice is gone; what remains hardcoded is the *flag* naming
+	// the function, which dies with the trigger-driven UI (U-C5). A null
+	// resolution (registry never synced) falls to the F29 floor — routing
+	// failing degrades to built-in behaviour, never blocks the turn.
+	const { resolveFunctionVerdict, STANDARD_GENRE_ID } = await import(
+		"$lib/server/pipelines/entities/sessionGenres"
+	)
+	// Three functions now (ruling 2026-09-07): the narrator split into
+	// world narration and side-character narration, and which one this
+	// turn is comes from the row the trigger wrote — a named speaker means
+	// the second. Still routed through `resolveFunctionSpec`, so a genre
+	// that binds its own spec to either function still wins.
+	//
+	// ⚠ **Four now**, and the fourth is a message verb rather than a
+	// button. Continue is its own trigger identity (ruling 2026-09-08,
+	// D-2): it is not a resume point in the `respond` turn, it is a turn of
+	// its own that happens to start from text. Keying it separately is what
+	// lets a genre bind `continue` to a spec of its own — the floor stays
+	// `respond`, because respond is the spec carrying the
+	// `continuationPrefill` port, so a genre that says nothing gets exactly
+	// today's behaviour.
+	const functionKey = isNarratorResponseMode
+		? sideCharacter
+			? "narrate-character"
+			: "narrate"
+		: isContinuing
+			? "continue"
+			: "respond"
+	const floorSpecId = isNarratorResponseMode
+		? sideCharacter
+			? NARRATE_CHARACTER_SPEC_ID
+			: NARRATE_SPEC_ID
+		: RESPOND_SPEC_ID
+	/**
+	 * The verdict, not the slug (ruled 2026-09-10): a preset binding that
+	 * stopped resolving must not refuse the reply, and the run it falls
+	 * back to must be able to say what it substituted. Anything else stays
+	 * exactly as it was — the slug still wins, the floor still catches a
+	 * null.
+	 */
+	const routed = await resolveFunctionVerdict(
+		db,
+		(session as any).genreId ?? STANDARD_GENRE_ID,
+		functionKey,
+		// The binding selects (19 §3, simplified 2026-08-24): this
+		// session's choice among the eligible, else the instance's,
+		// before the companion default.
+		{ sessionId }
+	)
+	const specId = routed.spec ?? floorSpecId
+	const runMeta = routed.fallback
+		? { meta: { preset: { via: "fallback" as const, ...routed.fallback } } }
+		: {}
+
+	/**
+	 * The second road (see `runReplyToCompletion`), taken on the shape of the
+	 * document and never on the genre id.
+	 *
+	 * A document that will not load is not a routing decision: the run below
+	 * raises the sentence that names which pipeline is missing and what to check,
+	 * which is a better answer than this branch inventing one.
+	 */
+	{
+		const { loadPublished } = await import(
+			"$lib/server/pipelines/boot/bootstrap"
+		)
+		const { runsToCompletion } = await import(
+			"$lib/server/pipelines/runtime/specShape"
+		)
+		const doc = await loadPublished(db, specId).catch(() => null)
+		if (doc && runsToCompletion(doc)) {
+			const { runReplyToCompletion } = await import(
+				"$lib/server/utils/runReplyToCompletion"
+			)
+			return await runReplyToCompletion({
+				socket,
+				emitToUser,
+				sessionId,
+				userId,
+				generatingMessage,
+				specId,
+				doc,
+				// Narrator mode keeps a null speaker here for the same reason the
+				// adapter path does: the row is narration, and only the RUN's
+				// scope learns who is talking.
+				currentCharacterId: isNarratorResponseMode
+					? (sideCharacter?.characterId ?? null)
+					: (generatingMessage.characterId ?? null),
+				speaker: sideCharacter,
+				continuationPrefill: isContinuing
+					? preservedContent
+					: undefined,
+				label: functionKey,
+				...runMeta
+			})
+		}
+	}
+
 	const resolved = isNarratorResponseMode
 		? await resolveTaskConfig({
 				taskType: "narratorPrompt",
@@ -404,63 +553,16 @@ export async function generateResponse({
 	 * queueing, streaming, persistence, swipes and thinking extraction below are
 	 * untouched legacy code. That is the whole reason the switch is one call
 	 * rather than a rewrite of this file.
+	 *
+	 * ⚠ This is the road for a spec with ONE Provider on the spine, which is
+	 * every reply this product shipped before Adventure. A spec with several
+	 * left above, at `runsToCompletion`: the halt below would stop at its FIRST
+	 * stage and send the planner's prompt as the reply.
 	 */
 	{
 		const { runTurn } = await import(
 			"$lib/server/pipelines/runtime/runTurn"
 		)
-		const { NARRATE_SPEC_ID, NARRATE_CHARACTER_SPEC_ID } = await import(
-			"$lib/server/pipelines/specs/narrate"
-		)
-		const { RESPOND_SPEC_ID } = await import(
-			"$lib/server/pipelines/boot/bootstrap"
-		)
-		// Function routing (19 §3, U-C3): the trigger names a function, the
-		// mode's contributors answer it — respond from the bucket, narrate
-		// from the narrate spec's own contributed trigger. The hardcoded
-		// spec choice is gone; what remains hardcoded is the *flag* naming
-		// the function, which dies with the trigger-driven UI (U-C5). A null
-		// resolution (registry never synced) falls to the F29 floor — routing
-		// failing degrades to built-in behaviour, never blocks the turn.
-		const { resolveFunctionSpec, STANDARD_GENRE_ID } = await import(
-			"$lib/server/pipelines/entities/sessionGenres"
-		)
-		// Three functions now (ruling 2026-09-07): the narrator split into
-		// world narration and side-character narration, and which one this
-		// turn is comes from the row the trigger wrote — a named speaker means
-		// the second. Still routed through `resolveFunctionSpec`, so a genre
-		// that binds its own spec to either function still wins.
-		//
-		// ⚠ **Four now**, and the fourth is a message verb rather than a
-		// button. Continue is its own trigger identity (ruling 2026-09-08,
-		// D-2): it is not a resume point in the `respond` turn, it is a turn of
-		// its own that happens to start from text. Keying it separately is what
-		// lets a genre bind `continue` to a spec of its own — the floor stays
-		// `respond`, because respond is the spec carrying the
-		// `continuationPrefill` port, so a genre that says nothing gets exactly
-		// today's behaviour.
-		const functionKey = isNarratorResponseMode
-			? sideCharacter
-				? "narrate-character"
-				: "narrate"
-			: isContinuing
-				? "continue"
-				: "respond"
-		const floorSpecId = isNarratorResponseMode
-			? sideCharacter
-				? NARRATE_CHARACTER_SPEC_ID
-				: NARRATE_SPEC_ID
-			: RESPOND_SPEC_ID
-		const specId =
-			(await resolveFunctionSpec(
-				db,
-				(session as any).genreId ?? STANDARD_GENRE_ID,
-				functionKey,
-				// The binding selects (19 §3, simplified 2026-08-24): this
-				// session's choice among the eligible, else the instance's,
-				// before the companion default.
-				{ sessionId }
-			)) ?? floorSpecId
 		const receipt = await runTurn({
 			db,
 			sessionId,
@@ -526,7 +628,10 @@ export async function generateResponse({
 			],
 			// Stops at the pre-call substrate with the real payload: the
 			// adapter below is what actually sends it.
-			preview: true
+			preview: true,
+			// A reply reached through a substitution says so on its own
+			// receipt — the one place the run inspector already reads.
+			...runMeta
 		})
 
 		// `PreviewReport.context.rendered` is Assemble's allocation record; the
@@ -553,11 +658,10 @@ export async function generateResponse({
 		const { toCompiledPrompt } = await import(
 			"$lib/server/pipelines/runtime/dispatch"
 		)
-		adapter.withCompiledPrompt(
-			toCompiledPrompt(rendered, connection, {
-				currentCharacterId: adapter.currentCharacterId
-			})
-		)
+		const payload = toCompiledPrompt(rendered, connection, {
+			currentCharacterId: adapter.currentCharacterId
+		})
+		adapter.withCompiledPrompt(payload)
 
 		/**
 		 * The stop sequences, composed ONCE and handed to the adapter (ruling
@@ -566,10 +670,11 @@ export async function generateResponse({
 		 * ⚠ **This path needs its own call, and that is not a second
 		 * composition point.** `dispatchGeneration` composes for every run whose
 		 * Provider node actually fires; a REPLY halts at the pre-call substrate
-		 * (`preview: true` above) and the adapter below is what sends. So the
-		 * two adapter-construction sites both call `composeStops` — one
+		 * (`preview: true` above) and the adapter below is what sends. All five
+		 * adapter-construction sites in this app call the ONE composer — one
 		 * function, one wire rule — rather than the adapters composing for
-		 * themselves, which is what five of them used to do and disagree about.
+		 * themselves, which is what five of THEM used to do and disagree about.
+		 * `connections/stopsWiring.test.ts` is what keeps the five honest.
 		 * Without this call the primary path would send no stop sequences at
 		 * all.
 		 *
@@ -583,9 +688,20 @@ export async function generateResponse({
 		)
 		const stops = composeStopsFor(connection, adapterSession, {
 			currentCharacterId: adapter.currentCharacterId,
-			explicit: generateNodeParams(receipt)?.stopSequences
+			explicit: generateNodeParams(receipt)?.stopSequences,
+			// The payload about to be sent, for the chat wire's inline-label
+			// question: the context template renders `{{{name}}}: {{{message}}}`
+			// into the message CONTENT, and a transcript labelled that way is one
+			// a model continues for both sides unless the labels stop it.
+			messages: payload?.messages
 		})
 		adapter.withStops(stops)
+
+		// How the author wants this step sent, off the same slot the stop
+		// sequences came from. Handed over only for `off`, because `auto` is the
+		// adapter's own answer — see `withStreaming`.
+		if (streamingModeFrom(generateNodeParams(receipt)?.streaming) === "off")
+			adapter.withStreaming("off")
 
 		// The receipt was written by `runTurn` before this function composed
 		// anything, so the stops are patched onto the generate node afterwards
@@ -656,15 +772,70 @@ export async function generateResponse({
 			? `${charName}:`
 			: ""
 
+	/**
+	 * Where this reply is allowed to end, carried into the queue item and back.
+	 *
+	 * The composed list is what decides — `trimAtSpeakerBoundary` reads the
+	 * `speaker` entries off it — so a turn whose stops were held back is cut by
+	 * nothing, and the two halves of one rule cannot disagree about who is in the
+	 * scene.
+	 */
+	const boundary: {
+		stops: ComposedStops | null
+		speakerName: string
+		trimmedAt?: ReplyTrim
+	} = { stops: stopsRecord?.stops ?? null, speakerName: charName }
+
+	/**
+	 * What the adapter did with the payload, onto the receipt the run stored
+	 * before the send.
+	 *
+	 * ⚠ Called on every road out of the queue below, and on the one that never
+	 * reaches it. The stored receipt says `halt` at the pre-call substrate until
+	 * this states what happened after it — see `recordReplyOutcome`.
+	 */
+	const recordReply = async (outcome: ReplyOutcome) => {
+		if (!stopsRecord) return
+		const { recordReplyOutcome } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
+		await recordReplyOutcome(db, stopsRecord.runId, {
+			finishReason: adapter.finishReason,
+			elapsedMs: adapter.lastExchange?.response.durationMs,
+			...outcome
+		})
+	}
+
 	// Persist the queue item id BEFORE enqueueing so it's never possible for a
 	// run to be active/started while the row still shows queueItemId: null —
 	// closes the race where a very-fast Stop click finds nothing to cancel.
 	const queueItemId = uuidv4()
-	await updateLegacyWhere(
+	/**
+	 * ⚠ Fenced on `isGenerating`, and a failed claim ends the turn.
+	 *
+	 * A Stop can land while the pipeline above is still compiling, which is a
+	 * stretch of seconds. `sessionMessages:cancel` releases the ROW first and
+	 * cancels the queue item second — and there is no queue item yet, so the row
+	 * is the only thing carrying that decision. A write that cannot claim it is
+	 * a turn nobody wants any more: sending anyway produces a generation nothing
+	 * in this app can reach or abort, whose eventual failure lands on whatever
+	 * the row is doing by then.
+	 */
+	const [claimed] = await updateLegacyWhere(
 		db,
-		eq(schema.sessionMessages.id, generatingMessage.id),
+		and(
+			eq(schema.sessionMessages.id, generatingMessage.id),
+			eq(schema.sessionMessages.isGenerating, true)
+		),
 		{ queueItemId }
 	)
+	if (!claimed) {
+		await recordReply({
+			result: "cancelled",
+			reason: "stopped before the request went out"
+		})
+		return false
+	}
 
 	const { done } = llmQueue.enqueue<GenerateExecuteResult>(
 		{
@@ -687,7 +858,8 @@ export async function generateResponse({
 					isContinuing,
 					preservedContent,
 					contextDebuggingEnabled,
-					queueItemId
+					queueItemId,
+					boundary
 				}),
 			onCancel: () => adapter.abort(),
 			onStatusChange: (status) =>
@@ -701,35 +873,95 @@ export async function generateResponse({
 		queueItemId
 	)
 
+	/**
+	 * What the adapter put on the wire, patched onto the receipt once the send
+	 * has happened.
+	 *
+	 * ⚠ Called on both roads out of the queue. A request that failed is the one
+	 * a reader most wants to see, and the record exists from the moment the
+	 * adapter built it — an adapter that never sent anything recorded nothing,
+	 * and the patch is a no-op on that.
+	 */
+	const recordWire = async () => {
+		if (!stopsRecord) return
+		const { recordedWire } = await import(
+			"$lib/server/pipelines/runtime/dispatch"
+		)
+		// The same shaping the pipeline road uses, so one call reads as itself
+		// and several read as a list wherever the receipt is read from.
+		const wire = recordedWire(adapter)
+		if (!wire) return
+		const { recordGenerateWire } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
+		await recordGenerateWire(db, stopsRecord.runId, wire)
+	}
+
 	try {
 		const result = await done
+		await recordWire()
 
 		/**
-		 * Which sequence actually ended the reply, once there is one to name.
+		 * What actually ended the reply, once there is something to name.
 		 *
 		 * ⚠ A SECOND write, and only when there is something new to say. The
 		 * list itself was recorded before the request went out, because a turn
 		 * that fails mid-generation is exactly the turn whose stop list somebody
-		 * wants to read; the hit can only be known afterwards, and only from the
-		 * one service that reports the word rather than a reason code
-		 * (llama.cpp's `stopping_word` — see `BaseConnectionAdapter.stopHit`).
-		 * So the common case stays one write.
+		 * wants to read. Neither of these can be known until afterwards: the hit
+		 * comes from the one service that reports the word rather than a reason
+		 * code (llama.cpp's `stopping_word` — see
+		 * `BaseConnectionAdapter.stopHit`), and `trimmedAt` says where this app
+		 * had to cut a reply the backend ran past. So the common case stays one
+		 * write.
 		 */
-		if (adapter.stopHit && stopsRecord) {
+		if ((adapter.stopHit || boundary.trimmedAt) && stopsRecord) {
 			const { recordGenerateStops } = await import(
 				"$lib/server/pipelines/runtime/receipts"
 			)
 			await recordGenerateStops(db, stopsRecord.runId, {
 				...stopsRecord.stops,
-				hit: adapter.stopHit
+				...(adapter.stopHit ? { hit: adapter.stopHit } : {}),
+				...(boundary.trimmedAt ? { trimmedAt: boundary.trimmedAt } : {})
 			})
 		}
 
+		/**
+		 * Prompt-cache usage, patched on for the same reason `stopHit` above is:
+		 * the receipt was stored before the adapter sent anything, so nothing has
+		 * reported what this call cost until now. `result.usage` is already
+		 * "absent stays absent" from `usageToRecord`, so a service that said
+		 * nothing makes no write at all rather than a write of undefined.
+		 */
+		if (result.usage && stopsRecord) {
+			const { recordGenerateCacheUsage } = await import(
+				"$lib/server/pipelines/runtime/receipts"
+			)
+			await recordGenerateCacheUsage(db, stopsRecord.runId, result.usage)
+		}
+
 		if (result.kind === "silentFail") {
+			await recordReply({
+				result: "err",
+				reason: "the message row moved on before the reply could be written"
+			})
 			return false
 		}
 
 		const { isAborted } = result
+		await recordReply(
+			isAborted
+				? {
+						result: "cancelled",
+						reason: "stopped while the adapter was sending"
+					}
+				: {
+						result: "ok",
+						text: result.text,
+						tokensPrompt: result.usage?.tokensPrompt,
+						tokensCompletion: result.usage?.tokensCompletion,
+						tokensReasoning: result.usage?.tokensReasoning
+					}
+		)
 
 		// Fetch the updated message for the response
 		const updatedMsg = await db.query.sessionMessages.findFirst({
@@ -752,16 +984,45 @@ export async function generateResponse({
 
 		return !isAborted // Whether there were no interruptions
 	} catch (err) {
-		if (isQueueCancellation(err)) {
+		await recordWire()
+		/**
+		 * ⚠ The ADAPTER's own flag counts as a cancellation too, not just the
+		 * queue's error class. A stop reaches the adapter first (`onCancel` →
+		 * `abort()`), and the stream it was reading can fail on the way down
+		 * from that abort — a service that closes a stream without its final
+		 * frame raises inside the client rather than resolving. That failure is
+		 * the stop, and a stop is never written up as a service error.
+		 */
+		if (isQueueCancellation(err) || adapter.isAborting) {
 			// The cancel handler already flipped isGenerating/queueItemId/error on
 			// the row — a user-initiated stop isn't a failure worth reporting.
+			await recordReply({
+				result: "cancelled",
+				reason: "stopped while the adapter was sending"
+			})
 			return false
 		}
+		/**
+		 * The receipt's reason obeys the rule `persistGenerationErrorRow`
+		 * states: our own words are shown as written, and a service's are not.
+		 * A run row is served to whoever owns it, admin or not, and a service
+		 * message carries the base URL it failed against. The whole diagnostic
+		 * is on the message row's `connection.detail` and in the recorded wire,
+		 * both administrator-only.
+		 */
+		await recordReply({
+			result: "err",
+			reason:
+				err instanceof ComposedError
+					? err.message
+					: "the service reported an error"
+		})
 		await persistGenerationErrorRow(
 			socket.io,
 			generatingMessage.sessionId,
 			generatingMessage.id,
-			err
+			err,
+			queueItemId
 		)
 		return false
 	}
@@ -783,7 +1044,8 @@ async function runGenerateAndPersist({
 	isContinuing,
 	preservedContent,
 	contextDebuggingEnabled,
-	queueItemId
+	queueItemId,
+	boundary
 }: {
 	signal: AbortSignal
 	/**
@@ -813,14 +1075,56 @@ async function runGenerateAndPersist({
 	// has moved on, regardless of timing. Message-stop status must never be
 	// contingent on whether the upstream LLM actually stops in time.
 	queueItemId: string
+	/**
+	 * Where this reply ends, and where it reports having ended.
+	 *
+	 * ⚠ In AND out. `stops` and `speakerName` decide the cut; `trimmedAt` is
+	 * written back for the receipt patch the caller makes once the turn is over —
+	 * the same seam `adapter.stopHit` uses, and for the same reason: the receipt
+	 * was stored before the adapter sent anything, so nothing has reported this
+	 * until now.
+	 */
+	boundary: {
+		stops: ComposedStops | null
+		speakerName: string
+		trimmedAt?: ReplyTrim
+	}
 }): Promise<GenerateExecuteResult> {
 	// Generate completion
 	let {
 		completionResult,
 		compiledPrompt,
 		isAborted,
-		thinkingContent: adapterThinking
+		thinkingContent: adapterThinking,
+		tokensPrompt,
+		tokensCached,
+		tokensCacheWrite,
+		tokensCompletion,
+		tokensReasoning
 	} = await adapter.generateText() // TODO: save compiledPrompt to sessionMessages
+	/**
+	 * The non-streaming result's own numbers, merged with what a STREAMING
+	 * request reported — `adapter.streamedUsage` only finishes filling once the
+	 * stream below has drained, so this is read lazily at each return rather
+	 * than once here. Result first, same order `dispatch.ts`'s `usageOf` uses:
+	 * an adapter that filled both is answering about the request it returned
+	 * from.
+	 */
+	function usageToRecord(): GenerateCacheUsage | undefined {
+		const streamed = adapter.streamedUsage ?? {}
+		const usage: GenerateCacheUsage = {}
+		const prompt = tokensPrompt ?? streamed.tokensPrompt
+		const cached = tokensCached ?? streamed.tokensCached
+		const cacheWrite = tokensCacheWrite ?? streamed.tokensCacheWrite
+		const completion = tokensCompletion ?? streamed.tokensCompletion
+		const reasoning = tokensReasoning ?? streamed.tokensReasoning
+		if (typeof prompt === "number") usage.tokensPrompt = prompt
+		if (typeof cached === "number") usage.tokensCached = cached
+		if (typeof cacheWrite === "number") usage.tokensCacheWrite = cacheWrite
+		if (typeof completion === "number") usage.tokensCompletion = completion
+		if (typeof reasoning === "number") usage.tokensReasoning = reasoning
+		return Object.keys(usage).length ? usage : undefined
+	}
 	let content = ""
 	/**
 	 * Reasoning the ADAPTER separated for us, via `thinkingCb`. Named for its
@@ -829,6 +1133,33 @@ async function runGenerateAndPersist({
 	 * back into one variable and the strip starts skipping frames again.
 	 */
 	let nativeThinking = ""
+
+	/**
+	 * The speaker boundary, applied to the model's own text and nothing else.
+	 *
+	 * ⚠ Always AFTER `resolveThinking`. A reasoning trace is prose a model talks
+	 * to itself in, and a `Name:` line inside one would otherwise take the real
+	 * reply with it. Always BEFORE `joinContinuation`, because the preserved half
+	 * is the user's text rather than this generation's.
+	 *
+	 * The last frame wins: a stream is cut at the same place on every frame it is
+	 * visible, so the row never grows past the boundary and the reader never
+	 * watches a runaway arrive and then vanish.
+	 */
+	const bound = (text: string): string => {
+		if (!boundary.stops) return text
+		const cut = trimAtSpeakerBoundary(
+			text,
+			boundary.stops,
+			boundary.speakerName
+		)
+		// Assigned rather than accumulated, absent included: the row's content
+		// and the receipt's account of it are the SAME pass, and a frame that
+		// cut inside an unclosed reasoning block must not outlive the closed
+		// one that does not.
+		boundary.trimmedAt = cut.trimmedAt
+		return cut.text
+	}
 
 	if (typeof completionResult === "function") {
 		let ok = true
@@ -888,7 +1219,7 @@ async function runGenerateAndPersist({
 					stagedForDisplay,
 					nativeThinking
 				)
-				stagedForDisplay = resolved.content
+				stagedForDisplay = bound(resolved.content)
 
 				// One seam, and only one — `joinContinuation` states what each
 				// wire mode actually does with the prefill and why the model
@@ -976,7 +1307,7 @@ async function runGenerateAndPersist({
 		// thinking pane. The model's own output is the only thing the parser
 		// should ever see.
 		const finalResolved = resolveThinking(content, nativeThinking)
-		content = finalResolved.content
+		content = bound(finalResolved.content)
 
 		// When continuing, append to existing content — through the same seam
 		// the mid-stream frames above use, so the last frame and the final write
@@ -1029,13 +1360,17 @@ async function runGenerateAndPersist({
 			if (signal.aborted) {
 				// Cancelled — the cancel handler already reset this row; this run's
 				// own completion write is stale and correctly a no-op.
-				return { kind: "normal", isAborted: true }
+				return {
+					kind: "normal",
+					isAborted: true,
+					usage: usageToRecord()
+				}
 			}
 			console.error(
 				"[generateResponse] Failed to update generating message:",
 				generatingMessage.id
 			)
-			return { kind: "silentFail" }
+			return { kind: "silentFail", usage: usageToRecord() }
 		}
 		// Broadcast the sessionMessage to all session participants
 		await broadcastToSessionUsers(
@@ -1070,7 +1405,12 @@ async function runGenerateAndPersist({
 			)
 		}
 		autoEnqueueSession(sessionId).catch(console.error)
-		return { kind: "normal", isAborted }
+		return {
+			kind: "normal",
+			isAborted,
+			usage: usageToRecord(),
+			text: content
+		}
 	} else {
 		content = completionResult.replace(startString, "").trim()
 
@@ -1081,9 +1421,10 @@ async function runGenerateAndPersist({
 		const nonStreamResolved = resolveThinking(content, adapterThinking)
 
 		// When continuing, append to existing content — the same seam again.
+		const nonStreamBounded = bound(nonStreamResolved.content)
 		const nonStreamContent = isContinuing
-			? joinContinuation(preservedContent, nonStreamResolved.content)
-			: nonStreamResolved.content
+			? joinContinuation(preservedContent, nonStreamBounded)
+			: nonStreamBounded
 
 		// --- SWIPE HISTORY + THINKING LOGIC (non-streamed) ---
 		const nonStreamThinking = nonStreamResolved.thinking
@@ -1127,13 +1468,17 @@ async function runGenerateAndPersist({
 			if (signal.aborted) {
 				// Cancelled — the cancel handler already reset this row; this run's
 				// own completion write is stale and correctly a no-op.
-				return { kind: "normal", isAborted: true }
+				return {
+					kind: "normal",
+					isAborted: true,
+					usage: usageToRecord()
+				}
 			}
 			console.error(
 				"[generateResponse] Failed to update generating message:",
 				generatingMessage.id
 			)
-			return { kind: "silentFail" }
+			return { kind: "silentFail", usage: usageToRecord() }
 		}
 		await broadcastToSessionUsers(
 			socket.io,
@@ -1167,6 +1512,11 @@ async function runGenerateAndPersist({
 			)
 		}
 		autoEnqueueSession(sessionId).catch(console.error)
-		return { kind: "normal", isAborted }
+		return {
+			kind: "normal",
+			isAborted,
+			usage: usageToRecord(),
+			text: nonStreamContent
+		}
 	}
 }

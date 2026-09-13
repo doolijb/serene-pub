@@ -93,6 +93,30 @@ export const SIM_WIDTH_PX: Record<SimTier, number> = {
 }
 
 /**
+ * The HEIGHT each preset previews at.
+ *
+ * The split above is about WIDTH — a device's height is no part of the
+ * ¼ | ½ | ¼ frame, and `simulatedGeometry` neither takes nor returns one. The
+ * side column's rail model does (see ./sideRail): whether a group can expand
+ * beside the pinned ones, or has to fly out over the session, is a question
+ * about how tall the COLUMN is. Previewed against the real window's height,
+ * all five presets would answer it with this monitor's number, and the one
+ * behaviour the preview exists to show would never appear at any of them.
+ *
+ * Logical heights, paired with the widths above: the 390×844 phone, a 640-wide
+ * tablet at 800, a 1024 laptop with about 640 of content left under its
+ * browser chrome, a 1440 desktop at 900, and the 2560×1440 monitor. Like the
+ * widths, they are what that device HAS, not a claim about any one window.
+ */
+export const SIM_HEIGHT_PX: Record<SimTier, number> = {
+	compact: 844,
+	cozy: 800,
+	roomy: 640,
+	wide: 900,
+	ultrawide: 1440
+}
+
+/**
  * How many columns the LIVE layout runs a side rail at, for a container of
  * `width`.
  *
@@ -114,6 +138,42 @@ export function railColumns(width: number): number {
 					.columns
 		)
 	)
+}
+
+/**
+ * The width the app stops giving the side zones any layout space at, and so
+ * the width the GRID editor stops being editable at: a margin culled to 0 has
+ * no zone to drag into, and the cells left in the middle are a thumb's width
+ * apart. Read off the tier ladder rather than restated, because it is the same
+ * threshold `.zone-rail` docks at and a session's `matchMedia` reads.
+ */
+export const MOBILE_EDIT_PX = TIER_MIN_PX.roomy
+
+/** Is this width below the breakpoint — a phone, or a window the size of one? */
+export function narrowWidth(width: number): boolean {
+	return !(width >= MOBILE_EDIT_PX)
+}
+
+/** Which editor a viewport gets. */
+export interface MobileEditInput {
+	/** The real window is below the breakpoint. */
+	narrow: boolean
+	/** The width being drawn — a previewed tier's, or the real one — is. */
+	simNarrow: boolean
+	/** The desktop asked to see the grid clamp at the width it is previewing. */
+	grid: boolean
+}
+
+/**
+ * Does the editor draw the phone's ordered rows instead of the grid?
+ *
+ * A real narrow window has no other answer — the zones it would drag into are
+ * culled — so the grid escape is offered only while a desktop PREVIEWS one,
+ * which is what lets the row editor be checked without a phone.
+ */
+export function mobileEditing(o: MobileEditInput): boolean {
+	if (o.narrow) return true
+	return o.simNarrow && !o.grid
 }
 
 export interface SimOption {

@@ -95,6 +95,28 @@ export interface ConfigOption {
 		 * picker on every install that upgraded into the capability model.
 		 */
 		reason?: string
+		/**
+		 * For a `connection-ref` choice: the MODELS on that endpoint (0114).
+		 *
+		 * Carried on the choice rather than fetched when one is picked, for the
+		 * ride-along reason `prompt` gives below: the second half of the pair
+		 * would otherwise be one round trip away from every selection, which in
+		 * practice means the model picker renders empty for a moment on every
+		 * change and the person sees the star flicker.
+		 *
+		 * Absent where the endpoint has none, which is how the panel knows not
+		 * to render a picker with no choice in it.
+		 */
+		models?: Array<{
+			id: number
+			/** What a person sees. */
+			name: string
+			/** What the adapter sends — the tooltip, when the two differ. */
+			model: string
+			enabled: boolean
+			/** Which one a slot naming no model resolves to. */
+			isDefault: boolean
+		}>
 	}>
 	/**
 	 * For a `prompts-ref` option: the row the resolved value points at, in
@@ -176,6 +198,16 @@ export interface ConfigOption {
 		origin?: string
 	}
 	/**
+	 * For a `context-template-ref` option: every language this slot renders,
+	 * most-preferred first.
+	 *
+	 * On the option rather than inside `contextTemplate`, for the reason
+	 * `promptFields` is: the create button needs it precisely when no row is
+	 * selected. A slot that accepts one language sends the one, so a client can
+	 * treat "more than one entry" as "offer a choice" without a second flag.
+	 */
+	templateEngines?: string[]
+	/**
 	 * For a `share` or `per-member` control: the bands, in render order.
 	 *
 	 * Carried on the option because the set is a fact about the *declaration*.
@@ -191,6 +223,29 @@ export interface ConfigOption {
 	}[]
 	/** For a `share` control: the tokens the split divides. See read.ts. */
 	windowTokens?: number
+	/**
+	 * For a `list` control: the declaration every row satisfies, with its
+	 * display text already resolved.
+	 *
+	 * The list editor renders from THIS and from nothing it knows about any
+	 * particular list — which is what a `list` kind in the field language buys
+	 * over a bespoke control per list. A plugin declaring an ordered list of its
+	 * own rows gets the same editor, labelled, with no client change.
+	 */
+	item?: {
+		fields: Array<{
+			key: string
+			label: string
+			control: string
+			of?: readonly string[]
+			members?: readonly {
+				key: string
+				label?: string
+				description?: string
+			}[]
+			default?: unknown
+		}>
+	}
 	/**
 	 * For a `scripts-chain` option: the resolved chain, hydrated in order.
 	 *
@@ -232,6 +287,15 @@ export interface ConfigOption {
 	writeAt?: WriteScope
 	/** True when a row exists at the scope this option's edits land at. */
 	overriddenHere: boolean
+	/**
+	 * True when the **configuration** holds a row for this address — that is,
+	 * when somebody departed from the declared default (ruled 2026-09-10).
+	 *
+	 * The panel's changed marker, and the Changes view's membership test. Not a
+	 * synonym for `overriddenHere`: that one follows the scope an edit lands
+	 * at, so inside a session it describes the session's own override instead.
+	 */
+	changed: boolean
 }
 
 /**
@@ -441,13 +505,48 @@ export interface Decl {
 		description?: string
 		tone?: number
 	}[]
+	/**
+	 * For a `list` control: the declaration every row satisfies, with its
+	 * display text already resolved.
+	 *
+	 * The list editor renders from THIS and from nothing it knows about any
+	 * particular list — which is what a `list` kind in the field language buys
+	 * over a bespoke control per list. A plugin declaring an ordered list of its
+	 * own rows gets the same editor, labelled, with no client change.
+	 */
+	item?: {
+		fields: Array<{
+			key: string
+			label: string
+			control: string
+			of?: readonly string[]
+			members?: readonly {
+				key: string
+				label?: string
+				description?: string
+			}[]
+			default?: unknown
+		}>
+	}
 	authorDefault?: unknown
 	/**
 	 * For a template slot: which language its source is written in, as a
 	 * registered engine id. Carried through so a stored value keeps its engine
 	 * rather than inheriting whatever core happens to render with today.
+	 *
+	 * The one-element spelling of `engines`. Resolve both through
+	 * `acceptedEngines`, never either alone.
 	 */
 	engine?: string
+	/**
+	 * For a template slot: every language it accepts, most-preferred first.
+	 *
+	 * Carried whole rather than collapsed to one here, because the picker needs
+	 * the union of the accepted pools and the create path needs the first
+	 * entry, and collapsing at projection time would leave the second caller
+	 * unable to reconstruct the first.
+	 */
+	engines?: readonly string[]
 	/**
 	 * For a prompts slot: the text fields the node declares.
 	 *

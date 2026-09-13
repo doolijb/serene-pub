@@ -23,7 +23,7 @@
  *   • Rows are inserted with NO explicit id — the identity sequence assigns one —
  *     so there is no id collision with user rows and no `resyncIdSequences` need.
  *
- * ## Why the shipped default is an EMPTY layout
+ * ## Why the shipped default is an EMPTY layout — and the one exception
  *
  * `{}` means "no overrides", which is precisely what the client renders when a
  * user has saved nothing: the app's own built-in arrangement. That makes the
@@ -31,6 +31,13 @@
  * applying it clears your overrides — while keeping the preset system inert for
  * everyone who never touches it. See `$lib/shared/sessionLayout/presets` for
  * how the layers compose.
+ *
+ * A genre may nevertheless ship an arrangement (`SeedableGenre.layout`), and
+ * the Adventure genre does: a world strip above the conversation, the party
+ * docked down the right. That is a genre saying what its surface IS, which is
+ * a different statement from a user saving one, and it still composes the same
+ * way — under the user's own `layoutSettings` and under their own arrangement,
+ * so anybody who has moved a panel keeps what they moved.
  *
  * ## Prune scope
  *
@@ -62,6 +69,21 @@ import {
 /** The genres to seed a default preset for. */
 export interface SeedableGenre {
 	genreId: string
+	/**
+	 * The preset's name. Absent means `Default`.
+	 *
+	 * A genre that ships an arrangement of its own gets to name it — "Adventure"
+	 * rather than "Default" — because the presets list shows it beside a user's
+	 * own saved layouts, and "Default" there reads as "no layout" when it is in
+	 * fact the genre's whole intended surface.
+	 */
+	name?: string
+	/**
+	 * The arrangement, verbatim. Absent means `{}` — "no overrides", i.e. the
+	 * app's own built-in layout, which is what keeps the preset system inert for
+	 * every genre that does not ship one (see the header).
+	 */
+	layout?: Record<string, unknown>
 }
 
 /**
@@ -76,6 +98,13 @@ export async function syncLayoutPresets(
 	// would make the second insert collide.
 	const genreIds = [...new Set(genres.map((g) => g.genreId).filter(Boolean))]
 	const shippedKeys = genreIds.map(layoutPresetSeedKey)
+	// Last wins, so a caller that unions a genre list with a shipped one may
+	// pass the bare id first and the furnished entry after it. Deduplicating on
+	// the id above and looking the content up here keeps those two facts apart:
+	// which genres exist, and what each one ships.
+	const byGenre = new Map(
+		genres.filter((g) => g.genreId).map((g) => [g.genreId, g])
+	)
 
 	// Every row already holding a seed key — authored ones INCLUDED, because
 	// `seed_key` is globally unique. Nothing in the app ever gives a user row a
@@ -91,9 +120,7 @@ export async function syncLayoutPresets(
 		})
 		.from(schema.sessionLayoutPresets)
 		.where(isNotNull(schema.sessionLayoutPresets.seedKey))
-	const existingByKey = new Map(
-		existing.map((r) => [r.seedKey as string, r])
-	)
+	const existingByKey = new Map(existing.map((r) => [r.seedKey as string, r]))
 
 	const writes: Promise<unknown>[] = []
 	for (const genreId of genreIds) {
@@ -101,6 +128,9 @@ export async function syncLayoutPresets(
 		const found = existingByKey.get(seedKey)
 		// A row someone authored is not ours to re-force, whatever key it holds.
 		if (found && found.authorUserId !== null) continue
+		const shipped = byGenre.get(genreId)
+		const name = shipped?.name ?? DEFAULT_PRESET_NAME
+		const layout = shipped?.layout ?? {}
 		if (!found) {
 			writes.push(
 				db.insert(schema.sessionLayoutPresets).values({
@@ -108,8 +138,8 @@ export async function syncLayoutPresets(
 					seedKey,
 					genreId,
 					authorUserId: null,
-					name: DEFAULT_PRESET_NAME,
-					layout: {}
+					name,
+					layout
 				})
 			)
 		} else {
@@ -117,7 +147,7 @@ export async function syncLayoutPresets(
 			writes.push(
 				db
 					.update(schema.sessionLayoutPresets)
-					.set({ genreId, name: DEFAULT_PRESET_NAME, layout: {} })
+					.set({ genreId, name, layout })
 					.where(
 						and(
 							eq(schema.sessionLayoutPresets.seedKey, seedKey),
@@ -177,8 +207,7 @@ function toWire(row: {
 		name: row.name,
 		genreId: row.genreId,
 		isDefault: row.authorUserId === null,
-		layout:
-			row.layout && typeof row.layout === "object" ? row.layout : {}
+		layout: row.layout && typeof row.layout === "object" ? row.layout : {}
 	}
 }
 

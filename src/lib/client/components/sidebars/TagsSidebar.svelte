@@ -348,7 +348,10 @@
 	}
 
 	function handleLorebookClick(lorebook: SelectLorebook) {
-		panelsCtx.digest.lorebookId = lorebook.id
+		panelsCtx.digest.lore = {
+			lorebookId: lorebook.id,
+			scope: "all"
+		}
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
 

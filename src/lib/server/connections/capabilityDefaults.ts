@@ -46,6 +46,16 @@ import { sidesOf, transformIdOf } from "$lib/shared/capabilities/sides"
 
 export interface CapabilityDefault {
 	connectionId: number | null
+	/**
+	 * WHICH MODEL on that endpoint (0114). NULL means its default model.
+	 *
+	 * Half of a PAIR, and it only ever travels with the `connectionId` beside
+	 * it — a model id means nothing without the endpoint it belongs to. That is
+	 * why `setCapabilityDefault` writes them together and why
+	 * `resolveCapabilityTarget` takes the model from whichever TIER won the
+	 * connection rather than walking the two independently.
+	 */
+	connectionModelId: number | null
 	samplingConfigId: number | null
 }
 
@@ -85,6 +95,7 @@ export async function capabilityDefaults(
 	for (const r of rows)
 		out[transformIdOf(r)] = {
 			connectionId: r.connectionId ?? null,
+			connectionModelId: r.connectionModelId ?? null,
 			samplingConfigId: r.samplingConfigId ?? null
 		}
 	return out
@@ -102,6 +113,7 @@ export async function capabilityDefault(
 	return row
 		? {
 				connectionId: row.connectionId ?? null,
+				connectionModelId: row.connectionModelId ?? null,
 				samplingConfigId: row.samplingConfigId ?? null
 			}
 		: undefined
@@ -127,6 +139,7 @@ export async function setCapabilityDefault(
 			// have on the clearing path — see the header of `sides.ts`.
 			...sidesOf(capability as TransformId),
 			connectionId: patch.connectionId ?? null,
+			connectionModelId: patch.connectionModelId ?? null,
 			samplingConfigId: patch.samplingConfigId ?? null
 		})
 		return
@@ -134,9 +147,21 @@ export async function setCapabilityDefault(
 	await db
 		.update(schema.connectionDefaults)
 		.set({
+			// ⚠ The model rides with the CONNECTION and not on its own. A caller
+			// that named an endpoint and said nothing about a model means "its
+			// default", never "keep the model the previous endpoint had" — that
+			// second reading would leave a registration pointing at a model row
+			// belonging to a different connection, which is a pair no picker can
+			// display and no run can resolve. So writing `connectionId` always
+			// writes `connectionModelId` too, even when the caller omitted it.
 			...(patch.connectionId !== undefined
-				? { connectionId: patch.connectionId }
-				: {}),
+				? {
+						connectionId: patch.connectionId,
+						connectionModelId: patch.connectionModelId ?? null
+					}
+				: patch.connectionModelId !== undefined
+					? { connectionModelId: patch.connectionModelId }
+					: {}),
 			...(patch.samplingConfigId !== undefined
 				? { samplingConfigId: patch.samplingConfigId }
 				: {})

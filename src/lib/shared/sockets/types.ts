@@ -16,6 +16,7 @@ import type {
 	LorebookEntryPatch,
 	NewLorebookEntry
 } from "$lib/shared/entries/types"
+import type { MediaFrame } from "$lib/shared/media/frame"
 
 declare global {
 	namespace Sockets {
@@ -24,6 +25,32 @@ declare global {
 			error: string
 			description?: string
 		}
+
+		/**
+		 * The revision-bearing address of an entity's avatar, joined alongside
+		 * `avatarMediaId` by every payload builder that ships one.
+		 *
+		 * A character or persona row holds an id and nothing else, and
+		 * `/media/{id}?v=thumb` is ONE URL string for every revision of that
+		 * file — so a browser that cached those pixels keeps serving them when
+		 * the row changes in place (a re-cut thumbnail, a moved display
+		 * pointer). `/media/{uuid}?v=thumb&r={rev}` changes when the bytes do,
+		 * which is what dislodges them.
+		 *
+		 * Null when the entity wears no avatar; absent when the builder did not
+		 * join, which the client reads as "fall back to the by-id redirect".
+		 */
+		interface AvatarMedia {
+			uuid: string
+			rev: number
+			/** The stored crop, so "adjust crop" opens on what is stored rather
+			 *  than on the default rule. Null when nothing was cropped. */
+			frame?: MediaFrame | null
+		}
+
+		/** A character or persona on the wire, with its avatar's real address
+		 *  joined on. Additive: every consumer of the bare row still type-checks. */
+		type WithAvatarMedia<T> = T & { avatarMedia?: AvatarMedia | null }
 
 		/** Shape of the `*:searchLibrary:error` events (characters and personas both emit this). */
 		interface SearchLibraryErrorResponse {
@@ -50,6 +77,16 @@ declare global {
 		 */
 		interface CapabilityDefault {
 			connectionId: number | null
+			/**
+			 * WHICH MODEL on that endpoint (0114). NULL means its default model,
+			 * which is what every registration the backfill left behind says.
+			 *
+			 * ⚠ Half of a PAIR. It travels with `connectionId` and is cleared
+			 * whenever that changes — a `connection_models` row belongs to one
+			 * endpoint, so a model surviving an endpoint change would name a
+			 * model of some other connection.
+			 */
+			connectionModelId: number | null
 			samplingConfigId: number | null
 		}
 
@@ -107,7 +144,7 @@ declare global {
 			namespace List {
 				interface Params {}
 				interface Response {
-					characterList: Partial<SelectCharacter>[]
+					characterList: WithAvatarMedia<Partial<SelectCharacter>>[]
 				}
 			}
 			namespace Get {
@@ -120,9 +157,13 @@ declare global {
 					// charactersGet (characters.ts) — unlike Create/Update
 					// below, which return the full row.
 					character:
-						| (Omit<
-								SelectCharacter,
-								"embedding" | "embeddingModel" | "vectorizedAt"
+						| (WithAvatarMedia<
+								Omit<
+									SelectCharacter,
+									| "embedding"
+									| "embeddingModel"
+									| "vectorizedAt"
+								>
 						  > & {
 								isOwner: boolean
 								ownerName: string | null
@@ -140,7 +181,7 @@ declare global {
 					avatarFile?: Buffer
 				}
 				interface Response {
-					character: SelectCharacter
+					character: WithAvatarMedia<SelectCharacter>
 				}
 			}
 			namespace Update {
@@ -149,7 +190,7 @@ declare global {
 					avatarFile?: Buffer | null
 				}
 				interface Response {
-					character: SelectCharacter
+					character: WithAvatarMedia<SelectCharacter>
 				}
 			}
 			namespace Delete {
@@ -333,6 +374,10 @@ declare global {
 			height: number | null
 			/** Milliseconds, when the source has a time dimension. */
 			durationMs: number | null
+			/** The region a thumbnail is cut from, in source pixels of the
+			 *  original. Null means the default rule applies — see
+			 *  `$lib/shared/media/frame`. */
+			frame: MediaFrame | null
 			filename: string | null
 			visibility: string
 			position: number
@@ -436,6 +481,23 @@ declare global {
 					visibility: string
 				}
 			}
+			/**
+			 * Re-cut what a thumbnail shows, without touching the bytes.
+			 *
+			 * `frame` is in source pixels of the ORIGINAL, and NULL clears it so
+			 * the default rule applies again — it is never the rule's current
+			 * output written down. The existing thumbnail is removed and `rev`
+			 * bumped, so every open view re-addresses the new crop.
+			 */
+			namespace SetFrame {
+				interface Params {
+					mediaId: number
+					frame: MediaFrame | null
+				}
+				interface Response {
+					media: Media
+				}
+			}
 			namespace Delete {
 				interface Params {
 					mediaId: number
@@ -510,6 +572,29 @@ declare global {
 				}
 				interface Response {
 					derivedCacheEnabled: boolean
+				}
+			}
+			/**
+			 * A file's bytes changed while its id stayed put — a re-cut
+			 * thumbnail, or a display pointer moved by a cull.
+			 *
+			 * Server-initiated, so `Params` is empty: nothing asks for this. It
+			 * exists because a bump writes NOTHING to the character or persona
+			 * wearing the file, so no `characters:update` would fire and every
+			 * open view would keep its stale `<img src>` until a reload.
+			 * Carrying the uuid as well as the token lets a view that never
+			 * joined the media row build the bustable URL from this alone.
+			 */
+			namespace Changed {
+				interface Params {}
+				interface Response {
+					id: number
+					uuid: string
+					rev: number
+					/** The crop as it now stands. Re-framing is one of the
+					 *  reasons the bytes changed, so a view holding an old frame
+					 *  learns the new one from the same announcement. */
+					frame: MediaFrame | null
 				}
 			}
 		}
@@ -893,11 +978,20 @@ declare global {
 					/** A `CapabilityId` — in practice always a transform id. */
 					capability: string
 					id: number | null
+					/**
+					 * WHICH MODEL on that endpoint (0114). Absent or null means
+					 * its default model, which is what the one-click paths
+					 * (`koboldcpp:connectModel`, `ollama:connectModel`) mean —
+					 * they have just made the model they are connecting the
+					 * endpoint's default.
+					 */
+					modelId?: number | null
 				}
 				interface Response {
 					ok: boolean
 					capability: string
 					id?: number | null
+					modelId?: number | null
 				}
 			}
 			/**
@@ -1079,6 +1173,152 @@ declare global {
 				 */
 				type Response = Capabilities.Response
 			}
+
+			/**
+			 * The MODELS on this endpoint (0114) — the second half of the pair.
+			 *
+			 * ## Under `Connections` and not its own namespace
+			 *
+			 * `ConnectionDefaults` earned its own because its subject is the
+			 * CAPABILITY; a model's subject is the connection it hangs off. It
+			 * has no identity apart from one, every handler is addressed by
+			 * `{ id }` the way `Scripts` is, and the editor that renders it is a
+			 * section of the connection form. Same file, same admin gate, same
+			 * `connections:` prefix — which is this file's convention for
+			 * "something a connection HAS".
+			 *
+			 * ## All five answer with the same refreshed view
+			 *
+			 * The `Scripts` pattern exactly, for the reason given there: a write
+			 * changes more than the row it names — creating the first model
+			 * stars it, deleting the starred one promotes another, and both move
+			 * the endpoint's legacy mirror — so two fetches that could disagree
+			 * are one fetch that cannot.
+			 */
+			namespace Models {
+				interface Params {
+					/** The CONNECTION. A model is always addressed through its endpoint. */
+					id: number
+				}
+				/**
+				 * One model row, as a client sees it.
+				 *
+				 * ⚠ No `extraJson`. The column exists and is merged onto the pair
+				 * for an adapter to read, and nothing writes it yet — putting it
+				 * on the wire before there is a control for it would make the
+				 * only way to set it a hand-crafted socket call, and the
+				 * encrypted `apiKey` the crypto path walks lives on the ENDPOINT.
+				 * The handlers refuse the field rather than trusting that.
+				 */
+				interface ModelRow {
+					id: number
+					connectionId: number
+					/** What the adapter sends. */
+					model: string
+					/** What a person sees. Defaults to `model`. */
+					name: string
+					enabled: boolean
+					/** At most one per endpoint — a database constraint, not a convention. */
+					isDefault: boolean
+					/** NULL means "the sampling config decides". */
+					contextWindow: number | null
+					/** NULL means "the endpoint's". A `completion_templates.key`. */
+					promptFormat: string | null
+					/** NULL means "the endpoint's". */
+					tokenCounter: string | null
+					sortOrder: number
+					/**
+					 * This MODEL's capability layer, in the same shape the
+					 * endpoint's column holds. Layered OVER the endpoint's at
+					 * resolution; on its own it says only what a person set for
+					 * this checkpoint and what a probe of it answered.
+					 */
+					capabilities?: Capabilities.Stored
+				}
+				interface Response {
+					connectionId?: number
+					models?: ModelRow[]
+					/** The endpoint's `type`, for the capability panel's key space. */
+					type?: string
+					preset?: string | null
+					error?: string
+				}
+			}
+			/** Add one model by hand. `name` defaults to `model`. */
+			namespace CreateModel {
+				interface Params {
+					id: number
+					model: {
+						model: string
+						name?: string | null
+						enabled?: boolean
+						contextWindow?: number | null
+						promptFormat?: string | null
+						tokenCounter?: string | null
+						sortOrder?: number
+					}
+				}
+				type Response = Models.Response
+			}
+			/**
+			 * Edit one model. A PARTIAL payload: an absent key is "leave it
+			 * alone", which is what lets the row editor save a rename without
+			 * restating every override.
+			 *
+			 * ⚠ `isDefault` is deliberately not here. Moving the star is
+			 * `SetDefaultModel`, because it is a write to two rows under one
+			 * constraint and an `isDefault: true` in a partial patch would be a
+			 * second way to attempt it — one that the partial unique index would
+			 * refuse with a sentence about an index.
+			 */
+			namespace UpdateModel {
+				interface Params {
+					id: number
+					modelId: number
+					model: Partial<
+						Omit<CreateModel.Params["model"], "model">
+					> & { model?: string }
+				}
+				type Response = Models.Response
+			}
+			namespace DeleteModel {
+				interface Params {
+					id: number
+					modelId: number
+				}
+				type Response = Models.Response
+			}
+			/**
+			 * Which model this endpoint means when a pair names only the
+			 * endpoint. Its own event — see `UpdateModel`.
+			 */
+			namespace SetDefaultModel {
+				interface Params {
+					id: number
+					modelId: number
+				}
+				type Response = Models.Response
+			}
+			/**
+			 * Add models a probe listed, all at once.
+			 *
+			 * ⚠ The probed list is NEVER auto-persisted; this runs on an explicit
+			 * press. `listModels` on a large OpenAI-compatible host returns a
+			 * hundred ids including embeddings and transcription endpoints, and
+			 * writing those as rows would fill every picker on the instance with
+			 * things nobody can chat to.
+			 */
+			namespace ImportModels {
+				interface Params {
+					id: number
+					models: { model: string; name?: string | null }[]
+				}
+				interface Response extends Models.Response {
+					/** How many rows it created, and how many were already there. */
+					added?: number
+					skipped?: number
+				}
+			}
 		}
 
 		/**
@@ -1137,6 +1377,31 @@ declare global {
 					 * one. See the `connections.notes` column comment.
 					 */
 					notes?: string
+					/**
+					 * The MODELS on this endpoint (0114), so the card can offer
+					 * the second half of the pair.
+					 *
+					 * Absent where the endpoint has none — a picker showing
+					 * "Default model" over an empty list is the honest rendering
+					 * of a connection nobody has finished setting up.
+					 */
+					models?: ModelOption[]
+				}
+				/**
+				 * One model, for the pair picker. Disabled models are INCLUDED
+				 * and marked: a registration made before somebody switched one
+				 * off has to still be shown as what it is, or the card renders
+				 * empty and "why is mine not in the list" has no answer.
+				 */
+				interface ModelOption {
+					id: number
+					/** What a person sees. */
+					name: string
+					/** What the adapter sends — the subtitle, when the two differ. */
+					model: string
+					enabled: boolean
+					/** Which one a registration naming no model resolves to. */
+					isDefault: boolean
 				}
 				interface SamplingOption {
 					id: number
@@ -1156,6 +1421,17 @@ declare global {
 					capability: string
 					half: "connection" | "sampling"
 					id: number | null
+					/**
+					 * The MODEL, when the half is `connection` (0114). Absent or
+					 * null means "that endpoint's default model".
+					 *
+					 * On the same event rather than a sixth one, because the
+					 * connection and the model are ONE choice made in one
+					 * control: sending them separately would make a moment in
+					 * which the registration names an endpoint and a model
+					 * belonging to the previous one.
+					 */
+					modelId?: number | null
 				}
 				interface Response {
 					capability: string
@@ -1171,7 +1447,7 @@ declare global {
 				interface Response {
 					// Matches the `with: { personaTags: { with: { tag: true } } }`
 					// query in personasList (personas.ts).
-					personaList: (Partial<SelectPersona> & {
+					personaList: (WithAvatarMedia<Partial<SelectPersona>> & {
 						personaTags?: { tag: SelectTag }[]
 					})[]
 				}
@@ -1185,9 +1461,13 @@ declare global {
 					// excluded — see the `columns` restriction in
 					// personasGet (personas.ts).
 					persona:
-						| (Omit<
-								SelectPersona,
-								"embedding" | "embeddingModel" | "vectorizedAt"
+						| (WithAvatarMedia<
+								Omit<
+									SelectPersona,
+									| "embedding"
+									| "embeddingModel"
+									| "vectorizedAt"
+								>
 						  > & {
 								isOwner: boolean
 								ownerName: string | null
@@ -1205,7 +1485,7 @@ declare global {
 					avatarFile?: Buffer
 				}
 				interface Response {
-					persona: SelectPersona
+					persona: WithAvatarMedia<SelectPersona>
 				}
 			}
 			namespace Update {
@@ -1214,7 +1494,7 @@ declare global {
 					avatarFile?: Buffer | null
 				}
 				interface Response {
-					persona: SelectPersona
+					persona: WithAvatarMedia<SelectPersona>
 				}
 			}
 			namespace Delete {
@@ -1417,6 +1697,22 @@ declare global {
 					error?: string
 				}
 			}
+			/**
+			 * The creation pre-fill a preset supplies (23 §9) — the keys the
+			 * new-session form applies (`applyPresetDefaults`), each optional
+			 * and each type-checked at apply, so a preset written by an older
+			 * build or a plugin can carry keys this one ignores.
+			 */
+			interface PresetDefaults {
+				name?: string
+				scenario?: string
+				groupReplyStrategy?: string
+				lorebookId?: number | null
+				tags?: string[]
+				genreFields?: Record<string, unknown>
+				[key: string]: unknown
+			}
+
 			interface PresetRow {
 				id: number
 				name: string
@@ -1435,10 +1731,37 @@ declare global {
 				 * applies where it recognises one and ignores otherwise. Null
 				 * when the preset declares none.
 				 */
-				defaults: Record<string, unknown> | null
+				defaults: PresetDefaults | null
 				enabled: boolean
 				isDefault: boolean
 				isImmutable: boolean
+				/**
+				 * Slots whose bound pipeline this instance cannot resolve
+				 * (ruled 2026-09-10), from the boot reconcile's notices.
+				 *
+				 * Absent means the reconcile found none. It never means the
+				 * preset refuses to run: a stale slot falls back to the
+				 * genre's default and the session says so — this is what puts
+				 * the same fact in front of the administrator, who is the only
+				 * person who can fix it.
+				 */
+				staleBindings?: StaleBinding[]
+			}
+			/**
+			 * One preset slot the instance cannot honour, as every surface
+			 * repeats it: the admin list, the preset editor, the session
+			 * banner, and the run's own explanation.
+			 */
+			interface StaleBinding {
+				event: string
+				/** The slug the preset still names. */
+				bound: string
+				/** Why it does not resolve, as a sentence. */
+				reason: string
+				/** The genre's own answer, which runs instead. Null = none. */
+				fallbackSpec: string | null
+				/** When the condition was first observed, ISO 8601. */
+				firstSeenAt?: string
 			}
 			namespace Presets {
 				interface Params {}
@@ -1453,6 +1776,8 @@ declare global {
 					description?: string
 					/** Copy this preset's selections instead of starting bare. */
 					fromPresetId?: number
+					/** The creation pre-fill — see `PresetRow.defaults`. */
+					defaults?: PresetDefaults | null
 				}
 				interface Response {
 					preset?: PresetRow
@@ -1468,6 +1793,11 @@ declare global {
 					primarySlug?: string | null
 					configSelections?: Record<string, number>
 					includedActions?: string[] | null
+					/**
+					 * The creation pre-fill — see `PresetRow.defaults`. `null`
+					 * clears it; absent leaves it alone.
+					 */
+					defaults?: PresetDefaults | null
 					enabled?: boolean
 					isDefault?: boolean
 				}
@@ -1570,10 +1900,10 @@ declare global {
 						| (SelectSession & {
 								sessionMessages: SelectSessionMessage[]
 								sessionCharacters: (SelectSessionCharacter & {
-									character: SelectCharacter
+									character: WithAvatarMedia<SelectCharacter>
 								})[]
 								sessionPersonas: (SelectSessionPersona & {
-									persona: SelectPersona
+									persona: WithAvatarMedia<SelectPersona>
 								})[]
 								sessionTags?: { tag: { name: string } }[]
 								// sessionGuests table has no `id` column (composite PK of
@@ -1855,6 +2185,39 @@ declare global {
 				interface Response {
 					sessionId: number
 					pipelines: Pipeline[]
+					/**
+					 * Slots the session's preset binds to something that no
+					 * longer answers, so the list above names the genre's
+					 * default instead (ruled 2026-09-10).
+					 *
+					 * On the wire rather than left to the reader to notice:
+					 * the list is a list of slugs, and a slug that is not the
+					 * one the preset promises is indistinguishable from one
+					 * that is unless the substitution is stated.
+					 */
+					presetFallbacks?: SessionAdmin.StaleBinding[]
+				}
+			}
+			/**
+			 * Whether this session is running what its preset says (ruled
+			 * 2026-09-10) — the banner's one read.
+			 *
+			 * Its own verb rather than a field on `sessions:get`: the answer
+			 * costs a resolution per bound event, and the session payload is
+			 * fetched on every page and every message. Asked once, where the
+			 * banner is.
+			 */
+			namespace PresetStatus {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					/** The preset the session was born on, or null. */
+					presetId: number | null
+					presetName: string | null
+					/** Empty when every bound slot resolves. */
+					stale: SessionAdmin.StaleBinding[]
 				}
 			}
 			namespace View {
@@ -1891,6 +2254,13 @@ declare global {
 						prefer?: "grid" | "drawer"
 					}
 					defaultActive?: boolean
+					/**
+					 * Per-instance settings this panel offers, in the SDK's
+					 * `FieldDecl` language (`WidgetDecl.settings`). The settings
+					 * panel renders exactly what is declared here; core adds
+					 * `title` and `lane` to every widget.
+					 */
+					settings?: Record<string, unknown>
 				}
 				interface Params {
 					sessionId: number
@@ -1997,6 +2367,13 @@ declare global {
 						 */
 						layoutSettings: Record<string, unknown>
 						/**
+						 * This user's per-INSTANCE widget settings for this
+						 * session, keyed by widget id: the deviations from each
+						 * widget's declared defaults, never the defaults
+						 * themselves. `{}` when nothing is overridden.
+						 */
+						widgetSettings: Record<string, Record<string, unknown>>
+						/**
 						 * The ALREADY-RESOLVED layout of the active preset —
 						 * `layoutPresetId`'s row if it still resolves, else the
 						 * genre default, else `{}`. Resolving server-side keeps
@@ -2021,6 +2398,15 @@ declare global {
 						 */
 						layoutPresetId?: number | null
 						layoutSettings?: Record<string, unknown>
+						/**
+						 * The caller's per-instance widget settings, keyed by
+						 * widget id, replacing what they have for this session.
+						 * Absent leaves them alone, on the same rule as the two
+						 * keys above. A widget mapped to an empty object is
+						 * stored as nothing: settings are deviations, and an
+						 * empty deviation set is not one.
+						 */
+						widgetSettings?: Record<string, Record<string, unknown>>
 					}
 					interface Response {
 						sessionId: number
@@ -2728,10 +3114,12 @@ declare global {
 
 		// Lorebooks namespace
 		namespace Lorebooks {
+			/** A lorebook row as the wire carries it. */
+			type WireLorebook = SelectLorebook
 			namespace List {
 				interface Params {}
 				interface Response {
-					lorebookList: Partial<SelectLorebook>[]
+					lorebookList: Partial<WireLorebook>[]
 				}
 			}
 			namespace Get {
@@ -2739,7 +3127,7 @@ declare global {
 					id: number
 				}
 				interface Response {
-					lorebook: (SelectLorebook & { tags: string[] }) | null
+					lorebook: (WireLorebook & { tags: string[] }) | null
 					/**
 					 * Every entry of the book, of every type, in one list —
 					 * `typeId` is what splits them, and nothing at this end
@@ -2754,7 +3142,7 @@ declare global {
 					name: string
 				}
 				interface Response {
-					lorebook: SelectLorebook
+					lorebook: WireLorebook
 				}
 			}
 			namespace Update {
@@ -2762,7 +3150,7 @@ declare global {
 					lorebook: UpdateLorebook
 				}
 				interface Response {
-					lorebook: SelectLorebook
+					lorebook: WireLorebook
 				}
 			}
 			namespace Delete {
@@ -2772,6 +3160,16 @@ declare global {
 				interface Response {
 					success?: string
 					error?: string
+				}
+			}
+			namespace Duplicate {
+				interface Params {
+					lorebookId: number
+					/** Defaults to `<name> (copy)`. */
+					name?: string
+				}
+				interface Response {
+					lorebook: WireLorebook
 				}
 			}
 			namespace Export {
@@ -2805,9 +3203,9 @@ declare global {
 					//   content differs — nothing was inserted; the client
 					//   should prompt via lorebooks:importResolve.
 					status: "created" | "unchanged" | "conflict"
-					lorebook: SelectLorebook | null
+					lorebook: WireLorebook | null
 					conflict?: {
-						existingLorebook: SelectLorebook
+						existingLorebook: WireLorebook
 						// The raw parsed import payload, held so the client
 						// can hand it back verbatim in ImportResolve.Params
 						// without re-uploading/re-parsing the file.
@@ -2822,7 +3220,7 @@ declare global {
 					existingId: number
 				}
 				interface Response {
-					lorebook: SelectLorebook
+					lorebook: WireLorebook
 				}
 			}
 			namespace BindingList {
@@ -2858,6 +3256,13 @@ declare global {
 				}
 				interface Response {
 					lorebookBinding: SelectLorebookBinding
+					/**
+					 * The book already held this character or persona, so the
+					 * row above is the one it already had, not a new one. Only
+					 * ever true for a bound row: a background row has no entity
+					 * to resolve through and is always created.
+					 */
+					existing: boolean
 				}
 			}
 			namespace UpdateBinding {
@@ -3056,6 +3461,92 @@ declare global {
 				interface Response {
 					success?: string
 					error?: string
+				}
+			}
+			/**
+			 * How much of each kind the book holds — the navigation column's
+			 * figures, in one query.
+			 *
+			 * Keyed by the **pool kind**: a declared type id, plus `scene` and
+			 * `cast` for the two doors whose rows are not entries, and `places`
+			 * for the entries that are on the map. A kind the book has none of
+			 * comes back as 0 rather than absent, so a count that has not
+			 * arrived stays distinguishable from a count of none.
+			 *
+			 * ⚠ `places` overlaps every other key rather than partitioning
+			 * with them: an entry is a place because of its **edges** — one
+			 * whose other end is an entry, or one typed with a way of getting
+			 * there — so a world lore row can be counted twice, once as its
+			 * type and once as a place. Summing the values is not the size of
+			 * the book.
+			 */
+			namespace Counts {
+				interface Params {
+					lorebookId: number
+				}
+				interface Response {
+					lorebookId: number
+					counts: Record<string, number>
+				}
+			}
+			/**
+			 * What the newest run of one conversation decided about this
+			 * book's entries — the retrieval markers on the list rows.
+			 *
+			 * ⚠ **Two states, and an absent entry is the third.** `fired` went
+			 * into the prompt and `considered` was weighed and left out; an
+			 * entry no mechanism reported on is missing from the map, which is
+			 * a different fact from either and must not be drawn as a weaker
+			 * `considered`.
+			 */
+			namespace RecentDecisions {
+				interface Params {
+					lorebookId: number
+					/** The conversation whose newest run is being read. */
+					sessionId: number
+				}
+				interface Response {
+					lorebookId: number
+					sessionId: number
+					/** Which run answered, absent when none had a ranking. */
+					runId?: string
+					decisions: Record<number, "fired" | "considered">
+					/**
+					 * What the same run did with the narrative graph — the ceiling
+					 * line's figures.
+					 *
+					 * ⚠ **The run's, not one member's.** The relationship mechanism
+					 * walks the speaker's whole graph under one ceiling, so these say
+					 * how many ties reached the prompt out of how many it walked —
+					 * never how many of *this* member's did.
+					 *
+					 * ⚠ **Absent is the common answer.** Only the ranked mechanism
+					 * (`core:query/relationship-search@1`) records figures; the two
+					 * sibling nodes publish keyed sections and no diagnostics at all,
+					 * so a pipeline built on those reports nothing here and the line
+					 * stays absent rather than inventing a denominator.
+					 */
+					relationships?: {
+						/** Ties that reached the prompt. */
+						sent: number
+						/** Ties the mechanism walked, the link hop's included. */
+						considered: number
+						/**
+						 * The ceiling the node was given. Absent when it declared none,
+						 * which is not the same as a ceiling of 0 — that one means the
+						 * graph is left out altogether.
+						 */
+						cap?: number
+						/**
+						 * The tie type that filled the ceiling, where one plainly did.
+						 *
+						 * Said only when the cap actually bit and every tie that got
+						 * through carries the one type: the receipt keeps what was sent
+						 * and not what was cut, so naming a type on a mixed list would
+						 * be a guess at which of them lost.
+						 */
+						cappedType?: string
+					}
 				}
 			}
 			/** Only a type declaring an `order` role answers this. */
@@ -3416,6 +3907,31 @@ declare global {
 					tone?: number
 				}[]
 				/**
+				 * For a `list` control: the declaration every row satisfies,
+				 * with its display text already resolved.
+				 *
+				 * The list editor renders from this rather than from anything
+				 * it knows about any particular list — which is why the field
+				 * language grew a `list` kind rather than the prompt-block pack
+				 * growing a control of its own. A plugin declaring an ordered
+				 * list of its own rows gets the same editor, labelled, with no
+				 * client change at all.
+				 */
+				item?: {
+					fields: Array<{
+						key: string
+						label: string
+						control: string
+						of?: readonly string[]
+						members?: readonly {
+							key: string
+							label?: string
+							description?: string
+						}[]
+						default?: unknown
+					}>
+				}
+				/**
 				 * For a `share` control: the tokens the split divides, when the
 				 * window is known.
 				 *
@@ -3450,6 +3966,29 @@ declare global {
 					 * that is still selectable.
 					 */
 					reason?: string
+					/**
+					 * For a `connection-ref` choice: the MODELS on that endpoint
+					 * (0114) — the second half of the pair the slot stores.
+					 *
+					 * Carried on the choice rather than fetched when one is
+					 * picked, the same ride-along `prompt` makes below: a round
+					 * trip per selection means the model picker renders empty
+					 * for a moment every time the endpoint changes.
+					 *
+					 * Absent for every other kind of choice, and for an endpoint
+					 * that has none — which is how the panel knows not to render
+					 * a picker with no choice in it.
+					 */
+					models?: Array<{
+						id: number
+						/** What a person sees. */
+						name: string
+						/** What the adapter sends — the tooltip, when they differ. */
+						model: string
+						enabled: boolean
+						/** Which one a slot naming no model resolves to. */
+						isDefault: boolean
+					}>
 				}>
 				/**
 				 * For a `prompts-ref` option: the field names the SLOT declares,
@@ -3461,6 +4000,16 @@ declare global {
 				 * absent and the new prompt came out with no boxes at all.
 				 */
 				promptFields?: string[]
+				/**
+				 * For a `context-template-ref` option: every language this slot renders,
+				 * most-preferred first.
+				 *
+				 * On the option rather than inside `contextTemplate`, for the reason
+				 * `promptFields` is: the create button needs it precisely when no row is
+				 * selected. A slot that accepts one language sends the one, so a client can
+				 * treat "more than one entry" as "offer a choice" without a second flag.
+				 */
+				templateEngines?: string[]
 				/**
 				 * For a `prompts-ref` option: the selected prompt row in
 				 * full, so the panel can show and edit its text inline.
@@ -3564,6 +4113,24 @@ declare global {
 				source: "session" | "preset" | "author"
 				writable: boolean
 				overriddenHere: boolean
+				/**
+				 * Did somebody depart from the shipped default here (ruled
+				 * 2026-09-10)?
+				 *
+				 * A configuration stores **deviations**: a row exists only
+				 * where the value differs from what the declaration says, so
+				 * this is the row's existence and nothing more. It is what the
+				 * changed marker beside a field draws, and what the Changes
+				 * view lists.
+				 *
+				 * Not a synonym for `overriddenHere`, which follows the scope
+				 * an edit LANDS at and therefore describes the session's own
+				 * override from inside a session. This one is always about the
+				 * configuration, so a person in a session can see that a field
+				 * was tuned for everyone without that being the thing their own
+				 * reset would remove.
+				 */
+				changed: boolean
 			}
 			/**
 			 * One step of the pipeline, in run order. The `key` is an ordinal,
@@ -3766,6 +4333,28 @@ declare global {
 				}
 			}
 			/**
+			 * Reset a whole configuration — every deviation at once.
+			 *
+			 * A delete of the configuration's rows rather than a loop of
+			 * `clearOption` over what the panel happened to be showing: a
+			 * client-side loop leaves behind exactly the rows the viewer could
+			 * not see, which is the half a person means least to keep.
+			 */
+			namespace ResetConfig {
+				interface Params {
+					slug: string
+					sessionId?: number
+					/** Which configuration. Absent means the instance's selected one. */
+					configId?: number
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
+					/** How many deviations went, so "reset" and "nothing to reset" differ. */
+					cleared?: number
+					error?: string
+				}
+			}
+			/**
 			 * The builder's Save all (22 §3): the whole draft in one request —
 			 * sets and clears together, answered with one refreshed view on
 			 * `pipelines:get` like the per-option events. Entries apply in
@@ -3863,6 +4452,13 @@ declare global {
 				enabled: boolean
 				/** The entry's keys, for the keyword criterion's wording. */
 				keys: string[]
+				/**
+				 * The book the entry lives in, so an explanation can offer to
+				 * open it. Absent when the projection read no entries at all,
+				 * and an absent book is no address: the action is not offered
+				 * rather than guessed at.
+				 */
+				lorebookId?: number
 			}
 			interface RetrievalRow {
 				/** `source:id` — stable, and what the panel keys `{#each}` on. */
@@ -3956,6 +4552,14 @@ declare global {
 					| "keyword"
 					| "semantic"
 					| "entity"
+					/**
+					 * The narrative graph. Its own kind rather than `semantic`,
+					 * because the arm carries a score and no signals — the same
+					 * shape a vector hit has — and folding it in would tell a
+					 * reader an embedding decided something no embedding was
+					 * consulted about.
+					 */
+					| "graph"
 					| "floor"
 					| "none"
 				/** Level two, ordered by contribution where there is one. */
@@ -4065,6 +4669,14 @@ declare global {
 				 * the app considered them rather than lost them.
 				 */
 				dropped: StopSequence[]
+				/**
+				 * Which rule decided the split.
+				 *
+				 * ⚠ Connection identity, so the egress projection removes this
+				 * key for everyone who is not an administrator: the lists
+				 * arrive, the word does not. A reader rendering it says what
+				 * it means without it.
+				 */
 				wire: "chat" | "completion"
 				/**
 				 * The sequence the service says actually matched, where it says.
@@ -4072,6 +4684,28 @@ declare global {
 				 * code that names no sequence, so this is usually absent.
 				 */
 				hit?: string
+			}
+			/**
+			 * What the prompt cost and how much of it the service reused (ruled
+			 * "later, non-disruptive" — this is the recording half).
+			 *
+			 * ⚠ `cached` absent means "this connection does not report reuse",
+			 * which is a different answer from `cached: 0` ("nothing was
+			 * reused"). KoboldCPP reports neither and Ollama reports the total
+			 * only, and collapsing the two would tell those users their caching
+			 * is broken.
+			 *
+			 * Carries no connection identity — three integers — so the
+			 * projection has nothing to remove and a non-admin reading their own
+			 * receipt sees all of it.
+			 */
+			interface RetrievalPromptCache {
+				/** The whole prompt, as the service counted it. */
+				prompt?: number
+				/** Served from a cached prefix. */
+				cached?: number
+				/** Written to the cache by this request — Anthropic alone bills this apart. */
+				write?: number
 			}
 			namespace RunExplain {
 				interface Params {
@@ -4122,6 +4756,30 @@ declare global {
 						 * absent rather than zeroed.
 						 */
 						stops?: RetrievalStops
+						/**
+						 * The prompt cache, where the connection reported
+						 * anything about it. Absent on a run that halted before
+						 * the provider, and on every service that says nothing
+						 * — silence rather than a row claiming zero reuse.
+						 */
+						promptCache?: RetrievalPromptCache
+						/**
+						 * The run took the genre's default because the
+						 * session's preset bound the event to a pipeline this
+						 * instance cannot resolve (ruled 2026-09-10).
+						 *
+						 * Absent on every ordinary run. Present, it is the
+						 * answer to "why is this not the pipeline the preset
+						 * says" — a question the node trail cannot answer,
+						 * because the substitution happened before the first
+						 * node.
+						 */
+						presetFallback?: {
+							preset: string
+							event: string
+							bound: string
+							reason: string
+						}
 					}
 					error?: string
 				}
@@ -4664,6 +5322,16 @@ declare global {
 					optionId: string
 					name?: string
 					source?: string
+					/**
+					 * Which language to write it in — one of the engines the
+					 * slot accepts. Absent means the slot's first, which is
+					 * what every caller predating engine sets gets.
+					 *
+					 * Sent rather than inferred server-side because a slot
+					 * accepting two languages has no way to know which one the
+					 * person clicking `+` meant.
+					 */
+					engine?: string | null
 					sessionId?: number
 				}
 				interface Response {
@@ -4837,6 +5505,50 @@ declare global {
 				}
 				interface Response {
 					library?: Library.Response
+					error?: string
+					/**
+					 * Names the saved template references that the step does
+					 * not supply.
+					 *
+					 * Advice, never a refusal: the template parsed and it will
+					 * render — each of these renders as nothing, which is a
+					 * silence the person who just saved is the only one placed
+					 * to recognise. A syntax error comes back as `error`
+					 * instead, and nothing is written.
+					 */
+					warnings?: TemplateWarning[]
+				}
+			}
+			/** Something to say about a template, and where in it. */
+			interface TemplateProblem {
+				message: string
+				line?: number
+				column?: number
+			}
+			/** One unsupplied name, with where the template says it. */
+			interface TemplateWarning extends TemplateProblem {
+				name: string
+			}
+			namespace ValidateTemplate {
+				interface Params {
+					/** "context" for a whole template, "variable" for a layout. */
+					kind: "context" | "variable"
+					source: string
+					/** The engine the row declares. Required — see PreviewTemplate. */
+					engine: string
+					/** The pool the draft belongs to — a node type or a variable id. */
+					poolId: string
+				}
+				interface Response {
+					/** A syntax error, if the source does not parse at all. */
+					syntax?: TemplateProblem
+					warnings: TemplateWarning[]
+					/**
+					 * False when the engine is a plugin's and core cannot
+					 * analyse it. An empty `warnings` then means "not looked
+					 * at", which an editor must not draw as a clean bill.
+					 */
+					checked: boolean
 					error?: string
 				}
 			}
@@ -5124,6 +5836,28 @@ declare global {
 						id: number
 						runId: string
 						specSlug: string
+						/** The authored semver the slug resolved to. */
+						specVersion: string
+						/**
+						 * The canonical hash of the document this run actually
+						 * ran (ruling 2026-09-10).
+						 *
+						 * The slug and semver name an indirection: an edited
+						 * document republishes under the same semver and the
+						 * slug moves on, so the pair says *which pipeline* and
+						 * this says *which document*. Null on a run that
+						 * recorded none, which is one written before the column
+						 * existed and whose backfill found no version row.
+						 */
+						specHash: string | null
+						/**
+						 * Whether the slug still resolves to that document.
+						 *
+						 * False for a receipt whose pipeline has been edited
+						 * since — and false for one with no hash at all, because
+						 * "current" would be a claim the row cannot support.
+						 */
+						specHashIsCurrent: boolean
 						outcome: string
 						haltNodeKey: string | null
 						haltReason: string | null
@@ -6374,6 +7108,17 @@ declare global {
 					// getLocalEmbeddingUnsupportedReason().
 					localEmbeddingsSupported: boolean
 					/**
+					 * What every embedded row's `embedding_model` is compared
+					 * against — a HuggingFace id, or `api::baseUrl::model`.
+					 *
+					 * Null when nothing is starred for `text->embedding`, which
+					 * is what "embeddings are off" means now. Derived from the
+					 * star rather than read from a column: it replaces
+					 * `system_settings.embedding_model_name`, which four
+					 * handlers had to keep in step with two other columns.
+					 */
+					activeEmbeddingModel: string | null
+					/**
 					 * The instance default connection and sampling config, per
 					 * capability (0175). Keyed by `CapabilityId`. The ONLY place a
 					 * default arrives from — `system_settings` no longer carries
@@ -6428,15 +7173,6 @@ declare global {
 				}
 			}
 			namespace UpdateAccountsEnabled {
-				interface Params {
-					enabled: boolean
-				}
-				interface Response {
-					success: boolean
-					enabled: boolean
-				}
-			}
-			namespace UpdateSummarizationEnabled {
 				interface Params {
 					enabled: boolean
 				}
@@ -6898,36 +7634,46 @@ declare global {
 			}
 		}
 
-		// VectorizationConfig namespace
-		namespace VectorizationConfig {
-			namespace Get {
+		/**
+		 * Named entities — the annotation lane's model, as the sidebar sees it.
+		 *
+		 * ⚠ One event, not three. There is no `enable`, no `setModel` and no
+		 * `loadModel` here: an entity backend is an ordinary connection, so
+		 * creating and editing one is `connections:create`/`update` and choosing
+		 * which one runs is `connections:setDefault`. What is left is the one
+		 * question a screen cannot answer for itself.
+		 */
+		namespace Ner {
+			namespace Status {
 				interface Params {}
 				interface Response {
-					config: { embeddingModelTtlMinutes: number }
-				}
-			}
-			namespace Update {
-				interface Params {
-					embeddingModelTtlMinutes: number
-				}
-				interface Response {
-					success: boolean
+					/** Is a `text->entities` connection starred? */
+					starred: boolean
+					/** The identity the lane would annotate under, or null. */
+					modelId: string | null
+					/** True once the model is loaded and the lane can use it. */
+					modelReady: boolean
+					/** The last load failure, or null. The lane keeps going without it. */
+					loadError: string | null
+					/**
+					 * Annotated ROWS — entries and messages — not the entity rows
+					 * underneath them.
+					 *
+					 * The number the switch confirmation quotes, and the reason it
+					 * rides here rather than on an event of its own: it is one count
+					 * query, asked at the same two moments as the rest of this.
+					 *
+					 * ⚠ No rate estimate accompanies it. Nothing in the lane measures
+					 * throughput, so there is no honest "roughly N minutes" to put
+					 * beside it.
+					 */
+					annotatedRows: number
 				}
 			}
 		}
 
 		// Vectorization namespace
 		namespace Vectorization {
-			/** Embedding model definition sent to the client */
-			interface ModelDef {
-				id: string
-				name: string
-				description: string
-				dimensions: number
-				sizeLabel: string
-				tier: "fast" | "balanced" | "best"
-			}
-
 			/**
 			 * A priority group in the embedding queue. Groups are processed in order;
 			 * within each group the order is: messages → lorebook content → characters → personas.
@@ -6949,70 +7695,55 @@ declare global {
 			namespace ListModels {
 				interface Params {}
 				interface Response {
-					models: ModelDef[]
+					/**
+					 * The starred embedding connection, or null when nothing is
+					 * starred — which is what "embeddings are off" means now.
+					 */
+					activeConnectionId: number | null
+					/**
+					 * The identity every embedded row is stamped with: a
+					 * HuggingFace id, or `api::baseUrl::model`.
+					 */
 					activeModelName: string | null
-					vectorizationEnabled: boolean
-					/** True if the active backend (local or API) is loaded/validated and ready to embed */
+					/** True if the active backend is loaded/validated and ready to embed */
 					modelReady: boolean
-					/** True if the model files are present in the local cache (local mode only — always false in API mode) */
+					/** True if the model files are in the local cache (local only — false for a host) */
 					modelCached: boolean
 					/** Last load error message, if any */
 					loadError: string | null
-					/** Which embedding backend is configured */
-					mode: "local" | "api"
-					apiBaseUrl: string | null
-					/** Returned as-is for the admin's own settings form to pre-fill, same as connections.apiKey elsewhere in the app */
-					apiKey: string | null
-					apiModel: string | null
-					apiDimensions: number | null
 				}
 			}
 
-			namespace EnableVectorization {
-				interface Params {
-					/** Whether to start the queue immediately */
-					startNow: boolean
-					modelName: string
-				}
-				interface Response {
-					success: boolean
-					vectorizationEnabled: boolean
-				}
-			}
-
-			namespace SetApiConfig {
-				interface Params {
-					baseUrl: string
-					apiKey?: string | null
-					model: string
-					/** Whether to start the queue immediately */
-					startNow: boolean
-				}
-				interface Response {
-					success: boolean
-					/** Set when success is false — e.g. the test embed call failed. Nothing is persisted in this case. */
-					error?: string | null
-					/** The composite api::baseUrl::model identifier now active, when success is true */
-					modelName?: string
-					dimensions?: number
-				}
-			}
-
-			namespace DisableVectorization {
+			/**
+			 * Bring the starred backend up now. Configures nothing.
+			 *
+			 * ⚠ Replaces `enable`, `disable`, `setModel` and `setApiConfig`,
+			 * all four of which wrote a column and then loaded. An embedding
+			 * endpoint is an ordinary connection, so creating and editing one
+			 * is `connections:create`/`update` and choosing which one runs is
+			 * `connections:setDefault` — leaving only "the server restarted,
+			 * load it again".
+			 */
+			namespace LoadModel {
 				interface Params {}
 				interface Response {
 					success: boolean
+					error?: string
 				}
 			}
 
-			namespace SetModel {
-				interface Params {
-					modelName: string
-				}
+			/**
+			 * What moving the embedding star would cost, for the confirmation
+			 * that precedes it.
+			 *
+			 * ⚠ Rows only. Nothing in the queue measures throughput, so there is
+			 * no honest rate to put beside it.
+			 */
+			namespace ReindexCost {
+				interface Params {}
 				interface Response {
-					success: boolean
-					modelName: string
-					dimensions: number
+					/** How many rows currently carry a vector. */
+					rows: number
 				}
 			}
 
@@ -7197,12 +7928,54 @@ declare global {
 				createdAt: Date | string
 				updatedAt: Date | string
 			}
+			/**
+			 * One end of an edge, as a writer states it.
+			 *
+			 * An endpoint is a cast binding **or** an entry, never both and
+			 * never neither — the same rule the table's two CHECK constraints
+			 * hold. A road between two places is an edge whose ends are both
+			 * entries; a keeper of a shrine is an edge with one of each.
+			 */
+			type RelationshipEndpoint =
+				| { kind: "cast"; bindingId: number }
+				| { kind: "entry"; entryId: number }
+
+			/**
+			 * One end of an edge, as the server hands it back.
+			 *
+			 * An entry endpoint carries what a graph needs to draw it as a
+			 * node, so a reader never has to go and fetch the row to put a
+			 * label on it. A cast endpoint carries no such pair because the
+			 * binding it names is already in `nodes`.
+			 */
+			type WireRelationshipEndpoint =
+				| { kind: "cast"; bindingId: number }
+				| {
+						kind: "entry"
+						entryId: number
+						name: string
+						typeId: EntryTypeId
+				  }
+
 			// Inline shape of a persisted narrative relationship (mirrors schema.narrativeRelationships)
 			interface NarrativeRelationship {
 				id: number
 				lorebookId: number
-				fromNodeId: number
-				toNodeId: number
+				/** Where the edge starts. The endpoint of record. */
+				from: WireRelationshipEndpoint
+				/** Where it ends. */
+				to: WireRelationshipEndpoint
+				/**
+				 * ⚠ **Populated only when that end is a cast binding, and kept
+				 * for one release.** Every endpoint was a binding before 0124,
+				 * so these are what existing readers bind to; an entry endpoint
+				 * reads `null` here and is only in `from`/`to`. Read `from`/`to`
+				 * — these go in the release after next.
+				 */
+				fromNodeId: number | null
+				toNodeId: number | null
+				fromEntryId: number | null
+				toEntryId: number | null
 				historyEntryId: number | null
 				sceneId: number | null
 				relationshipType: string
@@ -7494,8 +8267,18 @@ declare global {
 			namespace CreateRelationship {
 				interface Params {
 					lorebookId: number
-					fromNodeId: number
-					toNodeId: number
+					/**
+					 * The two ends. Both endpoints must be in `lorebookId` —
+					 * an edge across two lorebooks is refused, not clamped.
+					 */
+					from?: RelationshipEndpoint
+					to?: RelationshipEndpoint
+					/**
+					 * The pre-0124 spelling of a cast endpoint, accepted for
+					 * one release. Ignored when `from`/`to` is given.
+					 */
+					fromNodeId?: number
+					toNodeId?: number
 					relationshipType: string
 					status: string
 					description?: string
@@ -8414,6 +9197,294 @@ declare global {
 				interface Params {}
 				interface Response {
 					tunnel: TunnelView
+				}
+			}
+		}
+
+		/**
+		 * Stats and states (`DESIGN-stats-and-states.md`).
+		 *
+		 * Everything here is **session-scoped and resolved**: a caller reads
+		 * what a value *is* after the session → lorebook → card → default
+		 * chain, and writes at the session layer. The template layers — a
+		 * card's starting values, a world's base ones — belong to the card
+		 * editor and the lorebook workspace, which is why no verb here names
+		 * them: this is the playing surface, and structure is authored away
+		 * from it.
+		 *
+		 * A slot id is `owner:slot/name@N`; the values a template reads are
+		 * keyed by the bare name (`hp`), which is the resolver's business and
+		 * not this wire's.
+		 */
+		namespace State {
+			/** An owner, as everything above the tables names one. */
+			interface Owner {
+				kind:
+					| "card"
+					| "cast_member"
+					| "lorebook"
+					| "session"
+					| "session_cast"
+				id: number
+			}
+
+			/** The resolved shape — the same object templates read as `state`. */
+			interface ResolvedState {
+				world: Record<string, unknown>
+				cast: Record<string, Record<string, unknown>>
+				possessions: Record<
+					string,
+					{ entryId: number; name: string; quantity: number }[]
+				>
+			}
+
+			/** One held change, as the ledger renders it. */
+			interface ProposalRow {
+				id: number
+				sessionId: number
+				messageId: number | null
+				kind: "value" | "possession"
+				payload: Record<string, unknown>
+				status: "pending" | "accepted" | "rejected"
+				proposedBy: string
+				createdAt: string
+			}
+
+			/**
+			 * What a slot IS, for a surface that has to draw it.
+			 *
+			 * A value alone cannot be drawn: `14` is a bar only because the
+			 * slot is an integer with a floor and a ceiling, and `wary` is a
+			 * chip only because the slot is an enum with a closed set. The
+			 * registry that knows this is the host's, so the description
+			 * travels with the read rather than being re-declared client-side.
+			 *
+			 * ⚠ `descriptor` is deliberately absent: it is the sentence the
+			 * MODEL reads, and a widget rendering it would put prompt text on a
+			 * bar.
+			 */
+			interface SlotDescriptor {
+				slotId: string
+				/** The key this slot's value is filed under in the state bag. */
+				key: string
+				/** …and its fully qualified key, always present in the bag. */
+				qualifiedKey: string
+				label: string
+				description?: string
+				type: "integer" | "enum" | "text" | "boolean" | "derived"
+				appliesTo: ("cast" | "world")[]
+			}
+
+			/**
+			 * An owner a session's values belong to, keyed exactly as the
+			 * resolved state keys them.
+			 *
+			 * The key is what the state bag uses (`world`, `verity`); the kind
+			 * and id are what a write names. Sent rather than derived, because
+			 * deriving it client-side would be a second copy of the resolver's
+			 * key function, and the first name with an apostrophe in it is
+			 * where the two would disagree.
+			 */
+			interface StateOwnerRow {
+				key: string
+				kind: "session" | "session_cast"
+				id: number
+				label: string
+				/**
+				 * The configuration in force for this owner, per slot — what a
+				 * bar's bounds and a chip's options are read from. Only the
+				 * slots this owner may carry appear.
+				 */
+				configs: Record<string, Record<string, unknown>>
+			}
+
+			/**
+			 * One anchored row, as the transcript ledger reads it.
+			 *
+			 * The rows, not the resolved answer: resolution says what a stat is
+			 * NOW, and a ledger is about what one message changed. Names ride
+			 * along so a line needs no second lookup per row.
+			 */
+			interface LedgerRow {
+				id: number
+				kind: "value" | "possession"
+				messageId: number | null
+				ownerKey: string
+				ownerLabel: string
+				updatedBy: string
+				createdAt: string
+				/** Value rows. */
+				slotId?: string
+				slotLabel?: string
+				value?: number | string | boolean | null
+				/** Possession rows. */
+				entryId?: number
+				itemName?: string
+				/** How many this row leaves the owner holding. */
+				quantity?: number
+			}
+
+			/** What one slot read before this session first touched it. */
+			interface LedgerBaseline {
+				ownerKey: string
+				slotId: string
+				value: number | string | boolean | null
+			}
+
+			namespace Get {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					state: ResolvedState
+					/**
+					 * Every slot this install declares, and every owner this
+					 * session's values can belong to. Additive to the resolved
+					 * state rather than folded into it: `state` is the shape a
+					 * TEMPLATE reads, and a template author may never see which
+					 * layer a number came from or what it is configured as.
+					 */
+					slots: SlotDescriptor[]
+					owners: StateOwnerRow[]
+				}
+			}
+
+			namespace Set {
+				interface Params {
+					sessionId: number
+					owner: Owner
+					slotId: string
+					/** `null` clears this layer, so the read inherits again. */
+					value: number | string | boolean | null
+				}
+				interface Response {
+					sessionId: number
+					state: ResolvedState
+				}
+			}
+
+			namespace Give {
+				interface Params {
+					sessionId: number
+					owner: Owner
+					entryId: number
+					quantity?: number
+				}
+				interface Response {
+					sessionId: number
+					state: ResolvedState
+				}
+			}
+
+			namespace Take {
+				interface Params {
+					sessionId: number
+					owner: Owner
+					entryId: number
+					quantity?: number
+				}
+				interface Response {
+					sessionId: number
+					state: ResolvedState
+				}
+			}
+
+			namespace Transfer {
+				interface Params {
+					sessionId: number
+					from: Owner
+					to: Owner
+					entryId: number
+					quantity?: number
+				}
+				interface Response {
+					sessionId: number
+					state: ResolvedState
+				}
+			}
+
+			namespace Proposals {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					proposals: ProposalRow[]
+				}
+			}
+
+			/**
+			 * The session's anchored rows, oldest first — what the transcript
+			 * hangs under the message that changed something.
+			 *
+			 * A read of its own because the resolved state cannot answer it:
+			 * `state:get` returns what every stat is now, and a ledger is the
+			 * question "what did THIS message change", which only the rows and
+			 * their anchors can answer.
+			 */
+			namespace Ledger {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					rows: LedgerRow[]
+					/**
+					 * What each changed slot read before the session touched
+					 * it, so the first line of a run reads `hp 20 → 14` rather
+					 * than losing its left-hand side.
+					 */
+					baselines: LedgerBaseline[]
+				}
+			}
+
+			namespace Decide {
+				interface Params {
+					proposalId: number
+					accept: boolean
+				}
+				interface Response {
+					sessionId: number
+					proposalId: number
+					status: "accepted" | "rejected"
+					proposals: ProposalRow[]
+					state: ResolvedState
+				}
+			}
+
+			/**
+			 * Attach a slot to an owner, or change what attaching decided.
+			 *
+			 * Deviations only: `config` is what this owner changes — `{ max: 40 }`
+			 * — never the resolved whole.
+			 */
+			namespace Configure {
+				interface Params {
+					sessionId: number
+					owner: Owner
+					slotId: string
+					config: Record<string, unknown>
+				}
+				interface Response {
+					sessionId: number
+					state: ResolvedState
+				}
+			}
+
+			/**
+			 * Something changed. Broadcast to every participant after every
+			 * write, carrying no payload but the session — a surface re-reads
+			 * rather than patching, which is the same posture `widgetStyles`
+			 * takes and for the same reason: there is exactly one resolution
+			 * and the client must not own a second one.
+			 */
+			namespace Changed {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
 				}
 			}
 		}

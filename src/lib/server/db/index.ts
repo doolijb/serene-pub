@@ -672,6 +672,11 @@ async function runInitialisation(): Promise<void> {
 			withCorePresets(CORE_WIDGETS),
 			meta.version || "0.0.0"
 		)
+
+		// Prune per-instance widget settings against the current declarations,
+		// so a field core stopped declaring stops being stored (PLAN 25).
+		const { syncWidgetSettings } = await import("./widgetSettings")
+		await syncWidgetSettings(CORE_WIDGETS)
 	}
 }
 

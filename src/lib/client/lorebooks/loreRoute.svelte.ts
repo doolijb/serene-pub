@@ -1,0 +1,144 @@
+import { browser } from "$app/environment"
+import { replaceState } from "$app/navigation"
+import { untrack } from "svelte"
+import {
+	emptyRoute,
+	fromHash,
+	reduce,
+	sameRoute,
+	toHash,
+	type LoreAction,
+	type LoreRoute
+} from "./loreRoute"
+
+/**
+ * The lorebook workspace's route, held once and mirrored to the URL fragment.
+ *
+ * Every transition the user can make goes through `navigate`, which is the one
+ * place that asks whether there are unsaved changes. Arrivals — a hash, a deep
+ * link from another panel — go through `set`, because a guard belongs to the
+ * screen being left and there is none to leave.
+ */
+class LoreRouteStore {
+	#route = $state<LoreRoute>(emptyRoute())
+	#unsaved: (() => boolean) | null = null
+	/** The transition a confirmation is currently open for; one at a time. */
+	#pending = $state<{ resolve: (leave: boolean) => void } | null>(null)
+
+	get route(): LoreRoute {
+		return this.#route
+	}
+
+	/** True while the discard-changes confirmation is open. */
+	get confirming(): boolean {
+		return this.#pending !== null
+	}
+
+	/**
+	 * The workspace registers whatever manager is mounted. Returns the
+	 * unregister, which only clears the seam if it is still this one's.
+	 *
+	 * ⚠ The callback must read state, never a `$derived`: it is held here
+	 * across the registering component's whole life and is called from outside
+	 * it, and a derived read outside the effect that owns it is inert.
+	 */
+	registerUnsavedChanges(fn: () => boolean): () => void {
+		this.#unsaved = fn
+		return () => {
+			if (this.#unsaved === fn) this.#unsaved = null
+		}
+	}
+
+	hasUnsavedChanges(): boolean {
+		return !!this.#unsaved?.()
+	}
+
+	/**
+	 * Resolves true when the current screen can be left. The panel's own close
+	 * gate shares this, so closing the panel and moving inside it ask once, in
+	 * the same words.
+	 */
+	confirmLeave(): Promise<boolean> {
+		if (!this.hasUnsavedChanges()) return Promise.resolve(true)
+		if (this.#pending) return Promise.resolve(false)
+		return new Promise<boolean>((resolve) => {
+			this.#pending = { resolve }
+		})
+	}
+
+	resolveConfirm(leave: boolean): void {
+		const pending = this.#pending
+		this.#pending = null
+		pending?.resolve(leave)
+	}
+
+	async navigate(action: LoreAction): Promise<void> {
+		const next = reduce(this.#route, action)
+		if (sameRoute(next, this.#route)) return
+		if (!(await this.confirmLeave())) return
+		this.#route = next
+	}
+
+	set(route: LoreRoute): void {
+		if (sameRoute(route, this.#route)) return
+		this.#route = route
+	}
+
+	/**
+	 * Opens a tab of the inspector on whatever is already selected, or closes
+	 * it when handed nothing.
+	 *
+	 * Unguarded, and that is the rule rather than an omission: the inspector
+	 * is a tab of the screen the editor is on, not a screen being left, so
+	 * asking about unsaved changes here would be asking about a draft nothing
+	 * is discarding.
+	 */
+	openInspector(inspector?: string): void {
+		const route = this.#route
+		if (route.entryId == null) return
+		this.set(
+			reduce(route, {
+				type: "openEntry",
+				entryId: route.entryId,
+				sceneId: route.sceneId,
+				inspector
+			})
+		)
+	}
+
+	/**
+	 * Reads the fragment on arrival, writes it on every change, and follows it
+	 * when something else changes it. The write replaces the history entry
+	 * rather than pushing one: the workspace has its own back, and a step per
+	 * section would bury the page the panel is open over.
+	 */
+	attachHash(): () => void {
+		if (!browser) return () => {}
+		const applyHash = () => {
+			const next = fromHash(location.hash)
+			if (next) this.set(next)
+		}
+		applyHash()
+		window.addEventListener("hashchange", applyHash)
+		const stopMirror = $effect.root(() => {
+			$effect(() => {
+				const hash = toHash(this.#route)
+				const url = new URL(location.href)
+				url.hash = hash
+				// The router's replaceState reads its own page state, which would
+				// make this effect a subscriber to every URL change the router
+				// sees, including the popstate a hand-edited hash fires before
+				// hashchange; the mirror would then write the old address back
+				// over the new one. It depends on the route and nothing else.
+				if (url.href !== location.href)
+					untrack(() => replaceState(url, {}))
+			})
+		})
+		return () => {
+			window.removeEventListener("hashchange", applyHash)
+			stopMirror()
+		}
+	}
+}
+
+export const loreRoute = new LoreRouteStore()

@@ -44,6 +44,8 @@ import {
 	type ResolvedLayouts
 } from "$lib/server/pipelines/entities/variableLayouts"
 import type { Decision } from "$lib/server/pipelines/ranking/select"
+import { applyPromptBlocks } from "$lib/server/pipelines/prompt/promptBlocks"
+import { isShippedPromptBlocks } from "@serene-pub/sdk"
 
 /**
  * **One retrieved item, with its verdict** — what selection hands to rendering.
@@ -383,6 +385,18 @@ export interface RenderInput extends RenderRun {
 	postHistory?: Record<string, unknown>
 	/** The context config's story string. */
 	template: string
+	/**
+	 * The `blocks` param: which sections the prompt is built from, in what order.
+	 *
+	 * `unknown` rather than the entry type, because it arrives off a config
+	 * value and the honest shape of a config value is "whatever was stored".
+	 * `resolvePromptBlocks` is total over it.
+	 *
+	 * Absent, and the shipped pack, both mean **leave the template alone** — see
+	 * `promptBlocks.ts`. Absent is legitimate: the debug preview, the parity
+	 * harness and the template editors all render with no configuration in scope.
+	 */
+	blocks?: unknown
 	/** The prompts slot: system prompt, post-history instructions, and so on. */
 	prompts?: Record<string, unknown>
 	/** Everything else the template references — characters, personas, scenario. */
@@ -511,6 +525,21 @@ export interface RenderedContext {
  * throws rather than being rendered as Handlebars.
  */
 export async function render(input: RenderInput): Promise<RenderedContext> {
+	/**
+	 * The block pack, applied to the story string before anything renders.
+	 *
+	 * Two answers mean **leave the template alone** and both take this branch:
+	 * nobody configured a pack, and the pack is the one Serene Pub ships. So the
+	 * ordinary turn renders the template's own bytes rather than the template's
+	 * bytes rebuilt from a reordering that happened to be the identity — which
+	 * is what keeps the parity corpus comparing prompts, and what stops the
+	 * shipped order being imposed on a story string somebody wrote themselves.
+	 */
+	const packed =
+		input.blocks === undefined || isShippedPromptBlocks(input.blocks)
+			? { template: input.template, notes: [] as string[] }
+			: applyPromptBlocks(input.template, input.engine, input.blocks)
+
 	const included = input.allocation.blocks.filter((a) => a.included)
 	const bySource = (source: string) =>
 		included.filter((a) => a.source === source).map((a) => a.content)
@@ -659,7 +688,7 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		: input.promptFormat
 
 	const rendered = await renderTemplate(input.engine, {
-		template: input.template,
+		template: packed.template,
 		variables: context,
 		promptFormat,
 		// The resolved row, where the caller had one to resolve. The key stays
@@ -725,7 +754,10 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 	 * An EMPTY render still falls through untouched — nothing was lost, and "this
 	 * session has nothing in it" is a different problem with different owners.
 	 */
-	const notes: string[] = []
+	// The pack's own account of what it did comes first: a reader debugging a
+	// prompt with a section missing should meet "prompt blocks, in order: …"
+	// before anything about role structure.
+	const notes: string[] = [...packed.notes]
 	if (isSplit && messages!.length === 0 && rendered.trim() !== "") {
 		messages!.push({ role: "user", content: rendered })
 		notes.push(
@@ -754,7 +786,10 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		rendered: isSplit ? undefined : rendered,
 		messages,
 		promptFormat,
-		usedVariables: referencedVariables(input.template),
+		// The template that ACTUALLY rendered, which is not `input.template`
+		// once a pack has dropped a block: the variable-awareness panel lists
+		// what the prompt contains, never what the story string offered.
+		usedVariables: referencedVariables(packed.template),
 		// Absent, not empty, on the ordinary path — see `RenderedContext.notes`.
 		...(notes.length ? { notes } : {})
 	}

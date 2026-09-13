@@ -960,8 +960,9 @@ describe("lorebooks import/export (PGlite integration)", () => {
 	// content in its place. Now wrapped in a single db.transaction. These
 	// tests force a genuine mid-rebuild failure (two serenepub.bindings
 	// entries resolving to the same real characterId, which violates
-	// lorebook_bindings_unique — (lorebookId, characterId, personaId) — on
-	// the second insert inside restoreBoundEntities) and assert nothing was
+	// lorebook_bindings_character_unique — (lorebookId, characterId) where
+	// characterId is not null — on the second insert inside
+	// restoreBoundEntities) and assert nothing was
 	// partially committed.
 	describe("import restore is transactional (Round-10 audit fix)", () => {
 		test("overwrite: a mid-rebuild failure leaves the original content untouched", async () => {

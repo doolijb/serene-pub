@@ -12,10 +12,12 @@
  *   { type: "array",  items }
  *   { type: "string" }
  *   { type: "string", enum: [...] }      // a single-element enum is a value pin
+ *   { type: "number" } / { type: "integer" }
+ *   { type: "boolean" }
  *
  * Deliberately unsupported — add here WITH A TEST when a schema needs one:
- * optional properties, numbers, booleans, null, nested combinators
- * (oneOf/anyOf/allOf), `const`, and `maxLength`.
+ * optional properties, null, nested combinators (oneOf/anyOf/allOf), `const`,
+ * and `maxLength`.
  *
  * Two intentional narrowings versus the JSON Schema it is given:
  *
@@ -74,6 +76,9 @@ export type JsonSchemaNode =
 	  }
 	| { type: "array"; items: JsonSchemaNode }
 	| { type: "string"; enum?: string[] }
+	| { type: "number" }
+	| { type: "integer" }
+	| { type: "boolean" }
 
 /**
  * A GBNF literal matching the JSON encoding of `value`, quotes included.
@@ -90,14 +95,36 @@ function gbnfLiteral(value: string): string {
 	return `"${json.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
 }
 
-const PRIMITIVES = [
-	String.raw`string ::= "\"" char* "\"" ws`,
-	String.raw`char ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\bfnrt] | "u" [0-9a-fA-F]{4})`,
-	String.raw`ws ::= | " " | "\n" [ \t]{0,20}`
-]
+/**
+ * The scalar rules, by the name a schema node compiles to.
+ *
+ * Emitted only when something references them — see `jsonSchemaToGbnf`. The
+ * number and boolean forms are lifted verbatim from llama.cpp's shipped
+ * `grammars/json.gbnf`, like `string` and `char` above them and for the same
+ * reason: `integer` is that number rule with the fraction and the exponent taken
+ * off, which is the only way a grammar can say "whole".
+ */
+const SCALARS: Record<string, readonly string[]> = {
+	string: [
+		String.raw`string ::= "\"" char* "\"" ws`,
+		String.raw`char ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\bfnrt] | "u" [0-9a-fA-F]{4})`
+	],
+	number: [
+		String.raw`number ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)? ws`
+	],
+	integer: [String.raw`integer ::= ("-"? ([0-9] | [1-9] [0-9]*)) ws`],
+	boolean: [String.raw`boolean ::= ("true" | "false") ws`]
+}
+
+/** Referenced by every rule there is, so it is never conditional. */
+const WS = String.raw`ws ::= | " " | "\n" [ \t]{0,20}`
 
 export function jsonSchemaToGbnf(root: JsonSchemaNode): string {
 	const rules: string[] = []
+	// Which scalars this schema actually reached. A grammar carrying a rule
+	// nothing references is a grammar whose golden file moves whenever a
+	// scalar is ADDED to this file, which is a diff that says nothing.
+	const scalars = new Set<string>()
 	let counter = 0
 
 	const ruleName = (hint: string) => {
@@ -133,7 +160,19 @@ export function jsonSchemaToGbnf(root: JsonSchemaNode): string {
 				// WHITESPACE OWNERSHIP above. `string` already carries one.
 				return `(${node.enum.map(gbnfLiteral).join(" | ")}) ws`
 			}
+			scalars.add("string")
 			return "string"
+		}
+
+		// Each is a value and owns its single trailing `ws`, exactly as `string`
+		// does — see WHITESPACE OWNERSHIP above.
+		if (
+			node.type === "number" ||
+			node.type === "integer" ||
+			node.type === "boolean"
+		) {
+			scalars.add(node.type)
+			return node.type
 		}
 
 		if (node.type === "array") {
@@ -189,5 +228,10 @@ export function jsonSchemaToGbnf(root: JsonSchemaNode): string {
 	}
 
 	const rootRef = build(root, "root")
-	return [`root ::= ${rootRef}`, ...rules, ...PRIMITIVES].join("\n") + "\n"
+	const primitives = Object.entries(SCALARS)
+		.filter(([name]) => scalars.has(name))
+		.flatMap(([, lines]) => lines)
+	return (
+		[`root ::= ${rootRef}`, ...rules, ...primitives, WS].join("\n") + "\n"
+	)
 }

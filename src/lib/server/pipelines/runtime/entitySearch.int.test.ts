@@ -28,7 +28,10 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { and, eq } from "drizzle-orm"
-import type { TestDb } from "$lib/server/utils/testDb"
+import {
+	setConfigValue,
+	type TestDb
+} from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import { run } from "@serene-pub/sdk"
@@ -253,20 +256,16 @@ const selectedConfigId = async () => {
 }
 
 const setParam = async (path: string, value: unknown) =>
-	await db
-		.update(schema.pipelineConfigValues)
-		.set({ value })
-		.where(
-			and(
-				eq(
-					schema.pipelineConfigValues.configId,
-					await selectedConfigId()
-				),
-				eq(schema.pipelineConfigValues.nodeKey, ENTITY_LANE),
-				eq(schema.pipelineConfigValues.slot, "params"),
-				eq(schema.pipelineConfigValues.path, path)
-			)
-		)
+	// ⚠ An upsert, not the `UPDATE` this was. A config stores **deviations**
+	// (ruled 2026-09-10), so at an untouched address there is no row to update
+	// — the old form matched nothing and the lane stayed at the cap of 0 it
+	// ships with, which reads exactly like the mechanism being off.
+	await setConfigValue(
+		db,
+		await selectedConfigId(),
+		{ nodeKey: ENTITY_LANE, slot: "params", path },
+		value
+	)
 
 const annotationsOf = async (entryId: number) =>
 	await db

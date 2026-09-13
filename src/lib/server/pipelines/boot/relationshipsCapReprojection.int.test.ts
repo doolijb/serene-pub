@@ -42,7 +42,11 @@
 import { describe, it, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { and, eq, inArray } from "drizzle-orm"
-import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
+import {
+	createTestDb,
+	setConfigValue,
+	type TestDb
+} from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 
 /** The file that ships, not a re-typed copy of it. */
@@ -117,7 +121,10 @@ async function booted(): Promise<TestDb> {
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	const report = await bootstrapPipelines(db)
-	expect(report.conflict, report.conflict ?? "").toBeUndefined()
+	expect(
+		report.specs.length,
+		"the boot did not get as far as seeding the specs"
+	).toBeGreaterThan(0)
 	return db
 }
 
@@ -129,7 +136,10 @@ async function reboot(db: TestDb) {
 	// A conflict here is the failure the whole file exists to prevent: it is
 	// caught, reported, and `bootstrapPipelines` returns early, so pipelines
 	// silently stop on every upgraded install.
-	expect(report.conflict, report.conflict ?? "").toBeUndefined()
+	expect(
+		report.specs.length,
+		"the boot did not get as far as seeding the specs"
+	).toBeGreaterThan(0)
 }
 
 const registryRows = (db: TestDb, typeIds: readonly string[]) =>
@@ -543,24 +553,58 @@ describe("0111 clears the stored copy of the old declared ceiling", () => {
 					)
 				)
 
-		await db
-			.update(schema.pipelineConfigValues)
-			.set({ value: PREVIOUS_DECLARED_CAP })
-			.where(
-				and(
-					eq(schema.pipelineConfigValues.slot, "params"),
-					inArray(schema.pipelineConfigValues.path, [
-						"maxEntries",
-						"maxMessages"
-					])
-				)
+		// ⚠ **Seeded, where this used to `UPDATE` rows that were already
+		// there.** A config stores only deviations since 2026-09-10, so a fresh
+		// boot holds nothing at any of these addresses — the old form moved
+		// zero rows and left `before` empty, which made the comparison below
+		// vacuous in exactly the direction a mis-scoped DELETE would exploit.
+		//
+		// The addresses come off the declarations, minus the relationship nodes
+		// themselves: what this test controls for is a sweep that took some
+		// OTHER node's `maxEntries` with it.
+		const { declarations } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		for (const slug of SLUGS) {
+			const [spec] = await db
+				.select({
+					id: schema.pipelineSpecs.id,
+					activeVersionId: schema.pipelineSpecs.activeVersionId
+				})
+				.from(schema.pipelineSpecs)
+				.where(eq(schema.pipelineSpecs.slug, slug))
+			if (!spec?.activeVersionId) continue
+			const decls = (await declarations(db, spec.activeVersionId)).filter(
+				(d) =>
+					d.slot === "params" &&
+					(d.path === "maxEntries" || d.path === "maxMessages") &&
+					!(RELATIONSHIP_NODES as readonly string[]).includes(
+						d.nodeKey
+					)
 			)
+			const configs = await db
+				.select({ id: schema.pipelineConfigs.id })
+				.from(schema.pipelineConfigs)
+				.where(eq(schema.pipelineConfigs.specId, spec.id))
+			for (const config of configs)
+				for (const d of decls)
+					await setConfigValue(
+						db,
+						config.id,
+						{ nodeKey: d.nodeKey, slot: d.slot, path: d.path },
+						PREVIOUS_DECLARED_CAP
+					)
+		}
 
 		const before = await siblings()
-		// The relationship nodes hold no row of their own on a fresh database —
-		// the declaration has no default — so everything here belongs to some
-		// other node, which is what makes it a control.
-		expect(before.length).toBeGreaterThan(0)
+		// The relationship nodes hold no row of their own — the declaration has
+		// no default and the loop above skips them — so everything here belongs
+		// to some other node, which is what makes it a control.
+		expect(
+			before.length,
+			"no sibling cap was seeded, so the third statement's predicates " +
+				"are being asserted against an empty table"
+		).toBeGreaterThan(0)
 		expect(
 			before.map((r) => r.nodeKey),
 			"the relationship reads have a stored row on a fresh database, so " +

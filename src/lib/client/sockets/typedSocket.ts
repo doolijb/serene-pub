@@ -426,6 +426,62 @@ export type SocketEventMap = {
 		response: Sockets.ErrorResponse
 	}
 
+	// The MODELS on an endpoint (0114) — the second half of the pair.
+	//
+	// Six events sharing ONE response, the way the three script events do: a
+	// write here changes more than the row it names (creating the first model
+	// stars it, deleting the starred one promotes another, and both move the
+	// endpoint's legacy mirror), so every handler answers with the whole
+	// refreshed list and one client handler applies any of them.
+	"connections:models": {
+		params: Sockets.Connections.Models.Params
+		response: Sockets.Connections.Models.Response
+	}
+	"connections:models:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"connections:createModel": {
+		params: Sockets.Connections.CreateModel.Params
+		response: Sockets.Connections.CreateModel.Response
+	}
+	"connections:createModel:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"connections:updateModel": {
+		params: Sockets.Connections.UpdateModel.Params
+		response: Sockets.Connections.UpdateModel.Response
+	}
+	"connections:updateModel:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"connections:setDefaultModel": {
+		params: Sockets.Connections.SetDefaultModel.Params
+		response: Sockets.Connections.SetDefaultModel.Response
+	}
+	"connections:setDefaultModel:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"connections:deleteModel": {
+		params: Sockets.Connections.DeleteModel.Params
+		response: Sockets.Connections.DeleteModel.Response
+	}
+	"connections:deleteModel:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"connections:importModels": {
+		params: Sockets.Connections.ImportModels.Params
+		response: Sockets.Connections.ImportModels.Response
+	}
+	"connections:importModels:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
 	// Persona events
 	"personas:list": {
 		params: Sockets.Personas.List.Params
@@ -594,6 +650,10 @@ export type SocketEventMap = {
 	"sessions:pipelines": {
 		params: Sockets.Sessions.Pipelines.Params
 		response: Sockets.Sessions.Pipelines.Response
+	}
+	"sessions:presetStatus": {
+		params: Sockets.Sessions.PresetStatus.Params
+		response: Sockets.Sessions.PresetStatus.Response
 	}
 	"sessions:view": {
 		params: Sockets.Sessions.View.Params
@@ -1217,6 +1277,17 @@ export type SocketEventMap = {
 	"pipelines:clearOption": {
 		params: Sockets.Pipelines.ClearOption.Params
 		response: Sockets.Pipelines.ClearOption.Response
+	}
+	// "Reset all" — one delete of the configuration's rows rather than a loop
+	// of clears over the ones the panel happened to have loaded. Answers on
+	// `pipelines:get` like every other mutation.
+	"pipelines:resetConfig": {
+		params: Sockets.Pipelines.ResetConfig.Params
+		response: Sockets.Pipelines.ResetConfig.Response
+	}
+	"pipelines:resetConfig:error": {
+		params: never
+		response: { error?: string }
 	}
 	"pipelines:setOptions": {
 		params: Sockets.Pipelines.SetOptions.Params
@@ -2157,10 +2228,6 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
-	"systemSettings:updateSummarizationEnabled": {
-		params: Sockets.SystemSettings.UpdateSummarizationEnabled.Params
-		response: Sockets.SystemSettings.UpdateSummarizationEnabled.Response
-	}
 	"systemSettings:updateScriptsEnabled": {
 		params: Sockets.SystemSettings.UpdateScriptsEnabled.Params
 		response: Sockets.SystemSettings.UpdateScriptsEnabled.Response
@@ -2209,33 +2276,21 @@ export type SocketEventMap = {
 	}
 
 	// Vectorization events
-	"vectorizationConfig:get": {
-		params: Sockets.VectorizationConfig.Get.Params
-		response: Sockets.VectorizationConfig.Get.Response
-	}
-	"vectorizationConfig:update": {
-		params: Sockets.VectorizationConfig.Update.Params
-		response: Sockets.VectorizationConfig.Update.Response
+	"ner:status": {
+		params: Sockets.Ner.Status.Params
+		response: Sockets.Ner.Status.Response
 	}
 	"vectorization:listModels": {
 		params: Sockets.Vectorization.ListModels.Params
 		response: Sockets.Vectorization.ListModels.Response
 	}
-	"vectorization:enable": {
-		params: Sockets.Vectorization.EnableVectorization.Params
-		response: Sockets.Vectorization.EnableVectorization.Response
+	"vectorization:loadModel": {
+		params: Sockets.Vectorization.LoadModel.Params
+		response: Sockets.Vectorization.LoadModel.Response
 	}
-	"vectorization:disable": {
-		params: Sockets.Vectorization.DisableVectorization.Params
-		response: Sockets.Vectorization.DisableVectorization.Response
-	}
-	"vectorization:setModel": {
-		params: Sockets.Vectorization.SetModel.Params
-		response: Sockets.Vectorization.SetModel.Response
-	}
-	"vectorization:setApiConfig": {
-		params: Sockets.Vectorization.SetApiConfig.Params
-		response: Sockets.Vectorization.SetApiConfig.Response
+	"vectorization:reindexCost": {
+		params: Sockets.Vectorization.ReindexCost.Params
+		response: Sockets.Vectorization.ReindexCost.Response
 	}
 	"vectorization:startQueue": {
 		params: Sockets.Vectorization.StartQueue.Params
@@ -2257,11 +2312,7 @@ export type SocketEventMap = {
 		params: Sockets.Vectorization.ModelDownloadProgress.Params
 		response: Sockets.Vectorization.ModelDownloadProgress.Response
 	}
-	"vectorization:enable:error": {
-		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
-	}
-	"vectorization:setModel:error": {
+	"vectorization:loadModel:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
@@ -2380,6 +2431,14 @@ export type SocketEventMap = {
 	"lorebooks:delete": {
 		params: Sockets.Lorebooks.Delete.Params
 		response: Sockets.Lorebooks.Delete.Response
+	}
+	"lorebooks:duplicate": {
+		params: Sockets.Lorebooks.Duplicate.Params
+		response: Sockets.Lorebooks.Duplicate.Response
+	}
+	"lorebooks:duplicate:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"lorebooks:import": {
 		params: Sockets.Lorebooks.Import.Params
@@ -2504,6 +2563,16 @@ export type SocketEventMap = {
 		params: Sockets.Entries.IterateNext.Params
 		response: Sockets.Entries.IterateNext.Response
 	}
+	// The two reads the lorebook workspace's frame asks for: the navigation
+	// column's figures, and the retrieval markers on its rows.
+	"entries:counts": {
+		params: Sockets.Entries.Counts.Params
+		response: Sockets.Entries.Counts.Response
+	}
+	"entries:recentDecisions": {
+		params: Sockets.Entries.RecentDecisions.Params
+		response: Sockets.Entries.RecentDecisions.Response
+	}
 	"entries:testRetrieval": {
 		params: Sockets.Entries.TestRetrieval.Params
 		response: Sockets.Entries.TestRetrieval.Response
@@ -2604,6 +2673,14 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
+	"media:setFrame": {
+		params: Sockets.Media.SetFrame.Params
+		response: Sockets.Media.SetFrame.Response
+	}
+	"media:setFrame:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"media:setVisibility": {
 		params: Sockets.Media.SetVisibility.Params
 		response: Sockets.Media.SetVisibility.Response
@@ -2655,6 +2732,10 @@ export type SocketEventMap = {
 	"media:setCachePolicy:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
+	}
+	"media:changed": {
+		params: Sockets.Media.Changed.Params
+		response: Sockets.Media.Changed.Response
 	}
 
 	// Tag events
@@ -2812,16 +2893,14 @@ export type SocketEventMap = {
 		params: Record<string, never>
 		response: {
 			setup: {
-				summarizationStepComplete: boolean
 				ragStepComplete: boolean
 			} | null
 		}
 	}
 	"setup:markComplete": {
-		params: { step: "summarization" | "rag" }
+		params: { step: "rag" }
 		response: {
 			setup: {
-				summarizationStepComplete: boolean
 				ragStepComplete: boolean
 			}
 		}
@@ -2946,6 +3025,89 @@ export type SocketEventMap = {
 	"widgetStyles:clone:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
+	}
+
+	// Stats and states — the resolved session state, the three possession
+	// verbs, and the review gate the model's proposals wait at. Every mutation
+	// answers with the whole resolved state and broadcasts `state:changed` to
+	// the session, because one edit can move several reads and a client
+	// patching a row would be a second resolver.
+	"state:get": {
+		params: Sockets.State.Get.Params
+		response: Sockets.State.Get.Response
+	}
+	"state:get:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"state:set": {
+		params: Sockets.State.Set.Params
+		response: Sockets.State.Set.Response
+	}
+	"state:set:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"state:give": {
+		params: Sockets.State.Give.Params
+		response: Sockets.State.Give.Response
+	}
+	"state:give:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"state:take": {
+		params: Sockets.State.Take.Params
+		response: Sockets.State.Take.Response
+	}
+	"state:take:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"state:transfer": {
+		params: Sockets.State.Transfer.Params
+		response: Sockets.State.Transfer.Response
+	}
+	"state:transfer:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"state:configure": {
+		params: Sockets.State.Configure.Params
+		response: Sockets.State.Configure.Response
+	}
+	"state:configure:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"state:ledger": {
+		params: Sockets.State.Ledger.Params
+		response: Sockets.State.Ledger.Response
+	}
+	"state:ledger:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"state:proposals": {
+		params: Sockets.State.Proposals.Params
+		response: Sockets.State.Proposals.Response
+	}
+	"state:proposals:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"state:decide": {
+		params: Sockets.State.Decide.Params
+		response: Sockets.State.Decide.Response
+	}
+	"state:decide:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	/** Broadcast only — no handler answers it; a surface re-reads on it. */
+	"state:changed": {
+		params: Sockets.State.Changed.Params
+		response: Sockets.State.Changed.Response
 	}
 
 	// Global error/success events

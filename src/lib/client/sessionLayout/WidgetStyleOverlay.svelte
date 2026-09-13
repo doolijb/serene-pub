@@ -53,6 +53,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
+	import WidgetSettingsPanel from "./WidgetSettingsPanel.svelte"
 	import {
 		VAR_KEY_RE,
 		canManageStyle,
@@ -525,8 +526,8 @@
 	</Portal>
 {/snippet}
 
-<!-- Nothing at all outside Style mode: no hidden overlay to swallow a
-     widget's own hover affordances in the live view. -->
+<!-- Nothing at all outside the editor's Settings tab: no hidden overlay to
+     swallow a widget's own hover affordances in the live view. -->
 {#if styles.styleMode}
 	<div
 		bind:this={rootEl}
@@ -534,7 +535,7 @@
 		class:visible
 		class:editing={!!draft}
 		role="group"
-		aria-label="Style {label}"
+		aria-label="Settings for {label}"
 		onpointerenter={onEnter}
 		onpointerleave={() => (hovered = false)}
 		onpointerdown={() => styles.arm(widgetId)}
@@ -543,8 +544,16 @@
 	>
 		<div class="ws-card">
 			<div class="ws-card-head">
-				<Icons.Palette size={13} />
+				<Icons.SlidersHorizontal size={13} />
 				<span class="ws-card-title">{label}</span>
+			</div>
+			<!-- The widget's own settings: core's title and lane, whatever the
+			     widget declares, and its behaviour group behind a disclosure.
+			     Style below is one section of the same card. -->
+			<WidgetSettingsPanel {widgetId} />
+			<div class="ws-section">
+				<Icons.Palette size={11} />
+				<span>Style</span>
 			</div>
 			<Select
 				class="ws-select"
@@ -685,6 +694,20 @@
 		}
 	}
 
+	/* A section heading inside the card, on the same terms the settings panel
+	   labels its own — so Style reads as one section of the card rather than as
+	   the card itself. */
+	.ws-section {
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
+		margin-block-start: 0.15rem;
+		font-size: 0.62rem;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		opacity: 0.62;
+	}
 	.ws-card {
 		display: flex;
 		flex-direction: column;

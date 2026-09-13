@@ -43,7 +43,7 @@ import { registerOllamaHandlers } from "./ollama"
 import { registerKoboldCppHandlers } from "./koboldcpp"
 import { registerSummarizeHandlers } from "./summarize"
 import { registerVectorizationHandlers } from "./vectorization"
-import { registerVectorizationConfigHandlers } from "./vectorizationConfigs"
+import { registerNerHandlers } from "./ner"
 import { registerSceneHandlers } from "./scenes"
 import { registerNarrativeGraphHandlers } from "./narrativeGraph"
 import { registerSummarizePromptConfigHandlers } from "./summarizePromptConfigs"
@@ -53,6 +53,7 @@ import { registerTaskQueueHandlers } from "./taskQueue"
 import { registerActivityHandlers } from "./activity"
 import { registerCustomThemeHandlers } from "./customThemes"
 import { registerWidgetStyleHandlers } from "./widgetStyles"
+import { registerStateHandlers } from "./state"
 import { registerCardSourceHandlers } from "./cardSources"
 import { registerPipelineHandlers } from "./pipelines"
 import { registerSessionAdminHandlers } from "./sessionAdmin"
@@ -137,7 +138,7 @@ export function connectSockets(io: {
 		registerMediaHandlers(socket, emitToUser, register)
 		registerSummarizeHandlers(socket, emitToUser, register)
 		registerVectorizationHandlers(socket, emitToUser, register)
-		registerVectorizationConfigHandlers(socket, emitToUser, register)
+		registerNerHandlers(socket, emitToUser, register)
 		registerSceneHandlers(socket, emitToUser, register)
 		registerNarrativeGraphHandlers(socket, emitToUser, register)
 		registerImportHandlers(socket, emitToUser, register)
@@ -146,6 +147,7 @@ export function connectSockets(io: {
 		registerActivityHandlers(socket)
 		registerCustomThemeHandlers(socket, emitToUser, register)
 		registerWidgetStyleHandlers(socket, emitToUser, register)
+		registerStateHandlers(socket, emitToUser, register)
 		registerPipelineHandlers(socket, emitToUser, register)
 		registerSessionAdminHandlers(socket, emitToUser, register)
 		registerTunnelHandlers(socket, emitToUser, register)

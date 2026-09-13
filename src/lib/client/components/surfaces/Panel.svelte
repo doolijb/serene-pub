@@ -16,6 +16,8 @@
 		effectiveWidgetSkin,
 		widgetStylesStore
 	} from "$lib/client/stores/widgetStyles.svelte"
+	import { widgetSettingValues } from "$lib/client/stores/widgetSettings.svelte"
+	import { resolveWidgetInstance } from "$lib/shared/widgets/settings"
 	import { nativeSurface } from "$lib/client/surfaces/registry"
 	import type { PanelInstance } from "$lib/client/surfaces/types"
 	import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
@@ -69,6 +71,23 @@
 		primaryChildren,
 		onFrameAction
 	}: Props = $props()
+
+	/* This instance's settings (PLAN 25): the declaration and this user's stored
+	   deviations, resolved once into the three things a host threads — the
+	   header's title, the lane the subscription reads, and the settings the
+	   widget gets on its ctx. Both bodies below read the same triple, so a
+	   frame is a native widget minus the iframe here too. */
+	let resolved = $derived(
+		resolveWidgetInstance(
+			{
+				id: instance.id,
+				title: instance.title,
+				channels: instance.channels,
+				settings: instance.settings
+			},
+			widgetSettingValues(instance.id)
+		)
+	)
 
 	// Map the declared icon name to a lucide component, with a sensible floor.
 	let IconCmp = $derived(
@@ -144,7 +163,7 @@
 		: 'bg-surface-50-950 border-surface-200-800 rounded-lg border shadow-sm'}"
 	data-panel-id={instance.id}
 	tabindex="-1"
-	aria-label={instance.title}
+	aria-label={resolved.title}
 >
 	{#if !isPrimary && !hideHeader}
 	<!-- Title bar (secondary panels only; suppressed inside a tab group) -->
@@ -164,7 +183,7 @@
 			<span class="text-surface-600-400 p-0.5"><IconCmp size={14} /></span>
 		{/if}
 		<span class="min-w-0 flex-1 truncate text-xs font-semibold">
-			{instance.title}
+			{resolved.title}
 		</span>
 
 		<!-- Controls: reorder / pin-to-drawer / close. Primary shows none. -->
@@ -224,12 +243,13 @@
 		{:else if instance.surface.kind === "frame" && instance.src}
 			<PluginFrame
 				src={instance.src}
-				title={instance.title}
+				title={resolved.title}
 				surface="panel"
 				session={frameSession}
-				channels={instance.channels}
+				channels={resolved.channels}
 				messages={frameMessages}
-				props={{ panelId: instance.id, title: instance.title }}
+				props={{ panelId: instance.id, title: resolved.title }}
+				settings={resolved.settings}
 				skin={frameSkin}
 				{placement}
 				source={manager}
@@ -244,7 +264,7 @@
 			     outside Style mode. -->
 			<WidgetStyleOverlay
 				widgetId={instance.id}
-				label={instance.title}
+				label={resolved.title}
 				mount="frame"
 			/>
 		{:else if NativeCmp}
@@ -261,12 +281,13 @@
 					widget={{
 						id: instance.id,
 						instanceId: instance.id,
-						title: instance.title
+						title: resolved.title
 					}}
 					session={session as any}
 					messages={((session as any)?.sessionMessages ?? []) as any}
-					channels={instance.channels}
-					props={{ panelId: instance.id, title: instance.title }}
+					channels={resolved.channels}
+					props={{ panelId: instance.id, title: resolved.title }}
+					settings={resolved.settings}
 					{placement}
 					source={manager}
 					onAction={onFrameAction}
@@ -274,11 +295,11 @@
 					<NativeCmp
 						{sessionId}
 						{session}
-						channels={instance.channels}
+						channels={resolved.channels}
 					/>
 				</WidgetHost>
 			{:else}
-				<NativeCmp {sessionId} {session} channels={instance.channels} />
+				<NativeCmp {sessionId} {session} channels={resolved.channels} />
 			{/if}
 		{:else}
 			<!-- Unknown surface: a labeled floor, never a crash (21 §6). -->

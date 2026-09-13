@@ -53,16 +53,22 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 /**
- * Sites that build an IMAGE adapter, named rather than pattern-matched.
+ * Sites that build an adapter from a family with NO PROMPT, named rather than
+ * pattern-matched.
  *
- * `BaseImageAdapter` has no prompt, no completion template and no stop path —
- * `generateImage(req, opts)` takes its whole request as a parameter — so a stop
- * list would be meaningless there. Listed by file so the exemption is a decision
- * somebody made rather than a regex that happened not to match.
+ * Neither `BaseImageAdapter` nor `BaseEmbeddingAdapter` has a prompt, a
+ * completion template or a stop path: `generateImage(req, opts)` and
+ * `embedText(req, opts)` each take their whole request as a parameter, so a stop
+ * list would be meaningless on either. Listed by file so each exemption is a
+ * decision somebody made rather than a regex that happened not to match.
  */
-const IMAGE_ONLY = new Set([
+const NO_PROMPT = new Set([
 	"lib/server/sockets/images.ts",
-	"lib/server/pipelines/runtime/dispatchImage.ts"
+	"lib/server/pipelines/runtime/dispatchImage.ts",
+	// `activateApiEmbedding` constructs the embedding adapter the star names and
+	// asks it for one vector to learn the width. Nothing about that request has
+	// an end to stop at.
+	"lib/server/embedding/index.ts"
 ])
 
 interface Site {
@@ -78,7 +84,7 @@ const SITES: Site[] = []
 for (const full of walk(SERVER)) {
 	const file = relative(ROOT, full).replace(/\\/g, "/").replace(/^/, "")
 	const rel = "lib/server/" + relative(SERVER, full).replace(/\\/g, "/")
-	if (IMAGE_ONLY.has(rel)) continue
+	if (NO_PROMPT.has(rel)) continue
 	const src = readFileSync(full, "utf8")
 	const lines = src.split("\n")
 	lines.forEach((line, i) => {
@@ -118,13 +124,13 @@ describe("the scan is capable of the measurement it is used for", () => {
 		expect(files).toContain("lib/server/pipelines/runtime/dispatchStep.ts")
 	})
 
-	it("the image sites it exempts are actually there", () => {
+	it("the prompt-free sites it exempts are actually there", () => {
 		// An exemption for a file that has moved is an exemption for nothing,
 		// standing where a rule used to be.
-		for (const rel of IMAGE_ONLY)
+		for (const rel of NO_PROMPT)
 			expect(
 				readFileSync(join(ROOT, rel), "utf8"),
-				`${rel} is exempted as an image-only site and no longer constructs an adapter`
+				`${rel} is exempted as a prompt-free site and no longer constructs an adapter`
 			).toMatch(CONSTRUCTS)
 	})
 })

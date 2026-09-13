@@ -75,6 +75,48 @@ describe("the shipped default", () => {
 		expect(await valuesOf(config.id)).not.toHaveLength(0)
 	})
 
+	/**
+	 * An author preset's `path` selections have to reach the config, because
+	 * `params.path` has no declared default for the back-fill to fall back on:
+	 * a preset value missing from the shipped config is a parameter that
+	 * resolves EMPTY on every run, with nothing to say so.
+	 *
+	 * A live Adventure turn is what this is written from. Both selections were
+	 * absent, so the voices map iterated the whole plan document as one speaker
+	 * and the keeper's whole document reached `resolve-state-changes` as one
+	 * change with no slot on it.
+	 *
+	 * ⚠ A PIN rather than a reproduction, and the distinction is the same one
+	 * migration ordering has: a fresh database projects whatever the preset
+	 * currently says, so this passes either way. What it cannot see is a config
+	 * row written BEFORE the preset said anything, which `ensureDefaultConfig`
+	 * never revisits — that is what `0122_adventure_config_reprojection` is for.
+	 */
+	it("carries the author preset's path selections, which have no declared default", async () => {
+		const [adventure] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/adventure-respond"))
+		const res = await ensureDefaultConfig(
+			db,
+			adventure.id,
+			adventure.activeVersionId!,
+			adventure.slug
+		)
+		const at = (nodeKey: string, path: string) =>
+			valuesOf(res.configId).then(
+				(rows) =>
+					rows.find(
+						(r: any) =>
+							r.nodeKey === nodeKey &&
+							r.slot === "params" &&
+							r.path === path
+					)?.value
+			)
+		expect(await at("planWrite", "path")).toBe("speakers")
+		expect(await at("keeperWrite", "path")).toBe("values,possessions")
+	})
+
 	it("is created once, not once per boot", async () => {
 		const again = await ensureDefaultConfig(
 			db,
@@ -177,12 +219,7 @@ describe("what a new version does to a tuned config", () => {
 	})
 
 	it("culls a value the new version no longer declares", async () => {
-		await reconcileConfigs(
-			db,
-			specId,
-			specVersionId,
-			RESPOND_SPEC_ID
-		)
+		await reconcileConfigs(db, specId, specVersionId, RESPOND_SPEC_ID)
 
 		const rows = await valuesOf(mine)
 		expect(
@@ -300,12 +337,7 @@ describe("which config a scope has selected", () => {
 	})
 
 	it("falls back to what core shipped when nothing has chosen", async () => {
-		const res = await resolveSelectedConfig(
-			db,
-			specId,
-			RESPOND_SPEC_ID,
-			{}
-		)
+		const res = await resolveSelectedConfig(db, specId, RESPOND_SPEC_ID, {})
 		expect(res!.source).toBe("shipped")
 
 		const [shipped] = await db
@@ -325,22 +357,11 @@ describe("which config a scope has selected", () => {
 		// config is made per session, or it is the instance's.
 		await selectConfig(db, specId, "instance", 0, mine, userId)
 		expect(
-			(await resolveSelectedConfig(
-				db,
-				specId,
-				RESPOND_SPEC_ID,
-				{}
-			))!.source
+			(await resolveSelectedConfig(db, specId, RESPOND_SPEC_ID, {}))!
+				.source
 		).toBe("instance")
 
-		await selectConfig(
-			db,
-			specId,
-			"session",
-			sessionId,
-			mine,
-			userId
-		)
+		await selectConfig(db, specId, "session", sessionId, mine, userId)
 		expect(
 			(await resolveSelectedConfig(db, specId, RESPOND_SPEC_ID, {
 				sessionId
@@ -363,12 +384,9 @@ describe("which config a scope has selected", () => {
 		expect(rows.length).toBeGreaterThan(0)
 		for (const r of rows) expect(r.configId).toBeNull()
 
-		const res = await resolveSelectedConfig(
-			db,
-			specId,
-			RESPOND_SPEC_ID,
-			{ sessionId }
-		)
+		const res = await resolveSelectedConfig(db, specId, RESPOND_SPEC_ID, {
+			sessionId
+		})
 		expect(res!.source).toBe("shipped")
 	})
 
@@ -386,14 +404,7 @@ describe("which config a scope has selected", () => {
 			.returning()
 
 		await expect(
-			selectConfig(
-				db,
-				specId,
-				"session",
-				sessionId,
-				foreign.id,
-				userId
-			)
+			selectConfig(db, specId, "session", sessionId, foreign.id, userId)
 		).rejects.toThrow(/different pipeline/i)
 	})
 })
@@ -553,8 +564,27 @@ describe("an author preset that sets a whole settings slot", () => {
 	it("leaves a node the preset never mentioned on its own default", async () => {
 		// `post` (create-message) is not in the preset. Exploding a whole-slot
 		// value must not spray it across sibling nodes.
+		//
+		// ⚠ Asserted as an ABSENCE since the deviation ruling (2026-09-10): a
+		// config stores only what departs from the declaration, and `post`'s
+		// review declaration already says `off`, so the correct state is no row
+		// rather than a row holding `off`. Both halves are named — not `on`,
+		// and not there at all — because "no row" alone would also be satisfied
+		// by a seeder that had stopped writing this slot entirely, and `not on`
+		// alone would be satisfied by the materialized copy this ruling removes.
 		const values = await configFor("core:spec/generate-image")
-		expect(values.get("post|settings|review")).toBe("off")
+		expect(
+			values.get("post|settings|review"),
+			"the sibling node caught the preset's whole-slot value"
+		).not.toBe("on")
+		expect(
+			values.has("post|settings|review"),
+			"a row was written holding exactly the declared default — it " +
+				"resolves the same today and pins the node to `off` forever after"
+		).toBe(false)
+		// And the one that IS a deviation is still there, so this is not a
+		// config that simply lost its settings slot.
+		expect(values.get("render|settings|review")).toBe("on")
 	})
 
 	it("names the config after the preset it actually applied", async () => {
@@ -665,12 +695,7 @@ describe("naming what was culled", () => {
 	}, 60_000)
 
 	it("labels the cull with what the version that declared it called it", async () => {
-		await reconcileConfigs(
-			db,
-			specId,
-			specVersionId,
-			RESPOND_SPEC_ID
-		)
+		await reconcileConfigs(db, specId, specVersionId, RESPOND_SPEC_ID)
 		const culled = (await pendingNotices(db, mine)).filter(
 			(n: any) => n.kind === "culled" && n.path === retired.path
 		)

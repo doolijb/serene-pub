@@ -19,6 +19,27 @@
 
 export type MobileSide = "left" | "right"
 
+/**
+ * One entry in the panels menu (ruled 2026-09-10). The two per-side buttons
+ * under the nav bar are gone: there is ONE menu button beside the navigation
+ * menu's own, and it opens a sheet listing the session's side groups. A list of
+ * what is there scales with more widgets in a way two edge buttons never did —
+ * and it can say which side a group is on, and which are pinned, rather than
+ * making you open both to find out.
+ *
+ * `icon` is a Lucide NAME, not a component: this module is the bridge between
+ * two subtrees, and a component reference is a thing to draw with, not a thing
+ * to publish. Whoever renders the sheet resolves it, exactly as `iconOf` does.
+ */
+export interface MobileGroup {
+	side: MobileSide
+	/** The render unit's key — a group id, or a lone widget's id. */
+	key: string
+	title: string
+	icon: string
+	pinned: boolean
+}
+
 export interface MobileSidesSnapshot {
 	/** Below the app's 1024px breakpoint. */
 	narrow: boolean
@@ -51,7 +72,7 @@ export function resolveOpen(s: MobileSidesSnapshot): MobileSide | null {
 	return (s.open === "left" ? s.left : s.right) > 0 ? s.open : null
 }
 
-/** Does the header show the L/R group at all? Nothing populated, no buttons. */
+/** Does the header show the panels button at all? Nothing populated, no button. */
 export function showsToggles(
 	s: Pick<MobileSidesSnapshot, "narrow" | "left" | "right">
 ): boolean {
@@ -63,6 +84,16 @@ class MobileSidePanels {
 	left = $state(0)
 	right = $state(0)
 	open = $state<MobileSide | null>(null)
+
+	/** The side groups, published by SessionLayout for the panels menu. */
+	groups = $state<MobileGroup[]>([])
+	/** The panels menu — the sheet listing those groups — is showing. */
+	menuOpen = $state(false)
+	/**
+	 * The group the menu just asked for. SessionLayout takes it, opens that
+	 * group and scrolls to it; a value here is a request, never a state.
+	 */
+	pending = $state<{ side: MobileSide; key: string } | null>(null)
 
 	/**
 	 * The control the overlay was opened from; focus returns here on close.
@@ -84,6 +115,44 @@ class MobileSidePanels {
 			this.open = null
 			this.restoreFocus()
 		}
+	}
+
+	/** The header's panels button. */
+	toggleMenu(opener?: HTMLElement | null) {
+		if (this.menuOpen) {
+			this.closeMenu()
+			return
+		}
+		this.#opener =
+			opener ??
+			(globalThis.document?.activeElement as HTMLElement | null) ??
+			null
+		this.menuOpen = true
+	}
+
+	closeMenu() {
+		if (!this.menuOpen) return
+		this.menuOpen = false
+		this.restoreFocus()
+	}
+
+	/** A group was tapped in the menu: its side's sheet opens, showing it. */
+	openGroup(side: MobileSide, key: string) {
+		this.menuOpen = false
+		this.pending = { side, key }
+		this.open = side
+	}
+
+	/** SessionLayout, acting on the request exactly once. */
+	takePending(): { side: MobileSide; key: string } | null {
+		const p = this.pending
+		this.pending = null
+		return p
+	}
+
+	/** SessionLayout publishes what the menu lists. */
+	setGroups(groups: MobileGroup[]) {
+		this.groups = groups
 	}
 
 	/** Esc, the backdrop, or the overlay's own close button. */

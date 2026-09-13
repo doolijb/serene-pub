@@ -1,5 +1,5 @@
 /**
- * The annotation lane, over a real database and with **no model of any kind**.
+ * The annotation lane, over a real database and with **no model starred**.
  *
  * This is the half of the ruling that the embedding queue could not have
  * hosted. Its loop opened with `if (!candidateModel) break`, before any picker
@@ -7,10 +7,12 @@
  * the entity extractor is dictionary-based on purpose, so that the zero-setup
  * install keeps matching names with nothing downloaded and nothing configured.
  *
- * Every case below runs with the embedding module reporting *nothing
- * configured*. If a model requirement ever leaks back into the shared
- * primitives, these stop indexing and say so, rather than silently becoming a
- * feature that needs a download.
+ * ⚠ The lane CAN have a model now — a starred `text->entities` connection, tier
+ * zero — which makes this file's subject sharper rather than obsolete: with
+ * nothing starred it must behave exactly as it did when it could not have one.
+ * Both runtimes below refuse to load anything, so a model requirement leaking
+ * back into the shared primitives stops indexing here and says so, rather than
+ * silently becoming a feature that needs a download.
  *
  * The second subject is staleness. Annotations are derived data over mutable
  * rows and their freshness is a triple — `(extractorVersion, sourceHash,
@@ -42,6 +44,28 @@ vi.mock("$lib/server/embedding", () => ({
 	getConfiguredModelId: async () => null,
 	loadConfiguredEmbeddingModel: async () => {
 		throw new Error("the annotation lane must never ask for a model")
+	}
+}))
+
+// And no entity model. Nothing in this file stars one, so nothing may ask for
+// one: the lexical tiers are what every case below is about, and a load here
+// would mean the lane had started requiring what it is supposed to merely
+// prefer.
+vi.mock("$lib/server/ner", () => ({
+	loadNerModel: async () => {
+		throw new Error(
+			"the annotation lane must never ask for a model without a star"
+		)
+	},
+	unloadNerModel: () => {},
+	setNerTtlMinutes: () => {},
+	getLoadedNerModelId: () => null,
+	isNerModelReady: () => false,
+	isNerModelLoading: () => false,
+	extractNerSpans: async () => {
+		throw new Error(
+			"the annotation lane must never extract with a model it did not lease"
+		)
 	}
 }))
 
@@ -96,20 +120,35 @@ const annotationsOf = async (entryId: number) =>
 		.from(schema.entryAnnotations)
 		.where(eq(schema.entryAnnotations.entryId, entryId))
 
-describe("a lane with no model indexes anyway", () => {
-	test("declares that it needs none, and an admin surface can read that", async () => {
-		const { annotationLane, ANNOTATION_MODEL_TTL_MINUTES } = await import(
-			"./queue"
+describe("a lane with no model starred indexes anyway", () => {
+	test("declares which model it would load, and an admin surface can read that", async () => {
+		const { annotationLane } = await import("./queue")
+		const { DEFAULT_NER_TTL_MINUTES } = await import(
+			"$lib/shared/constants/ner"
 		)
 		expect(annotationLane.declaration).toEqual({
 			key: "annotation",
 			label: "annotation",
-			// ⚠ Not "no model yet". The extractor is dictionary-based by design;
-			// the optional ONNX mention detector is what this TTL is reserved
-			// for, and it is per-lane rather than a shared constant.
-			model: { role: null, ttlMinutes: ANNOTATION_MODEL_TTL_MINUTES }
+			// ⚠ The ROLE is what this lane's model WOULD be, not whether one is
+			// configured — that is the broker's `peek`, and it answers "none"
+			// here. A role that flipped to null with nothing starred would make
+			// the lane's identity depend on a setting, and an admin surface
+			// enumerating the lanes could not say what this one is for.
+			model: { role: "ner", ttlMinutes: DEFAULT_NER_TTL_MINUTES }
 		})
 	})
+
+	test("asks for no model at all while nothing is starred", async () => {
+		// The assertion the runtime mocks above make: both would throw. This is
+		// the zero-setup guarantee stated as a test rather than as a comment.
+		await import("./queue")
+		const { nerBroker } = await import("$lib/server/ner/broker")
+		expect(await nerBroker.peek()).toEqual({ kind: "none" })
+		expect(await nerBroker.request({ wait: true })).toEqual({
+			kind: "none",
+			modelId: null
+		})
+	}, 60_000)
 
 	test("annotates a book the background sweep has never seen", async () => {
 		const { lorebook, entries } = await makeBook([
@@ -129,7 +168,9 @@ describe("a lane with no model indexes anyway", () => {
 		const rows = await annotationsOf(entries[0]!.id)
 		expect(rows.length).toBeGreaterThan(0)
 		// The entry names itself, which is the gazetteer resolving a title.
-		expect(rows.map((r) => r.entityKey)).toContain(`entry:${entries[0]!.id}`)
+		expect(rows.map((r) => r.entityKey)).toContain(
+			`entry:${entries[0]!.id}`
+		)
 	}, 60_000)
 
 	test("re-annotates a row whose content moved under it", async () => {
@@ -245,7 +286,10 @@ describe("promotion on the annotation lane", () => {
 	test("indexes the entries a query scoped, and reports that it covered them", async () => {
 		const { lorebook, entries } = await makeBook([
 			{ name: "The Sluice Gate", content: "Where the ash wastes drain." },
-			{ name: "The Ember Tide", content: "It comes past the Sluice Gate." }
+			{
+				name: "The Ember Tide",
+				content: "It comes past the Sluice Gate."
+			}
 		])
 		const { promoteEntryAnnotations } = await import("./queue")
 		const { loadVocabulary } = await import("./index")

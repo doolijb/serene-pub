@@ -31,6 +31,7 @@ import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import { DEFAULT_VECTOR_NAME } from "$lib/server/utils/lorebookEntries"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
 
@@ -78,14 +79,34 @@ beforeAll(async () => {
 	testDb = (await import("$lib/server/db")).db as unknown as TestDb
 
 	// The lane's own enabled check, and it is a real one: `isEnabled` reads
-	// `system_settings.vectorization_enabled` on every promotion, so without
-	// this row every case below would report "switched off" and pass vacuously
-	// on the degradation test while failing the rest. id is explicit for
-	// `createTestDb`'s sequence-resync reason — see the peek-before-load suite.
+	// the `text->embedding` star on every promotion, so without it every case
+	// below would report "switched off" and pass vacuously on the degradation
+	// test while failing the rest. id is explicit for `createTestDb`'s
+	// sequence-resync reason — see the peek-before-load suite.
 	await testDb.insert(schema.systemSettings).values({
-		id: 1,
-		vectorizationEnabled: true,
-		embeddingModelName: MODEL
+		id: 1
+	})
+	const [embeddingConn] = await testDb
+		.insert(schema.connections)
+		.values({
+			name: "Eager Promotion Embeddings",
+			modality: "embeddings",
+			type: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+			model: MODEL,
+			extraJson: {},
+			capabilities: {}
+		} as any)
+		.returning()
+	await testDb.insert(schema.connectionModels).values({
+		connectionId: embeddingConn.id,
+		model: MODEL,
+		name: MODEL,
+		isDefault: true
+	})
+	await testDb.insert(schema.connectionDefaults).values({
+		input: "text",
+		output: "embedding",
+		connectionId: embeddingConn.id
 	})
 }, 60_000)
 
@@ -312,7 +333,7 @@ describe("the lane declares itself", () => {
 		expect(embeddingLane.declaration.model.ttlMinutes).toBe(11)
 	})
 
-	test("the two lanes are both registered, and only one wants a model", async () => {
+	test("both lanes are registered, and each names its own kind of model", async () => {
 		await import("./vectorizationQueue")
 		await import("$lib/server/annotations/queue")
 		const { listLanes } = await import("$lib/server/indexing/lane")
@@ -321,9 +342,12 @@ describe("the lane declares itself", () => {
 		)
 		expect(roles).toMatchObject({
 			embedding: "embedding",
-			// ⚠ Not a placeholder for a model that is coming. The extractor is
-			// dictionary-based on purpose so the zero-setup path keeps working.
-			annotation: null
+			// ⚠ The role is what this lane's model WOULD be, not whether one is
+			// configured. Its extractor is dictionary-based so the zero-setup
+			// path keeps working with nothing starred, and the broker's `peek`
+			// is what says so — a role that flipped with a setting would make
+			// the lane's identity depend on one.
+			annotation: "ner"
 		})
 	})
 })

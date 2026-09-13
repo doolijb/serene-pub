@@ -11,8 +11,9 @@
  * Exercises the real production path end-to-end (real PGlite DB via
  * createTestDb(), real getConfiguredEmbeddingTarget()/
  * loadConfiguredEmbeddingModel()/activateApiEmbedding()/embed()), mocking
- * only the external `openai` client — same approach as
- * loadConfiguredEmbeddingModel.test.ts — so "current" rows are established
+ * only the `fetch` call `OpenAIEmbeddingAdapter` makes to the embeddings
+ * endpoint — the one external boundary left now that a connection replaced
+ * the `openai`-client-backed singleton — so "current" rows are established
  * by actually running a real embed cycle, not by hand-writing an
  * embeddingModel string that only has to agree with itself.
  */
@@ -24,20 +25,32 @@ import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import { DEFAULT_VECTOR_NAME } from "$lib/server/utils/lorebookEntries"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
 let dataDir: string
+let embeddingConnectionId: number
 
-const testEmbedCreate = vi.fn(async () => ({
-	data: [{ embedding: Array(8).fill(0.1) }]
+const testEmbedCreate = vi.fn(async (input: string[]) => ({
+	data: input.map((_, index) => ({ index, embedding: Array(8).fill(0.1) }))
 }))
 
-vi.mock("openai", () => ({
-	OpenAI: class {
-		embeddings = { create: testEmbedCreate }
-	}
-}))
+// `OpenAIEmbeddingAdapter` speaks plain `fetch` to `<baseUrl>/embeddings` —
+// there is no client library left to mock, so the fake answers at the wire.
+vi.stubGlobal(
+	"fetch",
+	vi.fn(async (_url: unknown, init?: { body?: string }) => {
+		const { input } = JSON.parse(init?.body ?? "{}")
+		const body = await testEmbedCreate(input)
+		return {
+			ok: true,
+			status: 200,
+			json: async () => body,
+			text: async () => ""
+		}
+	})
+)
 
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
@@ -68,19 +81,35 @@ beforeAll(async () => {
 	// semantics (marks the value as already consumed) — the first default-
 	// generated insert would otherwise land on id 2, not 1.
 	await testDb.insert(schema.systemSettings).values({
-		id: 1,
-		vectorizationEnabled: true,
-		// Value is unused in API mode (only its truthiness gates the initial
-		// check) but must be non-empty regardless of mode — matches
-		// loadConfiguredEmbeddingModel.test.ts's API-mode fixture.
-		embeddingModelName: "api::placeholder::placeholder"
+		id: 1
 	})
-	await testDb.insert(schema.vectorizationConfigs).values({
-		id: 1,
-		embeddingModelTtlMinutes: 5,
-		mode: "api",
-		apiBaseUrl: "https://api.example.com",
-		apiModel: "model-a"
+	// The star: an `openai-embeddings` connection with a default model row,
+	// plus the `text->embedding` row in `connection_defaults` that switches
+	// embeddings on. `setApiModel()` below is what used to update
+	// `vectorization_configs.api_model`.
+	const [embeddingConn] = await testDb
+		.insert(schema.connections)
+		.values({
+			name: "Peek Before Load Embeddings",
+			modality: "embeddings",
+			type: CONNECTION_TYPE.OPENAI_EMBEDDINGS,
+			baseUrl: "https://api.example.com",
+			model: "model-a",
+			extraJson: {},
+			capabilities: {}
+		} as any)
+		.returning()
+	embeddingConnectionId = embeddingConn.id
+	await testDb.insert(schema.connectionModels).values({
+		connectionId: embeddingConn.id,
+		model: "model-a",
+		name: "model-a",
+		isDefault: true
+	})
+	await testDb.insert(schema.connectionDefaults).values({
+		input: "text",
+		output: "embedding",
+		connectionId: embeddingConn.id
 	})
 }, 60_000)
 
@@ -94,10 +123,17 @@ async function makeUser(username: string) {
 }
 
 async function setApiModel(apiModel: string) {
+	// Both columns: `resolveEmbeddingTarget` reads the model off the merged
+	// pair (the `connection_models` row wins), but the connection's own
+	// `model` column is kept in step the way a real write does.
 	await testDb
-		.update(schema.vectorizationConfigs)
-		.set({ apiModel })
-		.where(eq(schema.vectorizationConfigs.id, 1))
+		.update(schema.connectionModels)
+		.set({ model: apiModel, name: apiModel })
+		.where(eq(schema.connectionModels.connectionId, embeddingConnectionId))
+	await testDb
+		.update(schema.connections)
+		.set({ model: apiModel })
+		.where(eq(schema.connections.id, embeddingConnectionId))
 }
 
 async function makeStaleLoreEntry(userId: number, name: string) {

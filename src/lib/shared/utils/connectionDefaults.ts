@@ -68,8 +68,7 @@ export const CONNECTION_DEFAULTS = {
 			bypassEos: false,
 			grammarRetainState: false,
 			logprobs: false,
-			replaceInstructPlaceholders: false,
-			enableThinking: null as boolean | null
+			replaceInstructPlaceholders: false
 		}
 	},
 	[CONNECTION_TYPE.KOBOLDCPP_MANAGED]: {
@@ -91,7 +90,6 @@ export const CONNECTION_DEFAULTS = {
 			grammarRetainState: false,
 			logprobs: false,
 			replaceInstructPlaceholders: false,
-			enableThinking: null as boolean | null,
 			// No sdModelFile here, deliberately — a connection names exactly ONE
 			// model, and this one names a text GGUF. An image model riding along
 			// in the same row would be a second model on a row that has no way
@@ -139,9 +137,7 @@ export const CONNECTION_DEFAULTS = {
 		tokenCounter: TokenCounterOptions.ANTHROPIC_CLAUDE,
 		extraJson: {
 			stream: true,
-			apiKey: "",
-			thinking: false,
-			thinkingBudget: 8000
+			apiKey: ""
 		}
 	},
 	[CONNECTION_TYPE.A1111]: {
@@ -154,6 +150,64 @@ export const CONNECTION_DEFAULTS = {
 		extraJson: {
 			apiKey: ""
 		}
+	},
+	/**
+	 * The three embedding types.
+	 *
+	 * `modality: "embeddings"` is the load-bearing field — it is what
+	 * `withConnectionDefaults` writes into `connections.modality`, which is what
+	 * the sidebar filters on and what `shapeOfModality` turns into the shape a
+	 * provider slot compares against. Without it a new embedding connection
+	 * would be filed under Large Language Models.
+	 *
+	 * No `promptFormat` or `tokenCounter`: those are text-generation concerns,
+	 * and an embedding request has neither a template nor a budget.
+	 */
+	[CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS]: {
+		type: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+		modality: "embeddings",
+		// ⚠ Empty and not ABSENT. There is genuinely no host — the model runs in
+		// this process and its weights live in the app data directory — but
+		// omitting the key makes `baseUrl` optional across the whole union, and
+		// every consumer of `CONNECTION_DEFAULTS[type].baseUrl` (the document
+		// view's create form among them) then has to handle an undefined that
+		// only one entry can produce. Empty is what OPENAI already says for
+		// "nothing set yet", and the form below hides the field anyway.
+		baseUrl: "",
+		model: "",
+		extraJson: {}
+	},
+	[CONNECTION_TYPE.OPENAI_EMBEDDINGS]: {
+		type: CONNECTION_TYPE.OPENAI_EMBEDDINGS,
+		modality: "embeddings",
+		baseUrl: "",
+		model: "",
+		extraJson: {
+			apiKey: ""
+		}
+	},
+	[CONNECTION_TYPE.OLLAMA_EMBEDDINGS]: {
+		type: CONNECTION_TYPE.OLLAMA_EMBEDDINGS,
+		modality: "embeddings",
+		baseUrl: "http://localhost:11434",
+		model: "",
+		extraJson: {}
+	},
+	/**
+	 * The entity type, filed under its own modality for the same reason the
+	 * three above are: `withConnectionDefaults` writes this into
+	 * `connections.modality`, and a row without it lands in the LLM list and is
+	 * offered for the chat star.
+	 *
+	 * `baseUrl` is empty rather than absent — see the local embeddings entry for
+	 * why an omitted key is worse than an empty one here.
+	 */
+	[CONNECTION_TYPE.LOCAL_ONNX_NER]: {
+		type: CONNECTION_TYPE.LOCAL_ONNX_NER,
+		modality: "ner",
+		baseUrl: "",
+		model: "",
+		extraJson: {}
 	}
 }
 
@@ -510,8 +564,9 @@ export const OPENAI_COMPATIBLE_PRESETS = [
 export function presetLabel(slug: string | null | undefined): string {
 	if (!slug) return "custom"
 	return (
-		OPENAI_COMPATIBLE_PRESETS.find((p) => (p as { slug?: string }).slug === slug)
-			?.name ?? slug
+		OPENAI_COMPATIBLE_PRESETS.find(
+			(p) => (p as { slug?: string }).slug === slug
+		)?.name ?? slug
 	)
 }
 

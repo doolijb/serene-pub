@@ -31,7 +31,9 @@ export const DOC_ORDER: string[] = [
 	"sessions",
 	"session-layout",
 	"lorebooks",
+	"stats-and-states",
 	"connections",
+	"pipelines",
 	"context-templates",
 	"prompt-configs",
 	"summarization",
@@ -46,7 +48,8 @@ export const DOC_ORDER: string[] = [
 	"troubleshooting",
 	"android",
 	"hosting",
-	"environment-variables"
+	"environment-variables",
+	"data-model-notes"
 ]
 
 const rawDocs = import.meta.glob("/docs/**/*.md", {

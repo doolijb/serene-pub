@@ -7,6 +7,7 @@ import {
 	mapNarrativeNode,
 	mapNarrativeRelationship,
 	attachNarrativeGraph,
+	assignEntryLocalIds,
 	type SpecV3LorebookLike
 } from "./lorebookExportMapper"
 import {
@@ -358,6 +359,50 @@ describe("buildSpecV3Lorebook", () => {
 		expect(book.entries[0].extensions.serenepub.localId).toBe(1)
 	})
 
+	test("states an entry's parent by local id, and gives a referenced entry one", () => {
+		const book = buildSpecV3Lorebook(
+			{ name: "Book", description: "", uuid: "u1", extraJson: {} },
+			[
+				{
+					...baseEntry,
+					id: 10,
+					position: 0,
+					category: null,
+					anchorEntryId: null
+				},
+				{
+					...baseEntry,
+					id: 11,
+					position: 1,
+					category: null,
+					anchorEntryId: 10
+				}
+			],
+			new Map(),
+			new Map(),
+			new Map(),
+			new Map([[10, 1]])
+		)
+		expect(book.entries[0].extensions.serenepub.entryLocalId).toBe(1)
+		expect(
+			book.entries[0].extensions.serenepub.anchorEntryLocalId
+		).toBeUndefined()
+		expect(
+			book.entries[1].extensions.serenepub.entryLocalId
+		).toBeUndefined()
+		expect(book.entries[1].extensions.serenepub.anchorEntryLocalId).toBe(1)
+	})
+
+	test("writes neither key for a book nothing points inside", () => {
+		const book = buildSpecV3Lorebook(
+			{ name: "Book", description: "", uuid: "u1", extraJson: {} },
+			[{ ...baseEntry, id: 10, position: 0, category: null }]
+		)
+		expect(book.entries[0].extensions.serenepub).toEqual({
+			entryType: "world"
+		})
+	})
+
 	test("includes uuid and version in top-level extensions.serenepub", () => {
 		const book = buildSpecV3Lorebook(
 			{ name: "Book", description: "", uuid: "the-uuid", extraJson: {} },
@@ -398,6 +443,37 @@ describe("assignHistoryEntryLocalIds", () => {
 		expect(map.get(5)).toBe(1)
 		expect(map.get(42)).toBe(2)
 		expect(map.get(99)).toBe(3)
+	})
+})
+
+describe("assignEntryLocalIds", () => {
+	test("numbers only the entries something in the document points at", () => {
+		const map = assignEntryLocalIds(
+			[
+				{ ...baseEntry, id: 7, position: 0, anchorEntryId: null },
+				{ ...baseEntry, id: 8, position: 1, anchorEntryId: 7 },
+				{ ...baseEntry, id: 9, position: 2, anchorEntryId: null }
+			],
+			[]
+		)
+		// 7 is a parent, 8 and 9 are pointed at by nothing.
+		expect([...map.entries()]).toEqual([[7, 1]])
+	})
+
+	test("numbers an edge endpoint too, in the entries' own order", () => {
+		const map = assignEntryLocalIds(
+			[
+				{ ...baseEntry, id: 7, position: 0, anchorEntryId: null },
+				{ ...baseEntry, id: 8, position: 1, anchorEntryId: 7 },
+				{ ...baseEntry, id: 9, position: 2, anchorEntryId: null }
+			],
+			[9, 8]
+		)
+		expect([...map.entries()]).toEqual([
+			[7, 1],
+			[8, 2],
+			[9, 3]
+		])
 	})
 })
 
@@ -508,8 +584,10 @@ describe("mapNarrativeNode", () => {
 })
 
 const baseRelationship = {
-	fromNodeId: 1,
-	toNodeId: 2,
+	fromNodeId: 1 as number | null,
+	toNodeId: 2 as number | null,
+	fromEntryId: null as number | null,
+	toEntryId: null as number | null,
 	relationshipType: "ally",
 	description: "desc",
 	visibility: "acknowledged",
@@ -520,7 +598,7 @@ const baseRelationship = {
 }
 
 describe("mapNarrativeRelationship", () => {
-	test("resolves fromLocalId/toLocalId via the node map", () => {
+	test("writes a cast endpoint in both spellings — the kind, and the flat id an older importer reads", () => {
 		const mapped = mapNarrativeRelationship(
 			baseRelationship,
 			new Map([
@@ -531,6 +609,8 @@ describe("mapNarrativeRelationship", () => {
 			new Map()
 		)
 		expect(mapped).toEqual({
+			from: { kind: "cast", node: 10 },
+			to: { kind: "cast", node: 20 },
 			fromLocalId: 10,
 			toLocalId: 20,
 			relationshipType: "ally",
@@ -543,12 +623,66 @@ describe("mapNarrativeRelationship", () => {
 		})
 	})
 
+	test("addresses an entry endpoint by its entry local id, with no flat spelling", () => {
+		const mapped = mapNarrativeRelationship(
+			{
+				...baseRelationship,
+				fromNodeId: null,
+				toNodeId: null,
+				fromEntryId: 5,
+				toEntryId: 6
+			},
+			new Map(),
+			new Map(),
+			new Map(),
+			new Map([
+				[5, 1],
+				[6, 2]
+			])
+		)
+		expect(mapped?.from).toEqual({ kind: "entry", entry: 1 })
+		expect(mapped?.to).toEqual({ kind: "entry", entry: 2 })
+		expect(mapped?.fromLocalId).toBeUndefined()
+		expect(mapped?.toLocalId).toBeUndefined()
+	})
+
+	test("carries a mixed edge, one endpoint of each kind", () => {
+		const mapped = mapNarrativeRelationship(
+			{ ...baseRelationship, toNodeId: null, toEntryId: 6 },
+			new Map([[1, 10]]),
+			new Map(),
+			new Map(),
+			new Map([[6, 2]])
+		)
+		expect(mapped?.from).toEqual({ kind: "cast", node: 10 })
+		expect(mapped?.to).toEqual({ kind: "entry", entry: 2 })
+		expect(mapped?.fromLocalId).toBe(10)
+		expect(mapped?.toLocalId).toBeUndefined()
+	})
+
 	test("returns null when either endpoint doesn't resolve to an exported node", () => {
 		const mapped = mapNarrativeRelationship(
 			baseRelationship,
 			new Map([[1, 10]]), // toNodeId (2) missing
 			new Map(),
 			new Map()
+		)
+		expect(mapped).toBeNull()
+	})
+
+	test("returns null when an entry endpoint is not in this export", () => {
+		const mapped = mapNarrativeRelationship(
+			{
+				...baseRelationship,
+				fromNodeId: null,
+				toNodeId: null,
+				fromEntryId: 5,
+				toEntryId: 6
+			},
+			new Map(),
+			new Map(),
+			new Map(),
+			new Map([[5, 1]])
 		)
 		expect(mapped).toBeNull()
 	})

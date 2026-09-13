@@ -80,28 +80,36 @@
 
 	function navigateToGraphTab() {
 		if (!build || !isOwnActivity) return
-		panelsCtx.digest.lorebookId = build.lorebookId
-		panelsCtx.digest.lorebookTab = "graph"
+		panelsCtx.digest.lore = {
+			lorebookId: build.lorebookId,
+			scope: "all",
+			lens: "graph"
+		}
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
 
 	function openModal() {
 		if (!build || !isOwnActivity) return
-		panelsCtx.digest.lorebookId = build.lorebookId
-		panelsCtx.digest.lorebookTab = "graph"
+		panelsCtx.digest.lore = {
+			lorebookId: build.lorebookId,
+			scope: "all",
+			lens: "graph"
+		}
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 		graphBuildsCtx.reopenLorebookId = build.lorebookId
 	}
 
 	function navigateToScene(activity: SceneSummarizeState) {
-		panelsCtx.digest.lorebookId = activity.lorebookId
-		if (activity.historyEntryId) {
-			panelsCtx.digest.historyEntryId = activity.historyEntryId
-			panelsCtx.digest.historyEntryTab = "scenes"
-			panelsCtx.digest.sceneId = activity.sceneId
-		} else {
-			panelsCtx.digest.lorebookTab = "history"
-		}
+		// A scene is addressed under the history entry it was compiled into,
+		// so a scene with no entry yet is the History list and nothing more.
+		panelsCtx.digest.lore = activity.historyEntryId
+			? {
+					lorebookId: activity.lorebookId,
+					scope: "scenes",
+					entryId: activity.historyEntryId,
+					sceneId: activity.sceneId
+				}
+			: { lorebookId: activity.lorebookId, scope: "history" }
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
 
@@ -117,9 +125,11 @@
 	}
 
 	function navigateToCompileEntry(activity: CompileEntryState) {
-		panelsCtx.digest.lorebookId = activity.lorebookId
-		panelsCtx.digest.lorebookTab = "history"
-		panelsCtx.digest.historyEntryId = activity.historyEntryId
+		panelsCtx.digest.lore = {
+			lorebookId: activity.lorebookId,
+			scope: "history",
+			entryId: activity.historyEntryId
+		}
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
 

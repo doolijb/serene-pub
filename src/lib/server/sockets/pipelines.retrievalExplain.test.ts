@@ -43,16 +43,22 @@ const ENTRIES = new Map<string, any>([
 			"silverwood"
 		])
 	],
-	["worldLore:2", entry(2, "core:entry/world-lore", "The Silver Road", ["road"])],
+	[
+		"worldLore:2",
+		entry(2, "core:entry/world-lore", "The Silver Road", ["road"])
+	],
 	[
 		"worldLore:3",
 		entry(3, "core:entry/world-lore", "The Oath", ["oath"], {
 			constant: true
 		})
 	],
-	["worldLore:4", entry(4, "core:entry/world-lore", "A Disabled Note", [], {
-		enabled: false
-	})],
+	[
+		"worldLore:4",
+		entry(4, "core:entry/world-lore", "A Disabled Note", [], {
+			enabled: false
+		})
+	],
 	["history:7", entry(7, "core:entry/history", "The Siege", ["siege"])]
 ])
 
@@ -124,7 +130,9 @@ const receipt = (over: Record<string, any> = {}) => ({
 					queries: 2,
 					considered: 30,
 					matched: 4,
-					truncated: [{ source: "message", fetched: 2000, available: 5400 }]
+					truncated: [
+						{ source: "message", fetched: 2000, available: 5400 }
+					]
 				}
 			}
 		},
@@ -306,7 +314,10 @@ describe("explainRetrieval — content vocabulary before numbers", () => {
 										id: 2,
 										source: "worldLore",
 										tokens: 20,
-										signals: { tfidf: 0.27, lastRefRecency: 0.98 },
+										signals: {
+											tfidf: 0.27,
+											lastRefRecency: 0.98
+										},
 										payload: { name: "The Silver Road" }
 									}
 								})
@@ -318,9 +329,13 @@ describe("explainRetrieval — content vocabulary before numbers", () => {
 			})
 		)
 		const criteria = out.rows[0].criteria
-		const tfidf = criteria.find((c) => c.label === "Uncommon words in common")!
+		const tfidf = criteria.find(
+			(c) => c.label === "Uncommon words in common"
+		)!
 		const lastRef = criteria.find((c) => c.label === "Last referred to")!
-		expect(tfidf.detail).toBe("wording the rest of the lorebook does not share")
+		expect(tfidf.detail).toBe(
+			"wording the rest of the lorebook does not share"
+		)
 		expect(tfidf.detail).not.toMatch(/0\.27/)
 		expect(tfidf.value).toBeCloseTo(0.27, 5)
 		expect(lastRef.detail).toBe("came up recently in the conversation")
@@ -479,9 +494,7 @@ describe("explainRetrieval — content vocabulary before numbers", () => {
 		const criterion = out.rows[0].criteria.find(
 			(c) => c.label === "A name it's called by, in the scene"
 		)!
-		expect(criterion.detail).toBe(
-			"matched “the captain” → Captain Vell"
-		)
+		expect(criterion.detail).toBe("matched “the captain” → Captain Vell")
 		expect(criterion.detail).not.toMatch(/0\.83/)
 		expect(criterion.value).toBeCloseTo(0.83, 5)
 	})
@@ -571,9 +584,7 @@ describe("explainRetrieval — every explanation carries an action", () => {
 describe("explainRetrieval — the reasons a row would otherwise be lost in", () => {
 	const withDecisions = (decisions: any[], groups: any = {}) =>
 		receipt({
-			nodes: [
-				{ nodeKey: "rank", seq: 1, output: { decisions, groups } }
-			]
+			nodes: [{ nodeKey: "rank", seq: 1, output: { decisions, groups } }]
 		})
 
 	it("says both halves for a pin that was dropped, and warns as well", async () => {
@@ -754,8 +765,12 @@ describe("explainRetrieval — the mechanism-level half no row can carry", () =>
 		expect(notes).toMatch(
 			/World lore: 1 of 4 entries matched, scanning the last 10 messages, 1 level\(s\)/
 		)
-		expect(notes).toMatch(/admitted on relevance alone, at a threshold of 0\.40/)
-		expect(notes).toMatch(/Vector search: unavailable \(no embedding model\)/)
+		expect(notes).toMatch(
+			/admitted on relevance alone, at a threshold of 0\.40/
+		)
+		expect(notes).toMatch(
+			/Vector search: unavailable \(no embedding model\)/
+		)
 		expect(notes).toMatch(/Vector search: available \(nomic-embed-text\)/)
 	})
 
@@ -980,14 +995,22 @@ describe("explainRetrieval — the mechanism-level half no row can carry", () =>
 						nodeKey: "gather.characterLore.read",
 						seq: 1,
 						output: {
-							diagnostics: { scanDepth: 10, considered: 0, matched: 0 }
+							diagnostics: {
+								scanDepth: 10,
+								considered: 0,
+								matched: 0
+							}
 						}
 					},
 					{
 						nodeKey: "gather.historyEntries.read",
 						seq: 2,
 						output: {
-							diagnostics: { scanDepth: 10, considered: 0, matched: 0 }
+							diagnostics: {
+								scanDepth: 10,
+								considered: 0,
+								matched: 0
+							}
 						}
 					}
 				]
@@ -1011,13 +1034,19 @@ describe("explainRetrieval — the mechanism-level half no row can carry", () =>
 						nodeKey: "gather.somethingNew.read",
 						seq: 1,
 						output: {
-							diagnostics: { scanDepth: 10, considered: 0, matched: 0 }
+							diagnostics: {
+								scanDepth: 10,
+								considered: 0,
+								matched: 0
+							}
 						}
 					}
 				]
 			})
 		)
-		expect(out.notes.join("\n")).toContain("Something New: nothing to scan.")
+		expect(out.notes.join("\n")).toContain(
+			"Something New: nothing to scan."
+		)
 	})
 
 	it("says a run recorded no ranking instead of rendering an empty list", async () => {
@@ -1033,7 +1062,11 @@ describe("explainRetrieval — the mechanism-level half no row can carry", () =>
 		const out = await explain(
 			receipt({
 				nodes: [
-					{ nodeKey: "rank", seq: 1, output: { decisions: many, groups: {} } }
+					{
+						nodeKey: "rank",
+						seq: 1,
+						output: { decisions: many, groups: {} }
+					}
 				]
 			}),
 			ENTRIES,
@@ -1114,9 +1147,9 @@ describe("explainRetrieval — the medal says how it got here", () => {
 			})
 		)
 		expect(out.rows[0].marker).toBe("Shared entity")
-		expect(
-			out.rows[0].criteria.map((c) => c.detail).join(" | ")
-		).toMatch(/ashguard, gate/)
+		expect(out.rows[0].criteria.map((c) => c.detail).join(" | ")).toMatch(
+			/ashguard, gate/
+		)
 	})
 
 	it("marks a constant entry as the user's own instruction", async () => {
@@ -1168,6 +1201,139 @@ describe("explainRetrieval — the medal says how it got here", () => {
  * covering one of the three fields fails these rather than agreeing with
  * itself about a narrower one.
  */
+/**
+ * The narrative graph's own half of the panel (ruling 2026-09-10, Q1).
+ *
+ * A graph tie arrives here as a candidate carrying a `presetScore` and no
+ * signals, which is the exact shape the projection used to answer "the semantic
+ * arm scored it 0.833" for — a sentence about a mechanism that never ran, on a
+ * row whose real reasons (who is in the scene, whose tie it is, when it last
+ * changed) had nowhere to render. So what is pinned here is that the graph is
+ * named as its own mechanism, and that each of the three terms the ruling
+ * orders by is a line somebody can read.
+ */
+describe("explainRetrieval — the graph is its own mechanism, with reasons", () => {
+	const tie = (over: Record<string, any> = {}) =>
+		decision({
+			candidate: {
+				id: 41,
+				source: "relationships",
+				tokens: 22,
+				signals: {},
+				presetScore: 0.95,
+				payload: {
+					name: "Rell",
+					content: '{"type":"rival","secrecy":"We both know"}',
+					lane: "yourRelationships",
+					foundBy: "relationships",
+					rank: {
+						present: true,
+						touchesSpeaker: true,
+						recencyRank: 2,
+						of: 6
+					},
+					...((over.payload as object) ?? {})
+				}
+			},
+			...over.decision
+		})
+
+	const ranked = (d: any) =>
+		explain(
+			receipt({
+				nodes: [
+					{
+						nodeKey: "rank",
+						seq: 1,
+						output: { decisions: [d], groups: {} }
+					}
+				]
+			})
+		)
+
+	it("gives the graph its own medal instead of calling it a similarity", async () => {
+		const out = await ranked(tie())
+		expect(out.rows[0].marker).toBe("Narrative graph")
+		expect(out.rows[0].markerKind).toBe("graph")
+	})
+
+	it("names the band Relationships", async () => {
+		const out = await ranked(tie())
+		expect(out.rows[0].sourceLabel).toBe("Relationships")
+	})
+
+	// Label and detail together, because that is what a row shows: the label is
+	// the heading of the criterion and the detail is the sentence under it.
+	const read = (out: any) =>
+		out.rows[0].criteria
+			.map((c: any) => `${c.label}: ${c.detail}`)
+			.join(" | ")
+
+	it("says the scene is present for it, and whose tie it is", async () => {
+		const shown = read(await ranked(tie()))
+		expect(shown).toMatch(/in the scene/i)
+		expect(shown).toMatch(/speaker/i)
+	})
+
+	it("says how recently it changed, as a rank rather than a number", async () => {
+		expect(read(await ranked(tie()))).toMatch(
+			/2nd most recently changed of 6/
+		)
+	})
+
+	it("does not claim a presence or a speaker it does not have", async () => {
+		const out = await ranked(
+			tie({
+				payload: {
+					rank: {
+						present: false,
+						touchesSpeaker: false,
+						recencyRank: 6,
+						of: 6
+					}
+				}
+			})
+		)
+		const shown = read(out)
+		expect(shown).not.toMatch(/in the scene/i)
+		expect(shown).not.toMatch(/speaker/i)
+		expect(shown).toMatch(/6th most recently changed of 6/)
+	})
+
+	it("never tells a reader the semantic arm scored a graph tie", async () => {
+		expect(read(await ranked(tie()))).not.toMatch(/semantic arm/)
+	})
+
+	/**
+	 * The mechanism-level line. A ceiling of 0 and an empty graph produce the
+	 * same empty band, and only this sentence tells them apart.
+	 */
+	it("carries the mechanism's own note about what it walked", async () => {
+		const out = await explain(
+			receipt({
+				nodes: [
+					{
+						nodeKey: "gather.relationships.read",
+						seq: 1,
+						output: {
+							hits: [],
+							diagnostics: {
+								considered: 6,
+								matched: 0,
+								relationships:
+									"off — the ceiling is 0, so the graph is left out"
+							}
+						}
+					}
+				]
+			})
+		)
+		expect(out.notes.join(" ")).toMatch(
+			/Relationships: off — the ceiling is 0/
+		)
+	})
+})
+
 describe("explainRetrieval — the entry behind the decision, dated", () => {
 	/** The stored row a run would have scored, and its live twin. */
 	const STORED = {
@@ -1232,11 +1398,9 @@ describe("explainRetrieval — the entry behind the decision, dated", () => {
 	}
 
 	it("says nothing at all about a run whose entry is untouched", async () => {
-		const out = await explain(
-			await scoredReceipt(),
-			await liveEntries(),
-			{ entriesRead: true }
-		)
+		const out = await explain(await scoredReceipt(), await liveEntries(), {
+			entriesRead: true
+		})
 		expect(out.rows[0].provenance).toBe("unchanged")
 		expect(out.rows[0].provenanceNote).toBeUndefined()
 		expect(out.rows[0].currentTitle).toBeUndefined()
@@ -1395,7 +1559,11 @@ describe("explainRetrieval — what the fingerprint cannot see, it does not clai
 	}
 
 	/** A history entry: no title column, a date in `fields`, one key. */
-	const STORED = { title: null, keys: ["siege"], content: "It lasted a winter." }
+	const STORED = {
+		title: null,
+		keys: ["siege"],
+		content: "It lasted a winter."
+	}
 
 	const liveHistory = async (year: number) => {
 		const map = new Map(ENTRIES)
@@ -1597,4 +1765,97 @@ describe("explainRetrieval — the stop sequences", () => {
 			(await explain(withStops({ sent: "nope" }))).stops
 		).toBeUndefined()
 	}, 30_000)
+})
+
+/**
+ * The prompt cache, carried through to the panel (ruled "later,
+ * non-disruptive").
+ *
+ * ⚠ It is read off the RECEIPT NODE, not off the node's output: these are
+ * accounting fields the executor writes beside `tokens`, the same place a
+ * reader already looks for what a call cost, and putting them on the output
+ * would have made them part of the value the next node receives.
+ *
+ * Two absences that must not read as one: a run whose provider never reported a
+ * prompt total at all says nothing, and a connection that reported the total but
+ * no reuse says so out loud — otherwise "my cache is not working" and "this
+ * service does not tell us" look identical.
+ */
+describe("explainRetrieval — the prompt cache", () => {
+	const withCache = (over: Record<string, any>) =>
+		receipt({
+			nodes: [
+				{
+					nodeKey: "generate",
+					seq: 9,
+					typeId: "core:provider/generate-text@1",
+					output: { text: "hi" },
+					...over
+				}
+			]
+		})
+
+	it("carries the prompt total, the reused count and the cache write", async () => {
+		const out = await explain(
+			withCache({
+				tokensPrompt: 4096,
+				tokensCached: 3072,
+				tokensCacheWrite: 500
+			})
+		)
+		expect(out.promptCache).toEqual({
+			prompt: 4096,
+			cached: 3072,
+			write: 500
+		})
+	})
+
+	it("reports the total with no reuse count — 'this connection does not say'", async () => {
+		const out = await explain(withCache({ tokensPrompt: 512 }))
+		expect(out.promptCache).toEqual({ prompt: 512 })
+	})
+
+	it("keeps zero, which is a report of no reuse rather than no report", async () => {
+		const out = await explain(
+			withCache({ tokensPrompt: 900, tokensCached: 0 })
+		)
+		expect(out.promptCache).toEqual({ prompt: 900, cached: 0 })
+	})
+
+	it("says nothing when the run recorded nothing", async () => {
+		// The positive control is in the same case on purpose: without it this
+		// assertion holds just as well over a projection that reads nothing at
+		// all, which is the one way it could pass and mean the opposite.
+		expect(
+			(await explain(withCache({ tokensPrompt: 512 }))).promptCache
+		).toEqual({ prompt: 512 })
+		expect((await explain(receipt())).promptCache).toBeUndefined()
+	})
+
+	it("ignores a non-numeric record rather than rendering half a row", async () => {
+		expect(
+			(await explain(withCache({ tokensPrompt: 512 }))).promptCache
+		).toEqual({ prompt: 512 })
+		expect(
+			(await explain(withCache({ tokensPrompt: "lots" }))).promptCache
+		).toBeUndefined()
+	})
+
+	it("reads the tool-calling pin too, which is the same node under a second id", async () => {
+		const out = await explain(
+			receipt({
+				nodes: [
+					{
+						nodeKey: "agent.item.generate",
+						seq: 4,
+						typeId: "core:provider/generate-with-tools@1",
+						output: { text: "hi" },
+						tokensPrompt: 2048,
+						tokensCached: 1024
+					}
+				]
+			})
+		)
+		expect(out.promptCache).toEqual({ prompt: 2048, cached: 1024 })
+	})
 })

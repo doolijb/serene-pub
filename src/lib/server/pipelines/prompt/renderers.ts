@@ -2,9 +2,10 @@
  * Who can render a context template.
  *
  * A template carries its engine as data (`context_configs.engine`, 12 §2a), and
- * this is the registry that turns that id into a renderer. Core ships one —
- * Handlebars, with the helper set the existing story strings already use — and
- * an extension may register another.
+ * this is the registry that turns that id into a renderer. Core ships two —
+ * Handlebars, with the helper set the existing story strings already use, and
+ * Liquid, with the same set spelled as tags and filters — and an extension may
+ * register another.
  *
  * The reason this is a registry rather than a function is the whole point of
  * the ruling: **core's template language is a default, not an assumption.** A
@@ -13,18 +14,31 @@
  * is a guess that gets confidently wrong on the first template that looks like
  * two languages at once.
  *
- * What a plugin cannot do here is replace the *core* engine. Registering
- * `core:template/handlebars@1` a second time is refused, because a plugin that
- * could redefine how everyone else's templates render would be able to change
- * every prompt on the instance without appearing anywhere in a spec.
+ * What a plugin cannot do here is replace a *core* engine. Registering
+ * `core:template/handlebars@1` or `core:template/liquid@1` a second time is
+ * refused, because a plugin that could redefine how everyone else's templates
+ * render would be able to change every prompt on the instance without
+ * appearing anywhere in a spec.
  */
 
 import Handlebars from "handlebars"
 import { registerContextHandlebarsHelpers } from "$lib/shared/utils/contextHandlebarsHelpers"
+import { createContextLiquid } from "$lib/shared/utils/contextLiquid"
 import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
 import type { CompletionTemplate } from "$lib/shared/constants/completionTemplates"
+import {
+	CORE_LIQUID_ENGINE,
+	CORE_TEMPLATE_ENGINE,
+	CORE_TEMPLATE_ENGINES,
+	isCoreTemplateEngine
+} from "$lib/shared/pipelines/templateEngines"
 
-export const CORE_TEMPLATE_ENGINE = "core:template/handlebars@1"
+export {
+	CORE_LIQUID_ENGINE,
+	CORE_TEMPLATE_ENGINE,
+	CORE_TEMPLATE_ENGINES,
+	isCoreTemplateEngine
+}
 
 /**
  * The run a render belongs to, when it belongs to one.
@@ -120,7 +134,24 @@ function renderHandlebars(ctx: RenderContext): string {
 	return handlebars.compile(ctx.template)(ctx.variables)
 }
 
+/**
+ * Core's second renderer, over the same context object.
+ *
+ * A fresh instance per render for the reason above: the block tags close over
+ * `promptFormat`, so a shared one would pin the first connection's framing onto
+ * every later prompt. `createContextLiquid` carries the configuration and why
+ * each part of it is the way it is.
+ */
+function renderLiquid(ctx: RenderContext): string {
+	const liquid = createContextLiquid({
+		promptFormat:
+			ctx.completionTemplate ?? promptFormatOf(ctx.promptFormat)
+	})
+	return String(liquid.parseAndRenderSync(ctx.template, ctx.variables))
+}
+
 renderers.set(CORE_TEMPLATE_ENGINE, { render: renderHandlebars, owner: "core" })
+renderers.set(CORE_LIQUID_ENGINE, { render: renderLiquid, owner: "core" })
 
 export class TemplateEngineError extends Error {}
 
@@ -152,12 +183,12 @@ export function registerRenderer(
  *
  * Owner-checked for the same reason registration is: a plugin that could
  * release somebody else's engine could make every template on that engine
- * stop rendering by asking nicely. Core's engine is not releasable at all.
+ * stop rendering by asking nicely. Core's engines are not releasable at all.
  * Releasing an id nobody holds is a no-op, not an error — the sync that calls
  * this reconciles toward a desired state, and "already gone" is that state.
  */
 export function releaseRenderer(engineId: string, owner: string): void {
-	if (engineId === CORE_TEMPLATE_ENGINE) return
+	if (isCoreTemplateEngine(engineId)) return
 	const existing = renderers.get(engineId)
 	if (existing && existing.owner === owner) renderers.delete(engineId)
 }
@@ -165,7 +196,7 @@ export function releaseRenderer(engineId: string, owner: string): void {
 /** Test-only: drop plugin-registered engines, keeping core's. */
 export function _resetRenderers(): void {
 	for (const id of [...renderers.keys()])
-		if (id !== CORE_TEMPLATE_ENGINE) renderers.delete(id)
+		if (!isCoreTemplateEngine(id)) renderers.delete(id)
 }
 
 export const knownEngines = () =>
@@ -211,7 +242,8 @@ export async function renderTemplate(
 	const renderer = renderers.get(engineId)
 	if (!renderer)
 		throw new TemplateEngineError(
-			`no renderer for template engine '${engineId}'. Core renders ${CORE_TEMPLATE_ENGINE}; ` +
+			`no renderer for template engine '${engineId}'. Core renders ` +
+				`${CORE_TEMPLATE_ENGINES.join(" and ")}; ` +
 				`others come from an extension that registers one. Known: ` +
 				`${knownEngines()
 					.map((e) => `${e.id} (${e.owner})`)

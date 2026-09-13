@@ -36,7 +36,7 @@
  * dispatch path — never in anything a binding can see (F18).
  */
 
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	S,
@@ -49,6 +49,7 @@ import {
 	capabilityDefaults,
 	capabilityForSamplingShape
 } from "$lib/server/connections/capabilityDefaults"
+import { defaultModelsByConnection } from "$lib/server/connections/models"
 // Imported rather than re-declared. It was a `const TEXT_CAPABILITY` at the
 // bottom of this file and another in `capabilityTarget.ts`, which is the same
 // two-spellings shape the dropped `system_settings` columns had — and the string
@@ -172,6 +173,9 @@ export async function buildWorld(
 		: undefined
 
 	const connectionRows = await db.select().from(schema.connections)
+	// Which model each endpoint means when nobody has said (0114) — one query
+	// for the instance, read below to build each connection's descriptor.
+	const defaultModels = await defaultModelsByConnection(db)
 	const samplingRows = await db.select().from(schema.samplingConfigs)
 	/**
 	 * Every completion template, once, for the whole projection below.
@@ -240,32 +244,17 @@ export async function buildWorld(
 			layer(kind, id, context, "prompts", path, value)
 		}
 	}
-	// ── params: the prompt config's numeric fields ───────────────────────
-	// Numbers rather than text, so they layer onto the `params` slot. The
-	// trigger is a *suppression*: below it a short session gets no post-history
-	// reminder. Missing entirely, the pipeline reminded on every turn — visible
-	// only by comparing against a real session, since a fixture with no trigger
-	// configured behaves identically either way.
-	const paramsAt = (
-		kind: OverrideRow["scopeKind"],
-		id: string | number | undefined,
-		configId?: number | null
-	) => {
-		const row = pick(promptRows, configId) as any
-		if (!row) return
-		for (const key of ["postHistoryDepth", "postHistoryTokenTrigger"])
-			layer(kind, id, assemble, "params", key, row[key])
-	}
-
 	if (legacyPrompts) {
-		const selected = {
-			defaults: (system as any)?.[legacyPrompts.systemCol],
-			session: (session as any)?.[legacyPrompts.sessionCol]
-		}
-		promptsAt("defaults", undefined, selected.defaults)
-		promptsAt("session", scope.sessionId, selected.session)
-		paramsAt("defaults", undefined, selected.defaults)
-		paramsAt("session", scope.sessionId, selected.session)
+		promptsAt(
+			"defaults",
+			undefined,
+			(system as any)?.[legacyPrompts.systemCol]
+		)
+		promptsAt(
+			"session",
+			scope.sessionId,
+			(session as any)?.[legacyPrompts.sessionCol]
+		)
 	}
 
 	// ── connection and sampling ──────────────────────────────────────────
@@ -330,6 +319,71 @@ export async function buildWorld(
 	// is worse than not having it: every screen would agree with the user and
 	// the model would not.
 	if (scope.specId) await applyPipelineLayer(db, overrides, scope)
+
+	// ── post-history: the prompt config's two numbers ────────────────────
+	//
+	// Numbers rather than text, so they layer onto the `params` slot. The
+	// trigger is a *suppression*: below it a short session gets no post-history
+	// reminder, because a reinforcement note two messages after the system
+	// prompt is noise.
+	//
+	// **Onto every assemble node in the spec**, rather than onto one named key.
+	// A genre that plans, narrates, gives each speaker a voice and then writes
+	// the numbers down assembles four prompts in a turn, and a key names one of
+	// them; the other three resolve the declaration's `0` and remind on every
+	// turn while the panel shows the number somebody set. Nothing errors and
+	// the prompt is well-formed, so the only evidence is a "Response reminder"
+	// block in a two-message session.
+	//
+	// **Under the pipeline layer.** Written after it and skipped at any address
+	// it already wrote, so a value set in the pipeline panel wins — the same
+	// precedence the session block below canonises. An `author` row is the
+	// declaration's own default rather than a choice, and does not count as set.
+	//
+	// **Read for a spec with no legacy table of its own.** These two describe
+	// where a reminder goes and whether it goes at all, which is a property of
+	// the instance rather than of any pipeline's words, and the reply config is
+	// the one screen they are authored on. The TEXT projection above stays
+	// keyed to the spec: words differ per agent, and handing a narrator the
+	// reply's system prompt is what `LEGACY_PROMPT_SOURCES` exists to prevent.
+	const postHistorySource =
+		legacyPrompts ?? LEGACY_PROMPT_SOURCES[RESPOND_SPEC_ID]
+	const postHistoryRows = legacyPrompts
+		? promptRows
+		: await db.select().from(postHistorySource.table)
+	const postHistoryNodes = await assembleNodeKeys(db, scope, assemble)
+	// Snapshotted before anything below is pushed: the check is "did the
+	// pipeline layer decide this", and reading `overrides` live would let the
+	// instance-scope row written here answer for the session-scope one, which
+	// would pin every session to the instance default.
+	const pipelineParams = new Set(
+		overrides
+			.filter((o) => o.slot === "params" && o.scopeKind !== "author")
+			.map((o) => `${o.nodeKey}\u0000${o.path}`)
+	)
+	const postHistoryAt = (
+		kind: OverrideRow["scopeKind"],
+		id: string | number | undefined,
+		configId?: number | null
+	) => {
+		const row = pick(postHistoryRows, configId) as any
+		if (!row) return
+		for (const key of ["postHistoryDepth", "postHistoryTokenTrigger"])
+			for (const nodeKey of postHistoryNodes) {
+				if (pipelineParams.has(`${nodeKey}\u0000${key}`)) continue
+				layer(kind, id, nodeKey, "params", key, row[key])
+			}
+	}
+	postHistoryAt(
+		"defaults",
+		undefined,
+		(system as any)?.[postHistorySource.systemCol]
+	)
+	postHistoryAt(
+		"session",
+		scope.sessionId,
+		(session as any)?.[postHistorySource.sessionCol]
+	)
 
 	// ── the session's own columns, BELOW the panel's session-scope rows ───
 	//
@@ -461,7 +515,18 @@ export async function buildWorld(
 			name: c.name,
 			kind: "core:shape/text-gen@1",
 			metadata: {
-				model: c.model ?? undefined,
+				/**
+				 * The DEFAULT MODEL's identifier, from `connection_models` and
+				 * no longer from the endpoint's legacy mirror (0114).
+				 *
+				 * The IDENTIFIER and not the display name, unlike the config
+				 * panel's subtitle: this rides the descriptor the assemble node
+				 * renders against, so it is the string a template interpolates
+				 * and a receipt reports — what actually went on the wire. A
+				 * friendly name there would be a different value under the same
+				 * key depending on which reader you asked.
+				 */
+				model: defaultModels.get(c.id)?.model ?? undefined,
 				tokenizer: c.tokenCounter ?? undefined,
 				/**
 				 * The KEY, which is the reference the row stores and the
@@ -601,6 +666,46 @@ async function providerSlotShape(
 	return (await providerConnectionDecl(db, scope, providerKey))?.shape
 }
 
+/** The task that renders a prompt. Its `params` carry the post-history pair. */
+const ASSEMBLE_TYPE_ID = "core:task/assemble"
+
+/**
+ * Every node in the spec that assembles a prompt.
+ *
+ * Read from the spec's own nodes rather than named by the caller: a key names
+ * ONE node, and a pipeline may assemble a planner's prompt, a narrator's, one
+ * per speaking voice and a state-keeper's in a single turn. Every version of
+ * the type counts — the pair is the type's post-history contract, and a node
+ * whose pin does not declare it simply resolves the address to nothing.
+ *
+ * The caller's single key is the answer when there is no spec in scope (the
+ * parity harness's ad-hoc spec) and when the spec has no published version.
+ */
+async function assembleNodeKeys(
+	db: Db,
+	scope: WorldScope,
+	fallback: string
+): Promise<string[]> {
+	if (!scope.specId) return [fallback]
+	const [spec] = await db
+		.select()
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.slug, scope.specId))
+		.limit(1)
+	if (!spec?.activeVersionId) return [fallback]
+	const nodes = await db
+		.select()
+		.from(schema.pipelineNodes)
+		.where(
+			and(
+				eq(schema.pipelineNodes.specVersionId, spec.activeVersionId),
+				eq(schema.pipelineNodes.typeId, ASSEMBLE_TYPE_ID)
+			)
+		)
+	const keys = nodes.map((n) => n.nodeKey)
+	return keys.length ? keys : [fallback]
+}
+
 async function applyPipelineLayer(
 	db: Db,
 	overrides: OverrideRow[],
@@ -697,8 +802,29 @@ async function applyPipelineLayer(
 	 * Returns undefined for a dangling id, which `pushTemplate` then drops
 	 * whole. Losing a customization is the right cost here; losing the prompt
 	 * is not.
+	 *
+	 * ⚠ **A value that IS the template is taken as written.** An author preset
+	 * may ship a template inline — `p.template('scenePrompt', { source, engine })`
+	 * — and `ensureDefaultConfig` prefers a preset value over the reference it
+	 * would otherwise resolve, so an inline template DISPLACES that reference.
+	 * Accepting only a number here therefore drops the pair whole and leaves the
+	 * node with no template at all, which assemble answers with a halt.
 	 */
 	const derefTemplate = async (value: unknown) => {
+		if (value && typeof value === "object" && !Array.isArray(value)) {
+			const inline = value as { source?: unknown; engine?: unknown }
+			if (typeof inline.source !== "string") return undefined
+			const { CORE_TEMPLATE_ENGINE } = await import(
+				"$lib/server/pipelines/prompt/renderers"
+			)
+			return {
+				source: inline.source,
+				engine:
+					typeof inline.engine === "string"
+						? inline.engine
+						: CORE_TEMPLATE_ENGINE
+			}
+		}
 		if (typeof value !== "number") return undefined
 		const { resolveContextTemplate } = await import(
 			"$lib/server/pipelines/entities/contextTemplates"
@@ -744,14 +870,9 @@ async function applyPipelineLayer(
 	const { resolveSelectedConfig } = await import(
 		"$lib/server/pipelines/config/named"
 	)
-	const selected = await resolveSelectedConfig(
-		db,
-		spec.id,
-		spec.slug,
-		{
-			sessionId: scope.sessionId
-		}
-	)
+	const selected = await resolveSelectedConfig(db, spec.id, spec.slug, {
+		sessionId: scope.sessionId
+	})
 
 	if (selected) {
 		const values = await db
@@ -764,10 +885,7 @@ async function applyPipelineLayer(
 				// A reference. The fields it names become individual paths, so
 				// per-path resolution still works above it — someone overriding
 				// one field does not pin the rest of the prompt.
-				const fields = await resolvePromptFields(
-					db,
-					Number(v.value)
-				)
+				const fields = await resolvePromptFields(db, Number(v.value))
 				for (const [field, text] of Object.entries(fields))
 					push("preset", undefined, v.nodeKey, v.slot, field, text)
 				continue
@@ -844,6 +962,38 @@ async function applyPipelineLayer(
 		push(scopeKind, scopeId, o.nodeKey, o.slot, o.path ?? "", o.value)
 	}
 
+	// ── the floor under all of it: what the declaration declares ─────────
+	//
+	// A config stores **deviations** (ruled 2026-09-10): it carries a row only
+	// where somebody departed from the declared default, so at every other
+	// address the answer has to come from the declaration itself. This is where
+	// it comes from, at `author` — the bottom of `SCOPE_ORDER`, under the two
+	// `defaults` floors below and under everything anybody chose.
+	//
+	// ⚠ **One projection, not one per reader.** The SDK's resolver has always
+	// had an `author` layer and `ConfigWorld.authorDefaults` to fill it; the app
+	// populated neither, and the shipped config's materialized copy stood in for
+	// it. Doing this here rather than at each call site is what keeps the panel
+	// and the run agreeing: `executor.ts` (`resolveConfig`), `stepConfig.ts`
+	// (`resolveConfigSources`) and the graph builder all read the world, so all
+	// three inherit the same number from the same place. `panel/read.ts` reads
+	// `d.authorDefault` off the same `declarations()` walk.
+	//
+	// Only what a declaration can actually supply lands here: `declsForSlot`
+	// emits `authorDefault` for a `parameters` field, a `wire` slot's format and
+	// the two synthesized `settings` controls, and for no `*-ref` at all — so
+	// `push`'s `undefined` guard drops every reference, which keeps its own row
+	// precisely because there is nothing here to inherit.
+	//
+	// The executor's `params` branch merges the type's schema defaults on its
+	// own, so a params address would resolve either way; `settings.review`,
+	// `settings.enabled` and a block's `settings.mode` have no such branch —
+	// they are read straight off `config[key]['settings']` — and those are the
+	// ones that would have gone `undefined` the moment their materialized rows
+	// were swept.
+	for (const d of allDecls)
+		push("author", undefined, d.nodeKey, d.slot, d.path, d.authorDefault)
+
 	// ── the floor: a prompts slot always resolves to words ───────────────
 	//
 	// Every layer above this is optional — a config may not carry a prompts
@@ -854,11 +1004,14 @@ async function applyPipelineLayer(
 	// character sheet. So the shipped default is projected at `defaults`,
 	// below everything anyone chose.
 	//
-	// It is also the safety net for a boot that never reconciled:
-	// `bootstrapPipelines` returns early on a `TypeRegistryConflictError`
-	// (bootstrap.ts) without writing config values, and on that boot this is
-	// the only thing standing between a run and empty instructions. So it has
-	// to be right before anything is allowed to depend on it.
+	// It is also the safety net for a boot that never reconciled — one that
+	// failed part-way through `bootstrapPipelines` (bootstrap.ts) without
+	// writing config values. On that boot this is the only thing standing
+	// between a run and empty instructions, so it has to be right before
+	// anything is allowed to depend on it. Until the content-addressing ruling
+	// (2026-09-10) the common way to reach that state was a type-registry
+	// conflict, which returned early by design; that particular route is gone
+	// and the net stays, because "boot did not finish" has other causes.
 	//
 	// ⚠ **Resolved per pool, not once per pipeline.** This used to resolve ONE
 	// `defaultPromptFor(db, spec.id)` and push its fields onto EVERY prompts
@@ -905,15 +1058,10 @@ async function applyPipelineLayer(
 				// is: a row in this pool defaulted to this slug → the immutable
 				// row in this pool written here → the oldest immutable row in
 				// the pool → null.
-				const id = await defaultPromptFor(
-					db,
-					d.nodeTypeId,
-					d.slot,
-					{
-						id: spec.id,
-						slug: spec.slug
-					}
-				)
+				const id = await defaultPromptFor(db, d.nodeTypeId, d.slot, {
+					id: spec.id,
+					slug: spec.slug
+				})
 				byPool.set(
 					poolKey,
 					id == null ? null : await resolvePromptFields(db, id)
@@ -946,10 +1094,7 @@ async function applyPipelineLayer(
 				shipped.set(
 					d.variableId,
 					await derefLayout(
-						await defaultVariableTemplateFor(
-							db,
-							d.variableId
-						)
+						await defaultVariableTemplateFor(db, d.variableId)
 					)
 				)
 			push(

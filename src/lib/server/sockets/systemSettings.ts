@@ -1,6 +1,7 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { capabilityDefaults } from "$lib/server/connections/capabilityDefaults"
+import { resolveEmbeddingTarget } from "$lib/server/embedding/target"
 import { eq } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { isAndroidWrapper } from "$lib/server/utils"
@@ -65,6 +66,28 @@ export const systemSettingsGet: Handler<
 				} as any,
 				isAndroidWrapper: isAndroidWrapper(),
 				localEmbeddingsSupported: await isLocalEmbeddingSupported(),
+				/**
+				 * The identity every embedded row's `embedding_model` is
+				 * compared against, so a "vectors up to date / stale" badge can
+				 * be rendered without a second round trip.
+				 *
+				 * ⚠ Derived from the STAR, not read off a column. It was
+				 * `system_settings.embedding_model_name`, which meant "the
+				 * active model" and had to be written by four handlers in step
+				 * with two other columns. Sent alongside the row rather than
+				 * inside it for the same reason `capabilityDefaults` is: it is
+				 * not a setting, it is a resolution.
+				 *
+				 * ⚠ For a host-backed connection this string is
+				 * `api::<baseUrl>::<model>`, so it names a base URL — and this
+				 * event has no role gate. That exposure is unchanged from the
+				 * column it replaces (which carried the same composite string
+				 * to everyone) and is carried forward deliberately rather than
+				 * widened: redacting it would blank the badge for every
+				 * non-admin on a shared instance.
+				 */
+				activeEmbeddingModel:
+					(await resolveEmbeddingTarget(db))?.modelId ?? null,
 				// The instance default per capability (0175). It used to be two
 				// columns on `system_settings` and rode along with the row; now it
 				// is its own table, so it is fetched and sent explicitly — the
@@ -78,37 +101,6 @@ export const systemSettingsGet: Handler<
 			console.error("Error fetching system settings:", error)
 			emitToUser("systemSettings:get:error", {
 				error: "Failed to fetch system settings"
-			})
-			throw error
-		}
-	}
-}
-
-export const systemSettingsUpdateSummarizationEnabled: Handler<
-	Sockets.SystemSettings.UpdateSummarizationEnabled.Params,
-	Sockets.SystemSettings.UpdateSummarizationEnabled.Response
-> = {
-	event: "systemSettings:updateSummarizationEnabled",
-	handler: async (socket, params, emitToUser) => {
-		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		try {
-			await db
-				.update(schema.systemSettings)
-				.set({ summarizationEnabled: params.enabled })
-				.where(eq(schema.systemSettings.id, 1))
-
-			const res: Sockets.SystemSettings.UpdateSummarizationEnabled.Response =
-				{
-					success: true,
-					enabled: params.enabled
-				}
-			emitToUser("systemSettings:updateSummarizationEnabled", res)
-			await systemSettingsGet.handler(socket, {}, emitToUser)
-			return res
-		} catch (error: any) {
-			console.error("Update summarization enabled error:", error)
-			emitToUser("systemSettings:updateSummarizationEnabled:error", {
-				error: "Failed to update summarization setting"
 			})
 			throw error
 		}
@@ -508,7 +500,6 @@ export function registerSystemSettingsHandlers(
 	) => void
 ) {
 	register(socket, systemSettingsGet, emitToUser)
-	register(socket, systemSettingsUpdateSummarizationEnabled, emitToUser)
 	register(socket, systemSettingsUpdateScriptsEnabled, emitToUser)
 	register(socket, systemSettingsUpdateContextDebuggingEnabled, emitToUser)
 	register(socket, systemSettingsUpdateLegacyConfigsVisible, emitToUser)

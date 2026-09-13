@@ -93,6 +93,29 @@ describe("sideSlot — one mount, four places", () => {
 		])
 	})
 
+	it("walks stowed → margin → overlay → stowed without ever leaving the mount", () => {
+		// The whole trip a side takes in one session: parked while a sidebar
+		// holds its margin, docked when that closes, carried into the mobile
+		// sheet on a rotate, and parked again when the sheet shuts. Every step
+		// is a CONTAINER, so the subtree that moves between them is the same
+		// one throughout — there is deliberately no value here that means "not
+		// rendered", which is what makes the no-reload law hold by
+		// construction rather than by remembering.
+		const wide = { ...base, marginMode: true, marginPx: 400 }
+		const trip: SideSlotInput[] = [
+			{ ...wide, marginFree: false },
+			{ ...wide, marginFree: true },
+			{ ...wide, marginFree: true, narrow: true, overlayOwns: true },
+			{ ...wide, marginFree: true, narrow: true }
+		]
+		expect(trip.map(sideSlot)).toEqual([
+			"stowed",
+			"margin",
+			"overlay",
+			"stowed"
+		])
+	})
+
 	it("crossing the breakpoint and back never leaves the mount", () => {
 		const wide = { ...base, marginMode: true, marginFree: true, marginPx: 400 }
 		const narrow = { ...wide, narrow: true }

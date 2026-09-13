@@ -90,15 +90,21 @@ export interface TurnRequest {
 	 * Rows this turn is producing that the caller already knows about.
 	 *
 	 * ⚠ The reply path's message row is created by the **trigger**, before the
-	 * run: the pipeline compiles the prompt and the adapter fills the row in, so
-	 * no Consumer ever commits and the host records nothing. Seeding the
-	 * collector here is what gives a real reply an artifact — and, through that,
-	 * what stops the run being recorded as a preview. See `saveReceipt`.
+	 * run. On the single-Provider road the pipeline compiles the prompt and the
+	 * adapter fills the row in, so no Consumer ever commits and the host records
+	 * nothing: seeding the collector here is what gives such a reply an artifact
+	 * — and, through that, what stops the run being recorded as a preview. See
+	 * `saveReceipt`. A multi-stage reply commits through its own Consumer and
+	 * seeds nothing; it names the row on `fillMessageId` instead.
 	 *
 	 * Everything the run writes *itself* is appended by the host as it goes;
 	 * this is only the head start.
 	 */
 	artifacts?: RunArtifact[]
+	/** The row this turn writes into, when the trigger already made one — see `HostScope.fillMessageId`. */
+	fillMessageId?: number
+	/** Node lifecycle observation — see `SpecRunRequest.onNode`. */
+	onNode?: SpecRunRequest["onNode"]
 	/** Which spec to run. Defaults to core's. */
 	specId?: string
 	/**
@@ -138,6 +144,8 @@ export interface TurnRequest {
 	 * for. A real turn always records.
 	 */
 	skipReceipt?: boolean
+	/** Run-level facts the dispatch decided — see `SpecRunRequest.meta`. */
+	meta?: Record<string, unknown>
 }
 
 /**
@@ -196,6 +204,11 @@ export interface SpecRunRequest {
 	 * this unset; the host records those as they are written.
 	 */
 	artifacts?: RunArtifact[]
+	/**
+	 * A message row this run fills in rather than creating — see
+	 * `HostScope.fillMessageId`. Only a caller that already owns a row sets it.
+	 */
+	fillMessageId?: number
 	seed?: string
 	runId?: string
 	sink?: HostScope["sink"]
@@ -227,6 +240,20 @@ export interface SpecRunRequest {
 	 * *except* its write, and hands the result to a person instead.
 	 */
 	preview?: boolean | { atNode: string }
+	/**
+	 * Facts about *how this run was reached* that no node produced.
+	 *
+	 * Stamped onto the receipt beside everything the executor recorded, so the
+	 * explain surface reads them from the one blob every other "why did the
+	 * turn do that" answer already lives in. One key so far: `preset`, set when
+	 * the session's preset bound this event to a pipeline this instance
+	 * cannot resolve, and the genre's default ran instead (ruled 2026-09-10).
+	 *
+	 * ⚠ Not for anything a node can say. A node's own account belongs on its
+	 * node row, where the trail is queryable; this is only for the facts that
+	 * were decided before the first node existed.
+	 */
+	meta?: Record<string, unknown>
 	skipReceipt?: boolean
 	/**
 	 * Node parameters forced on top of everything the world resolved.
@@ -351,6 +378,7 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 		currentCharacterId: request.currentCharacterId,
 		draftMessage: request.draftMessage,
 		artifacts,
+		fillMessageId: request.fillMessageId,
 		sink: request.sink,
 		signal: request.signal
 	}
@@ -470,6 +498,20 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 		})
 	})
 
+	/**
+	 * How the run was reached, stamped on the receipt before it is stored or
+	 * returned.
+	 *
+	 * On the receipt rather than in a column beside it: a substitution is
+	 * something the reader of *this run* needs, and the receipt is the one
+	 * thing every explain surface already loads. Merged rather than assigned,
+	 * so a second dispatch fact later does not have to displace this one.
+	 */
+	if (request.meta && Object.keys(request.meta).length) {
+		const carrier = receipt as Receipt & { meta?: Record<string, unknown> }
+		carrier.meta = { ...(carrier.meta ?? {}), ...request.meta }
+	}
+
 	// Recorded before returning, and never allowed to fail the turn. A run that
 	// produced a good reply and then could not write its own receipt has still
 	// produced a good reply.
@@ -510,6 +552,8 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 		draftMessage: request.draftMessage,
 		speaker: request.speaker ?? null,
 		artifacts: request.artifacts,
+		fillMessageId: request.fillMessageId,
+		onNode: request.onNode,
 		input: {
 			text: request.text,
 			/**
@@ -548,6 +592,7 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 		cancelSignal: request.cancelSignal,
 		preview: request.preview,
 		skipReceipt: request.skipReceipt,
+		meta: request.meta,
 		overrides: request.overrides
 	})
 }

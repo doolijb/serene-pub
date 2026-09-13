@@ -13,10 +13,52 @@ import type {
 	ChatCompletionMessageParam
 } from "openai/resources/chat/completions/completions"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-import { openAISamplingKeyMap } from "$lib/shared/utils/samplerMappings"
+import {
+	isReasoningKey,
+	openAISamplingKeyMap,
+	reasoningOf
+} from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
+import { ToolCallDeltaAccumulator } from "./streamingToolCalls"
+
+/**
+ * What an OpenAI-shaped `usage` block says a call cost.
+ *
+ * ⚠ **Every field is checked rather than read.** Twenty-four services answer in
+ * this envelope and `usage` is whatever each of them chose to put there; a
+ * string where a count belongs must produce silence, not `NaN` on a receipt.
+ *
+ * `cached_tokens` is absent, never zero, on a service that does not report
+ * reuse — see `TextGenResult.tokensCached` for why the two must not collapse.
+ */
+function cacheUsageFrom(usage: unknown): {
+	tokensPrompt?: number
+	tokensCached?: number
+	tokensCompletion?: number
+	tokensReasoning?: number
+} {
+	const u: any = usage
+	if (!u || typeof u !== "object") return {}
+	const num = (v: unknown) =>
+		typeof v === "number" && Number.isFinite(v) ? v : undefined
+	const prompt = num(u.prompt_tokens)
+	const cached = num(u.prompt_tokens_details?.cached_tokens)
+	const completion = num(u.completion_tokens)
+	// How much of what the model WROTE it spent thinking. Part of
+	// `completion_tokens` rather than beside it, so this is a breakdown of a
+	// number already reported and never an addition to it — which is why a
+	// reader needs it: a 512-token cap that produced a 40-word reply is a
+	// reasoning budget, not a short model.
+	const reasoning = num(u.completion_tokens_details?.reasoning_tokens)
+	return {
+		...(prompt !== undefined ? { tokensPrompt: prompt } : {}),
+		...(cached !== undefined ? { tokensCached: cached } : {}),
+		...(completion !== undefined ? { tokensCompletion: completion } : {}),
+		...(reasoning !== undefined ? { tokensReasoning: reasoning } : {})
+	}
+}
 
 /**
  * The native reasoning text on an OpenAI-compatible `delta` or `message`.
@@ -69,6 +111,16 @@ function reasoningTextFrom(source: any): string | undefined {
 
 export class OpenAIChatAdapter extends BaseConnectionAdapter {
 	private abortController?: AbortController
+
+	/**
+	 * `/v1/chat/completions` takes a `tools` array and answers with
+	 * `tool_calls`, so this class genuinely sends them — which is the only
+	 * question this property answers. See `consumesTools` on the base class for
+	 * why that is not the same as the connection being allowed to use tools.
+	 */
+	get consumesTools(): boolean {
+		return true
+	}
 
 	constructor({
 		connection,
@@ -123,7 +175,9 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI].baseUrl
 			)
 		const model = this.connection.model || "gpt-3.5-turbo"
-		const stream = this.connection.extraJson?.stream || false
+		const stream = this.streamingOn(
+			this.connection.extraJson?.stream || false
+		)
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
 
 		/**
@@ -173,6 +227,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 			model,
 			messages,
 			...this.mapSamplingConfig(),
+			...this.reasoningParams(),
 			// Several OpenAI-compatible backends reject json_object mode unless
 			// the word "JSON" appears somewhere in the prompt. Every caller that
 			// sets responseFormat here sends a prompt whose first line states
@@ -203,6 +258,33 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 				: {})
 		}
 
+		/**
+		 * The tools, in the field this format calls them (20 §9).
+		 *
+		 * ⚠ Only when there are any. An empty `tools: []` is not the same
+		 * request as no `tools` key: several OpenAI-compatible servers reject
+		 * the empty array outright, and others switch on tool-calling mode for
+		 * it — so every pipeline that is not a tool loop would start paying for
+		 * a feature it never asked for.
+		 *
+		 * `tool_choice: "auto"` is stated rather than left to the default,
+		 * because the default is not the same across the twenty-four services
+		 * behind this format. Auto is what a tool loop means: the model decides
+		 * whether this turn is work or an answer, and the answer is how the
+		 * loop ends.
+		 */
+		if (this.tools.length) {
+			params.tools = this.tools.map((t) => ({
+				type: "function" as const,
+				function: {
+					name: t.name,
+					description: t.description,
+					parameters: t.parameters
+				}
+			}))
+			params.tool_choice = "auto"
+		}
+
 		// The composed list, already filtered by the wire rule — the ternary
 		// that stood here is `connections/stops.ts`'s job now (ruling
 		// 2026-09-10). Its reasoning is unchanged and lives there: in chat wire
@@ -225,6 +307,14 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 
 		this.abortController = new AbortController()
 
+		// The record the inspector reads instead of a proxy: this format's own
+		// rendering of the request, filled in below as the response is read.
+		// Headers stay out of it — the key travels in one.
+		const wire = this.beginExchange({
+			url: `${baseURL || "https://api.openai.com/v1"}/chat/completions`,
+			body: { ...params, stream }
+		})
+
 		try {
 			if (stream) {
 				return {
@@ -237,8 +327,24 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 								{ ...params, stream: true },
 								{ signal: this.abortController?.signal }
 							)
+						/**
+						 * The call, assembled from its fragments (20 §9).
+						 *
+						 * Declared for every streaming request rather than only
+						 * a tool-carrying one, so the field below is `null`
+						 * ("nothing was called") rather than `undefined` ("this
+						 * adapter did not look") on both — the distinction the
+						 * loop's predicate reads.
+						 */
+						const calls = new ToolCallDeltaAccumulator()
 						for await (const part of streamResp as any) {
+							wire.frame(part)
 							if (this.isAborting) break
+							// The last chunk of a stream carries no delta and,
+							// where the server was asked for it, the usage
+							// block — so this is read before the `continue`
+							// below rather than inside the delta branch.
+							this.recordStreamedUsage(cacheUsageFrom(part.usage))
 							const delta = part.choices?.[0]?.delta
 							if (!delta) continue
 							// Native reasoning, off the same delta as the text.
@@ -249,7 +355,14 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 							if (delta.content) {
 								contentCb(delta.content)
 							}
+							calls.push(delta.tool_calls)
 						}
+						// A call that arrived is a call the model made,
+						// whatever the server called the ending:
+						// `finish_reason` is not consulted, because several
+						// servers behind this format close a tool-calling
+						// stream on `"stop"`.
+						this.streamedToolCall = calls.first()
 					},
 					compiledPrompt,
 					isAborted: this.isAborting
@@ -259,8 +372,11 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 					{ ...params, stream: false },
 					{ signal: this.abortController?.signal }
 				)
+				wire.received(response)
 				let content = ""
 				let thinkingContent: string | undefined
+				let toolCall: ReturnType<OpenAIChatAdapter["toolCallFrom"]> =
+					null
 				if (
 					response.choices &&
 					response.choices[0] &&
@@ -271,12 +387,24 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 					// The same two names the streaming branch reads, on the
 					// assembled message rather than a delta.
 					thinkingContent = reasoningTextFrom(message) || undefined
+					// The first call only — see `TextGenResult.toolCall`.
+					const first = (message as any).tool_calls?.[0]
+					if (first)
+						toolCall = this.toolCallFrom(
+							first.function?.name,
+							// A JSON **string** on this format, which is why the
+							// normalizer parses rather than assigns.
+							first.function?.arguments
+						)
 				}
 				return {
 					completionResult: content,
 					compiledPrompt,
 					isAborted: this.isAborting,
-					thinkingContent
+					thinkingContent,
+					toolCall,
+					// Recorded, never acted on: see `TextGenResult.tokensCached`.
+					...cacheUsageFrom((response as any).usage)
 				}
 			}
 		} catch (err: any) {
@@ -310,10 +438,41 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		// present IS the switch being on, so the key map is the only filter left.
 		for (const [key, value] of Object.entries(this.sampling)) {
 			if (openAISamplingKeyMap[key]) {
+				// Translated below rather than copied — `reasoning_effort`
+				// takes this format's own word for "none", and a budget has no
+				// field here at all.
+				if (isReasoningKey(key)) continue
 				result[openAISamplingKeyMap[key]] = value
 			}
 		}
 		return result
+	}
+
+	/**
+	 * `reasoning_effort`, or nothing at all.
+	 *
+	 * ⚠ **Nothing at all is the default**, and it has to be: the config's
+	 * `reasoning` field being absent means the switch is off, and a request
+	 * with no `reasoning_effort` key is the request this adapter has always
+	 * sent. Only a config that turned the sampler on changes a byte.
+	 *
+	 * `"none"` is this format's own word for off, and it is SENT rather than
+	 * withheld. Twenty-four services answer in this envelope and they disagree
+	 * about it — OpenAI's newer models take it, several proxies reject an
+	 * effort they do not know, and there is no per-connection flag saying
+	 * which. Sending it is the honest reading of a person who switched the
+	 * sampler on and chose Off, and the Wire tab shows exactly what went out
+	 * when a server refuses it. A connection-level opt-out belongs here the day
+	 * one exists; guessing per host does not.
+	 *
+	 * `reasoningBudget` has no field in this format, so a config carrying one
+	 * is recorded as ignored rather than silently dropped.
+	 */
+	private reasoningParams(): Record<string, string> {
+		const { level, budget } = reasoningOf(this.sampling)
+		if (!level) return {}
+		if (budget !== undefined) this.noteIgnoredSampler("reasoningBudget")
+		return { reasoning_effort: level === "off" ? "none" : level }
 	}
 
 	abort() {

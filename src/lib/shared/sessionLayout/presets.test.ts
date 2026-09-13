@@ -9,7 +9,12 @@
  * exactly as they were before presets existed.
  */
 import { describe, expect, it } from "vitest"
-import { DEFAULT_PRESET_NAME, layoutPresetSeedKey, presetBase } from "./presets"
+import {
+	DEFAULT_PRESET_NAME,
+	layoutPresetSeedKey,
+	presetBase,
+	presetWidgetSettings
+} from "./presets"
 
 describe("layoutPresetSeedKey", () => {
 	it("is derived from the genre id, not a numeric id", () => {
@@ -72,5 +77,57 @@ describe("presetBase", () => {
 		presetBase(preset, settings)
 		expect(preset).toEqual({ a: 1 })
 		expect(settings).toEqual({ b: 2 })
+	})
+})
+
+describe("presetWidgetSettings", () => {
+	it("reads the settings the preset pins", () => {
+		expect(
+			presetWidgetSettings(
+				{ widgetSettings: { "scene-portraits": { source: "scene" } } },
+				{}
+			)
+		).toEqual({ "scene-portraits": { source: "scene" } })
+	})
+
+	it("puts the user's own value over the preset's, field by field", () => {
+		expect(
+			presetWidgetSettings(
+				{
+					widgetSettings: {
+						"scene-portraits": { source: "scene", bars: true }
+					}
+				},
+				{ "scene-portraits": { bars: false } }
+			)
+		).toEqual({ "scene-portraits": { source: "scene", bars: false } })
+	})
+
+	it("keeps a widget only the user has settings for", () => {
+		expect(
+			presetWidgetSettings(
+				{ widgetSettings: { stats: { density: "compact" } } },
+				{ inventory: { groupBy: "item" } }
+			)
+		).toEqual({
+			stats: { density: "compact" },
+			inventory: { groupBy: "item" }
+		})
+	})
+
+	it("treats a non-object blob on either side as absent", () => {
+		expect(presetWidgetSettings(undefined, undefined)).toEqual({})
+		expect(presetWidgetSettings({ widgetSettings: 7 }, "no")).toEqual({})
+		expect(
+			presetWidgetSettings({ widgetSettings: { stats: 3 } }, null)
+		).toEqual({})
+	})
+
+	it("does not mutate either input", () => {
+		const preset = { widgetSettings: { stats: { density: "full" } } }
+		const user = { stats: { density: "compact" } }
+		presetWidgetSettings(preset, user)
+		expect(preset.widgetSettings.stats).toEqual({ density: "full" })
+		expect(user.stats).toEqual({ density: "compact" })
 	})
 })

@@ -43,6 +43,7 @@ import {
 	MediaVariant,
 	MediaVisibility
 } from "$lib/shared/constants/MediaVisibility"
+import { frameProblem, framesEqual } from "$lib/shared/media/frame"
 import { CULL_ORIGINALS_CONFIRM } from "$lib/shared/constants/MediaCleanup"
 
 /**
@@ -379,6 +380,32 @@ export const mediaList: Handler<
 	}
 }
 
+/**
+ * Announce that a file's bytes changed while its id stayed put.
+ *
+ * A bump writes nothing to the character, persona or message wearing the file,
+ * so no entity event fires and every open view keeps the `<img src>` it already
+ * rendered — which a browser answers from its own cache. The uuid travels with
+ * the token so a view holding only `avatarMediaId` can build the bustable URL
+ * from this alone.
+ *
+ * Emitted after the write, never before: the token on the wire has to be the
+ * one the route will serve.
+ */
+async function announceChanged(
+	fileId: number,
+	emitToUser: (event: string, data: any) => void
+) {
+	const row = await getMedia(db, fileId)
+	if (!row) return
+	emitToUser("media:changed", {
+		id: row.id,
+		uuid: row.uuid,
+		rev: row.rev,
+		frame: row.frame ?? null
+	} satisfies Sockets.Media.Changed.Response)
+}
+
 export const mediaRegenerateThumbnail: Handler<
 	Sockets.Media.RegenerateThumbnail.Params,
 	Sockets.Media.RegenerateThumbnail.Response
@@ -411,6 +438,7 @@ export const mediaRegenerateThumbnail: Handler<
 		// browser can be holding bytes at this exact URL either way, and only a
 		// different URL string dislodges them.
 		await bumpFileRev(db, row.id)
+		await announceChanged(row.id, emitToUser)
 
 		const res: Sockets.Media.RegenerateThumbnail.Response = {
 			mediaId: row.id,
@@ -423,6 +451,70 @@ export const mediaRegenerateThumbnail: Handler<
 		}
 		emitToUser("media:regenerateThumbnail", res)
 		await mediaList.handler(socket, {}, emitToUser)
+		return res
+	}
+}
+
+export const mediaSetFrame: Handler<
+	Sockets.Media.SetFrame.Params,
+	Sockets.Media.SetFrame.Response
+> = {
+	event: "media:setFrame",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const row = await getMedia(db, params.mediaId)
+		if (!row || row.userId !== userId) throw new Error("Image not found.")
+
+		const frame = params.frame ?? null
+		// Refused, never clamped. A frame that does not fit means the caller
+		// measured a different image, and quietly moving it would store a crop
+		// nobody chose.
+		if (frame) {
+			const problem = frameProblem(frame, row.width, row.height)
+			if (problem) throw new Error(problem)
+		}
+
+		// Nothing changed, so nothing is re-cut and no URL is invalidated.
+		// Re-saving the same crop must not cost every open view its cached
+		// pixels.
+		if (framesEqual(row.frame, frame)) {
+			const same: Sockets.Media.SetFrame.Response = {
+				media: toClientMedia(row)
+			}
+			emitToUser("media:setFrame", same)
+			return same
+		}
+
+		await db
+			.update(schema.files)
+			.set({ frame })
+			.where(eq(schema.files.id, row.id))
+
+		// The stored thumbnail is the OLD crop, and `ensureVariant` returns
+		// what is stored — so it has to go, or the new frame never reaches a
+		// pixel.
+		const existing = await getVariant(db, row.id, MediaVariant.THUMB)
+		if (existing) {
+			const outcome = await cullVariant(db, existing.id)
+			if (!outcome.ok) {
+				throw new Error(
+					`The crop could not be applied: ${outcome.reason}.`
+				)
+			}
+		}
+
+		// Bumped whether or not a thumb row existed: `?v=thumb` on a file with
+		// no thumb row still SERVES something — the display form, immutable for
+		// a year — so a browser can be holding bytes at this exact URL either
+		// way, and only a different URL string dislodges them.
+		await bumpFileRev(db, row.id)
+		await announceChanged(row.id, emitToUser)
+
+		const updated = (await getMedia(db, row.id)) ?? row
+		const res: Sockets.Media.SetFrame.Response = {
+			media: toClientMedia(updated)
+		}
+		emitToUser("media:setFrame", res)
 		return res
 	}
 }
@@ -673,7 +765,23 @@ export const mediaCullOriginals: Handler<
 		}
 
 		const priced = await cullableOriginals(userId)
+		// Which file each priced row belongs to, read once: `cullVariant`
+		// reports THAT the pointer moved, and the announcement needs to name
+		// the file whose bare URL now serves different bytes.
+		const fileOfVariant = new Map<number, number>()
+		if (priced.variantIds.length) {
+			for (const v of await db
+				.select({
+					id: schema.variants.id,
+					fileId: schema.variants.fileId
+				})
+				.from(schema.variants)
+				.where(inArray(schema.variants.id, priced.variantIds))) {
+				fileOfVariant.set(v.id, v.fileId)
+			}
+		}
 		const refusals: string[] = []
+		const repointedFiles = new Set<number>()
 		let files = 0
 		let freedBytes = 0
 		for (const variantId of priced.variantIds) {
@@ -686,6 +794,13 @@ export const mediaCullOriginals: Handler<
 			}
 			files++
 			freedBytes += outcome.freedBytes
+			if (outcome.repointed) {
+				const fileId = fileOfVariant.get(variantId)
+				if (fileId != null) repointedFiles.add(fileId)
+			}
+		}
+		for (const fileId of repointedFiles) {
+			await announceChanged(fileId, emitToUser)
 		}
 
 		const res: Sockets.Media.CullOriginals.Response = {
@@ -746,6 +861,7 @@ export function registerMediaHandlers(
 ) {
 	register(socket, mediaList, emitToUser)
 	register(socket, mediaRegenerateThumbnail, emitToUser)
+	register(socket, mediaSetFrame, emitToUser)
 	register(socket, mediaSetVisibility, emitToUser)
 	register(socket, mediaDelete, emitToUser)
 	register(socket, mediaCleanupPreview, emitToUser)

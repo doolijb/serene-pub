@@ -128,6 +128,9 @@ export const personasList: Handler<
 				embeddingModel: true
 			},
 			with: {
+				avatarMedia: {
+					columns: { uuid: true, rev: true, frame: true }
+				},
 				personaTags: {
 					with: {
 						tag: true
@@ -162,6 +165,9 @@ export const personasGet: Handler<
 				vectorizedAt: false
 			},
 			with: {
+				avatarMedia: {
+					columns: { uuid: true, rev: true, frame: true }
+				},
 				personaTags: {
 					with: {
 						tag: true
@@ -200,6 +206,21 @@ export const personasGet: Handler<
 			return res
 		}
 	}
+}
+
+/** See `characterForBroadcast` in characters.ts — an avatar upload writes
+ *  `avatarMediaId` after the row the handler already holds. */
+async function personaForBroadcast(
+	id: number,
+	fallback: SelectPersona
+): Promise<Sockets.Personas.Update.Response["persona"]> {
+	const row = await db.query.personas.findFirst({
+		where: (p, { eq }) => eq(p.id, id),
+		with: {
+			avatarMedia: { columns: { uuid: true, rev: true, frame: true } }
+		}
+	})
+	return row ?? fallback
 }
 
 export const personasCreate: Handler<
@@ -244,7 +265,9 @@ export const personasCreate: Handler<
 
 			autoEnqueuePersona(persona.id, persona.name).catch(console.error)
 			await personasList.handler(socket, {}, emitToUser)
-			const res: Sockets.Personas.Create.Response = { persona }
+			const res: Sockets.Personas.Create.Response = {
+				persona: await personaForBroadcast(persona.id, persona)
+			}
 			emitToUser("personas:create", res)
 			return res
 		} catch (e: any) {
@@ -288,6 +311,8 @@ export const personasUpdate: Handler<
 			// import-dedup identity.
 			delete (data as any).lorebookId
 			delete (data as any).uuid
+			// See charactersUpdate: a joined relation, never a column.
+			delete (data as any).avatarMedia
 
 			const [updated] = await db
 				.update(schema.personas)
@@ -328,7 +353,9 @@ export const personasUpdate: Handler<
 			autoEnqueuePersona(id, updated.name).catch(console.error)
 			await personasGet.handler(socket, { id }, emitToUser)
 			await personasList.handler(socket, {}, emitToUser)
-			const res: Sockets.Personas.Update.Response = { persona: updated }
+			const res: Sockets.Personas.Update.Response = {
+				persona: await personaForBroadcast(id, updated)
+			}
 			emitToUser("personas:update", res)
 			return res
 		} catch (e: any) {
@@ -1126,8 +1153,14 @@ export const personasSetAvatar: Handler<
 			)
 			.returning()
 
-		const res: Sockets.Personas.SetAvatar.Response = { persona: updated }
+		const broadcast = await personaForBroadcast(params.personaId, updated)
+		const res: Sockets.Personas.SetAvatar.Response = { persona: broadcast }
 		emitToUser("personas:setAvatar", res)
+		// The session views listen for `personas:update`, not for this event —
+		// and picking a gallery image changes the face they render.
+		emitToUser("personas:update", {
+			persona: broadcast
+		} satisfies Sockets.Personas.Update.Response)
 		await personasGet.handler(socket, { id: params.personaId }, emitToUser)
 		return res
 	}

@@ -18,6 +18,13 @@
 		batchSize: number
 	}
 
+	/**
+	 * ⚠ `enableThinking` is gone from this form (ruling 2026-09-12), the same
+	 * way it left `KoboldCppForm`: reasoning is a SAMPLING parameter now,
+	 * chosen per stage on the sampling config. The managed adapter extends the
+	 * plain one, so the read it depended on is gone too. Stale keys in an
+	 * existing row's `extraJson` are read by nothing and cost nothing.
+	 */
 	interface ExtraFieldData {
 		stream: boolean
 		useMemory: boolean
@@ -28,7 +35,6 @@
 		grammarRetainState: boolean
 		logprobs: boolean
 		replaceInstructPlaceholders: boolean
-		enableThinking: boolean | null
 		managedConfig: ManagedConfig
 	}
 
@@ -42,7 +48,6 @@
 		grammarRetainState?: boolean
 		logprobs?: boolean
 		replaceInstructPlaceholders?: boolean
-		enableThinking?: boolean | null
 		managedConfig?: ManagedConfig
 	}
 
@@ -127,7 +132,6 @@
 			logprobs: extraJson.logprobs ?? false,
 			replaceInstructPlaceholders:
 				extraJson.replaceInstructPlaceholders ?? false,
-			enableThinking: extraJson.enableThinking ?? null,
 			managedConfig: {
 				gpuLayers:
 					extraJson.managedConfig?.gpuLayers ??
@@ -156,7 +160,6 @@
 			grammarRetainState: fields.grammarRetainState,
 			logprobs: fields.logprobs,
 			replaceInstructPlaceholders: fields.replaceInstructPlaceholders,
-			enableThinking: fields.enableThinking,
 			managedConfig: fields.managedConfig
 		}
 	}
@@ -448,32 +451,6 @@
 					</Switch.Control>
 					<Switch.HiddenInput />
 				</Switch>
-				<div class="flex items-center justify-between gap-4">
-					<div>
-						<p class="font-semibold">Thinking / Reasoning</p>
-						<p class="text-muted-foreground text-xs">
-							Auto lets the model decide based on its template
-						</p>
-					</div>
-					<div
-						class="border-surface-300-700 flex overflow-hidden rounded border text-sm"
-					>
-						{#each [{ label: "Auto", value: null }, { label: "On", value: true }, { label: "Off", value: false }] as opt}
-							<button
-								type="button"
-								class="px-3 py-1 transition-colors {koboldCppFields.enableThinking ===
-								opt.value
-									? 'preset-filled-primary-500'
-									: 'preset-filled-surface-400-600'}"
-								onclick={() =>
-									(koboldCppFields!.enableThinking =
-										opt.value)}
-							>
-								{opt.label}
-							</button>
-						{/each}
-					</div>
-				</div>
 				<hr class="border-surface-300-700" />
 				<p class="text-muted-foreground text-xs">
 					Managed mode launch settings — applied the next time this

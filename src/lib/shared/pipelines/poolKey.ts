@@ -13,19 +13,18 @@
  * pair lives here and `entities/contextTemplateDefaults.ts` re-exports the
  * composer for its ten existing importers.
  *
- * Imports nothing, deliberately: `config.ts` needs `poolKeyFor` and
- * `contextTemplates.ts` imports `config.ts`, a cycle this module cannot join.
+ * Imports one leaf, `templateEngines.ts`, which imports nothing: `config.ts`
+ * needs `poolKeyFor` and `contextTemplates.ts` imports `config.ts`, a cycle
+ * this module cannot join.
  */
 
 /**
- * Core's template engine — the one every install has.
+ * Core's default template engine, re-exported for this module's importers.
  *
- * Duplicated as a literal in the library page and defined again server-side in
- * `prompt/renderers.ts`, which is how a template could be written for one engine
- * and rendered by another. It is the fallback for a pool key that names none,
- * and nothing else: `renderTemplate` no longer defaults, it throws.
+ * It is the fallback for a pool key that names no engine, and nothing else:
+ * `renderTemplate` no longer defaults, it throws.
  */
-export const CORE_TEMPLATE_ENGINE = "core:template/handlebars@1"
+export { CORE_TEMPLATE_ENGINE } from "$lib/shared/pipelines/templateEngines"
 
 /**
  * A node type id with its version stripped.

@@ -68,16 +68,32 @@ export const startupTasks: StartupTask[] = [
 		}
 	},
 	{
-		// Embeddings become a connection (20 §14) — one-shot, pointer-guarded.
+		/**
+		 * The half of migration 0127 that SQL cannot do.
+		 *
+		 * 0127 projects the old embedding singleton into a connection and stars
+		 * it, but it can neither re-encrypt the API key across key classes nor
+		 * resolve the row's capabilities against the adapter manifest. This
+		 * finishes both, exactly once — the quarantined envelope is consumed, so
+		 * a second boot finds nothing to do.
+		 */
 		name: "embedding",
 		run: async () => {
 			const { migrateEmbeddingConnection } = await import(
 				"$lib/server/embedding/migrateEmbeddingConnection"
 			)
 			const r = await migrateEmbeddingConnection(db)
-			if (r.migrated)
+			if (r.keysConverted)
 				console.log(
-					`[embedding] endpoint config migrated to connection ${r.connectionId}`
+					`[embedding] re-encrypted ${r.keysConverted} API key(s) under the connection key class`
+				)
+			if (r.keysFailed)
+				console.warn(
+					`[embedding] ${r.keysFailed} API key(s) could not be decrypted and were dropped — re-enter them on the connection`
+				)
+			if (r.capabilitiesResolved)
+				console.log(
+					`[embedding] resolved capabilities for ${r.capabilitiesResolved} embedding connection(s)`
 				)
 		}
 	},
@@ -89,11 +105,12 @@ export const startupTasks: StartupTask[] = [
 		 * different kinds of thing. Seeded rows there are user-editable
 		 * content, upserted so a user's edits survive; a published spec version
 		 * is immutable by construction — it is what a run resolved against — so
-		 * it is published once per version and never rewritten.
+		 * it is published once per document and never rewritten.
 		 *
-		 * A type-registry conflict means pipelines cannot run safely on this
-		 * build; it does not mean a session cannot start. The report carries
-		 * the reason for a diagnostics screen to show.
+		 * A declaration this build changed publishes under a new hash and the
+		 * slug's pointer moves (ruling 2026-09-10). The log says which, because
+		 * a pointer moving under an unchanged pin is the one event here worth
+		 * being able to correlate an incident with.
 		 */
 		name: "pipelines",
 		run: async () => {
@@ -101,11 +118,10 @@ export const startupTasks: StartupTask[] = [
 				"$lib/server/pipelines/boot/bootstrap"
 			)
 			const report = await bootstrapPipelines(db)
-			if (report.conflict)
-				console.warn(
-					"[pipelines] type registry conflict — pipelines are disabled on " +
-						"this build until it is resolved:\n" +
-						report.conflict
+			if (report.types.republished.length)
+				console.info(
+					"[pipelines] these slugs now resolve to a new declaration: " +
+						report.types.republished.join(", ")
 				)
 			if (report.entryProjection) {
 				// A constraint with no way to see what violates it is worse
@@ -160,10 +176,21 @@ export const startupTasks: StartupTask[] = [
 			const { listSessionGenres, STANDARD_GENRE_ID } = await import(
 				"$lib/server/pipelines/entities/sessionGenres"
 			)
+			const { CORE_LAYOUT_PRESETS } = await import(
+				"@serene-pub/core-catalog"
+			)
 			const genres = await listSessionGenres(db)
+			// The shipped arrangements go LAST: `syncLayoutPresets` keys on the
+			// genre id and takes the last entry for each, so a genre that
+			// appears both as a bare id above and as a furnished entry here gets
+			// the arrangement its package declares. A genre with no shipped
+			// layout keeps the empty default, which is the built-in surface.
 			await syncLayoutPresets([
 				{ genreId: STANDARD_GENRE_ID },
-				...genres.map((g) => ({ genreId: g.genreId }))
+				...genres.map((g) => ({ genreId: g.genreId })),
+				...CORE_LAYOUT_PRESETS.filter((l) =>
+					genres.some((g) => g.genreId === l.genreId)
+				)
 			])
 		}
 	},

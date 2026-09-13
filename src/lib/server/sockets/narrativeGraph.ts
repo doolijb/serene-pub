@@ -29,6 +29,8 @@ import {
 	inBookOfType,
 	mergeFields
 } from "$lib/server/utils/lorebookEntries"
+import type { EntryTypeId } from "$lib/shared/entries/types"
+import { castEdgeOnly, isCastEdge } from "$lib/server/utils/narrativeEdges"
 import {
 	buildGraphFromScenes,
 	GraphParseError,
@@ -76,6 +78,156 @@ import { verifyBindingTargetAccess } from "./lorebooks"
 
 // Resume states saved before each scene — keyed by "userId:lorebookId"
 const buildResumeStates = new Map<string, GraphBuilderResumeState>()
+
+// ─── Endpoints ────────────────────────────────────────────────────────────────
+
+/**
+ * An edge's two ends, as stored: one column of each pair set, the other null.
+ *
+ * The database holds the rule as two CHECK constraints; this is the one place
+ * the application states it, so no handler builds half a pair by hand.
+ */
+type EndpointColumns =
+	| { nodeId: number; entryId: null }
+	| { nodeId: null; entryId: number }
+
+/** The stored pair a wire endpoint names. */
+const endpointColumns = (
+	endpoint: Sockets.NarrativeGraph.RelationshipEndpoint
+): EndpointColumns =>
+	endpoint.kind === "cast"
+		? { nodeId: endpoint.bindingId, entryId: null }
+		: { nodeId: null, entryId: endpoint.entryId }
+
+/**
+ * An endpoint a client named, checked against the book it claims to be in.
+ *
+ * Cross-lorebook edges are refused rather than repaired: an edge whose ends
+ * live in two books belongs to neither, and the row carries one `lorebookId`.
+ */
+async function resolveEndpoint(
+	endpoint: Sockets.NarrativeGraph.RelationshipEndpoint,
+	lorebookId: number,
+	side: "From" | "To"
+): Promise<EndpointColumns> {
+	if (endpoint.kind === "cast") {
+		const node = await db.query.lorebookBindings.findFirst({
+			where: eq(schema.lorebookBindings.id, endpoint.bindingId),
+			columns: { lorebookId: true }
+		})
+		if (!node || node.lorebookId !== lorebookId)
+			throw new Error(`${side}-node not found.`)
+		return { nodeId: endpoint.bindingId, entryId: null }
+	}
+	const entry = await db.query.lorebookEntries.findFirst({
+		where: eq(schema.lorebookEntries.id, endpoint.entryId),
+		columns: { lorebookId: true }
+	})
+	if (!entry || entry.lorebookId !== lorebookId)
+		throw new Error(`${side}-entry not found.`)
+	return { nodeId: null, entryId: endpoint.entryId }
+}
+
+/**
+ * What an entry endpoint needs to be drawn as a node.
+ *
+ * One query for every entry both ends of every row name, rather than one per
+ * endpoint: a graph of a hundred roads would otherwise be two hundred reads.
+ */
+async function entryEndpointIndex(
+	rows: readonly {
+		fromEntryId: number | null
+		toEntryId: number | null
+	}[]
+): Promise<Map<number, { name: string; typeId: EntryTypeId }>> {
+	const ids = [
+		...new Set(
+			rows.flatMap((r) =>
+				[r.fromEntryId, r.toEntryId].filter(
+					(id): id is number => id != null
+				)
+			)
+		)
+	]
+	const index = new Map<number, { name: string; typeId: EntryTypeId }>()
+	if (ids.length === 0) return index
+	const entries = await db
+		.select({
+			id: schema.lorebookEntries.id,
+			title: schema.lorebookEntries.title,
+			typeId: schema.lorebookEntries.typeId
+		})
+		.from(schema.lorebookEntries)
+		.where(inArray(schema.lorebookEntries.id, ids))
+	for (const entry of entries)
+		index.set(entry.id, {
+			name: entry.title ?? "",
+			typeId: entry.typeId as EntryTypeId
+		})
+	return index
+}
+
+/**
+ * A stored row as the wire carries it.
+ *
+ * `from`/`to` are the endpoints of record; `fromNodeId`/`toNodeId` ride along
+ * unchanged for the readers written before an endpoint could be an entry — see
+ * the note on the wire type. An entry endpoint whose row has since been deleted
+ * cannot occur (the FK cascades), so an id missing from the index would be a
+ * read racing a delete: it is drawn nameless rather than dropped, because an
+ * edge that vanishes from a graph without a reason is the worse failure.
+ */
+function wireRelationship(
+	row: SelectNarrativeRelationship,
+	entries: Map<number, { name: string; typeId: EntryTypeId }>
+): Sockets.NarrativeGraph.NarrativeRelationship {
+	const endpoint = (
+		nodeId: number | null,
+		entryId: number | null
+	): Sockets.NarrativeGraph.WireRelationshipEndpoint => {
+		if (entryId != null) {
+			const entry = entries.get(entryId)
+			return {
+				kind: "entry",
+				entryId,
+				name: entry?.name ?? "",
+				typeId: entry?.typeId ?? WORLD_LORE_TYPE_ID
+			}
+		}
+		return { kind: "cast", bindingId: nodeId! }
+	}
+	return {
+		...row,
+		from: endpoint(row.fromNodeId, row.fromEntryId),
+		to: endpoint(row.toNodeId, row.toEntryId)
+	}
+}
+
+/**
+ * The endpoint a payload states, in one shape.
+ *
+ * `from`/`to` win; `fromNodeId`/`toNodeId` are the pre-0124 spelling of a cast
+ * endpoint and are accepted for one release. Naming neither is refused rather
+ * than defaulted: an edge has to start somewhere, and a default would be a
+ * guess at which row.
+ */
+function statedEndpoint(
+	endpoint: Sockets.NarrativeGraph.RelationshipEndpoint | undefined,
+	legacyNodeId: number | undefined,
+	side: "From" | "To"
+): Sockets.NarrativeGraph.RelationshipEndpoint {
+	if (endpoint) return endpoint
+	if (legacyNodeId != null) return { kind: "cast", bindingId: legacyNodeId }
+	throw new Error(`${side} endpoint is required.`)
+}
+
+/** Every row of a list, with its endpoints resolved in one query. */
+async function wireRelationships(
+	rows: readonly SelectNarrativeRelationship[]
+): Promise<Sockets.NarrativeGraph.NarrativeRelationship[]> {
+	const entries = await entryEndpointIndex(rows)
+	return rows.map((row) => wireRelationship(row, entries))
+}
 
 // ─── List ─────────────────────────────────────────────────────────────────────
 
@@ -233,7 +385,9 @@ export const narrativeGraphListHandler: Handler<
 
 		const res: Sockets.NarrativeGraph.List.Response = {
 			nodes,
-			relationships,
+			// Entries are on the graph too: an entry with an edge is a node,
+			// and the endpoint carries what it takes to draw one.
+			relationships: await wireRelationships(relationships),
 			ungraphedSceneCount,
 			unresolvedCastSceneCount: unresolvedCastScenes.length,
 			namelessBindingCount: nodes.filter(
@@ -710,12 +864,18 @@ export const narrativeGraphBuildHandler: Handler<
 			// replace mode reprocesses everything — but the seed *set* is the
 			// same either way, so the mode branch that used to live here is
 			// gone.
+			// Cast edges only: the builder seeds the model with characters and
+			// the ties between them, and an edge with an entry end has no
+			// second character to name.
 			const existingRelationships =
 				mode === "extend"
 					? await db.query.narrativeRelationships.findMany({
-							where: eq(
-								schema.narrativeRelationships.lorebookId,
-								params.lorebookId
+							where: and(
+								eq(
+									schema.narrativeRelationships.lorebookId,
+									params.lorebookId
+								),
+								castEdgeOnly
 							),
 							orderBy: asc(schema.narrativeRelationships.id)
 						})
@@ -759,15 +919,17 @@ export const narrativeGraphBuildHandler: Handler<
 			}
 			if (seeds.length > 0) seedNodes = seeds
 
-			seedRelationships = existingRelationships.map((r) => ({
-				fromNodeId: r.fromNodeId,
-				toNodeId: r.toNodeId,
-				relationshipType: r.relationshipType,
-				visibility: r.visibility,
-				status: r.status,
-				description: r.description,
-				reason: r.reason
-			}))
+			seedRelationships = existingRelationships
+				.filter(isCastEdge)
+				.map((r) => ({
+					fromNodeId: r.fromNodeId,
+					toNodeId: r.toNodeId,
+					relationshipType: r.relationshipType,
+					visibility: r.visibility,
+					status: r.status,
+					description: r.description,
+					reason: r.reason
+				}))
 		}
 
 		// Screens newly-proposed character nodes: a station or an artefact with
@@ -1822,9 +1984,10 @@ export const narrativeGraphApplyProposalHandler: Handler<
 			),
 			columns: { id: true }
 		})
+		const wiredRelationships = await wireRelationships(relationships)
 		const listPayload: Sockets.NarrativeGraph.List.Response = {
 			nodes,
-			relationships,
+			relationships: wiredRelationships,
 			ungraphedSceneCount: ungraphedScenes.length,
 			unresolvedCastSceneCount: unresolvedAfterApply.length,
 			namelessBindingCount: nodes.filter(
@@ -1837,7 +2000,7 @@ export const narrativeGraphApplyProposalHandler: Handler<
 		}
 		const res: Sockets.NarrativeGraph.ApplyProposal.Response = {
 			nodes,
-			relationships
+			relationships: wiredRelationships
 		}
 		emitToUser("narrativeGraph:list", listPayload)
 		emitToUser("narrativeGraph:applyProposal", res)
@@ -2088,14 +2251,30 @@ export const narrativeGraphUpdateRelationshipHandler: Handler<
 		if (!lorebook) throw new Error("Access denied.")
 
 		// Explicit allowlist, not a denylist — a denylist previously let a
-		// client rewrite fromNodeId/toNodeId/lorebookId to point anywhere,
-		// unlike createRelationship, which validates new endpoints. Never
-		// writable here: fromNodeId, toNodeId, lorebookId, embedding,
-		// embeddingModel.
+		// client rewrite fromNodeId/toNodeId/lorebookId to point anywhere.
+		// Never writable here: lorebookId, embedding, embeddingModel. An
+		// endpoint IS writable, and only through `from`/`to`, which go through
+		// the same validation `createRelationship` puts a new endpoint through:
+		// the row keeps its own lorebook and both ends must be in it.
 		const fields: Partial<
 			typeof schema.narrativeRelationships.$inferInsert
 		> = {}
 		const r = params.relationship
+
+		if (r.from !== undefined) {
+			const from = await resolveEndpoint(
+				r.from,
+				existing.lorebookId,
+				"From"
+			)
+			fields.fromNodeId = from.nodeId
+			fields.fromEntryId = from.entryId
+		}
+		if (r.to !== undefined) {
+			const to = await resolveEndpoint(r.to, existing.lorebookId, "To")
+			fields.toNodeId = to.nodeId
+			fields.toEntryId = to.entryId
+		}
 
 		if (r.relationshipType !== undefined)
 			fields.relationshipType = r.relationshipType
@@ -2161,7 +2340,10 @@ export const narrativeGraphUpdateRelationshipHandler: Handler<
 			.where(eq(schema.narrativeRelationships.id, params.relationship.id))
 
 		const res: Sockets.NarrativeGraph.UpdateRelationship.Response = {
-			relationship: updated
+			relationship: wireRelationship(
+				updated,
+				await entryEndpointIndex([updated])
+			)
 		}
 		emitToUser("narrativeGraph:updateRelationship", res)
 		return res
@@ -2208,8 +2390,6 @@ export const narrativeGraphCreateRelationshipHandler: Handler<
 		const userId = socket.user!.id
 		const {
 			lorebookId,
-			fromNodeId,
-			toNodeId,
 			relationshipType,
 			status,
 			description,
@@ -2223,18 +2403,18 @@ export const narrativeGraphCreateRelationshipHandler: Handler<
 		})
 		if (!lorebook) throw new Error("Lorebook not found or access denied.")
 
-		const [fromNode, toNode] = await Promise.all([
-			db.query.lorebookBindings.findFirst({
-				where: eq(schema.lorebookBindings.id, fromNodeId)
-			}),
-			db.query.lorebookBindings.findFirst({
-				where: eq(schema.lorebookBindings.id, toNodeId)
-			})
+		const [from, to] = await Promise.all([
+			resolveEndpoint(
+				statedEndpoint(params.from, params.fromNodeId, "From"),
+				lorebookId,
+				"From"
+			),
+			resolveEndpoint(
+				statedEndpoint(params.to, params.toNodeId, "To"),
+				lorebookId,
+				"To"
+			)
 		])
-		if (!fromNode || fromNode.lorebookId !== lorebookId)
-			throw new Error("From-node not found.")
-		if (!toNode || toNode.lorebookId !== lorebookId)
-			throw new Error("To-node not found.")
 
 		if (historyEntryId != null) {
 			const [historyEntry] = await db
@@ -2255,8 +2435,10 @@ export const narrativeGraphCreateRelationshipHandler: Handler<
 			.insert(schema.narrativeRelationships)
 			.values({
 				lorebookId,
-				fromNodeId,
-				toNodeId,
+				fromNodeId: from.nodeId,
+				fromEntryId: from.entryId,
+				toNodeId: to.nodeId,
+				toEntryId: to.entryId,
 				relationshipType,
 				visibility: (visibility ??
 					"acknowledged") as RelationshipVisibility,
@@ -2268,7 +2450,10 @@ export const narrativeGraphCreateRelationshipHandler: Handler<
 			.returning()
 
 		const res: Sockets.NarrativeGraph.CreateRelationship.Response = {
-			relationship: inserted
+			relationship: wireRelationship(
+				inserted,
+				await entryEndpointIndex([inserted])
+			)
 		}
 		emitToUser("narrativeGraph:createRelationship", res)
 		return res
@@ -2456,12 +2641,15 @@ export const narrativeGraphQueryContextHandler: Handler<
 		}
 
 		// ── Layer 1: speaker's outbound relationships ─────────────────────────────
-		const speakerRels = await db.query.narrativeRelationships.findMany({
-			where: and(
-				eq(schema.narrativeRelationships.lorebookId, lorebookId),
-				eq(schema.narrativeRelationships.fromNodeId, speakerNodeId)
-			)
-		})
+		const speakerRels = (
+			await db.query.narrativeRelationships.findMany({
+				where: and(
+					eq(schema.narrativeRelationships.lorebookId, lorebookId),
+					castEdgeOnly,
+					eq(schema.narrativeRelationships.fromNodeId, speakerNodeId)
+				)
+			})
+		).filter(isCastEdge)
 
 		const l1NodeIds = [
 			...new Set([
@@ -2544,13 +2732,14 @@ export const narrativeGraphQueryContextHandler: Handler<
 				.filter((id) => id !== speakerNodeId)
 
 			if (participantNodeIds.length > 0) {
-				const inverseRels =
+				const inverseRels = (
 					await db.query.narrativeRelationships.findMany({
 						where: and(
 							eq(
 								schema.narrativeRelationships.lorebookId,
 								lorebookId
 							),
+							castEdgeOnly,
 							eq(
 								schema.narrativeRelationships.toNodeId,
 								speakerNodeId
@@ -2565,6 +2754,7 @@ export const narrativeGraphQueryContextHandler: Handler<
 							] as RelationshipVisibility[])
 						)
 					})
+				).filter(isCastEdge)
 
 				const l2NodeIds = [
 					...new Set([
@@ -2593,16 +2783,22 @@ export const narrativeGraphQueryContextHandler: Handler<
 		})
 
 		for (const node of legendaryNodes) {
-			const publicRels = await db.query.narrativeRelationships.findMany({
-				where: and(
-					eq(schema.narrativeRelationships.lorebookId, lorebookId),
-					eq(schema.narrativeRelationships.fromNodeId, node.id),
-					eq(
-						schema.narrativeRelationships.visibility,
-						"public" as RelationshipVisibility
+			const publicRels = (
+				await db.query.narrativeRelationships.findMany({
+					where: and(
+						eq(
+							schema.narrativeRelationships.lorebookId,
+							lorebookId
+						),
+						castEdgeOnly,
+						eq(schema.narrativeRelationships.fromNodeId, node.id),
+						eq(
+							schema.narrativeRelationships.visibility,
+							"public" as RelationshipVisibility
+						)
 					)
-				)
-			})
+				})
+			).filter(isCastEdge)
 
 			const l3NodeIds = [
 				...new Set([
@@ -2827,11 +3023,15 @@ export const narrativeGraphMergeNodeHandler: Handler<
 
 			const relationshipRewrites: {
 				id: number
-				oldFromNodeId: number
-				oldToNodeId: number
+				oldFromNodeId: number | null
+				oldToNodeId: number | null
 			}[] = []
 			const deletedRelationships: Record<string, unknown>[] = []
 
+			// ⚠ **Only the cast endpoints move.** `affectedRels` is selected on
+			// the two node columns, so an entry endpoint is never `absorbedId`
+			// and never rewritten: absorbing a character rewrites their end of
+			// "keeper of the shrine" and leaves the shrine where it is.
 			for (const rel of affectedRels) {
 				const newFromNodeId =
 					rel.fromNodeId === absorbedId ? survivorId : rel.fromNodeId
@@ -2842,8 +3042,10 @@ export const narrativeGraphMergeNodeHandler: Handler<
 				// for (two rows turning out to be the same person) very
 				// plausibly already has a relationship *between them* —
 				// rewriting both endpoints to the survivor's id would leave
-				// a relationship from someone to themselves.
-				if (newFromNodeId === newToNodeId) {
+				// a relationship from someone to themselves. Two entry
+				// endpoints are both null and are not a self-loop, which is
+				// why this asks for a real id rather than for equality alone.
+				if (newFromNodeId !== null && newFromNodeId === newToNodeId) {
 					deletedRelationships.push({ ...rel })
 					relationshipRewrites.push({
 						id: rel.id,
@@ -2861,6 +3063,8 @@ export const narrativeGraphMergeNodeHandler: Handler<
 						r.id !== rel.id &&
 						r.fromNodeId === newFromNodeId &&
 						r.toNodeId === newToNodeId &&
+						r.fromEntryId === rel.fromEntryId &&
+						r.toEntryId === rel.toEntryId &&
 						r.relationshipType === rel.relationshipType
 				)
 				if (duplicate) {
@@ -3177,8 +3381,10 @@ export const narrativeGraphUndoMergeHandler: Handler<
 				})
 				.returning()
 
-			const remapId = (id: number) =>
-				id === oldAbsorbedId ? inserted.id : id
+			// Null passes straight through: that end of the edge is an entry,
+			// which a merge never touched and an undo must not invent one for.
+			const remapId = <T extends number | null>(id: T) =>
+				(id === oldAbsorbedId ? inserted.id : id) as T
 
 			// Restore relationships still standing (rewritten, not deleted)
 			// back to their original endpoints.
@@ -3218,8 +3424,12 @@ export const narrativeGraphUndoMergeHandler: Handler<
 				} = deletedRel
 				await tx.insert(schema.narrativeRelationships).values({
 					...(relRest as typeof schema.narrativeRelationships.$inferInsert),
-					fromNodeId: remapId(relRest.fromNodeId as number),
-					toNodeId: remapId(relRest.toNodeId as number),
+					fromNodeId: remapId(
+						(relRest.fromNodeId ?? null) as number | null
+					),
+					toNodeId: remapId(
+						(relRest.toNodeId ?? null) as number | null
+					),
 					createdAt: relCreatedAt
 						? new Date(relCreatedAt as string)
 						: new Date()

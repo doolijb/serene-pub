@@ -7,10 +7,14 @@
 import { describe, expect, it } from "vitest"
 import {
 	frameCovers,
+	itemPinned,
 	loadArranged,
 	reexpress,
 	seedPositions,
-	withGeometry
+	showZonePin,
+	unitPinned,
+	withGeometry,
+	withPins
 } from "./arrangedGeometry"
 import type { GsItem, GsLayout, GsPos } from "./GridStackZone.svelte"
 
@@ -176,6 +180,20 @@ describe("seedPositions — default placement (nothing saved yet)", () => {
 		)
 		expect(out.map((p) => p.y)).toEqual([0, 3])
 	})
+
+	it("seeds an item with no saved geometry below one placed explicitly, not on top of it", () => {
+		const out = seedPositions(
+			[
+				{ id: "map", title: "Map", x: 0, y: 2, w: 9, h: 3 },
+				{ id: "notes", title: "Notes", h: 3 }
+			],
+			9,
+			37
+		)
+		expect(out[0]).toEqual(pos("map", 0, 2, 9, 3))
+		expect(out[1].y).toBeGreaterThanOrEqual(5)
+		expect(overlaps(out[0], out[1])).toBe(false)
+	})
 })
 
 describe("seedPositions — a saved arrangement drawn in a SMALLER zone", () => {
@@ -324,5 +342,110 @@ describe("reexpress — a zone RE-MEASURED, not re-seeded", () => {
 
 	it("re-expresses an empty zone to nothing rather than throwing", () => {
 		expect(reexpress({ cols: 4, rows: 4, items: [] }, 2, 2)).toEqual([])
+	})
+})
+
+/**
+ * PER-GROUP PIN (ruled 2026-09-10). The pin used to be the ZONE's, so every
+ * group in a side column shared it and the Move tab's per-group toggle died
+ * with the page. It is now a field on the arranged ITEM, and these are the two
+ * halves of that promise: an arrangement saved before the field existed still
+ * reads as everything pinned, and a group the user unpinned comes back
+ * unpinned.
+ */
+describe("the persisted per-group pin", () => {
+	const zone = (items: GsPos[]): GsLayout => ({ cols: 9, rows: 12, items })
+	/** Through the wire the blob actually takes: a json column. */
+	const roundTrip = (a: unknown) =>
+		loadArranged(JSON.parse(JSON.stringify(a)))
+
+	it("reads a LEGACY arrangement — no pin field anywhere — as all pinned", () => {
+		const saved = {
+			left: zone([
+				pos("map", 0, 0, 9, 4),
+				{ ...pos("notes", 0, 4, 9, 4), group: "g:notes+cast" },
+				{ ...pos("cast", 0, 8, 9, 4), group: "g:notes+cast" }
+			])
+		}
+		const out = roundTrip(saved)
+		expect(out.left!.items.every(itemPinned)).toBe(true)
+		expect(unitPinned(out.left!.items.slice(1))).toBe(true)
+	})
+
+	it("carries one group's unpin through save → load", () => {
+		const before = { left: zone([pos("map", 0, 0, 9, 4), pos("notes", 0, 4, 9, 4)]) }
+		const after = {
+			left: withPins(before.left, ["notes"], false)
+		}
+		const out = roundTrip(after)
+		expect(out.left!.items.map(itemPinned)).toEqual([true, false])
+	})
+
+	it("writes every member of a tab group, so the group reads as one", () => {
+		const g = zone([
+			{ ...pos("notes", 0, 0, 5, 4), group: "g:notes+cast" },
+			{ ...pos("cast", 5, 0, 4, 4), group: "g:notes+cast" }
+		])
+		const out = roundTrip({ left: withPins(g, ["notes", "cast"], false) })
+		expect(unitPinned(out.left!.items)).toBe(false)
+	})
+
+	it("stores a PIN as the absence of the field — absent is the default", () => {
+		const off = withPins(zone([pos("map", 0, 0, 9, 4)]), ["map"], false)
+		const on = withPins(off, ["map"], true)
+		expect(JSON.stringify(off)).toContain('"pinned":false')
+		expect(JSON.stringify(on)).not.toContain("pinned")
+		expect(unitPinned(roundTrip({ left: on }).left!.items)).toBe(true)
+	})
+
+	it("leaves the items it was not asked about alone", () => {
+		const z = zone([pos("map", 0, 0, 9, 4), pos("notes", 0, 4, 9, 4)])
+		const out = withPins(z, ["map"], false)
+		expect(out.items[1]).toBe(z.items[1])
+		expect(z.items[0].pinned).toBeUndefined()
+	})
+
+	it("reads a group as pinned unless EVERY member says otherwise", () => {
+		// Regrouping a pinned widget with an unpinned one: the default wins,
+		// which is the same reading a legacy arrangement gets.
+		const mixed = withPins(
+			zone([
+				{ ...pos("notes", 0, 0, 5, 4), group: "g" },
+				{ ...pos("cast", 5, 0, 4, 4), group: "g" }
+			]),
+			["notes"],
+			false
+		)
+		expect(unitPinned(mixed.items)).toBe(true)
+	})
+
+	it("lays a saved pin back over the editor's items (withGeometry)", () => {
+		const items: GsItem[] = [
+			{ id: "map", title: "Map", h: 3 },
+			{ id: "notes", title: "Notes", h: 3 }
+		]
+		const saved = withPins(
+			zone([pos("map", 0, 0, 9, 4), pos("notes", 0, 4, 9, 4)]),
+			["notes"],
+			false
+		)
+		const out = withGeometry(items, saved)
+		expect(out.map(itemPinned)).toEqual([true, false])
+	})
+})
+
+describe("showZonePin — the zone-wide pin only means something un-arranged", () => {
+	const zone = (items: GsPos[]): GsLayout => ({ cols: 9, rows: 12, items })
+
+	it("shows on a side with no saved arrangement (governs the rail vs icons)", () => {
+		expect(showZonePin(undefined)).toBe(true)
+	})
+
+	it("hides once a side has a saved frame — arrangedSide ignores it there", () => {
+		expect(showZonePin(zone([pos("map", 0, 0, 9, 4)]))).toBe(false)
+	})
+
+	it("hides even for a frame with no items (still a reported arrangement)", () => {
+		expect(showZonePin(zone([]))).toBe(false)
 	})
 })

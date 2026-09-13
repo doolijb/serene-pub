@@ -44,11 +44,13 @@ import {
 	eq,
 	gte,
 	inArray,
+	isNotNull,
 	isNull,
 	lte,
 	or,
 	sql
 } from "drizzle-orm"
+import type { AnyPgColumn } from "drizzle-orm/pg-core"
 import type { Handler } from "$lib/shared/events"
 import { lorebookBindingListHandler, syncLorebookBindings } from "./lorebooks"
 import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
@@ -57,6 +59,7 @@ import { bandOfType, entryDeclaration } from "$lib/server/entries/declarations"
 // Imported, never copied: session access is owner-OR-guest and every handler
 // that decided that for itself got it wrong in one direction or the other.
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
+import { TRAVEL_LINK_TYPES } from "$lib/shared/lorebooks/linkVocabulary"
 import {
 	DEFAULT_VECTOR_NAME,
 	ENTRY_TYPE_IDS,
@@ -218,6 +221,57 @@ async function assertAnchorInBook(
 }
 
 /**
+ * How far a re-parent walks before it calls the chain a loop.
+ *
+ * A tree that deep is not a tree anybody is reading, and an unbounded walk over
+ * a chain that already contains a cycle never returns. Refusing at the ceiling
+ * is the same answer as refusing a cycle: this parent cannot be set.
+ */
+const MAX_ANCHOR_DEPTH = 32
+
+/**
+ * A client-supplied parent entry, checked before it is written.
+ *
+ * Four refusals, and each names a different broken tree: a parent in another
+ * lorebook (an entry filed under something its book does not contain), a parent
+ * that does not exist, the entry itself, and a parent whose own chain of
+ * parents leads back to the entry being moved. The last is the one that cannot
+ * be checked locally — hence the walk.
+ *
+ * `entryId` is absent on a create: a row that does not exist yet cannot be its
+ * own ancestor, so only the first two refusals can fire.
+ */
+async function assertAnchorEntry(
+	anchorEntryId: number | null | undefined,
+	lorebookId: number,
+	entryId?: number
+) {
+	if (anchorEntryId == null) return
+	if (entryId != null && anchorEntryId === entryId)
+		throw new Error("An entry cannot be filed under itself.")
+
+	let cursor: number | null = anchorEntryId
+	for (let depth = 0; depth < MAX_ANCHOR_DEPTH; depth++) {
+		if (cursor == null) return
+		const row:
+			| { lorebookId: number; anchorEntryId: number | null }
+			| undefined = await db.query.lorebookEntries.findFirst({
+			where: eq(schema.lorebookEntries.id, cursor),
+			columns: { lorebookId: true, anchorEntryId: true }
+		})
+		if (!row) throw new Error("Parent entry not found.")
+		if (row.lorebookId !== lorebookId)
+			throw new Error("Parent entry not found.")
+		if (entryId != null && row.anchorEntryId === entryId)
+			throw new Error(
+				"That would file the entry under one of its own children."
+			)
+		cursor = row.anchorEntryId
+	}
+	throw new Error(`Entries may be nested ${MAX_ANCHOR_DEPTH} deep at most.`)
+}
+
+/**
  * Apply the column half and the merged `fields` half of an update.
  *
  * ⚠ **A payload that names nothing is a real case, not a client bug** — the
@@ -361,6 +415,7 @@ export const createEntryHandler: Handler<
 			)
 
 		await assertAnchorInBook(data.lorebookBindingId, data.lorebookId)
+		await assertAnchorEntry(data.anchorEntryId, data.lorebookId)
 
 		// Advisory lock scoped to lorebookId — without it, two concurrent
 		// creates read the same free position and the second one raises a
@@ -474,6 +529,16 @@ export const updateEntryHandler: Handler<
 			await assertAnchorInBook(
 				updateData.lorebookBindingId,
 				existing.entry.lorebookId
+			)
+
+		// The re-parent. Same book, real row, not itself, and no walk back to
+		// itself — checked here rather than trusted, because the tree the
+		// workspace draws is this column and nothing else.
+		if (Object.prototype.hasOwnProperty.call(updateData, "anchorEntryId"))
+			await assertAnchorEntry(
+				updateData.anchorEntryId,
+				existing.entry.lorebookId,
+				params.entry.id
 			)
 
 		// ⚠ `fields` is merged, never replaced: `graphed` and `isCompleted` are
@@ -987,6 +1052,7 @@ export const testEntryRetrievalHandler: Handler<
 					{
 						id: row.id,
 						typeId: row.typeId,
+						lorebookId: row.lorebookId,
 						title: row.title,
 						keys: Array.isArray(row.keys) ? row.keys : [],
 						constant: !!row.constant,
@@ -1025,6 +1091,314 @@ export const testEntryRetrievalHandler: Handler<
 	}
 }
 
+/**
+ * The two doors whose rows are not entries, under the names the wire uses.
+ *
+ * `Sockets.Entries.Counts` declares this vocabulary: a count is keyed by the
+ * **pool kind**, which is a declared type id for an entry and one of these for
+ * the two sections drawing rows out of another table.
+ */
+const SCENE_KIND = "scene"
+const CAST_KIND = "cast"
+
+/**
+ * The third such door: entries that are somewhere rather than something.
+ *
+ * ⚠ **Not a type and not a facet on the row** — an entry is a place because of
+ * its *edges*, so this is a count over `narrative_relationships` and nothing
+ * about the entry itself decides it. Two ways to qualify, either one enough: an
+ * edge whose other end is also an entry (a road between two places), or an edge
+ * whose type is one a person travels along (`TRAVEL_LINK_TYPES` — the same list
+ * the picker offers, so the count and the vocabulary cannot drift apart).
+ */
+const PLACE_KIND = "places"
+
+export const entryCountsHandler: Handler<
+	Sockets.Entries.Counts.Params,
+	Sockets.Entries.Counts.Response
+> = {
+	event: "entries:counts",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const book = await findOwnedBook(params.lorebookId, userId)
+		if (!book) throw new Error("Lorebook not found.")
+
+		// Every declared kind starts at zero, so a door the book has nothing
+		// behind reads "0" rather than going blank — an absent figure is how a
+		// reader learns a count has not arrived, and it must not also be how
+		// they learn there is nothing there.
+		const counts: Record<string, number> = {}
+		for (const typeId of ENTRY_TYPE_IDS) counts[typeId] = 0
+		counts[SCENE_KIND] = 0
+		counts[CAST_KIND] = 0
+
+		const byType = await db
+			.select({
+				typeId: schema.lorebookEntries.typeId,
+				total: sql<number>`count(*)::int`
+			})
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.lorebookId, params.lorebookId))
+			.groupBy(schema.lorebookEntries.typeId)
+		for (const row of byType) counts[row.typeId] = Number(row.total)
+
+		const [scenes] = await db
+			.select({ total: sql<number>`count(*)::int` })
+			.from(schema.scenes)
+			.where(eq(schema.scenes.lorebookId, params.lorebookId))
+		counts[SCENE_KIND] = Number(scenes?.total ?? 0)
+
+		const [cast] = await db
+			.select({ total: sql<number>`count(*)::int` })
+			.from(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.lorebookId, params.lorebookId))
+		counts[CAST_KIND] = Number(cast?.total ?? 0)
+
+		// One row per qualifying entry, whichever end of the edge it is on —
+		// `union` rather than `or` across two columns so an entry with a road
+		// at each end is one place rather than two.
+		const travelTypes = [...TRAVEL_LINK_TYPES]
+		const qualifies = (mine: AnyPgColumn, other: AnyPgColumn) =>
+			db
+				.select({ entryId: sql<number>`${mine}` })
+				.from(schema.narrativeRelationships)
+				.where(
+					and(
+						eq(
+							schema.narrativeRelationships.lorebookId,
+							params.lorebookId
+						),
+						isNotNull(mine),
+						or(
+							isNotNull(other),
+							inArray(
+								sql`lower(trim(${schema.narrativeRelationships.relationshipType}))`,
+								travelTypes
+							)
+						)
+					)
+				)
+		const placeRows = await db
+			.select({ total: sql<number>`count(*)::int` })
+			.from(
+				qualifies(
+					schema.narrativeRelationships.fromEntryId,
+					schema.narrativeRelationships.toEntryId
+				)
+					.union(
+						qualifies(
+							schema.narrativeRelationships.toEntryId,
+							schema.narrativeRelationships.fromEntryId
+						)
+					)
+					.as("places")
+			)
+		counts[PLACE_KIND] = Number(placeRows[0]?.total ?? 0)
+
+		const res = { lorebookId: params.lorebookId, counts }
+		emitToUser("entries:counts", res)
+		return res
+	}
+}
+
+/**
+ * How far back to look for a run that actually ranked something.
+ *
+ * A conversation's runs are not all turns — a summarize, a compile and a title
+ * each write a receipt with no retrieval in it — so taking the newest row
+ * would blank every marker in the list the moment somebody compiled a scene.
+ * Bounded rather than unbounded: this answers "what happened lately", and a
+ * scan to the beginning of a long conversation would be a different question.
+ */
+const RECENT_RUN_WINDOW = 5
+
+/**
+ * The tie type that filled the ceiling, where one plainly did.
+ *
+ * ⚠ **Only on a list of one type, and only when the cap bit.** The receipt
+ * keeps the ties that were SENT and not the ones that were cut, so on a mixed
+ * list naming a type would be a guess at which of them lost the room. When the
+ * cap bit and everything through it carries one type, there is nothing to
+ * guess: that type is what filled the ceiling.
+ */
+function cappedTypeOf(
+	node: any,
+	figures: { sent: number; considered: number; cap?: number }
+): string | undefined {
+	const { sent, considered, cap } = figures
+	if (cap === undefined || cap <= 0) return undefined
+	if (sent !== cap || considered <= sent) return undefined
+	const kept: any[] = Array.isArray(node?.output?.main)
+		? node.output.main
+		: []
+	const types = new Set<string>()
+	for (const candidate of kept) {
+		const type = candidate?.payload?.entry?.type
+		if (typeof type === "string" && type) types.add(type)
+	}
+	return types.size === 1 ? [...types][0] : undefined
+}
+
+/**
+ * What the run did with the narrative graph, for the graph lens's ceiling line.
+ *
+ * ⚠ **Read off the relationship mechanism's own diagnostics, never counted from
+ * the prompt.** `core:query/relationship-search@1` is the only node that walks
+ * the graph AND records what it walked: its two siblings publish keyed sections
+ * with no figures at all, and a count taken from the rendered sections would
+ * have a numerator and no denominator. A run without it reports nothing here,
+ * which is what keeps the line absent rather than wrong.
+ *
+ * `relationships` is that mechanism's own sentence and nothing else writes one,
+ * so it is what identifies the node in a receipt's trail.
+ */
+function relationshipsFromReceipt(
+	receipt: any
+): Sockets.Entries.RecentDecisions.Response["relationships"] {
+	const nodes: any[] = Array.isArray(receipt?.nodes) ? receipt.nodes : []
+	for (const node of nodes) {
+		const d = node?.output?.diagnostics
+		if (!d || typeof d.relationships !== "string") continue
+		if (typeof d.matched !== "number" || typeof d.considered !== "number")
+			continue
+		const figures = {
+			sent: d.matched as number,
+			considered: d.considered as number,
+			cap: typeof d.maxEntries === "number" ? d.maxEntries : undefined
+		}
+		const cappedType = cappedTypeOf(node, figures)
+		return {
+			sent: figures.sent,
+			considered: figures.considered,
+			...(figures.cap !== undefined ? { cap: figures.cap } : {}),
+			...(cappedType ? { cappedType } : {})
+		}
+	}
+	return undefined
+}
+
+export const entryRecentDecisionsHandler: Handler<
+	Sockets.Entries.RecentDecisions.Params,
+	Sockets.Entries.RecentDecisions.Response
+> = {
+	event: "entries:recentDecisions",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+
+		/**
+		 * ⚠ **Two checks, and neither stands in for the other** — the same
+		 * rule `entries:testRetrieval` is scoped by. The book is the asker's
+		 * by this file's ownership rule; the conversation is theirs by the
+		 * shared owner-OR-guest one.
+		 */
+		const book = await findOwnedBook(params.lorebookId, userId)
+		if (!book) throw new Error("Lorebook not found.")
+
+		const access = await checkSessionAccess(params.sessionId, userId)
+		if (!access.hasAccess)
+			throw new Error("Session not found or access denied.")
+
+		const answer = (
+			part: Omit<
+				Sockets.Entries.RecentDecisions.Response,
+				"lorebookId" | "sessionId"
+			>
+		) => {
+			const res: Sockets.Entries.RecentDecisions.Response = {
+				lorebookId: params.lorebookId,
+				sessionId: params.sessionId,
+				...part
+			}
+			emitToUser("entries:recentDecisions", res)
+			return res
+		}
+
+		const [session] = await db
+			.select({ lorebookId: schema.sessions.lorebookId })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, params.sessionId))
+			.limit(1)
+		// A conversation reading another book decided nothing about this
+		// book's rows. That is an empty answer rather than a refusal: the
+		// question was asked and it has a true answer.
+		if (!session || session.lorebookId !== params.lorebookId)
+			return answer({ decisions: {} })
+
+		const rows = await db
+			.select({ id: schema.lorebookEntries.id })
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.lorebookId, params.lorebookId))
+		const inBook = new Set(rows.map((r) => r.id))
+
+		const runs = await db
+			.select({
+				runId: schema.pipelineRuns.runId,
+				receipt: schema.pipelineRuns.receipt
+			})
+			.from(schema.pipelineRuns)
+			.where(
+				and(
+					eq(schema.pipelineRuns.sessionId, params.sessionId),
+					// A preview left no message, so the run a reader means by
+					// "the last one" is the last one that sent something.
+					eq(schema.pipelineRuns.isPreview, false)
+				)
+			)
+			.orderBy(desc(schema.pipelineRuns.id))
+			.limit(RECENT_RUN_WINDOW)
+
+		const { explainRetrieval } = await import("./pipelines")
+		const entryBands = new Set(ENTRY_TYPE_IDS.map(bandOfType))
+
+		for (const run of runs) {
+			const explanation = explainRetrieval(
+				(run.receipt ?? {}) as any,
+				// No entry facts: this reports what was decided, never what
+				// the rows say now, so the projection's titles and drift
+				// checks are work nothing here reads.
+				new Map(),
+				{
+					entriesRead: false,
+					// The default cap trims the tail of a long list for a
+					// panel that renders all of it; a marker is wanted for
+					// every row, so a cap here would blank the list's bottom.
+					limit: Number.MAX_SAFE_INTEGER
+				}
+			)
+			if (!explanation.ranked) continue
+
+			const decisions: Record<number, "fired" | "considered"> = {}
+			for (const row of explanation.rows) {
+				if (typeof row.id !== "number") continue
+				// Both, and neither is redundant: a band says the candidate
+				// was an entry rather than a message, and the book's own ids
+				// say it was one of *these* entries — message ids and entry
+				// ids are separate spaces that freely collide.
+				if (!entryBands.has(row.source)) continue
+				if (!inBook.has(row.id)) continue
+				// `skipped` is not a weak `considered`: no mechanism offered
+				// the entry to the ranker, so the row carries no mark at all.
+				if (row.outcome === "included") decisions[row.id] = "fired"
+				else if (
+					row.outcome === "excluded" &&
+					decisions[row.id] !== "fired"
+				)
+					decisions[row.id] = "considered"
+			}
+			// The same run's figures, so the ceiling line and the markers are
+			// two readings of one turn rather than two turns.
+			const relationships = relationshipsFromReceipt(run.receipt)
+			return answer({
+				runId: run.runId,
+				decisions,
+				...(relationships ? { relationships } : {})
+			})
+		}
+
+		return answer({ decisions: {} })
+	}
+}
+
 export function registerEntryHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -1041,4 +1415,6 @@ export function registerEntryHandlers(
 	register(socket, updateEntryPositionsHandler, emitToUser)
 	register(socket, iterateNextEntryHandler, emitToUser)
 	register(socket, testEntryRetrievalHandler, emitToUser)
+	register(socket, entryCountsHandler, emitToUser)
+	register(socket, entryRecentDecisionsHandler, emitToUser)
 }

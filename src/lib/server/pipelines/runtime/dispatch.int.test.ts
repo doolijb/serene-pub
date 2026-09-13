@@ -32,6 +32,8 @@ let seen: {
 	constructedWith?: any
 	aborted?: boolean
 	attachments?: unknown
+	tools?: unknown
+	streaming?: unknown
 } = {}
 /**
  * Whether the stand-in adapter has a vision path this run.
@@ -42,6 +44,15 @@ let seen: {
  * test.
  */
 let adapterSendsAttachments = true
+let adapterSendsTools = true
+/**
+ * What the stand-in recorded of its own send, if anything.
+ *
+ * A `let` because both answers are ordinary: an adapter records one exchange
+ * per call it makes, and a fake that recorded none is what every other case in
+ * this file is.
+ */
+let adapterExchanges: any[] = []
 let mode:
 	| "text"
 	| "stream"
@@ -51,7 +62,9 @@ let mode:
 	| "inlineThinkingStream"
 	| "prefilledClose"
 	| "nativeAndInline"
-	| "streamWithThinkingContent" = "text"
+	| "streamWithThinkingContent"
+	| "streamWithToolCall"
+	| "toolCallNoStream" = "text"
 let connectionForRun: any = connection
 
 /** Pinned to the real action, so a rename cannot pass here — fakeTextAdapter.ts. */
@@ -64,8 +77,27 @@ class FakeAdapter implements FakeTextAdapter {
 	}
 	/** The composed stop list. Recorded so a test can assert what was handed over. */
 	stops: any
+	/** Filled while the stream runs, like the real adapters fill it. */
+	streamedToolCall: any = null
+	/** What this send put on the wire, the way the base class records it. */
+	get exchanges() {
+		return adapterExchanges
+	}
+	get lastExchange() {
+		return adapterExchanges[adapterExchanges.length - 1]
+	}
 	withStops(s: any) {
 		this.stops = s
+		return this
+	}
+	/**
+	 * The node's send shape, recorded so a test can assert what was handed
+	 * over — and, just as load-bearing, what was NOT. `auto` must reach no
+	 * adapter at all: it is the adapter's own answer, and a second way to
+	 * spell it is a second place for the per-service default to disagree.
+	 */
+	withStreaming(mode: any) {
+		seen.streaming = mode
 		return this
 	}
 	withCompiledPrompt(p: any) {
@@ -75,6 +107,21 @@ class FakeAdapter implements FakeTextAdapter {
 	}
 	get consumesAttachments() {
 		return adapterSendsAttachments
+	}
+	/**
+	 * Whether the stand-in has tool code this run.
+	 *
+	 * A `let` for the same reason `adapterSendsAttachments` is one: three
+	 * adapters send tools and four do not, and what dispatch does with the
+	 * difference — refuse rather than send a request that quietly lost its
+	 * declarations — is the thing under test.
+	 */
+	get consumesTools() {
+		return adapterSendsTools
+	}
+	withTools(tools: any) {
+		seen.tools = tools
+		return this
 	}
 	withAttachments(inputs: any) {
 		seen.attachments = inputs
@@ -109,6 +156,41 @@ class FakeAdapter implements FakeTextAdapter {
 					for (const chunk of ["Hel", "lo ", "there"]) {
 						if (this.aborted) return
 						onContent(chunk)
+					}
+				}
+			}
+		/**
+		 * An adapter that learns of the tool call only while the stream is
+		 * being drained (20 §9).
+		 *
+		 * `TextGenResult.toolCall` cannot carry it — the object was returned
+		 * before the first delta arrived — so the value lands on the adapter,
+		 * exactly like `stopHit`, and the dispatch reads it after the drain.
+		 */
+		/**
+		 * The call off a NON-streaming answer — the shape a tool-loop node with
+		 * `streaming: off` produces. The API answers in one piece, so the call
+		 * rides the result object rather than landing on the adapter.
+		 */
+		if (mode === "toolCallNoStream")
+			return {
+				completionResult: "Let me look.",
+				compiledPrompt: this.injected,
+				isAborted: false,
+				toolCall: {
+					tool: "search_entries",
+					args: { query: "ashguard" }
+				}
+			}
+		if (mode === "streamWithToolCall")
+			return {
+				compiledPrompt: this.injected,
+				isAborted: false,
+				completionResult: async (onContent: (c: string) => void) => {
+					for (const chunk of ["Let me ", "look."]) onContent(chunk)
+					this.streamedToolCall = {
+						tool: "search_entries",
+						args: { query: "ashguard" }
 					}
 				}
 			}
@@ -297,10 +379,120 @@ const compiled = { prompt: "You are Alice.", meta: { built: "by a Task" } }
 beforeEach(() => {
 	seen = {}
 	resolveArgs = null
+	adapterExchanges = []
 	mode = "text"
 	sessionRow = true
 	connectionForRun = connection
 	adapterSendsAttachments = true
+	adapterSendsTools = true
+})
+
+/**
+ * The tools, handed over under the same two questions attachments are (20 §9).
+ *
+ * The property that can only break silently is the refusal: a model that was
+ * never offered a tool and a model that declined one return the same empty
+ * answer, so a request that quietly went out without its declarations reads as
+ * the model choosing not to call one.
+ */
+describe("tools on the wire", () => {
+	const TOOLS = [
+		{ name: "search_entries", description: "Search.", parameters: {} }
+	]
+
+	it("hands them to an adapter that sends them", async () => {
+		const r = await dispatchGeneration({
+			db: fakeDb,
+			compiledPrompt: compiled,
+			sessionId: 7,
+			tools: TOOLS
+		})
+		expect(seen.tools).toEqual(TOOLS)
+		// Null rather than undefined on an adapter that returned no call: the
+		// loop's predicate reads this port.
+		expect(r.toolCall).toBeNull()
+	})
+
+	it("refuses rather than sending a request that lost its tools", async () => {
+		adapterSendsTools = false
+		await expect(
+			dispatchGeneration({
+				db: fakeDb,
+				compiledPrompt: compiled,
+				sessionId: 7,
+				tools: TOOLS
+			})
+		).rejects.toThrow(/no code that sends them/)
+		expect(seen.tools).toBeUndefined()
+	})
+
+	it("refuses a connection whose tools capability is switched off, by name", async () => {
+		connectionForRun = {
+			...connection,
+			capabilities: { resolved: { "text->text": 2, tools: 0 } }
+		}
+		await expect(
+			dispatchGeneration({
+				db: fakeDb,
+				compiledPrompt: compiled,
+				sessionId: 7,
+				tools: TOOLS
+			})
+		).rejects.toThrow(/gone out unseen/)
+	})
+
+	it("reads a streaming adapter's call, which lands after generateText returned", async () => {
+		// The defect this closes: a connection with `extraJson.stream` surfaced
+		// no call at all, so a tool loop's predicate never fired and the loop
+		// ran to its ceiling. The value cannot ride the result object — that
+		// was returned before the first delta — so it is read off the adapter
+		// after the drain, the same seam `stopHit` uses.
+		mode = "streamWithToolCall"
+		const r = await dispatchGeneration({
+			db: fakeDb,
+			compiledPrompt: compiled,
+			sessionId: 7,
+			tools: TOOLS
+		})
+		expect(r.text).toBe("Let me look.")
+		expect(r.toolCall).toEqual({
+			tool: "search_entries",
+			args: { query: "ashguard" }
+		})
+	})
+
+	it("a tool node with streaming off still returns the call", async () => {
+		// The other half of the streamed case above, and the reason `off` is
+		// safe to offer on a tool loop at all: a non-streaming answer carries
+		// the call on the result object, and the loop's predicate reads the
+		// same port either way. Without this the cheapest way to run a loop
+		// would also be the way it never fires.
+		mode = "toolCallNoStream"
+		const r = await dispatchGeneration({
+			db: fakeDb,
+			compiledPrompt: compiled,
+			sessionId: 7,
+			tools: TOOLS,
+			streaming: "off"
+		})
+		expect(seen.streaming).toBe("off")
+		expect(r.text).toBe("Let me look.")
+		expect(r.toolCall).toEqual({
+			tool: "search_entries",
+			args: { query: "ashguard" }
+		})
+	})
+
+	it("a request with no tools hands nothing over", async () => {
+		// The overwhelming case, and it must stay byte-identical to what it was
+		// before tools existed.
+		await dispatchGeneration({
+			db: fakeDb,
+			compiledPrompt: compiled,
+			sessionId: 7
+		})
+		expect(seen.tools).toBeUndefined()
+	})
 })
 
 describe("dispatching a prompt built elsewhere", () => {
@@ -556,6 +748,69 @@ describe("what dispatch refuses to hand back", () => {
 		expect(r.via).toBe("koboldcpp")
 	})
 
+	/**
+	 * The one thing that does come back, and the rule that makes it safe.
+	 *
+	 * A request cannot be described without naming where it went, so the
+	 * exchange an adapter recorded is connection material by construction. It
+	 * rides under `wire`, which `withoutConnectionIdentity` removes at every
+	 * egress — the same arrangement `connection` on the node output already
+	 * has, and the reason neither is a declared out-port.
+	 */
+	it("hands back the exchange the adapter recorded, and the egress removes it", async () => {
+		adapterExchanges = [
+			{
+				request: {
+					url: `${SECRET_URL}/api/v1/generate`,
+					method: "POST",
+					body: { prompt: "You are Alice.", model: "some-model-q4" }
+				},
+				response: {
+					raw: '{"results":[{"text":"Hello there"}]}',
+					streamed: false,
+					durationMs: 12
+				},
+				redacted: []
+			}
+		]
+		const r: any = await dispatchGeneration({
+			db: fakeDb,
+			compiledPrompt: compiled,
+			sessionId: 7
+		})
+		expect(r.wire?.request?.url).toBe(`${SECRET_URL}/api/v1/generate`)
+		expect(r.wire?.response?.raw).toContain("Hello there")
+		const { withoutConnectionIdentity } = await import(
+			"$lib/server/connections/visibility"
+		)
+		const seenByAnyoneElse = withoutConnectionIdentity(r)
+		expect(seenByAnyoneElse).not.toHaveProperty("wire")
+		expect(JSON.stringify(seenByAnyoneElse)).not.toContain(SECRET_URL)
+		// The rest of the receipt is untouched by that removal.
+		expect(seenByAnyoneElse.text).toBe("Hello there")
+		expect(seenByAnyoneElse.stops).toBeTruthy()
+	})
+
+	it("lists every call when one node made more than one", async () => {
+		const call = (n: number) => ({
+			request: {
+				url: `${SECRET_URL}/api/v1/generate`,
+				method: "POST",
+				body: { n }
+			},
+			response: { raw: `${n}`, streamed: false, durationMs: 1 },
+			redacted: []
+		})
+		adapterExchanges = [call(1), call(2)]
+		const r: any = await dispatchGeneration({
+			db: fakeDb,
+			compiledPrompt: compiled,
+			sessionId: 7
+		})
+		expect(r.wire.calls).toHaveLength(2)
+		expect(r.wire.calls[1].request.body).toEqual({ n: 2 })
+	})
+
 	it("keeps the connection out of the binding's result too", async () => {
 		const bindings = coreBindings()
 		const host = createHost(fakeDb, { sessionId: 7, userId: 1 })
@@ -577,6 +832,45 @@ describe("what dispatch refuses to hand back", () => {
 		expect(r.kind).toBe("ok")
 		expect(JSON.stringify(r.value)).not.toContain(SECRET_KEY)
 		expect(r.value.text).toBe("Hello there")
+	})
+
+	it("publishes the exchange on the node's own output", async () => {
+		adapterExchanges = [
+			{
+				request: {
+					url: `${SECRET_URL}/api/v1/generate`,
+					method: "POST",
+					body: { prompt: "You are Alice." }
+				},
+				response: {
+					raw: "Hello there",
+					streamed: false,
+					durationMs: 3
+				},
+				redacted: []
+			}
+		]
+		const bindings = coreBindings()
+		const host = createHost(fakeDb, { sessionId: 7, userId: 1 })
+		const r: any = await bindings["core:provider/generate-text@1"]!(
+			{ compiledPrompt: compiled },
+			{
+				call: (payload: unknown) =>
+					host.call!(payload, {
+						key: "generate",
+						typeId: "core:provider/generate-text",
+						typeVersion: 1,
+						kind: "provider"
+					}),
+				signal: new AbortController().signal,
+				progress: () => {},
+				log: () => {}
+			} as any
+		)
+		// On the OUTPUT, beside `stops` and under the same key the projection
+		// removes — a receipt reader's question, not a downstream port's.
+		expect(r.value.wire.request.body).toEqual({ prompt: "You are Alice." })
+		expect(r.value.stops).toBeTruthy()
 	})
 })
 
@@ -755,6 +1049,39 @@ describe("the generate-text binding", () => {
 
 	it("refuses to generate in a run with no session scope", async () => {
 		await expect(runWith({ userId: 1 })).rejects.toThrow(HostScopeError)
+	})
+
+	/**
+	 * The send shape, from the node's `params` slot to the adapter.
+	 *
+	 * This is the FULL-RUN road — binding, host, dispatch — and the one a
+	 * multi-stage spec takes. The reply road reads the same parameter off the
+	 * receipt instead, because it halts before any binding runs; both have to
+	 * work or the control is live on one kind of pipeline and dead on the
+	 * other.
+	 */
+	it("carries `off` from the node's params slot to the adapter", async () => {
+		await runWith(
+			{ sessionId: 7 },
+			{ compiledPrompt: compiled, params: { streaming: "off" } }
+		)
+		expect(seen.streaming).toBe("off")
+	})
+
+	it("hands nothing over at `auto`, which is the adapter's own answer", async () => {
+		// Not `withStreaming('auto')`. The adapter's default IS auto, and a
+		// caller restating it would be a second resolution of the per-service
+		// default this seam exists to keep in one place.
+		await runWith(
+			{ sessionId: 7 },
+			{ compiledPrompt: compiled, params: { streaming: "auto" } }
+		)
+		expect(seen.streaming).toBeUndefined()
+	})
+
+	it("hands nothing over when the node has no params at all", async () => {
+		await runWith({ sessionId: 7 })
+		expect(seen.streaming).toBeUndefined()
 	})
 
 	it("forwards the run's stream sink without putting it in the payload", async () => {

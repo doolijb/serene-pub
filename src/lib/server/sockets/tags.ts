@@ -206,6 +206,11 @@ export const tagsGetRelatedData: Handler<
 						name: true,
 						avatarMediaId: true,
 						userId: true
+					},
+					with: {
+						avatarMedia: {
+							columns: { uuid: true, rev: true, frame: true }
+						}
 					}
 				}
 			}
@@ -229,6 +234,11 @@ export const tagsGetRelatedData: Handler<
 						name: true,
 						avatarMediaId: true,
 						userId: true
+					},
+					with: {
+						avatarMedia: {
+							columns: { uuid: true, rev: true, frame: true }
+						}
 					}
 				}
 			}

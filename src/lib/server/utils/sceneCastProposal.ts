@@ -100,6 +100,7 @@ import {
 	EMPTY_GAZETTEER,
 	type Entity,
 	type EntityRef,
+	type EntityTier,
 	type Gazetteer
 } from "$lib/server/pipelines/ranking/entities"
 
@@ -317,7 +318,10 @@ export function classifySite(
 }
 
 /** The sites that make a name a proposed participant. Speech-gated: these two. */
-const PROMOTING_SITES = ["speech-tag", "vocative"] as const satisfies readonly CastSite[]
+const PROMOTING_SITES = [
+	"speech-tag",
+	"vocative"
+] as const satisfies readonly CastSite[]
 
 /** One turn of the span the cast is being proposed for. */
 export interface CastTurn {
@@ -357,7 +361,15 @@ export interface ProposedCastMember {
 	key: string
 	/** The fullest surface form seen — the label a person reads, and the name an unresolved member would be created under. */
 	name: string
-	tier: "gazetteer" | "open"
+	/**
+	 * The extractor's own union, not a narrower copy of it.
+	 *
+	 * This proposer passes no model spans, so `model` cannot occur today — but a
+	 * hand-written `"gazetteer" | "open"` here is a second spelling of a
+	 * vocabulary that has already grown once, and it fails at the assignment
+	 * rather than where the tier is read.
+	 */
+	tier: EntityTier
 	/** Present only for a gazetteer hit. */
 	ref?: EntityRef
 	/** ⚠ Never empty. See `proposeSceneCast`. */
@@ -376,7 +388,7 @@ export type WithheldReason =
 export interface WithheldCastName {
 	key: string
 	name: string
-	tier: "gazetteer" | "open"
+	tier: EntityTier
 	ref?: EntityRef
 	reason: WithheldReason
 	turns: number[]
@@ -406,7 +418,7 @@ export interface SceneCastProposalOptions {
 interface CastRow {
 	key: string
 	name: string
-	tier: "gazetteer" | "open"
+	tier: EntityTier
 	ref?: EntityRef
 	sites: Record<CastSite, number[]>
 	roster: boolean
@@ -459,7 +471,7 @@ export function proposeSceneCast(
 	const rowFor = (seed: {
 		key: string
 		name: string
-		tier: "gazetteer" | "open"
+		tier: EntityTier
 		ref?: EntityRef
 	}): CastRow => {
 		let row = rows.get(seed.key)
@@ -584,7 +596,9 @@ export function proposeSceneCast(
  */
 export function renderEvidence(evidence: readonly CastEvidence[]): string {
 	return evidence
-		.map((e) => (e.turns.length ? `${e.kind}@${e.turns.join(",")}` : e.kind))
+		.map((e) =>
+			e.turns.length ? `${e.kind}@${e.turns.join(",")}` : e.kind
+		)
 		.join(" + ")
 }
 

@@ -146,6 +146,21 @@ export interface EntryColumns {
 	 * narrows it where it is read.
 	 */
 	selectiveLogic: string | null
+	/**
+	 * The `parent` role's column — the entry this one is filed under, or null
+	 * for a root.
+	 *
+	 * On the base rather than per type: the column is one traversal edge for
+	 * every shape (a district's city, a scene's history entry, an amendment's
+	 * base), and the workspace's tree nests every kind on it at once.
+	 *
+	 * ⚠ **Writable, and validated on the way in.** `null` is top level. The
+	 * handler refuses a parent in another lorebook, a parent that does not
+	 * exist, the entry itself, and any target whose own chain of parents leads
+	 * back to this entry — a cycle is a tree nothing can draw and a walk
+	 * nothing can end.
+	 */
+	anchorEntryId: number | null
 	matchMode: string | null
 	useRegex: boolean | null
 	caseSensitive: boolean
@@ -153,6 +168,25 @@ export interface EntryColumns {
 	content: string
 	constant: boolean
 	enabled: boolean
+	/**
+	 * Out of the manager's way, and out of retrieval — a different fact from
+	 * `enabled`.
+	 *
+	 * `enabled: false` is a switch on a row the author still keeps in front of
+	 * them; archiving is what a row gets when it should stop occupying the
+	 * list without being destroyed. Writable, like `enabled`.
+	 */
+	archived: boolean
+	/**
+	 * Who wrote this row — `human`, `summarizer`, `graph-builder`.
+	 *
+	 * ⚠ **Projected, never written from a client.** It is the fact that decides
+	 * whether a machine writer may overwrite a sentence a person typed, so a
+	 * payload that could set it would be a payload that could claim to be a
+	 * person. `splitUpdate` does not name it and `entryInsert` leaves it at the
+	 * column's default.
+	 */
+	provenance: string
 	extraJson: Record<string, any>
 	/** `'YYYY-MM-DD'` — the legacy `date` column's string, kept for the client. */
 	createdAt: string
@@ -185,6 +219,8 @@ type WritableColumns = Omit<
 	| "embedding"
 	| "embeddingModel"
 	| "vectorizedAt"
+	// Who wrote the row is the server's answer — see the column.
+	| "provenance"
 >
 
 /**

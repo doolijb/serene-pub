@@ -799,6 +799,104 @@
       "when": 1789021440337,
       "tag": "0113_declared_ports_and_rank_groups",
       "breakpoints": true
+    },
+    {
+      "idx": 114,
+      "version": "7",
+      "when": 1789030935750,
+      "tag": "0114_endpoint_model_split",
+      "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1789031765846,
+      "tag": "0115_config_deviations",
+      "breakpoints": true
+    },
+    {
+      "idx": 116,
+      "version": "7",
+      "when": 1789033950804,
+      "tag": "0116_session_preset_notices",
+      "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1789049552566,
+      "tag": "0117_widget_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1789049612566,
+      "tag": "0118_relationship_search",
+      "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1789050150605,
+      "tag": "0119_content_addressed_specs",
+      "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1789083339037,
+      "tag": "0120_lorebook_features",
+      "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1789083457228,
+      "tag": "0121_stats_and_states",
+      "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1789107866451,
+      "tag": "0122_adventure_config_reprojection",
+      "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1789120163332,
+      "tag": "0123_media_frame",
+      "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1789190054827,
+      "tag": "0124_lore_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 125,
+      "version": "7",
+      "when": 1789230685191,
+      "tag": "0125_lorebook_binding_uniqueness",
+      "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1789273924506,
+      "tag": "0126_summarization_always_on",
+      "breakpoints": true
+    },
+    {
+      "idx": 127,
+      "version": "7",
+      "when": 1789278445215,
+      "tag": "0127_embeddings_are_connections",
+      "breakpoints": true
     }
   ]
 }

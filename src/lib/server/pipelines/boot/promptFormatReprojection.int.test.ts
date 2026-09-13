@@ -100,7 +100,10 @@ async function booted(): Promise<TestDb> {
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	const report = await bootstrapPipelines(db)
-	expect(report.conflict, report.conflict ?? "").toBeUndefined()
+	expect(
+		report.specs.length,
+		"the boot did not get as far as seeding the specs"
+	).toBeGreaterThan(0)
 	return db
 }
 
@@ -206,7 +209,10 @@ describe("0095 re-projects what it names", () => {
 			"$lib/server/pipelines/boot/bootstrap"
 		)
 		const report = await bootstrapPipelines(db)
-		expect(report.conflict, report.conflict ?? "").toBeUndefined()
+		expect(
+			report.specs.length,
+			"the boot did not get as far as seeding the specs"
+		).toBeGreaterThan(0)
 		expect(
 			report.specs.find((s) => s.id === "core:spec/respond")?.action
 		).toBe("published")

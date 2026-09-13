@@ -75,10 +75,15 @@ import { randomUUID } from "crypto"
 /**
  * What a lane needs loaded before it can work — **declared as data**.
  *
- * `role: null` is the annotation lane today and is not a temporary state: the
- * entity extractor is dictionary-based and deliberately model-free so the
- * zero-setup path keeps working. A lane with no model gets the same lifecycle
- * machinery while having nothing to load.
+ * `role` is what the lane's model WOULD be, not whether one is configured: the
+ * annotation lane declares `"ner"` whether or not a `text->entities` connection
+ * is starred, and its broker's `peek()` is what answers "none" while nothing is.
+ * A role that flipped with a setting would make a lane's identity depend on one,
+ * and an admin surface enumerating the lanes could not say what each is for.
+ *
+ * `role: null` remains a real answer for a lane that loads nothing at all — see
+ * `modelFreeBroker` — which gets the same lifecycle machinery while having
+ * nothing to load.
  */
 export interface LaneModelSpec {
 	/** A name the residency manager understands, or `null` for none. */
@@ -138,6 +143,11 @@ export interface LaneModelBroker {
  *
  * Constraint 3 arrived at from the other direction: a model-free lane is not a
  * special case in the loop, it is a broker that always answers "none".
+ *
+ * ⚠ No lane in the app holds one: the annotation lane's `nerBroker` answers
+ * "none" only while nothing is starred. This stays as the reference
+ * implementation of that answer and the shape a model-free lane takes, and
+ * because the loop's handling of `none` is what any such broker relies on.
  */
 export const modelFreeBroker = (ttlMinutes = 0): LaneModelBroker => ({
 	spec: { role: null, ttlMinutes },
@@ -542,7 +552,10 @@ export class IndexingLane {
 			req.timeoutMs ?? this.limits.promotionTimeoutMs
 		)
 
-		const nothing = (reason: string, boundHit = false): PromotionReport => ({
+		const nothing = (
+			reason: string,
+			boundHit = false
+		): PromotionReport => ({
 			requested,
 			processed: 0,
 			remaining: requested,
@@ -657,7 +670,11 @@ export class IndexingLane {
 			}
 			let item: LaneItem | null = null
 			try {
-				item = await this.def.work.specific(ref, modelId, ticket.context)
+				item = await this.def.work.specific(
+					ref,
+					modelId,
+					ticket.context
+				)
 			} catch (err) {
 				console.error(
 					`[${this.key}] promoted pick failed for ${refKey(ref)}:`,
@@ -883,7 +900,9 @@ export class IndexingLane {
 			 * one cannot re-enter the promotion either.
 			 */
 			if (!promoted)
-				await this.sleep(Math.min(2000 * failures, this.limits.backoffCapMs))
+				await this.sleep(
+					Math.min(2000 * failures, this.limits.backoffCapMs)
+				)
 		}
 	}
 

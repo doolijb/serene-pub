@@ -81,7 +81,10 @@
 		systemSettingsCtx.settings = {
 			...message.systemSettings,
 			isAndroidWrapper: message.isAndroidWrapper,
-			localEmbeddingsSupported: message.localEmbeddingsSupported
+			localEmbeddingsSupported: message.localEmbeddingsSupported,
+			// Derived from the `text->embedding` star, not a column — carried
+			// across for the same reason the capability defaults below are.
+			activeEmbeddingModel: message.activeEmbeddingModel
 		}
 		// The capability defaults ride BESIDE the settings row, not inside it —
 		// they are their own table since 0175 and the only place a default

@@ -38,7 +38,10 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { and, eq, inArray } from "drizzle-orm"
-import type { TestDb } from "$lib/server/utils/testDb"
+import {
+	setConfigValue,
+	type TestDb
+} from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import { run } from "@serene-pub/sdk"
@@ -255,27 +258,38 @@ const selectedConfigId = async () => {
 }
 
 const setParam = async (nodeKey: string, path: string, value: unknown) => {
-	const result = await db
-		.update(schema.pipelineConfigValues)
-		.set({ value })
-		.where(
-			and(
-				eq(
-					schema.pipelineConfigValues.configId,
-					await selectedConfigId()
-				),
-				eq(schema.pipelineConfigValues.nodeKey, nodeKey),
-				eq(schema.pipelineConfigValues.slot, "params"),
-				eq(schema.pipelineConfigValues.path, path)
-			)
-		)
-		.returning()
-	// A silent no-op here is the failure this whole file exists to catch: an
-	// address nothing seeded is a control that renders and stores nowhere.
+	// ⚠ An upsert, not the `UPDATE` this was. A config stores **deviations**
+	// (ruled 2026-09-10), so at an untouched address there is no row to update
+	// — the old form matched nothing and every case ran at the declared value.
+	await setConfigValue(
+		db,
+		await selectedConfigId(),
+		{ nodeKey, slot: "params", path },
+		value
+	)
+	// A write that landed nowhere is the failure this whole file exists to
+	// catch, and the check MOVES rather than goes: an upsert cannot no-op, so
+	// "did a row change" no longer asks anything. What is worth asserting is
+	// that the address is one this version DECLARES — a path nothing declares
+	// stores cleanly, resolves to nothing, and is swept by the next reconcile,
+	// which is the same silent nothing the old row-count guarded against.
+	const { declarations } = await import(
+		"$lib/server/pipelines/config/panel"
+	)
+	const [spec] = await db
+		.select({ activeVersionId: schema.pipelineSpecs.activeVersionId })
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.id, respondSpecRow.id))
+		.limit(1)
+	const declared = await declarations(db, spec!.activeVersionId!)
 	expect(
-		result.length,
-		`no stored row at ${nodeKey}/params/${path}, so nothing was changed`
-	).toBeGreaterThan(0)
+		declared.some(
+			(d) =>
+				d.nodeKey === nodeKey && d.slot === "params" && d.path === path
+		),
+		`this version declares no ${nodeKey}/params/${path}, so a stored row ` +
+			`there is a control that renders and reaches nothing`
+	).toBe(true)
 }
 
 describe("the declared defaults are the numbers the scan would have used", () => {

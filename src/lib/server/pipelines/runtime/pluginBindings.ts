@@ -38,6 +38,8 @@ import * as schema from "$lib/server/db/schema"
 import type { Bindings } from "@serene-pub/sdk"
 import { ok, err } from "@serene-pub/sdk"
 import type { RuntimeManager } from "$lib/server/plugins/RuntimeManager"
+import type { HandlerRequires } from "@serene-pub/sdk"
+import { structuralCompat } from "$lib/server/pipelines/runtime/structuralCompat"
 
 /** Read `nodeTypes` off a stored manifest, tolerant of its json being anything. */
 export function nodeTypesOf(manifest: unknown): Record<string, string> {
@@ -47,8 +49,54 @@ export function nodeTypesOf(manifest: unknown): Record<string, string> {
 			: undefined
 	if (!raw || typeof raw !== "object") return {}
 	const out: Record<string, string> = {}
-	for (const [pin, hook] of Object.entries(raw as Record<string, unknown>))
+	for (const [pin, hook] of Object.entries(raw as Record<string, unknown>)) {
 		if (typeof hook === "string" && hook) out[pin] = hook
+		// The declared form, added for structural compatibility (ruling
+		// 2026-09-10): `{ hook, reads: { ports, params } }`. Read here rather
+		// than in a second walk so the two spellings cannot disagree about
+		// which hook a pin names.
+		else if (hook && typeof hook === "object") {
+			const name = (hook as { hook?: unknown }).hook
+			if (typeof name === "string" && name) out[pin] = name
+		}
+	}
+	return out
+}
+
+/**
+ * What an extension declares each of its node hooks reads (ruling 2026-09-10).
+ *
+ * ⚠ **Optional, and its absence is not a failure.** A manifest written before
+ * this existed declares nothing, and a plugin binding a hook to a type it
+ * declared itself has nothing to check — the compile-time derivation already
+ * held it. The declaration earns its keep in the case the ruling names: a
+ * plugin binding a hook to **somebody else's** public type, where two
+ * separately compiled artefacts meet and no `tsc` run saw both.
+ *
+ * Read off the same `nodeTypes` map rather than a parallel one, because a
+ * second map is a second thing that can name a different hook.
+ */
+export function nodeReadsOf(manifest: unknown): Record<string, HandlerRequires> {
+	const raw =
+		manifest && typeof manifest === "object"
+			? (manifest as any).nodeTypes
+			: undefined
+	if (!raw || typeof raw !== "object") return {}
+	const out: Record<string, HandlerRequires> = {}
+	for (const [pin, hook] of Object.entries(raw as Record<string, unknown>)) {
+		if (!hook || typeof hook !== "object") continue
+		const reads = (hook as { reads?: unknown }).reads
+		if (!reads || typeof reads !== "object") continue
+		const { ports, params } = reads as { ports?: unknown; params?: unknown }
+		// Half a declaration is not a declaration: the missing half would be
+		// checked as "reads nothing", which is the one answer that always
+		// passes.
+		if (!Array.isArray(ports) || !Array.isArray(params)) continue
+		out[pin] = {
+			ports: ports.filter((p): p is string => typeof p === "string"),
+			params: params.filter((p): p is string => typeof p === "string")
+		}
+	}
 	return out
 }
 
@@ -86,7 +134,14 @@ export async function pluginNodeBindings(
 			typeId: schema.pipelineTypeRegistry.typeId,
 			version: schema.pipelineTypeRegistry.version,
 			kind: schema.pipelineTypeRegistry.kind,
-			ownerPluginId: schema.pipelineTypeRegistry.ownerPluginId
+			ownerPluginId: schema.pipelineTypeRegistry.ownerPluginId,
+			// The declaration side of the structural check. Read from the
+			// **row**, never from a descriptor: F6 says core reads a plugin's
+			// contract from what it stored at install, and a
+			// `transport: 'process'` type has no in-process descriptor to read
+			// even if that rule allowed it.
+			ports: schema.pipelineTypeRegistry.ports,
+			slots: schema.pipelineTypeRegistry.slots
 		})
 		.from(schema.pipelineTypeRegistry)
 		.where(
@@ -125,7 +180,11 @@ export async function pluginNodeBindings(
 	const byOwner = new Map(
 		owners.map((o) => [
 			o.id,
-			{ pluginId: o.pluginId, nodeTypes: nodeTypesOf(o.manifest) }
+			{
+				pluginId: o.pluginId,
+				nodeTypes: nodeTypesOf(o.manifest),
+				nodeReads: nodeReadsOf(o.manifest)
+			}
 		])
 	)
 
@@ -149,6 +208,29 @@ export async function pluginNodeBindings(
 						`its manifest's nodeTypes is the binding, and it has no entry`
 				)
 			continue
+		}
+		/**
+		 * Structural compatibility (ruling 2026-09-10), where a plugin says
+		 * what its hook reads.
+		 *
+		 * ⚠ An `err` binding rather than a thrown boot. A third party's
+		 * packaging mistake must not be able to stop this install from
+		 * starting — the same judgement the two branches above already make
+		 * for an uninstalled owner and a missing hook entry. The sentence is
+		 * the one `structuralCompat` writes, so a plugin author reads the same
+		 * words core would read about its own bindings.
+		 */
+		const reads = owner.nodeReads[pin]
+		if (reads) {
+			const verdict = structuralCompat(
+				reads,
+				{ typeId: row.typeId, version: row.version, ports: row.ports, slots: row.slots },
+				`the extension '${owner.pluginId}' hook '${hookName}'`
+			)
+			if (!verdict.ok) {
+				bindings[pin] = async () => err(verdict.message)
+				continue
+			}
 		}
 		bindings[pin] = async (input: unknown) => {
 			const r = await manager.callHook(

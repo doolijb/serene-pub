@@ -43,6 +43,24 @@
 	let seeded = $state(false)
 	let detailRequested = $state(false)
 
+	/* The creation pre-fill (23 §9) — the keys the new-session form reads. */
+	let defName = $state("")
+	let defScenario = $state("")
+	let defTags = $state("")
+	/**
+	 * Everything else the blob holds, carried through untouched.
+	 *
+	 * `defaults` is loose JSON a genre or a plugin may put its own keys in
+	 * (`genreFields`, `lorebookId`), and this form edits three of them. Saving
+	 * the three alone would silently delete the rest, which is the one way a
+	 * partial editor can do real damage.
+	 */
+	let defExtra = $state<Record<string, unknown>>({})
+
+	/** `{}` and absent are the same fact; only one of them is stored. */
+	const asDefaults = (d: Record<string, unknown> | null | undefined) =>
+		d && Object.keys(d).length ? d : null
+
 	$effect(() => {
 		if (seeded || loading || !row) return
 		name = row.name
@@ -50,7 +68,30 @@
 		enabled = row.enabled
 		isDefault = row.isDefault
 		bindings = structuredClone($state.snapshot(row.bindings) ?? {})
+		const d = structuredClone($state.snapshot(row.defaults) ?? {}) as Record<
+			string,
+			unknown
+		>
+		defName = typeof d.name === "string" ? d.name : ""
+		defScenario = typeof d.scenario === "string" ? d.scenario : ""
+		defTags = Array.isArray(d.tags)
+			? d.tags.filter((t): t is string => typeof t === "string").join(", ")
+			: ""
+		const { name: _n, scenario: _s, tags: _t, ...rest } = d
+		defExtra = rest
 		seeded = true
+	})
+
+	const defaults = $derived.by(() => {
+		const out: Record<string, unknown> = { ...defExtra }
+		const tags = defTags
+			.split(",")
+			.map((t) => t.trim())
+			.filter(Boolean)
+		if (defName.trim()) out.name = defName.trim()
+		if (defScenario.trim()) out.scenario = defScenario.trim()
+		if (tags.length) out.tags = tags
+		return asDefaults(out)
 	})
 
 	// The genre's event surface arrives once the row names the genre.
@@ -67,7 +108,21 @@
 				description !== (row.description ?? "") ||
 				enabled !== row.enabled ||
 				isDefault !== row.isDefault ||
-				JSON.stringify(bindings) !== JSON.stringify(row.bindings))
+				JSON.stringify(bindings) !== JSON.stringify(row.bindings) ||
+				JSON.stringify(defaults) !==
+					JSON.stringify(asDefaults(row.defaults)))
+	)
+
+	/**
+	 * Slots the instance cannot honour (ruled 2026-09-10), from the boot
+	 * reconcile's notices, keyed by event so a slot can wear its own mark.
+	 *
+	 * Read off the row rather than recomputed here: the reconcile and the run
+	 * ask one predicate, and a third opinion on this screen is how the form
+	 * comes to call healthy a slot the sessions are falling back on.
+	 */
+	const staleByEvent = $derived(
+		new Map((row?.staleBindings ?? []).map((b) => [b.event, b]))
 	)
 
 	/** Non-open slots are the bindable ones; open slots are the action list. */
@@ -146,7 +201,7 @@
 			description: description || null,
 			enabled,
 			isDefault,
-			...(readonly ? {} : { bindings })
+			...(readonly ? {} : { bindings, defaults })
 		})
 		toaster.success({ title: "Preset saved" })
 	}
@@ -207,6 +262,53 @@
 	</div>
 {:else}
 	<div class="form-max flex flex-col gap-4">
+		<!-- A slot the instance cannot honour (ruled 2026-09-10). First on the
+		     page because it is the one thing here that is currently untrue:
+		     every session on this preset is running something else for that
+		     event. It says so rather than blocking — nothing is stopped, and
+		     the fix is a rebind, which is what the button goes to. -->
+		{#if row.staleBindings?.length}
+			<div
+				class="card preset-tonal-warning flex items-start gap-3 p-3"
+				role="status"
+			>
+				<Icons.TriangleAlert size={18} class="mt-0.5 shrink-0" />
+				<div class="flex min-w-0 flex-1 flex-col gap-1 text-sm">
+					<p class="font-semibold">
+						{row.staleBindings.length === 1
+							? "One binding is not available on this instance."
+							: `${row.staleBindings.length} bindings are not available on this instance.`}
+					</p>
+					<ul class="flex flex-col gap-0.5 text-xs">
+						{#each row.staleBindings as b (b.event)}
+							<li>
+								<code class="font-mono">{b.event}</code>
+								is bound to
+								<code class="font-mono">{b.bound}</code>
+								— {b.reason}
+								{#if b.fallbackSpec}
+									Sessions run
+									<code class="font-mono">
+										{b.fallbackSpec}
+									</code>
+									instead.
+								{:else}
+									Nothing else answers this event, so it does
+									not run at all.
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				</div>
+				<a
+					class="btn btn-sm preset-filled-primary-500 shrink-0"
+					href="#bindings"
+				>
+					<Icons.Link2 size={14} /> Rebind
+				</a>
+			</div>
+		{/if}
+
 		<div class="card preset-filled-surface-100-900 flex flex-col gap-3 p-4 shadow-sm">
 			<div class="field-row">
 				<label class="flex flex-col gap-1 text-sm">
@@ -256,7 +358,10 @@
 		</div>
 
 		<!-- ── the bindings: the genre's event slots, filled ─────────── -->
-		<section class="card preset-filled-surface-100-900 flex flex-col gap-3 p-4 shadow-sm">
+		<section
+			id="bindings"
+			class="card preset-filled-surface-100-900 flex flex-col gap-3 p-4 shadow-sm"
+		>
 			<div>
 				<h3 class="text-sm font-semibold">Event bindings</h3>
 				<p class="text-surface-600-400 text-xs">
@@ -299,6 +404,21 @@
 									size={12}
 									class="mr-0.5 inline"
 								/>unbound
+							</span>
+						{/if}
+						<!-- The saved binding does not resolve on this
+						     instance. Distinct from "unbound" above, which is a
+						     slot nobody filled: this one IS filled, and what it
+						     names is absent. -->
+						{#if staleByEvent.get(slot.event)}
+							<span
+								class="text-warning-500 text-xs"
+								title={staleByEvent.get(slot.event)!.reason}
+							>
+								<Icons.TriangleAlert
+									size={12}
+									class="mr-0.5 inline"
+								/>{staleByEvent.get(slot.event)!.bound} is not available
 							</span>
 						{/if}
 					</div>
@@ -371,6 +491,59 @@
 				<p class="text-surface-600-400 text-xs italic">
 					This preset is shipped with Serene Pub — its bindings are
 					never edited in place. Duplicate it to change them.
+				</p>
+			{/if}
+		</section>
+
+		<!-- ── the creation pre-fill ────────────────────────────────── -->
+		<section
+			class="card preset-filled-surface-100-900 flex flex-col gap-3 p-4 shadow-sm"
+		>
+			<div>
+				<h3 class="text-sm font-semibold">Creation defaults</h3>
+				<p class="text-surface-600-400 text-xs">
+					What the new-session form is pre-filled with when somebody
+					starts from this preset. Every field is optional, and each is
+					only a starting point — whoever creates the session can change
+					it before creating.
+				</p>
+			</div>
+			<div class="field-row">
+				<label class="flex flex-col gap-1 text-sm">
+					<span class="font-medium">Session name</span>
+					<input
+						class="input"
+						readonly={readonly}
+						placeholder="Left to the person creating it"
+						bind:value={defName}
+					/>
+				</label>
+				<label class="flex flex-col gap-1 text-sm">
+					<span class="font-medium">Tags</span>
+					<input
+						class="input"
+						readonly={readonly}
+						placeholder="comma, separated"
+						bind:value={defTags}
+					/>
+				</label>
+			</div>
+			<label class="flex flex-col gap-1 text-sm">
+				<span class="font-medium">Scenario</span>
+				<textarea
+					class="textarea w-full"
+					rows={3}
+					readonly={readonly}
+					placeholder="Left to the person creating it"
+					bind:value={defScenario}
+				></textarea>
+			</label>
+			{#if Object.keys(defExtra).length}
+				<p class="text-surface-600-400 text-xs italic">
+					This preset also carries
+					<span class="font-mono text-[11px]"
+						>{Object.keys(defExtra).join(", ")}</span
+					>, which this screen does not edit and leaves untouched.
 				</p>
 			{/if}
 		</section>

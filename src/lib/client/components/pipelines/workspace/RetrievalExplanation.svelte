@@ -34,9 +34,10 @@
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { SvelteMap, SvelteSet } from "svelte/reactivity"
-	import { onDestroy, onMount } from "svelte"
+	import { getContext, onDestroy, onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { entryTypeScope } from "$lib/client/lorebooks/entrySections"
 
 	type Explanation = NonNullable<
 		Sockets.Pipelines.RunExplain.Response["explanation"]
@@ -62,6 +63,11 @@
 	}: Props = $props()
 
 	const socket = useTypedSocket()
+	/**
+	 * Absent wherever this is rendered outside the app shell, which is why the
+	 * Open entry action is offered only when there is a panel to open it in.
+	 */
+	const panelsCtx = getContext<PanelsCtx | undefined>("panelsCtx")
 
 	/** Which rows are open. A plain Set gives no reactive `.add()` in Svelte 5. */
 	const open = new SvelteSet<string>()
@@ -78,7 +84,10 @@
 	 * disagreeing with the panel that owns it. The row still shows what the
 	 * database last said, which is the point; it just says it from here.
 	 */
-	const levers = new SvelteMap<string, { constant: boolean; enabled: boolean }>()
+	const levers = new SvelteMap<
+		string,
+		{ constant: boolean; enabled: boolean }
+	>()
 
 	/**
 	 * A lever was refused. The entry handlers refuse by throwing, so this is
@@ -177,8 +186,51 @@
 		completion: "held back"
 	}
 
+	/**
+	 * That sentence, for a reader who may not have been told which wire.
+	 *
+	 * Wire mode is connection identity, so the projection removes it for
+	 * everyone who is not an administrator — the stop lists still arrive, and
+	 * the rule that decided them does not.
+	 */
+	const dropReason = (wire: string | undefined) =>
+		(wire && DROP_REASON[wire]) ||
+		"held back by this connection's wire rule"
+
+	/**
+	 * Whether this row can be followed back to the entry it is about.
+	 *
+	 * Two things have to be true and neither implies the other: the
+	 * explanation has to carry the book (an older receipt's projection may
+	 * not), and there has to be a workspace to open it in.
+	 */
+	function addressOf(row: Row) {
+		const entry = row.entry
+		if (!panelsCtx || !entry?.lorebookId) return null
+		return {
+			lorebookId: entry.lorebookId,
+			scope: entryTypeScope(entry.typeId),
+			entryId: entry.id,
+			// The account of this decision, in the place the entry is edited:
+			// the question a reader has after "why was it left out" is asked
+			// of the entry, and Read in? is where it is answered.
+			inspector: "fires"
+		}
+	}
+
+	/** Opens the workspace on the entry, with its own retrieval account open. */
+	function openEntry(row: Row) {
+		const lore = addressOf(row)
+		if (!lore || !panelsCtx) return
+		panelsCtx.digest.lore = lore
+		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+	}
+
 	/** The two levers, written through the verb the lore managers already use. */
-	function setEntry(row: Row, patch: { constant?: boolean; enabled?: boolean }) {
+	function setEntry(
+		row: Row,
+		patch: { constant?: boolean; enabled?: boolean }
+	) {
 		if (!row.entry) return
 		socket.emit("entries:update", {
 			entry: { id: row.entry.id, typeId: row.entry.typeId, ...patch }
@@ -188,7 +240,7 @@
 
 {#if loading}
 	<p class="text-surface-600-400 text-sm">Reading the decisions…</p>
-{:else if explanation && (rows.length || explanation.notes.length || explanation.warnings.length || explanation.stops)}
+{:else if explanation && (rows.length || explanation.notes.length || explanation.warnings.length || explanation.stops || explanation.promptCache || explanation.presetFallback)}
 	<!-- A bordered section rather than a second card: every host renders this
 	     INSIDE a card of its own — a receipt, a composer tab, a report modal —
 	     and the same preset nested in itself reads as a rendering fault rather
@@ -203,6 +255,34 @@
 				{caption}
 			</span>
 		</div>
+
+		<!-- Which pipeline actually ran, when it was not the one the session's
+		     preset names (ruling 2026-09-10). First, and in the warnings'
+		     register rather than the notes': every number below it was
+		     produced by a different pipeline than the reader is expecting, so
+		     it changes how the whole panel should be read. Same vocabulary as
+		     the Stops row — a labelled fact, the slug in monospace, the
+		     sentence after it. -->
+		{#if explanation.presetFallback}
+			{@const fb = explanation.presetFallback}
+			<p
+				class="preset-tonal-warning flex items-start gap-2 rounded p-2 text-xs"
+			>
+				<Icons.Replace size={14} class="mt-0.5 shrink-0" />
+				<span>
+					Ran the default pipeline: preset
+					<strong>{fb.preset}</strong>
+					binds
+					<code class="font-mono">{fb.event}</code>
+					to
+					<code class="font-mono">{fb.bound}</code>
+					— which is not available.
+					{#if fb.reason}
+						<span class="opacity-80">{fb.reason}</span>
+					{/if}
+				</span>
+			</p>
+		{/if}
 
 		{#each explanation.warnings as w (w)}
 			<p
@@ -293,9 +373,9 @@
 				{#each stops.dropped as stop (stop.kind + stop.value)}
 					<span
 						class="preset-tonal-surface inline-flex items-center gap-1 rounded-full px-2 py-0.5 line-through opacity-50"
-						title="{STOP_KIND[stop.kind]} — held back: {DROP_REASON[
+						title="{STOP_KIND[stop.kind]} — held back: {dropReason(
 							stops.wire
-						]}"
+						)}"
 					>
 						<code class="font-mono">{stop.value}</code>
 						<span class="text-[0.62rem] tracking-wider uppercase">
@@ -305,10 +385,46 @@
 				{/each}
 				{#if stops.dropped.length}
 					<span class="text-surface-600-400">
-						{DROP_REASON[stops.wire]}
+						{dropReason(stops.wire)}
 					</span>
 				{/if}
 			</div>
+		{/if}
+
+		<!-- What the prompt cost and how much of it the service reused (ruled
+		     "later, non-disruptive"). Recording only: nothing in the app places
+		     a prefix or orders a request on account of this number. It sits
+		     beside Stops because it answers the same KIND of question — a fact
+		     about the send that no row of the table can carry.
+
+		     ⚠ "not reported" is a real state, and it is not zero. Several
+		     services never say, and telling those users nothing was reused
+		     would read as a broken cache. -->
+		{#if explanation.promptCache}
+			{@const cache = explanation.promptCache}
+			<p class="text-surface-700-300 flex items-start gap-2 text-xs">
+				<Icons.DatabaseZap
+					size={14}
+					class="mt-0.5 shrink-0"
+					aria-hidden="true"
+				/>
+				<span>
+					<span class="font-medium">Prompt cache:</span>
+					{#if cache.cached === undefined}
+						not reported by this connection.
+					{:else if cache.prompt === undefined}
+						{cache.cached.toLocaleString()} prompt tokens reused.
+					{:else}
+						{cache.cached.toLocaleString()} of
+						{cache.prompt.toLocaleString()} prompt tokens reused.
+					{/if}
+					{#if cache.write !== undefined}
+						<span class="text-surface-600-400">
+							{cache.write.toLocaleString()} written to the cache.
+						</span>
+					{/if}
+				</span>
+			</p>
 		{/if}
 
 		{#if !explanation.ranked}
@@ -476,9 +592,7 @@
 										{row.provenanceNote}
 									</p>
 									{#if row.currentTitle}
-										<p
-											class="text-surface-600-400 text-xs"
-										>
+										<p class="text-surface-600-400 text-xs">
 											Now titled “{row.currentTitle}”.
 										</p>
 									{/if}
@@ -488,8 +602,8 @@
 										class="text-surface-600-400 text-xs italic"
 									>
 										{#if row.provenance === "changed" || row.provenance === "deleted"}
-											<span class="not-italic"
-												>As it read then:
+											<span class="not-italic">
+												As it read then:
 											</span>
 										{/if}“{row.excerpt}”
 									</p>
@@ -578,6 +692,17 @@
 												? "Never include"
 												: "Never included"}
 										</button>
+										{#if addressOf(row)}
+											<button
+												type="button"
+												class="btn btn-sm preset-tonal-surface"
+												title="Open this entry in the lorebook workspace, on its retrieval account"
+												onclick={() => openEntry(row)}
+											>
+												<Icons.BookOpen size={13} />
+												Open entry
+											</button>
+										{/if}
 									</div>
 								{/if}
 							</div>

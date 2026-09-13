@@ -11,8 +11,8 @@ Once every required step is complete, the exact same screen switches to a normal
 The wizard adapts to who you are:
 
 - The **first admin** to set up a brand-new server sees the full wizard, including connecting an AI service.
-- An **admin logging in after the server is already configured** sees a shorter welcome message but still gets the connection/summarization/RAG steps if those aren't done yet.
-- **Non-admin users** never see the connection, summarization, or RAG steps at all — those are server-wide settings an admin controls. Non-admins only go through Welcome, Persona, Character, and Create Session. See [Users and Accounts](./users-and-accounts.md) for how admin vs. non-admin roles work.
+- An **admin logging in after the server is already configured** sees a shorter welcome message but still gets the connection and RAG steps if those aren't done yet.
+- **Non-admin users** never see the connection or RAG steps at all — those are server-wide settings an admin controls. Non-admins only go through Welcome, Persona, Character, and Create Session. See [Users and Accounts](./users-and-accounts.md) for how admin vs. non-admin roles work.
 
 ## Step 1: Welcome
 
@@ -67,29 +67,20 @@ Selecting a model enables a **Connect** button in the footer, which creates the 
 
 Choosing **Manual Setup** disables both built-in managers and opens the Connections panel with a tutorial flag set, so you can configure any OpenAI-compatible endpoint, LM Studio, Claude, LlamaCpp, or another custom service yourself. The wizard shows a "Waiting for Connection" message and automatically detects and advances once you've created and activated a connection — you don't need to come back and click anything.
 
-## Summarization Setup
-
-Also admin-only. This step introduces manual conversation summarization and explains it in two short cards:
-
-- **What it does**: "You trigger summarization manually in a session. Serene compresses selected messages into a compact record that the AI uses to stay aware of past events without running out of context."
-- **Resource usage**: "Increases AI usage by around 30%. Summarization only runs when you manually trigger it in a session, so you stay in control."
-
-Two footer buttons are offered: **Skip for now** (marks this step done without turning summarization on) and **Enable Summarization** (turns the feature on server-wide and marks the step done). Either choice advances the wizard. This step is tracked per-user on the server, independent of whether you actually have any sessions yet. For the full picture of how summarization works day-to-day, see [Summarization](./summarization.md).
-
 ## Embeddings (RAG) Setup
 
-Admin-only, and only shown right after the Summarization step (reachable on Android too, where only the External API option applies — see [Android App](./android.md)). This introduces retrieval-augmented generation (RAG) for lorebooks and session history:
+Admin-only (reachable on Android too, where only the External API option applies — see [Android App](./android.md)). This introduces retrieval-augmented generation (RAG) for lorebooks and session history:
 
 - **What it does**: "A small AI model understands the meaning of your lore. When you session, Serene Pub finds the most relevant entries and quietly adds them to every message."
 - **Resource usage**: "CPU only — runs a small model locally in the background. One-time download, then works silently without extra AI calls."
 
-Unlike the connection setup steps, this step doesn't have its own inline configuration UI — its footer's **Open Embeddings Settings** button opens the real Embeddings sidebar (the same panel described in [Embeddings & RAG](./embeddings-and-rag.md)), and the wizard waits for it to report ready before advancing, updating live with no page reload needed:
+Unlike the connection setup steps, this step has no inline configuration UI. Its footer's **Open Embedding Connections** button opens the Embeddings section of the Connections sidebar (described in [Embeddings & RAG](./embeddings-and-rag.md)), and the wizard waits for a starred embedding connection to report ready before advancing, updating live with no page reload:
 
-- Not yet enabled: **Skip for now** and **Open Embeddings Settings** are both offered.
-- Enabled but not ready yet (still loading or misconfigured): a status message points you back to the Embeddings panel, and a **Disable & Skip** option is already available at this point too, not just once it's ready.
-- Enabled and ready: the footer's button becomes **Continue**.
+- No starred connection: **Skip for now** and **Open Embedding Connections** are both offered.
+- Starred but not ready yet (still loading or misconfigured): a status message points you back to the sidebar.
+- Starred and ready: the footer's button becomes **Continue**.
 
-See [Embeddings & RAG](./embeddings-and-rag.md) for what the Local Model vs. External API choice means and how to reconfigure it later.
+See [Embeddings & RAG](./embeddings-and-rag.md) for the three services and how moving the star later re-indexes.
 
 ## Creating Your First Persona
 
@@ -133,7 +124,7 @@ Because the wizard and the home dashboard are the same page, there's nothing spe
 
 ### How the wizard decides where to start
 
-When you land on this screen, Serene Pub checks, per step: do you have an active connection, has summarization been marked complete for your account, has RAG been marked complete, do you have at least one character, at least one persona, and at least one session. If everything required for your role is already true, you get the dashboard. If anything is missing, you get the wizard — and if some steps are already done (for example you have a connection and a character but no persona yet), the wizard skips the Welcome screen entirely and opens directly on the first incomplete step instead of making you click through steps you've already finished.
+When you land on this screen, Serene Pub checks, per step: do you have an active connection, has RAG been marked complete, do you have at least one character, at least one persona, and at least one session. If everything required for your role is already true, you get the dashboard. If anything is missing, you get the wizard — and if some steps are already done (for example you have a connection and a character but no persona yet), the wizard skips the Welcome screen entirely and opens directly on the first incomplete step instead of making you click through steps you've already finished.
 
 ### Revisiting completed steps
 
@@ -141,11 +132,11 @@ While the wizard is open, the step indicator at the top is a row of numbered cir
 
 ### Skipping steps
 
-Summarization, RAG, persona, and character can all be explicitly skipped with a **Skip for now** button without actually completing the underlying setup. Skipping summarization or RAG simply records that step as acknowledged on your account (so the wizard won't nag you again) without turning either feature on. Skipping persona or character just moves you forward — since the dashboard view requires an actual character/persona/session to appear, skipping those steps means you'll see the wizard again next time until you actually create one.
+RAG, persona, and character can all be explicitly skipped with a **Skip for now** button without actually completing the underlying setup. Skipping RAG simply records that step as acknowledged on your account (so the wizard won't nag you again) without turning the feature on. Skipping persona or character just moves you forward — since the dashboard view requires an actual character/persona/session to appear, skipping those steps means you'll see the wizard again next time until you actually create one.
 
 ### What non-admin users see
 
-Because connecting an AI service, enabling summarization, and configuring RAG are all server-wide settings, they only ever appear for admin accounts. A non-admin user's wizard is just four steps: Welcome, Persona, Character, Create Session. Everything else about how the wizard behaves — auto-skipping, step indicators, the dashboard hand-off — works identically for admins and non-admins alike.
+Because connecting an AI service and configuring RAG are server-wide settings, they only ever appear for admin accounts. A non-admin user's wizard is just four steps: Welcome, Persona, Character, Create Session. Everything else about how the wizard behaves — auto-skipping, step indicators, the dashboard hand-off — works identically for admins and non-admins alike.
 
 ### Android differences
 

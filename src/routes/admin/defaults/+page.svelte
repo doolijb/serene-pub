@@ -193,11 +193,34 @@
 	function setHalf(
 		capability: string,
 		half: "connection" | "sampling",
-		raw: string
+		raw: string,
+		modelRaw?: string
 	) {
 		const id = raw === "" ? null : Number(raw)
 		if (id !== null && Number.isNaN(id)) return
-		socket.emit("connectionDefaults:set", { capability, half, id })
+		// The MODEL rides with the connection (0114), never on its own.
+		//
+		// ⚠ Changing the endpoint sends NO model, which the handler stores as
+		// NULL — "that endpoint, its default model". Carrying the previous
+		// endpoint's model across would register a pair whose two halves name
+		// different connections, which no picker can display and no run can
+		// resolve. The select below is keyed on the connection for the same
+		// reason: a different endpoint is a different list.
+		const modelId =
+			half === "connection" && modelRaw ? Number(modelRaw) : null
+		socket.emit("connectionDefaults:set", {
+			capability,
+			half,
+			id,
+			...(half === "connection"
+				? {
+						modelId:
+							modelId !== null && !Number.isNaN(modelId)
+								? modelId
+								: null
+					}
+				: {})
+		})
 	}
 
 	function setGroupSampling(rows: ComboRow[], raw: string) {
@@ -319,6 +342,10 @@
 				{#each group.rows as combo (combo.id)}
 					{@const options = connectionOptions[combo.id] ?? []}
 					{@const current = defaults[combo.id]?.connectionId ?? null}
+					{@const currentModel =
+						defaults[combo.id]?.connectionModelId ?? null}
+					{@const currentModels =
+						options.find((o) => o.id === current)?.models ?? []}
 					{@const eligible = hasEligible(combo.id)}
 					{@const cardSampling = samplingOptions[combo.id] ?? []}
 					{@const cardValue = String(
@@ -419,6 +446,61 @@
 										</option>
 									{/each}
 								</select>
+								{#if currentModels.length}
+									<!-- The second half of the pair (0114).
+									     Rendered only where the chosen endpoint
+									     HAS models: an endpoint with none means
+									     what it always meant, and a picker over
+									     an empty list is a control with no
+									     choice in it.
+
+									     "Its default model" is a real option and
+									     the resting one, not a blank: it is what
+									     every registration the 0114 backfill left
+									     behind says, and it keeps following the
+									     star when somebody re-stars the endpoint
+									     — which is what an admin who has never
+									     thought about models wants and what a
+									     pinned id would silently stop doing. -->
+									<select
+										class="select select-sm w-56"
+										value={currentModel == null
+											? ""
+											: String(currentModel)}
+										onchange={(e) =>
+											setHalf(
+												combo.id,
+												"connection",
+												String(current),
+												e.currentTarget.value
+											)}
+										aria-label={`Model for ${capabilityLabel(combo.id as any)}`}
+									>
+										<option value="">
+											Its default model{currentModels.find(
+												(m) => m.isDefault
+											)
+												? ` (${currentModels.find((m) => m.isDefault)!.name})`
+												: ""}
+										</option>
+										<!-- Disabled models are LISTED and
+										     greyed, never dropped: a
+										     registration made before somebody
+										     switched one off has to still show
+										     as what it is. -->
+										{#each currentModels as m (m.id)}
+											<option
+												value={String(m.id)}
+												disabled={!m.enabled}
+												title={m.model}
+											>
+												{m.name}{m.enabled
+													? ""
+													: " — switched off"}
+											</option>
+										{/each}
+									</select>
+								{/if}
 							{/if}
 						</div>
 

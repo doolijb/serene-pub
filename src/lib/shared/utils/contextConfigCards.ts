@@ -767,7 +767,13 @@ const STRUCTURAL_FIELDS = [
 	// their editor light up red. It renders empty now, which they will see —
 	// a lint error would tell them their template is malformed, which it is
 	// not, and send them looking for a typo.
-	"speakerRelationships"
+	"speakerRelationships",
+	// Stats and states. Structural rather than a declared variable because a
+	// template reads KEYS out of it — `state.world.weather` — and a variable is
+	// a value some layout renders to a string, which would leave nothing to
+	// read into. Typed `any` like every structural name, so the walk stops here
+	// and a slot a genre declares is never reported as a misspelling.
+	"state"
 ]
 
 /**
@@ -783,7 +789,7 @@ const STRUCTURAL_FIELDS = [
  * normal case rather than a race — extension load happens at boot, and this
  * file is reached when an editor opens.
  */
-const KNOWN_TOP_LEVEL_FIELDS = new Set([
+export const KNOWN_TOP_LEVEL_FIELDS = new Set([
 	...STRUCTURAL_FIELDS,
 	...allVariables().flatMap((v) => Object.keys(v.scope))
 ])

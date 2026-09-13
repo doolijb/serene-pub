@@ -29,6 +29,7 @@
 	import ActivitySidebar from "$lib/client/components/sidebars/ActivitySidebar.svelte"
 	import ConnectionTimeoutModal from "$lib/client/components/ConnectionTimeoutModal.svelte"
 	import PipelineReviewModal from "$lib/client/components/pipelines/PipelineReviewModal.svelte"
+	import RunInspectorModal from "$lib/client/components/pipelines/inspector/RunInspectorModal.svelte"
 	import UpdateNoticeBar from "$lib/client/components/UpdateNoticeBar.svelte"
 	import type { Snippet } from "svelte"
 	import { Theme } from "$lib/client/consts/Theme"
@@ -119,7 +120,7 @@
 		"users:current:logout:error",
 		"users:current:updateDisplayName:error",
 		"userSettings:uploadBackground:error",
-		"vectorization:setModel:error"
+		"vectorization:loadModel:error"
 	])
 
 	// Turns "characters:update:error" into "Characters update failed", etc.
@@ -271,6 +272,7 @@
 	let taskQueueCtx: TaskQueueCtx = $state({ tasks: [] })
 	let openSessionCtx: OpenSessionCtx = $state({
 		sessionId: null,
+		sessionName: null,
 		lorebookId: null,
 		isOwner: false
 	})
@@ -738,7 +740,11 @@
 		systemSettingsCtx.settings = {
 			...message.systemSettings,
 			isAndroidWrapper: message.isAndroidWrapper,
-			localEmbeddingsSupported: message.localEmbeddingsSupported
+			localEmbeddingsSupported: message.localEmbeddingsSupported,
+			// Not a column: derived from the `text->embedding` star, and folded
+			// in here beside the other two derivations so every screen that used
+			// to read `settings.embeddingModelName` keeps reading one object.
+			activeEmbeddingModel: message.activeEmbeddingModel
 		}
 		systemSettingsCtx.capabilityDefaults = message.capabilityDefaults
 		ollamaSettingsCtx.settings = { ...message.ollamaSettings }
@@ -1437,6 +1443,12 @@
      reply, a summarize, an event — and the card has to reach the person
      whichever screen they are on. -->
 <PipelineReviewModal />
+
+<!-- The run inspector (handover §4.8): what a run did, anchored to whatever
+     produced it. Mounted globally for the same reason as the card above — a
+     message's menu and a finished progress card both open it, and neither
+     screen should own a copy. -->
+<RunInspectorModal />
 
 <!-- Update notice. Rendered here rather than in +layout.svelte because that
      file is the parent of this one and so cannot read userCtx (context flows

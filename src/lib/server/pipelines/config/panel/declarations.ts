@@ -56,7 +56,66 @@ const PARAM_CONTROL: Record<string, string> = {
 	// where `share` normalises to a fixed total and `perMember` has no range at
 	// all. Rendering a strength like a share would teach a reader that turning
 	// one up turns the others down.
-	strengths: "strengths"
+	strengths: "strengths",
+	// An ordered list of rows, rendered from the ELEMENT's declaration rather
+	// than from anything this panel knows about any particular list. The
+	// `blocks` param is the first of them; a plugin declaring `type: 'list'`
+	// gets the same editor with no work here.
+	//
+	// ⚠ `object` is deliberately absent. Nothing declares a bare object param
+	// yet, and mapping it to a control the client has no branch for would put a
+	// text box in front of a value it cannot edit — the dead-control family.
+	// Add it here when there is a control to point at.
+	list: "list"
+}
+
+/**
+ * A list element's declaration, flattened for the client.
+ *
+ * The same projection `members` gets and for the same reason: display text is
+ * resolved here, because the client renders strings and does not pick them. A
+ * plugin's list of its own rows arrives labelled without anybody editing the
+ * panel.
+ *
+ * One level. A list of objects is the shape this exists for; a list of lists is
+ * not offered a control, and the declaration check refuses neither — it simply
+ * arrives with no fields, which the client renders as an unlabelled row rather
+ * than as nothing.
+ */
+function itemDeclOf(
+	item: ParamDecl | undefined,
+	language?: string
+): Decl["item"] | undefined {
+	if (!item) return undefined
+	const fields = Object.entries(item.fields ?? {}).map(([key, raw]) => {
+		const f = raw as ParamDecl
+		return {
+			key,
+			label: i18nText(f.label ?? f.i18n, language) ?? humanizeCamel(key),
+			control: PARAM_CONTROL[f.type] ?? "string",
+			...(f.of ? { of: f.of } : {}),
+			...(f.members
+				? {
+						members: f.members.map((m) => ({
+							key: m.key,
+							label:
+								i18nText(m.label ?? m.i18n, language) ??
+								humanizeCamel(m.key),
+							...(i18nText(m.description, language)
+								? {
+										description: i18nText(
+											m.description,
+											language
+										)!
+									}
+								: {})
+						}))
+					}
+				: {}),
+			...(f.default !== undefined ? { default: f.default } : {})
+		}
+	})
+	return { fields }
 }
 
 /**
@@ -130,7 +189,8 @@ function declsForSlot(
 		typeLabel,
 		nodeKind,
 		...((decl as { quick?: boolean }).quick ? { quick: true } : {}),
-		...(decl.engine ? { engine: decl.engine } : {})
+		...(decl.engine ? { engine: decl.engine } : {}),
+		...(decl.engines?.length ? { engines: [...decl.engines] } : {})
 	}
 
 	// One option, not one per declared field. A prompt is a **swappable entity**
@@ -231,6 +291,11 @@ function declsForSlot(
 							}))
 						}
 					: {}),
+				// The element declaration, for a `list`. Absent for every other
+				// control, which is what keeps the payload the size it was.
+				...((it) => (it ? { item: it } : {}))(
+					p?.type === "list" ? itemDeclOf(p.item) : undefined
+				),
 				...(p?.default !== undefined
 					? { authorDefault: p.default }
 					: {})

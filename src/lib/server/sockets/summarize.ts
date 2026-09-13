@@ -511,6 +511,21 @@ export const sessionsSetLorebookHandler: Handler<
 			.where(eq(schema.sessions.id, sessionId))
 			.returning()
 
+		// Attaching a book to a session is one of the two ways the two meet,
+		// and the cast arrives on its own from either (ruling 2026-09-12).
+		// Imported lazily: this is the only reference summarize.ts has to the
+		// sessions module, and a static one would tie the two files' load
+		// order together for a single call.
+		if (lorebookId !== null) {
+			const { runLorebookBindingCheck } = await import("./sessions")
+			await runLorebookBindingCheck(
+				socket,
+				sessionId,
+				lorebookId,
+				emitToUser
+			).catch(console.error)
+		}
+
 		const response: Sockets.Sessions.SetLorebook.Response = {
 			session: updated
 		}

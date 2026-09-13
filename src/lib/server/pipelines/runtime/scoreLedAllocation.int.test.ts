@@ -33,7 +33,10 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { and, eq } from "drizzle-orm"
-import type { TestDb } from "$lib/server/utils/testDb"
+import {
+	setConfigValue,
+	type TestDb
+} from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues, historyValues } from "$lib/server/pipelines/testing/fixtures"
 import { run } from "@serene-pub/sdk"
@@ -222,6 +225,13 @@ const rankNode = async () => {
  * instance scope, so a fixture writing to the immutable original would change
  * nothing and prove nothing.
  */
+/** The one address this file tunes: the ranker's allocation switch. */
+const SWITCH_AT = {
+	nodeKey: "rank",
+	slot: "params",
+	path: "scoreLedAllocation"
+}
+
 const selectedConfigId = async () => {
 	const { resolveSelectedConfig } = await import(
 		"$lib/server/pipelines/config/named"
@@ -237,23 +247,11 @@ const selectedConfigId = async () => {
 }
 
 const setScoreLed = async (value: boolean) =>
-	await db
-		.update(schema.pipelineConfigValues)
-		.set({ value })
-		.where(
-			and(
-				eq(
-					schema.pipelineConfigValues.configId,
-					await selectedConfigId()
-				),
-				eq(schema.pipelineConfigValues.nodeKey, "rank"),
-				eq(schema.pipelineConfigValues.slot, "params"),
-				eq(
-					schema.pipelineConfigValues.path,
-					"scoreLedAllocation"
-				)
-			)
-		)
+	// ⚠ An upsert, not the `UPDATE` this was. A config stores **deviations**
+	// (ruled 2026-09-10), so at an address nobody has tuned there is no row to
+	// update — the old form matched nothing and the run resolved the declared
+	// default while the failure pointed at the ranker.
+	await setConfigValue(db, await selectedConfigId(), SWITCH_AT, value)
 
 describe("the declared switch and the shipped behaviour are one answer", () => {
 	it("declares false, so an upgrade selects what it selected yesterday", async () => {
@@ -302,43 +300,88 @@ describe("the declared switch and the shipped behaviour are one answer", () => {
 		).toBeUndefined()
 	})
 
-	it("back-fills into every config of both ranking pipelines, copies included", async () => {
-		// A pure addition: `reconcileConfigs` back-fills it and nothing is
-		// culled. Asserted against the configs rather than reasoned about,
-		// because the shipped immutable row is not the one a turn reads and a
-		// back-fill that reached only it would leave the live config without
-		// the control (0192's Part 2 is the same claim, made in prose).
-		for (const spec of [respondSpecRow, narrateSpecRow]) {
+	it("reaches every config of both ranking pipelines, copies included, without pinning one", async () => {
+		// ⚠ **Rewritten for the deviation ruling (2026-09-10), and it now
+		// asserts MORE than it did.** The claim was "`reconcileConfigs`
+		// back-fills it into every config", checked by finding a row — which
+		// was only ever a proxy for what matters: the shipped `false` reaches
+		// the config a turn actually reads, not just the immutable row nobody
+		// runs (0192's Part 2, in prose).
+		//
+		// A config stores only what DEPARTS from the declaration now, so the
+		// back-fill correctly writes nothing here — `false` IS the declared
+		// value — and a row would be a pin that outlives the next correction of
+		// it. Both halves are therefore named: no config holds a copy, and
+		// every config resolves it anyway.
+		const { selectConfig, resolveSelectedConfig } = await import(
+			"$lib/server/pipelines/config/named"
+		)
+		const { resolveConfigSources } = await import("@serene-pub/sdk")
+
+		for (const [spec, slug] of [
+			[respondSpecRow, RESPOND_SPEC_ID],
+			[narrateSpecRow, NARRATE_SPEC_ID]
+		] as const) {
 			const configs = await db
 				.select()
 				.from(schema.pipelineConfigs)
 				.where(eq(schema.pipelineConfigs.specId, spec.id))
 			expect(configs.length).toBeGreaterThan(0)
-			for (const config of configs as any[]) {
-				const [value] = await db
-					.select()
-					.from(schema.pipelineConfigValues)
-					.where(
-						and(
-							eq(
-								schema.pipelineConfigValues.configId,
-								config.id
-							),
-							eq(
-								schema.pipelineConfigValues.nodeKey,
-								"rank"
-							),
-							eq(
-								schema.pipelineConfigValues.path,
-								"scoreLedAllocation"
+
+			const before = await resolveSelectedConfig(db, spec.id, slug, {})
+			try {
+				for (const config of configs as any[]) {
+					const [row] = await db
+						.select()
+						.from(schema.pipelineConfigValues)
+						.where(
+							and(
+								eq(
+									schema.pipelineConfigValues.configId,
+									config.id
+								),
+								eq(
+									schema.pipelineConfigValues.nodeKey,
+									SWITCH_AT.nodeKey
+								),
+								eq(
+									schema.pipelineConfigValues.path,
+									SWITCH_AT.path
+								)
 							)
 						)
-					)
-					.limit(1)
-				expect(
-					(value as any)?.value,
-					`${config.name} holds no value for the allocation switch`
-				).toBe(false)
+						.limit(1)
+					expect(
+						row,
+						`${config.name} holds a stored copy of the declared ` +
+							`allocation switch — it resolves the same today ` +
+							`and pins the config to it forever after`
+					).toBeUndefined()
+
+					// And it resolves anyway, through the run's own resolver,
+					// for THIS config rather than for whichever one happened to
+					// be selected — the half a row count never checked.
+					await selectConfig(db, spec.id, "instance", 0, config.id)
+					const world = await buildWorld(db, { specId: slug })
+					const sources: any = resolveConfigSources(world as any, [
+						SWITCH_AT.nodeKey
+					])
+					expect(
+						sources?.[SWITCH_AT.nodeKey]?.[SWITCH_AT.slot]?.[
+							SWITCH_AT.path
+						],
+						`${config.name} does not resolve the allocation ` +
+							`switch, so the control reaches nothing on a turn`
+					).toEqual({ value: false, scopeKind: "author" })
+				}
+			} finally {
+				await selectConfig(
+					db,
+					spec.id,
+					"instance",
+					0,
+					before?.configId ?? null
+				)
 			}
 		}
 
@@ -412,23 +455,12 @@ describe("a stored switch reaches the selection", () => {
 		// direction a misread must not go: a default-off control that switches
 		// itself on during an upgrade changes what reaches the model on an
 		// install that never asked.
-		await db
-			.update(schema.pipelineConfigValues)
-			.set({ value: "false" as any })
-			.where(
-				and(
-					eq(
-						schema.pipelineConfigValues.configId,
-						await selectedConfigId()
-					),
-					eq(schema.pipelineConfigValues.nodeKey, "rank"),
-					eq(schema.pipelineConfigValues.slot, "params"),
-					eq(
-						schema.pipelineConfigValues.path,
-						"scoreLedAllocation"
-					)
-				)
-			)
+		await setConfigValue(
+			db,
+			await selectedConfigId(),
+			SWITCH_AT,
+			"false" as any
+		)
 		try {
 			const truthy = await rankNode()
 			expect(truthy.kept).toEqual(["history"])

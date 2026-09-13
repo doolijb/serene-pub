@@ -218,6 +218,14 @@ describe("recording what a run did", () => {
 			// than a read inside the context Task.
 			"gather.relationshipsPerspectives.read",
 			"gather.relationshipsKnown.read",
+			// The same graph again, read as ranked candidates rather than as
+			// three keyed sections (ruling 2026-09-10, Q1). A third branch and
+			// not a widening of either above it: those two hand the graph to
+			// the template outside the budget, and this one puts every tie into
+			// the `relationships` band where the share divides it and the
+			// receipt accounts for it. It spends nothing until somebody raises
+			// that band, and it is a line in the trail either way.
+			"gather.relationships.read",
 			// Spec 1.19.0: the fourth mechanism. Its own block rather than a fifth
 			// chain in `gather`, because chains of a parallel block cannot read
 			// each other and this one needs `gather.history`'s messages — and
@@ -235,7 +243,6 @@ describe("recording what a run did", () => {
 			// Spec 1.11.0: who speaks is decided (or an explicit pick recorded)
 			// inside the run — the receipt line 19 §5 exists for.
 			"speaker",
-			"context",
 			// Spec 1.6.0: how much room the context has, derived from the
 			// sampling config's window instead of typed on the ranker. Its own
 			// node for the same reason `relationships` is — a number that
@@ -260,6 +267,13 @@ describe("recording what a run did", () => {
 			"names.arm.link",
 			"loreLinked",
 			"rank",
+			// ⚠ **Below the ranker, where it used to be above it.** The context
+			// builder's two relationship in-ports carry `rank`'s inclusions, so
+			// the prompt's relationship sections are built from the band that
+			// was actually allocated rather than from the whole graph dump; a
+			// node cannot read a selection that has not happened. Nothing
+			// between the two ever read this node.
+			"context",
 			"lines",
 			"prompt",
 			"generate",

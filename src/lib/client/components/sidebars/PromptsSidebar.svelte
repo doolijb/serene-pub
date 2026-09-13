@@ -46,7 +46,6 @@
 
 	const socket = useTypedSocket()
 	let userSettingsCtx: UserSettingsCtx = getContext("userSettingsCtx")
-	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
 	// ── Session Prompts state ───────────────────────────────────────────────────
 	let sessionList: Sockets.PromptConfigs.List.Response["promptConfigsList"] =
@@ -1128,50 +1127,47 @@
 			</div>
 		</button>
 
-		<!-- Summarize type cards — only shown when summarization is enabled -->
-		{#if systemSettingsCtx.settings?.summarizationEnabled}
-			{#each [{ v: "world" as const, label: "World Lore Summarization", desc: "System instructions for world lore summarization.", icon: Icons.Globe, activeName: activeWorldName }, { v: "character" as const, label: "Character Lore Summarization", desc: "System instructions for character lore summarization.", icon: Icons.User, activeName: activeCharacterName }, { v: "scene" as const, label: "Scene Summarization", desc: "System instructions for scene summarization.", icon: Icons.Film, activeName: activeSceneName }, { v: "graph" as const, label: "Narrative Graph Build", desc: "Per-step instructions and model overrides for building the relationship graph.", icon: Icons.Share2, activeName: activeGraphName }] as card}
-				<button
-					class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
-					onclick={() => (view = card.v)}
-				>
-					<div class="flex items-start gap-3">
-						<div
-							class="bg-primary-500/10 text-primary-500 mt-0.5 shrink-0 rounded-lg p-2"
-						>
-							<card.icon size={20} />
-						</div>
-						<div class="min-w-0 flex-1">
-							<div
-								class="flex items-center justify-between gap-2"
-							>
-								<span class="font-semibold">{card.label}</span>
-								<Icons.ChevronRight
-									size={16}
-									class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5"
-								/>
-							</div>
-							<p class="text-muted-foreground mt-0.5 text-sm">
-								{card.desc}
-							</p>
-							{#if card.activeName}
-								<div class="mt-2 flex items-center gap-1.5">
-									<Icons.CheckCircle
-										size={12}
-										class="text-success-500 shrink-0"
-									/>
-									<span
-										class="text-success-600 dark:text-success-400 truncate text-xs font-medium"
-									>
-										{card.activeName}
-									</span>
-								</div>
-							{/if}
-						</div>
+		<!-- Summarize type cards. Offered in every instance: summarizing is a
+		     capability, not a switch an admin throws (0126). -->
+		{#each [{ v: "world" as const, label: "World Lore Summarization", desc: "System instructions for world lore summarization.", icon: Icons.Globe, activeName: activeWorldName }, { v: "character" as const, label: "Character Lore Summarization", desc: "System instructions for character lore summarization.", icon: Icons.User, activeName: activeCharacterName }, { v: "scene" as const, label: "Scene Summarization", desc: "System instructions for scene summarization.", icon: Icons.Film, activeName: activeSceneName }, { v: "graph" as const, label: "Narrative Graph Build", desc: "Per-step instructions and model overrides for building the relationship graph.", icon: Icons.Share2, activeName: activeGraphName }] as card}
+			<button
+				class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
+				onclick={() => (view = card.v)}
+			>
+				<div class="flex items-start gap-3">
+					<div
+						class="bg-primary-500/10 text-primary-500 mt-0.5 shrink-0 rounded-lg p-2"
+					>
+						<card.icon size={20} />
 					</div>
-				</button>
-			{/each}
-		{/if}
+					<div class="min-w-0 flex-1">
+						<div class="flex items-center justify-between gap-2">
+							<span class="font-semibold">{card.label}</span>
+							<Icons.ChevronRight
+								size={16}
+								class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5"
+							/>
+						</div>
+						<p class="text-muted-foreground mt-0.5 text-sm">
+							{card.desc}
+						</p>
+						{#if card.activeName}
+							<div class="mt-2 flex items-center gap-1.5">
+								<Icons.CheckCircle
+									size={12}
+									class="text-success-500 shrink-0"
+								/>
+								<span
+									class="text-success-600 dark:text-success-400 truncate text-xs font-medium"
+								>
+									{card.activeName}
+								</span>
+							</div>
+						{/if}
+					</div>
+				</div>
+			</button>
+		{/each}
 	</div>
 
 	<!-- ── CHAT PROMPTS EDITOR ────────────────────────────────────────────────── -->

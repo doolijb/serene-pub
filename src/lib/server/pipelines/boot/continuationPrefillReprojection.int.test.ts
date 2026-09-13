@@ -80,7 +80,10 @@ async function booted(): Promise<TestDb> {
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	const report = await bootstrapPipelines(db)
-	expect(report.conflict, report.conflict ?? "").toBeUndefined()
+	expect(
+		report.specs.length,
+		"the boot did not get as far as seeding the specs"
+	).toBeGreaterThan(0)
 	return db
 }
 
@@ -92,7 +95,10 @@ async function reboot(db: TestDb) {
 	// A conflict here is the failure the whole file exists to prevent: it is
 	// caught, reported, and `bootstrapPipelines` returns early, so pipelines
 	// silently stop on every upgraded install.
-	expect(report.conflict, report.conflict ?? "").toBeUndefined()
+	expect(
+		report.specs.length,
+		"the boot did not get as far as seeding the specs"
+	).toBeGreaterThan(0)
 }
 
 const registryRow = (db: TestDb, typeId: string) =>

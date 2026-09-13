@@ -63,6 +63,42 @@ describe("what a non-admin receives", () => {
 		expect(seen.nodes[0]!.input.sampling).toEqual({ temperature: 0.8 })
 	})
 
+	it("carries no record of what an adapter put on the wire", () => {
+		// The exchange names the base URL, the model and the body the
+		// administrator's compute was sent. `stops` and `structured` are the
+		// reader's own account of their own reply and stay.
+		const seen = redactConnections(
+			{
+				nodes: [
+					{
+						nodeKey: "generate",
+						output: {
+							text: "Hello there",
+							wire: {
+								request: {
+									url: "http://192.168.1.50:5001/api/v1/generate",
+									method: "POST",
+									body: { model: "some-model-q4" }
+								},
+								response: { raw: "Hello there" },
+								redacted: []
+							},
+							stops: { sent: [], dropped: [] },
+							structured: { mode: "schema" }
+						}
+					}
+				]
+			},
+			user
+		)
+		const output = seen.nodes[0]!.output as Record<string, unknown>
+		expect(output).not.toHaveProperty("wire")
+		expect(JSON.stringify(seen)).not.toContain("192.168.1.50")
+		expect(output.text).toBe("Hello there")
+		expect(output.stops).toEqual({ sent: [], dropped: [] })
+		expect(output.structured).toEqual({ mode: "schema" })
+	})
+
 	it("has no id to guess with — not from a session, a default, or a list", () => {
 		const seen = redactConnections(
 			{

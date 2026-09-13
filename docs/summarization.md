@@ -2,13 +2,11 @@
 
 Summarization is an on-demand tool for condensing session messages into permanent [lorebook](./lorebooks.md) entries — world lore, character lore, or scene summaries — so long stretches of roleplay can be distilled into compact facts instead of being kept verbatim forever.
 
-This is a separate system from [Embeddings & RAG](./embeddings-and-rag.md), which automatically retrieves relevant content by meaning rather than compressing it — the two are related (summarized content gets embedded too, once RAG is enabled) but independently enabled and configured. Summarization is a manual, LLM-assisted pipeline for turning session messages into permanent lorebook content, distinct from the automatic background indexing RAG does.
+This is a separate system from [Embeddings & RAG](./embeddings-and-rag.md), which automatically retrieves relevant content by meaning rather than compressing it — the two are related (summarized content gets embedded too, once RAG is enabled) but configured separately; only RAG has a switch. Summarization is a manual, LLM-assisted pipeline for turning session messages into permanent lorebook content, distinct from the automatic background indexing RAG does.
 
-## Enabling Summarization
+## Always available
 
-Summarization is controlled from **System Settings**, under the "Summarization" section, and requires admin privileges to change. It's a single switch — its in-app description: "When enabled, you can select a range of session messages and generate a Scene Summary from them (via an LLM), which feeds the Narrative Graph and can become a lorebook history entry. This is a manual, per-session action — nothing runs automatically, and the original messages are never removed or replaced during prompt construction."
-
-The onboarding wizard's Summarization step offers **Skip for now** (marks the step done without turning summarization on) and **Enable Summarization** (turns the feature on server-wide and marks the step done). Either choice advances the wizard. This step is tracked per-user on the server, independent of whether you actually have any sessions yet.
+Summarization has no switch. Selecting messages to summarize, processing a scene, compiling a history entry and building the graph are offered in every install; each is a manual action that runs only when you trigger it, so nothing costs tokens on its own. Vectorization is the one retrieval capability that still has a setting, because it needs a model chosen first.
 
 ## Summarize to Lorebook
 
@@ -36,7 +34,7 @@ The Activity Sidebar tracks the live progress of longer-running background jobs 
 
 The Activity tab shows a card per in-progress or awaiting-review job relevant to the current user (plus other users' jobs, shown read-only). Card types include:
 
-- **Graph build/extend** jobs — building or extending a lorebook's narrative graph, showing the current phase and a "scene X/Y" progress indicator. Extraction here is pure LLM text-processing of already-summarized scenes and history entries, so it depends on Summarization being enabled, not on vectorization/RAG — see [Lorebooks](./lorebooks.md#graph-tab) for what the narrative graph is. Once built, graph nodes are lorebook bindings like any other, so their content is also picked up by [Embeddings & RAG](./embeddings-and-rag.md)'s background indexing if that's separately enabled.
+- **Graph build/extend** jobs — building or extending a lorebook's narrative graph, showing the current phase and a "scene X/Y" progress indicator. Extraction here is pure LLM text-processing of already-summarized scenes and history entries, so it depends on nothing being switched on, vectorization/RAG included — see [Lorebooks](./lorebooks.md#nesting-and-links) for what the narrative graph is. Once built, graph nodes are lorebook bindings like any other, so their content is also picked up by [Embeddings & RAG](./embeddings-and-rag.md)'s background indexing if that's separately enabled.
 - **Scene** summarization jobs — shows "Processing…", then "Ready to review" or "Failed," with a "Review Results" button that jumps straight to the scene.
 - **Compile** jobs — history-entry compilation, with the same running/review/error states and a "Review & Apply" button.
 

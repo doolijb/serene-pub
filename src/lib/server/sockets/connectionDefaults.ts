@@ -55,6 +55,11 @@ import {
 	capabilityDefaults,
 	setCapabilityDefault
 } from "$lib/server/connections/capabilityDefaults"
+import {
+	connectionModelById,
+	defaultConnectionModel,
+	mergeEndpointModel
+} from "$lib/server/connections/models"
 
 const DENIED = "Access denied. Only admin users can manage capability defaults."
 
@@ -129,6 +134,44 @@ export const connectionDefaultsList: Handler<
 			.from(schema.samplingConfigs)
 			.orderBy(asc(schema.samplingConfigs.name))
 
+		/**
+		 * The MODELS on each endpoint (0114), so the screen can offer a PAIR.
+		 *
+		 * One query for the instance, grouped here — the same "whole matrix in
+		 * one response" argument this file's header makes about the connections
+		 * themselves. A fetch per endpoint as each card opens would mean the
+		 * page cannot say which model is registered until it has asked once per
+		 * connection, and the summary strip is the point of the screen.
+		 *
+		 * DISABLED models are included and marked, never filtered out: a
+		 * registration made before somebody switched a model off must still be
+		 * shown as what it is, or the card renders empty and "why is mine not in
+		 * the list" has no answer anywhere.
+		 */
+		const modelRows = await db
+			.select()
+			.from(schema.connectionModels)
+			.orderBy(
+				asc(schema.connectionModels.sortOrder),
+				asc(schema.connectionModels.name),
+				asc(schema.connectionModels.id)
+			)
+		const modelsByConnection = new Map<
+			number,
+			Sockets.ConnectionDefaults.List.ModelOption[]
+		>()
+		for (const m of modelRows) {
+			const list = modelsByConnection.get(m.connectionId) ?? []
+			list.push({
+				id: m.id,
+				name: m.name,
+				model: m.model,
+				enabled: m.enabled,
+				isDefault: m.isDefault
+			})
+			modelsByConnection.set(m.connectionId, list)
+		}
+
 		const connectionOptions: Record<
 			string,
 			Sockets.ConnectionDefaults.List.ConnectionOption[]
@@ -150,6 +193,13 @@ export const connectionDefaultsList: Handler<
 					...(entry.reason ? { reason: entry.reason } : {}),
 					...(notesById.get(entry.id)
 						? { notes: notesById.get(entry.id)! }
+						: {}),
+					// The second half of the pair. Absent where the endpoint has
+					// no models — a picker showing "Default model" over an empty
+					// list is the honest rendering of an endpoint nobody has
+					// finished setting up.
+					...(modelsByConnection.get(entry.id)
+						? { models: modelsByConnection.get(entry.id)! }
 						: {})
 				})
 			)
@@ -226,6 +276,7 @@ export const connectionDefaultsSet: Handler<
 					id: true,
 					name: true,
 					type: true,
+					preset: true,
 					capabilities: true
 				}
 			})
@@ -234,8 +285,50 @@ export const connectionDefaultsSet: Handler<
 				emitToUser("connectionDefaults:set:error", { error })
 				throw new Error(error)
 			}
+			/**
+			 * The MODEL half of the pair (0114), validated before it is stored
+			 * and judged WITH the endpoint rather than after it.
+			 *
+			 * A registration whose two halves name different connections is a
+			 * pair no picker can display and no run can resolve — the resolver
+			 * refuses it, at dispatch, about a choice this screen accepted. So
+			 * the coherence check lives here, at the write, which is also the
+			 * only place that can answer it: `connection_defaults` has two
+			 * foreign keys and no constraint spanning them, because a check
+			 * cannot span two tables and a trigger would be a fourth place that
+			 * decides what a pair means.
+			 */
+			if (params.modelId != null) {
+				const model = await connectionModelById(db, params.modelId)
+				const bad = !model
+					? "That model no longer exists."
+					: model.connectionId !== params.id
+						? "That model is not on the connection you chose."
+						: !model.enabled
+							? "That model is switched off. Switch it on, or choose another."
+							: null
+				if (bad) {
+					emitToUser("connectionDefaults:set:error", { error: bad })
+					throw new Error(bad)
+				}
+			}
+			/**
+			 * Judged as the PAIR, not as the endpoint.
+			 *
+			 * After the split "what can this do" is a question about a model: one
+			 * host serves a vision checkpoint and a text-only one at the same base
+			 * URL, and judging the bare endpoint would register the text-only one
+			 * for vision and fail at the first image. `mergeEndpointModel` is the
+			 * same merge the resolver performs, so this screen and the run agree
+			 * about what was registered — which is the whole reason
+			 * `capabilityRefusal` is imported here rather than re-derived.
+			 */
+			const model =
+				params.modelId != null
+					? await connectionModelById(db, params.modelId)
+					: await defaultConnectionModel(db, params.id)
 			const refusal = capabilityRefusal(
-				row,
+				mergeEndpointModel(row as any, model) as any,
 				params.capability as CapabilityId
 			)
 			if (refusal) {
@@ -251,7 +344,18 @@ export const connectionDefaultsSet: Handler<
 			db,
 			params.capability,
 			params.half === "connection"
-				? { connectionId: params.id }
+				? // Both halves of the pair, together. Writing the endpoint
+					// always writes the model — `setCapabilityDefault` treats an
+					// omitted `connectionModelId` beside a stated `connectionId`
+					// as NULL for exactly this reason: "the endpoint I picked,
+					// its default model" is what a control that offers no model
+					// means, and leaving the previous endpoint's model in place
+					// would be an incoherent pair.
+					{
+						connectionId: params.id,
+						connectionModelId:
+							params.id == null ? null : (params.modelId ?? null)
+					}
 				: { samplingConfigId: params.id }
 		)
 

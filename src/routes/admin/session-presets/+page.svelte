@@ -54,7 +54,14 @@
 			label: "Primary",
 			value: (r) => r.primarySlug ?? ""
 		},
-		{ key: "enabled", label: "Status", value: (r) => (r.enabled ? 0 : 1) },
+		{
+			key: "enabled",
+			label: "Status",
+			// Stale first, then hidden, then healthy: the column exists to be
+			// scanned, and the row that needs an administrator is the row a
+			// sort on it should put at the top.
+			value: (r) => (r.staleBindings?.length ? -1 : r.enabled ? 0 : 1)
+		},
 		{ key: "actions", label: "", class: "w-px text-right" }
 	]
 </script>
@@ -82,7 +89,9 @@
 	{rows}
 	{columns}
 	{loading}
-	searchText={(r) => `${r.name} ${typeName(r.genreId)} ${r.genreId}`}
+	searchText={(r) =>
+		`${r.name} ${typeName(r.genreId)} ${r.genreId} ` +
+		(r.staleBindings ?? []).map((b) => `${b.event} ${b.bound}`).join(" ")}
 	searchPlaceholder="Search presets…"
 	defaultSort="name"
 	storageKey="serene-pub:adminView:sessionPresets"
@@ -113,6 +122,26 @@
 				{row.primarySlug ?? "type default"}
 			</span>
 		{:else if col.key === "enabled"}
+			<!-- A slot whose pipeline has gone (ruled 2026-09-10). Beside the
+			     availability badge rather than in a column of its own: it is a
+			     fact about whether this preset does what it says, which is the
+			     same question "enabled" answers. Sessions on it keep running —
+			     the badge reports a substitution, never a stoppage. -->
+			{#if row.staleBindings?.length}
+				<a
+					class="preset-tonal-warning mr-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
+					href="/admin/session-presets/{row.id}#bindings"
+					onclick={(e) => e.stopPropagation()}
+					title={row.staleBindings
+						.map((b) => `${b.event} → ${b.bound}: ${b.reason}`)
+						.join("\n")}
+				>
+					<Icons.TriangleAlert size={12} />
+					{row.staleBindings.length === 1
+						? "1 binding unavailable"
+						: `${row.staleBindings.length} bindings unavailable`}
+				</a>
+			{/if}
 			{#if row.enabled}
 				<span
 					class="preset-tonal-success rounded-full px-2 py-0.5 text-xs"

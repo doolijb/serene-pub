@@ -282,4 +282,33 @@ describe("sessions:create with a preset", () => {
 		expect(res.session.genreId).toBe("core:genre/chat")
 		expect((res.session as any).presetId).toBe(live.id)
 	}, 60_000)
+
+	// Withdrawn beside disabled (0119). `enabled` stays true — an
+	// administrator's approval survives a withdrawal — so a check that reads
+	// only that flag lets a preset whose plugin is gone start new sessions,
+	// while the picker that offered it has already dropped it.
+	test("refuses a withdrawn preset, in the same sentence", async () => {
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const owner = await createTestUser(testDb, "preset-withdrawn-creator")
+		const { sessionsCreateHandler } = await import("./sessions")
+		const sock = fakeSocket(owner.id, false)
+
+		const withdrawn = await makePreset({
+			name: "Withdrawn create",
+			withdrawnAt: new Date()
+		})
+		expect(withdrawn.enabled).toBe(true)
+		await expect(
+			sessionsCreateHandler.handler(
+				sock,
+				{
+					session: { name: "x", presetId: withdrawn.id } as any,
+					characterIds: [],
+					personaIds: [],
+					characterPositions: {}
+				},
+				noopEmit
+			)
+		).rejects.toThrow(/preset is not available/)
+	}, 60_000)
 })

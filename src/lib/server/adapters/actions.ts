@@ -79,6 +79,33 @@ export interface ActionOptions {
  * adapter hands back something the caller drives, and the callbacks are how
  * partial content and native reasoning arrive separately.
  */
+/**
+ * How a tool is described to a model on the wire (20 §9).
+ *
+ * Declared here, beside the action results, rather than in the pipeline
+ * package: an adapter must be able to name this shape, and `pipelines/runtime`
+ * pulls the database and the host in behind it. `advertise-tools` normalizes
+ * every tool to exactly this — `parameters` is JSON Schema — so an adapter's
+ * whole job is putting it in the field its service calls tools.
+ */
+export interface ToolDeclaration {
+	name: string
+	description: string
+	parameters: Record<string, unknown>
+}
+
+/**
+ * A tool the model asked for, in the one shape the pipeline speaks.
+ *
+ * The same `{ tool, args }` `core:task/parse-tool-call@1` publishes, so
+ * `core:provider/run-tool@1` and a loop's predicate take the native door and
+ * the prompt door without knowing which was used.
+ */
+export interface ToolCall {
+	tool: string
+	args: Record<string, unknown>
+}
+
 export interface TextGenResult {
 	completionResult:
 		| string
@@ -89,11 +116,75 @@ export interface TextGenResult {
 	compiledPrompt: PromptBuilderCompiledPrompt
 	isAborted: boolean
 	/**
+	 * The tool the model called, when the request carried tools and it called
+	 * one.
+	 *
+	 * Absent everywhere else, including on every adapter that has no tool code
+	 * — which is what makes it safe to read unconditionally: undefined means
+	 * "no call", the same thing an empty reply from a tool-capable service
+	 * means. Only the FIRST call is surfaced: the loop runs one tool per
+	 * iteration and receipts it as one step, and a batch of parallel calls
+	 * collapsed into one node would lose exactly the per-step timing and
+	 * per-step review the loop exists to give.
+	 */
+	toolCall?: ToolCall | null
+	/**
 	 * Native thinking/reasoning content returned by the model, if any. Only
 	 * populated for non-streaming responses — streaming adapters deliver thinking
 	 * through `thinkingCb`.
 	 */
 	thinkingContent?: string
+	/**
+	 * How many tokens the PROMPT cost, as the service counted it.
+	 *
+	 * The denominator of the prompt-cache row, and the only measurement of a
+	 * prompt that is not this app's own estimate. Absent on every service that
+	 * does not report usage.
+	 *
+	 * ⚠ Anthropic's `input_tokens` is NOT this number — it excludes both cache
+	 * halves — so that adapter sums the three fields rather than forwarding the
+	 * one whose name matches.
+	 */
+	tokensPrompt?: number
+	/**
+	 * How much of that prompt the service served from a cached prefix.
+	 *
+	 * ⚠ **Absent is not zero, and the difference is the whole point.** "This
+	 * connection does not report reuse" and "nothing was reused" are opposite
+	 * findings, and a 0 written over the first would tell a user their cache is
+	 * broken when the truth is that KoboldCPP and Ollama simply never say.
+	 * Recorded only — nothing here places a prefix, orders a request, or sends
+	 * a cache control.
+	 */
+	tokensCached?: number
+	/**
+	 * Tokens WRITTEN to the cache by this request, where a service bills the two
+	 * halves separately. Anthropic is the only one that does.
+	 */
+	tokensCacheWrite?: number
+	/**
+	 * How many tokens the model WROTE, as the service counted it.
+	 *
+	 * The other half of what a reply cost, and the number a receipt reports as
+	 * the generate node's `tokens`. Absent on every service that does not
+	 * report usage — a count nobody gave is not a reply that cost nothing.
+	 */
+	tokensCompletion?: number
+	/**
+	 * How much of what the model wrote it spent REASONING, where the service
+	 * breaks that out.
+	 *
+	 * ⚠ **Part of `tokensCompletion`, never an addition to it.** OpenAI reports
+	 * it as `completion_tokens_details.reasoning_tokens`, a breakdown of a
+	 * number already counted, and anything that added the two would report a
+	 * reply as costing twice what it did.
+	 *
+	 * Absent nearly everywhere, and the absences are facts rather than gaps:
+	 * Anthropic returns thinking as content blocks and never counts them
+	 * separately, and Ollama's `eval_count` does not split. "This service does
+	 * not say" and "none was spent" are opposite findings — see `tokensCached`.
+	 */
+	tokensReasoning?: number
 }
 
 // ── editImage ───────────────────────────────────────────────────────────────
@@ -159,6 +250,44 @@ export interface EmbedResult {
 	dimensions: number
 	/** Whatever the backend returned, for the receipt. Never interpreted. */
 	raw?: unknown
+}
+
+// ── extractEntities ─────────────────────────────────────────────────────────
+
+/**
+ * One passage in, its named entities out.
+ *
+ * One string rather than a batch, unlike `embedText`, and the asymmetry is the
+ * caller's shape rather than an oversight: annotation is per row — one entry,
+ * one message — and every span is an offset INTO THAT STRING, so a batch would
+ * have to carry which member each offset belonged to. A backend that batches
+ * internally still receives one call per row, which costs a loop and keeps the
+ * offsets unambiguous.
+ */
+export interface ExtractEntitiesRequest {
+	text: string
+	/** Overrides the connection's own model, for a backend that hosts several. */
+	model?: string
+}
+
+/**
+ * One mention, located in the passage that was handed in.
+ *
+ * ⚠ `start`/`end` are character offsets into `ExtractEntitiesRequest.text` and
+ * must satisfy `text.slice(start, end) === this.text`. They are what makes a
+ * model span mergeable with the gazetteer's spans, which claim their own
+ * stretches of the same string; an offset from some normalised copy of the text
+ * would silently claim the wrong words.
+ */
+export interface EntitySpan {
+	/** The surface form, exactly as the passage writes it. */
+	text: string
+	/** The backend's own label — `PER`, `LOC`, `ORG`, … Never translated here. */
+	label: string
+	start: number
+	end: number
+	/** The backend's confidence, 0..1. Written onto the annotation row. */
+	score: number
 }
 
 // ── transcribeAudio ─────────────────────────────────────────────────────────
@@ -245,6 +374,11 @@ export interface AdapterActions {
 	): Promise<ImageGenResult>
 	/** Turn text into vectors. */
 	embedText?(req: EmbedRequest, opts?: ActionOptions): Promise<EmbedResult>
+	/** Read the names out of a passage. */
+	extractEntities?(
+		req: ExtractEntitiesRequest,
+		opts?: ActionOptions
+	): Promise<EntitySpan[]>
 	/** Speech in, text out. */
 	transcribeAudio?(
 		req: TranscribeRequest,
@@ -285,11 +419,12 @@ export function actionsOf(
 	const stop = stopAt?.prototype
 	let proto: unknown = Ctor?.prototype
 	while (proto && proto !== stop && proto !== Object.prototype) {
+		// `hasOwnProperty` and not `in`: `in` walks the chain itself and would
+		// count a member from past the stop, which is the whole thing this
+		// exists to exclude.
 		for (const name of ACTION_NAMES)
-			// `hasOwnProperty` and not `in`: `in` walks the chain itself and would
-			// count a member from past the stop, which is the whole thing this
-			// exists to exclude.
-			if (Object.prototype.hasOwnProperty.call(proto, name)) found.add(name)
+			if (Object.prototype.hasOwnProperty.call(proto, name))
+				found.add(name)
 		proto = Object.getPrototypeOf(proto)
 	}
 	return found

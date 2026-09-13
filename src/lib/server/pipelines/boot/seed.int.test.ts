@@ -321,7 +321,10 @@ describe("core's specs", () => {
 describe("bootstrap as a whole", () => {
 	it("reports what it did, and does nothing the second time", async () => {
 		const report = await bootstrapPipelines(db)
-		expect(report.conflict).toBeUndefined()
+		expect(
+			report.specs.length,
+			"the boot did not get as far as seeding the specs"
+		).toBeGreaterThan(0)
 		expect(report.events.inserted).toBe(0)
 		expect(report.events.updated).toBe(0)
 		expect(report.events.unchanged).toBeGreaterThan(0)

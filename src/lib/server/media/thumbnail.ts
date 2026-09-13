@@ -15,11 +15,17 @@
  * the router for it directly.
  */
 import {
+	cropRaster,
 	decodeImage,
 	encodeRaster,
 	resizeRaster,
 	type RasterImage
 } from "./convert/codecs"
+import {
+	clampFrame,
+	defaultFrame,
+	type MediaFrame
+} from "$lib/shared/media/frame"
 
 /**
  * Longest edge.
@@ -45,34 +51,54 @@ export interface ThumbnailResult {
 }
 
 /**
- * Aspect is preserved rather than square-cropped: every call site already
- * applies `object-cover`, so baking a crop in would discard information the CSS
- * is perfectly able to discard itself.
+ * The thumbnail is cut from the file's FRAME, and from `defaultFrame` when it
+ * has none — see `$lib/shared/media/frame`. A thumbnail is shown in a square
+ * cell at every call site, so the crop is decided here, where the pixels are,
+ * rather than by whatever `object-cover` happens to reach for.
  *
- * Returns null when the source is already smaller than the target — a
- * thumbnail bigger than its original is pure waste, and the original serves.
+ * Returns null only when there is nothing to do: the frame is the whole image,
+ * the image is already under the target, and the bytes are already webp.
  *
- * ⚠ **Deliberately NOT routed through the conversion router**, and that is the
- * one exception in this directory rather than an oversight. The router refuses
- * to flatten an animation; a thumbnail MAY flatten one, because a still preview
- * of an animated image is the understood contract for a list cell and the row
- * is written `fidelity: 'reduced'` to say so. Routing this would make an
- * animated GIF thumbnail-less. See `deriveThumb`.
+ * ⚠ **Not routed through the conversion router**, and that is the one exception
+ * in this directory rather than an oversight. The router refuses to flatten an
+ * animation; a thumbnail MAY flatten one, because a still preview of an
+ * animated image is the understood contract for a list cell and the row is
+ * written `fidelity: 'reduced'` to say so. Routing this would make an animated
+ * GIF thumbnail-less. See `deriveThumb`.
  */
 export async function makeThumbnail(
 	buffer: Buffer | Uint8Array,
-	mime: string
+	mime: string,
+	frame?: MediaFrame | null
 ): Promise<ThumbnailResult | null> {
 	const src = await decodeImage(buffer, mime)
-	const longest = Math.max(src.width, src.height)
-	if (longest <= THUMB_MAX_EDGE && mime === "image/webp") return null
+	// Clamped against the DECODED size, not the stored one: a frame is checked
+	// against `files.width/height` when it is set, and this is the source of
+	// truth for the bytes actually in hand.
+	const cut = clampFrame(
+		frame ?? defaultFrame(src.width, src.height),
+		src.width,
+		src.height
+	)
+	const whole =
+		cut.x === 0 &&
+		cut.y === 0 &&
+		cut.w === src.width &&
+		cut.h === src.height
+
+	const longest = Math.max(cut.w, cut.h)
+	if (whole && longest <= THUMB_MAX_EDGE && mime === "image/webp") return null
+
+	const cropped: RasterImage = whole
+		? src
+		: cropRaster(src, cut.x, cut.y, cut.w, cut.h)
 
 	const scale = Math.min(1, THUMB_MAX_EDGE / longest)
-	const width = Math.max(1, Math.round(src.width * scale))
-	const height = Math.max(1, Math.round(src.height * scale))
+	const width = Math.max(1, Math.round(cut.w * scale))
+	const height = Math.max(1, Math.round(cut.h * scale))
 
 	const raster: RasterImage =
-		scale < 1 ? await resizeRaster(src, width, height) : src
+		scale < 1 ? await resizeRaster(cropped, width, height) : cropped
 
 	return {
 		bytes: await encodeRaster(raster, "image/webp", {

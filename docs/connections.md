@@ -8,23 +8,27 @@ The **Connections** sidebar (opened from the main navigation, admin-only) is whe
 
 Since 0.6, prompts and context templates are configured in the **Pipelines** panel rather than in sidebars of their own — see [Context Templates](./context-templates.md). The 0.5 **Context Configs** and **Prompt Configs** sidebars are now two tabs inside **Legacy configs**, kept so nothing you wrote is lost; nothing in 0.6 builds a prompt from them. [Prompt Configs](./prompt-configs.md) still documents what those rows mean. This page focuses on Connections and Sampling Configs.
 
-Each connection is a named record holding a **type** (which backend adapter to use), a **Base URL** and/or **API Key** where applicable, a selected **Model**, a **Prompt Format**, a **Token Counter**, and a bag of type-specific **Advanced Settings** (stream mode, session-vs-completion mode, and so on). Exactly one connection can be marked as the system's default (a star icon in the sidebar), and individual Session Prompts or sessions can override it — see [Prompt Configs](./prompt-configs.md) and [Sessions](./sessions.md) for how that override chain resolves.
+Each connection is a named record holding a **type** (which backend adapter to use), a **Base URL** and/or **API Key** where applicable, one or more **Models** (see [Endpoints and models](#endpoints-and-models)), a **Prompt Format**, a **Token Counter**, and a bag of type-specific **Advanced Settings** (stream mode, session-vs-completion mode, and so on). Exactly one connection can be marked as the system's default (a star icon in the sidebar), and individual Session Prompts or sessions can override it — see [Prompt Configs](./prompt-configs.md) and [Sessions](./sessions.md) for how that override chain resolves.
 
 Creating a connection is done via the **+** button (or Ctrl/Cmd+N) in the Connections sidebar, which opens a **Create New AI Connection** modal: enter a name, then pick an **AI Service** from a single searchable combobox (placeholder text: "Search for a service (Groq, Ollama, Mistral, ...)"). This picker flattens every native connection type _and_ every OpenAI-compatible preset (Groq, OpenRouter, Mistral, and so on — see [OpenAI Session & Compatible Endpoint Presets](#openai-session--compatible-endpoint-presets) below) into one list, grouped under **Cloud APIs**, **Local / Self-hosted**, and **Custom** — a preset isn't nested two levels deep behind a separate "OpenAI Session" type selection; you can search and pick it directly. Whichever service you pick, its difficulty rating and description appear below the picker before you confirm. The editor tracks unsaved changes and will prompt before you switch connections, close the sidebar, or discard edits; a refresh icon reverts to the last-saved values, and a trash icon deletes the connection (with a confirmation modal).
+
+## Sections
+
+The Connections sidebar has four sections, one per modality: **LLM / Text Generation**, **Image Generation**, **Embeddings** and **Named entities**. Each lists its own connections and stars one as the default for its capability. Embeddings and Named entities are covered in [Embeddings and RAG](./embeddings-and-rag.md); the entity form has no base URL or key, only a model idle timeout.
 
 ## Connection Types At A Glance
 
 Serene Pub ships seven text-generation connection types, each with its own form and its own difficulty rating (shown in the New Connection modal):
 
-| Type                  | Label              | Difficulty                                 |
-| --------------------- | ------------------ | ------------------------------------------ |
-| `lmstudio`            | LM Studio          | Beginner (GUI) - Minimal setup required    |
-| `ollama`              | Ollama             | Beginner (No GUI) - Minimal setup required |
-| `openai`              | OpenAI Session     | Beginner - Nothing to install              |
-| `llamacpp`            | Llama.cpp          | Intermediate - Not for beginners           |
-| `koboldcpp`           | KoboldCPP          | Beginner (GUI) - Simple setup              |
-| `koboldcpp_managed`   | KoboldCPP Manager  | Beginner (GUI) - Managed by Serene Pub     |
-| `anthropic`           | Anthropic (Claude) | Beginner - Nothing to install              |
+| Type                | Label              | Difficulty                                 |
+| ------------------- | ------------------ | ------------------------------------------ |
+| `lmstudio`          | LM Studio          | Beginner (GUI) - Minimal setup required    |
+| `ollama`            | Ollama             | Beginner (No GUI) - Minimal setup required |
+| `openai`            | OpenAI Session     | Beginner - Nothing to install              |
+| `llamacpp`          | Llama.cpp          | Intermediate - Not for beginners           |
+| `koboldcpp`         | KoboldCPP          | Beginner (GUI) - Simple setup              |
+| `koboldcpp_managed` | KoboldCPP Manager  | Beginner (GUI) - Managed by Serene Pub     |
+| `anthropic`         | Anthropic (Claude) | Beginner - Nothing to install              |
 
 …plus two image-generation types, which the picker's **Image** filter lists and which image nodes in a pipeline draw from:
 
@@ -242,27 +246,41 @@ The two vocabularies have nothing in common, so a config belongs to exactly one 
 
 Each parameter has its own checkbox and, when switched on, its own control — a slider with a click-to-edit numeric readout for numbers, a text box or one-per-line list for the rest. Ranges, defaults and descriptions all come from the parameter's own declaration, so the editor lists everything the category actually supports rather than a hand-picked subset.
 
-For text generation that is roughly thirty parameters, grouped: Core (temperature, top P, top K, min P, typical P, seed), Repetition (repetition/frequency/presence penalties, repeat-last-N, penalize newline), Mirostat, XTC, DRY, Dynamic temperature (including tail-free sampling), a KoboldCPP-only group (top A, N-sigma, smoothing factor, banned tokens), and Budget (response tokens, context tokens, stop sequences, logit bias).
+For text generation that is roughly thirty parameters, grouped: Core (temperature, top P, top K, min P, typical P, seed), Repetition (repetition/frequency/presence penalties, repeat-last-N, penalize newline), Mirostat, XTC, DRY, Dynamic temperature (including tail-free sampling), a KoboldCPP-only group (top A, N-sigma, smoothing factor, banned tokens), Reasoning (see below), and Budget (response tokens, context tokens, stop sequences, logit bias).
 
 For image generation: steps, CFG scale, width, height, batch, seed, sampler, scheduler, CLIP skip and denoise.
 
 Response Tokens and Context Tokens each have an **Unlock max** checkbox that raises the slider's ceiling well past the everyday range (to 65,536 and 524,288 respectively) for unusually long-context models.
 
+### Reasoning
+
+A model that reasons before it answers spends tokens nobody reads, and on most services those tokens count against the response limit. Two sampling parameters govern it, so the choice is made per stage through the sampling slot rather than per connection:
+
+- **Reasoning**: `off`, `low`, `medium` or `high`. Unchecked, nothing is sent and the model does whatever it does by default. `off` asks the service for no reasoning at all.
+- **Reasoning budget**: a token count, up to 32768, for the services that take a number (Anthropic and llama.cpp). With a level and no budget the level sets it: low 2048, medium 8000, high 32000.
+
+What goes on the wire depends on the service: Ollama's `think` (true or false, or the level word for gpt-oss models), an OpenAI-style `reasoning_effort` (`none` for off), Anthropic's thinking block with a budget, llama.cpp's `reasoning_budget` and template switch on the chat wire only, KoboldCPP's thinking flag for on and off. Anything a service cannot express is recorded as an ignored sampler. Anthropic disables temperature, top P and top K while thinking is on, so those are dropped and recorded as ignored, and the Wire tab shows both the reasoning request and the dropped samplers. Where a service reports reasoning tokens separately, the run inspector's reply line shows them beside the completion count.
+
+The shipped **Precise (Extraction)** config sends `off`, and a **Background** config (Precise plus reasoning off) is what the Adventure genre's planner and state keeper use: stages nobody reads should not think out loud.
+
 ### Switching a parameter on and off
 
 A parameter's checkbox controls whether it is sent to the backend at all. Unchecked, the value is remembered but left out of the request, and the service uses its own default — so turning a sampler off and on again does not lose what you had set.
+
+Those service defaults are not always neutral. Ollama, for instance, applies a repeat penalty of 1.1, top K 40 and top P 0.9 to any request that does not name them, so the built-in **Default** config, which sends only temperature and the two token limits, is really "temperature plus whatever the backend decides". The run inspector's Wire tab shows exactly which parameters left the app; anything absent there was the backend's call.
 
 A parameter can be switched on and still not reach a given backend: not every connection type understands every sampler (Anthropic, for instance, accepts only temperature, top P, top K and response tokens). Those are dropped from the outgoing request and recorded as ignored rather than causing an error.
 
 ### Immutable presets
 
-Serene Pub ships eight built-in, non-deletable configs — three for text generation and five for image generation.
+Serene Pub ships nine built-in, non-deletable configs — four for text generation and five for image generation.
 
 Text generation:
 
 - **Default** — temperature, response tokens and context tokens on; everything else deferring to the backend.
 - **Disabled** — nothing switched on at all, so every request goes out with the connection's own defaults.
-- **Precise (Extraction)** — low temperature with tightened top P/top K, for structured extraction rather than roleplay.
+- **Precise (Extraction)** — low temperature with tightened top P/top K and reasoning off, for structured extraction rather than roleplay.
+- **Background** — the Precise values with reasoning off, for stages nobody reads: planning, state keeping, summaries.
 
 Image generation, one per model family — a diffusion model rendered at the wrong size does not degrade, it duplicates and smears the subject, so the size is part of the family rather than a taste setting:
 
@@ -276,11 +294,11 @@ CFG 1 on Flux and Turbo / Distilled is deliberate, not a placeholder: both are g
 
 Sampler and scheduler are left unset on every image preset. The valid names are a property of the connection's checkpoint and build, so the only backend-independent answer is "whatever it already uses".
 
-All eight are starting points to clone from. Names must be unique within a modality — "Default" can exist for text generation and for image generation, but not twice for either.
+All nine are starting points to clone from. Names must be unique within a modality — "Default" can exist for text generation and for image generation, but not twice for either.
 
 > **Upgrading:** the row previously shown as **Default (Image)** is now **SD 1.5**, and its values changed from 1024×1024 / 25 steps / CFG 5 to 512×512 / 25 steps / CFG 7. An install that left the built-in image default selected will render smaller; pick the **SDXL** preset if 1024² was intended.
 
-These five are a *local diffusion* vocabulary. A hosted image service — OpenAI's `gpt-image-1`, for instance — has no steps, CFG, sampler or seed at all; it takes a size from a fixed list plus quality and format options. Those live on the connection's own profile, declared by its adapter, rather than in a sampling config, and anything a backend cannot honour is reported as ignored rather than dropped silently.
+These five are a _local diffusion_ vocabulary. A hosted image service — OpenAI's `gpt-image-1`, for instance — has no steps, CFG, sampler or seed at all; it takes a size from a fixed list plus quality and format options. Those live on the connection's own profile, declared by its adapter, rather than in a sampling config, and anything a backend cannot honour is reported as ignored rather than dropped silently.
 
 ### Power-user note: how sampling maps to each connection type
 
@@ -309,19 +327,85 @@ Every connection form also has a **Token Counter** dropdown, used for client-sid
 A stop sequence is a string that ends the reply the moment the model writes it. Serene Pub composes one list per request, from three sources, and each entry carries the **kind** it came from:
 
 - **`format`** — the stop strings on the connection's **completion template** (the row behind the Prompt Format above). These name the template's own delimiters, such as ChatML's `<|im_end|>` or Vicuna's `### `.
-- **`speaker`** — a `Name:` label for every character and persona in the scene _except_ whoever is speaking. The speaker's own name is deliberately left out: the prompt already seeds `Ash: `, and stopping on `Ash:` would return an empty reply from any model that opens by repeating the name.
+- **`speaker`** — a `Name:` label for every character and persona in the scene _except_ whoever is speaking. The speaker's own name is left out on purpose: the prompt already seeds `Ash: `, and stopping on `Ash:` would return an empty reply from any model that opens by repeating the name.
 - **`explicit`** — whatever you type into the reply step's **Stop sequences** parameter, one per line. `{{char}}` and `{{user}}` are interpolated.
 
 **The wire rule.** Which kinds are actually sent depends on the connection's wire mode (the **Chat messages** / **Text completion** control in the Capabilities panel):
 
-| Wire                | `format`  | `speaker` | `explicit` |
-| ------------------- | --------- | --------- | ---------- |
-| **Text completion** | sent      | sent      | sent       |
-| **Chat messages**   | held back | held back | sent       |
+| Wire                | `format`  | `speaker`                            | `explicit` |
+| ------------------- | --------- | ------------------------------------ | ---------- |
+| **Text completion** | sent      | sent                                 | sent       |
+| **Chat messages**   | held back | sent when the transcript is labelled | sent       |
 
-On a chat wire the roles carry the structure of the conversation, so a completion template's delimiters and a transcript's speaker labels have nothing in the prompt to match — and sending them anyway _overrides_ the model's own native stop tokens on servers such as Ollama's OpenAI-compatibility layer, which truncates replies for no gain. Your own stop sequences are your choice rather than the template's, so those ride either wire.
+A `format` stop names a delimiter of a flat prompt, so on a chat wire it matches nothing and _overrides_ the model's own native stop tokens on servers such as Ollama's OpenAI-compatibility layer, which truncates replies for no gain. Those stay held back.
 
-Entries the wire rule holds back are **reported, not discarded**: a reply's **What actually fired** panel shows a **Stops** row listing what was sent (with its kind) and what was held back and why, so "my stop sequence did nothing" and "my reply ran on past its turn" are answerable rather than guessed at. Where the backend names the sequence it actually matched — llama.cpp is the only one that reports the word rather than a reason code — that entry is highlighted.
+A `speaker` stop is different, because the labels are usually still there. The default context template renders each turn as `{{{name}}}: {{{message}}}`, so on a chat wire the roles mark where a turn ends while the label _inside_ the message content is what says whose turn the next line is. The prompt ends with a seeded `Ash:` and a model handed that transcript simply carries on writing it, your line included. So when the compiled messages carry inline labels, the labels ride the chat wire too, newline-prefixed (`"\nAsh:"`), because a bare label would match at the very start of a reply that opens by naming somebody and end it before it had said anything. A chat transcript with no inline labels has nothing for them to match, and they stay held back.
+
+Your own stop sequences are your choice rather than the template's, so those ride either wire.
+
+**Where a reply ends.** Some backends ignore a stop list on their chat leg entirely. So whatever came back is also cut at the first line that opens with another participant's label, using the same labels that went out as `speaker` stops. Only line starts count, and never the reply's own first line: a name mid-sentence ("She said Ash: was late") is prose and is kept, and a reply that opens as somebody else keeps its text rather than arriving blank. The speaker's own opening label is stripped once, so a model that repeats the seed does not show it to you.
+
+**The exact request is kept.** Whatever an adapter renders a prompt into on its way to your endpoint is recorded on that turn's run receipt, along with the raw reply, and an administrator can read both in the run inspector's Wire tab (see [Pipelines](./pipelines.md)).
+
+Entries the wire rule holds back are **reported, not discarded**: a reply's **What actually fired** panel shows a **Stops** row listing what was sent (with its kind) and what was held back, each carrying the sentence that decided it, so "my stop sequence did nothing" and "my reply ran on past its turn" are answerable rather than guessed at. Where the backend names the sequence it actually matched — llama.cpp is the only one that reports the word rather than a reason code — that entry is highlighted. A reply that had to be cut at a speaker boundary says so on the same row, naming the label and how much was kept.
+
+## Streaming
+
+Whether a request streams is normally the connection's choice (the **Stream** option on the connection form, whose default differs by service). Each generating node in a pipeline can also override it with its **Streaming** parameter:
+
+- **auto** (the default) keeps the connection's answer.
+- **off** sends one request and waits for the whole reply. On an image node it also stops the progress poll, so no previews arrive.
+
+Streaming only helps where somebody is watching tokens arrive, which on a multi-stage pipeline is exactly one stage: the one that writes the reply. A planner, a state keeper, a summariser or a lore extractor gains nothing from it, and some services answer a one-shot request faster and report their token usage more completely, so **off** is the right setting for background stages. A stage set to **off** still returns its tool calls, its stop hit and its usage counts; the adapter reads them from the single response instead of the stream. **auto** never forces streaming on: a connection whose Stream option is off stays off.
+
+## Endpoints and models
+
+Since 0.6 a connection is an **endpoint** — where the compute is — and the models reachable through it are rows of their own. Anywhere you choose "which connection", you are really choosing an **(endpoint, model) pair**.
+
+Before this, a connection row held a URL, a key, a wire mode, **one** model name and **one** set of capabilities. That conflated two different things. One llama.cpp host serving three GGUFs had to be three connections, each restating the same URL and key; testing one told you nothing about the other two; and probing a vision checkpoint taught the _endpoint_ vision, so every text-only model behind the same host inherited the claim.
+
+### What lives where
+
+| On the endpoint (the connection)            | On the model                                                            |
+| ------------------------------------------- | ----------------------------------------------------------------------- |
+| Base URL, API key, connection type / preset | The identifier the service knows it by (what actually goes on the wire) |
+| Wire mode (chat vs completion)              | A display name, so four quantisations of one model are tellable apart   |
+| Prompt Format, Token Counter                | **Overrides** of the endpoint's Prompt Format and Token Counter         |
+| Capabilities the _protocol_ can express     | Capabilities _this checkpoint_ has — layered over the endpoint's        |
+| Stop scripts                                | An optional Context window                                              |
+| Per-connection notes                        | Enabled / disabled, and which one is **default**                        |
+
+Every per-model setting starts blank, and blank means "whatever the connection says". That is what makes the change invisible on upgrade: a model row with no overrides resolves identically to the endpoint it hangs off.
+
+### The Models section
+
+Open a connection in the **Connections** sidebar and you will find **Models** beneath the connection's own fields:
+
+- **Add model** — type the identifier the service uses (`llama3.1:8b`, `gpt-4o`, `Mistral-7B-Instruct.gguf`) and, optionally, a friendlier name.
+- **Add N from the last test** — after **Test Connection** or **Refresh Models**, this adds everything the backend reported that is not already on the list. A probed list is never saved on its own: a large OpenAI-compatible host answers with a hundred ids including embeddings and transcription endpoints, and none of that belongs in your chat picker unless you put it there.
+- The **radio** beside each row is the endpoint's **default model** — what a choice that names only this connection means. Exactly one model per connection can hold it, and the database enforces that rather than the screen.
+- The **on** checkbox stops a model being offered in pickers without deleting it, so a model pulled off the host for a week does not take its settings — or the selections naming it — with it.
+- The **gear** opens that model's own settings: display name, the identifier it sends, a **Context window**, and **Template** / **Tokenizer** overrides. Both overrides default to _From the connection_.
+- The **×** removes a model. The connection is kept — removing the last model from a connection is clearing a field, not throwing away a URL and a key.
+
+### Choosing a pair
+
+Every picker that used to name a connection now shows the connection and, beside it, a model:
+
+- **Admin → Defaults** registers a pair per capability. The model picker offers **Its default model** as the resting choice, which keeps following the star if you later change which model the connection means.
+- A **pipeline's provider node** (the Connection option on a Reply, Summarize or Image step) stores a pair the same way.
+- Choosing a **different connection clears the model**, always. A model belongs to one endpoint, so carrying it across would leave a selection whose two halves name different connections — a pair no screen can show and no run can resolve.
+- A model that is deleted releases anything registered against it back to "the endpoint's default model", rather than stranding the choice. A model that is _switched off_ while something still names it is refused at run time with a sentence saying so, instead of quietly running a different model.
+
+### What the upgrade did
+
+Migration `0114` reads every existing connection that named a model and gives it exactly one model row: the identifier it already had, marked default and enabled, **and nothing else**. Prompt Format, Token Counter, capabilities and context window all stay blank on the new row, so the effective settings are byte-for-byte what they were.
+
+A connection that never named a model gets no model row — that is an endpoint nobody finished setting up, and inventing a model for it would make it look configured in every picker. Add one from the Models section when you know what is on the host.
+
+Existing registrations in **Admin → Defaults**, and existing pipeline configurations, are left naming no model — which means "that endpoint's default model", which is the one model they had. Nothing you configured before the upgrade resolves differently after it.
+
+The old `model` column on the connection is kept as a mirror of the default model's identifier, so a downgrade or a backup restored into an older build still finds it where it has always been. Nothing in 0.6 reads it.
 
 ## Testing, defaults, and everyday management
 

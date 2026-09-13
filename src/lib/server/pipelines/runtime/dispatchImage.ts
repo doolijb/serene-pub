@@ -58,6 +58,7 @@ import {
 	type RenderRun
 } from "$lib/server/pipelines/prompt/renderers"
 import type { ImageGenProgress } from "$lib/shared/imageGen/types"
+import type { StreamingMode } from "$lib/server/connections/streaming"
 import type { MediaRef } from "@serene-pub/sdk"
 import type { RunArtifact } from "$lib/server/pipelines/runtime/receipts"
 
@@ -73,6 +74,12 @@ export interface ImageCall {
 	prompts?: { positive?: string; negative?: string } | null
 	/** The `connection` slot's resolved value — a `connections` row id. */
 	connectionId?: number | null
+	/**
+	 * The MODEL half of the `connection` slot's pair (0114). Null means the
+	 * endpoint's default model, which is what every slot authored before the
+	 * split says and what every registration the backfill left behind means.
+	 */
+	connectionModelId?: number | null
 	/** The `sampling` slot's resolved value — a `sampling_configs` row id. */
 	samplingId?: number | null
 	sessionId?: number | null
@@ -101,6 +108,17 @@ export interface ImageCall {
 	nodeKey?: string
 	signal?: AbortSignal
 	onProgress?: (p: ImageGenProgress) => void
+	/**
+	 * How the author wants this render sent — the node's `streaming` parameter.
+	 *
+	 * On an image backend there is no token stream, so what `off` turns off is
+	 * the PROGRESS: the poll an adapter runs beside the render and the preview
+	 * frames it decodes. A background stage pays for neither, which is the whole
+	 * of what the parameter buys here.
+	 *
+	 * Absent and `auto` are the same render.
+	 */
+	streaming?: StreamingMode | null
 }
 
 export interface ImageCallResult {
@@ -341,6 +359,7 @@ export async function dispatchImage(
 		capability: "text->image",
 		pipelineConfig: {
 			connectionId: call.connectionId,
+			connectionModelId: call.connectionModelId,
 			samplingConfigId: call.samplingId
 		}
 	})
@@ -436,7 +455,13 @@ export async function dispatchImage(
 		try {
 			return await adapter.generateImage(req, {
 				signal: call.signal,
-				onProgress: call.onProgress
+				// ⚠ Withheld rather than ignored, and the difference is the
+				// cost. An adapter that is handed no callback runs no progress
+				// poll and decodes no preview frame, which is what `off` is
+				// asking for; one handed a callback it must not call would pay
+				// for both and throw the answers away.
+				onProgress:
+					call.streaming === "off" ? undefined : call.onProgress
 			})
 		} finally {
 			// Push the unload timer back, exactly as the TEXT path does after a

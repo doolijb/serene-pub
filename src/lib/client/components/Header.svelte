@@ -4,12 +4,15 @@
 	// Shared hover signal — lets the session's "Layout" pull-tab reveal itself
 	// only while this nav bar is hovered. See navHover.svelte.ts.
 	import { navHover } from "$lib/client/sessionLayout/navHover.svelte"
-	// Mobile side panels (P6, ruled 2026-08-30). Below 1024px a session's side
-	// zones take no layout space; if either side holds widgets they are reached
-	// from the compact L/R group this bar grows underneath itself. SessionLayout
-	// publishes the counts and renders the overlay — it is a sibling of this
-	// component under <main>, not a descendant, so a module singleton is the
-	// bridge (exactly as navHover above).
+	// Mobile side panels (P6, ruled 2026-08-30; revised 2026-09-10). Below
+	// 1024px a session's side zones take no layout space; if either side holds
+	// widgets they are reached from ONE panels button beside the navigation
+	// menu's, which opens a sheet listing the groups. (It used to be a pair of
+	// L/R buttons in a row under this bar — two edge buttons that said nothing
+	// about what was behind them and did not scale past two sides.)
+	// SessionLayout publishes the counts and the list and renders both sheets —
+	// it is a sibling of this component under <main>, not a descendant, so a
+	// module singleton is the bridge (exactly as navHover above).
 	import {
 		mobileSidePanels,
 		showsToggles
@@ -236,6 +239,26 @@
 			     needed to. The tonal fill now only appears on hover/focus, so
 			     it still confirms it's a button when you reach for it. The 44px
 			     box is kept regardless: it's the tap target, not decoration. -->
+			<!-- The session's panels, mobile only (ruled 2026-09-10): ONE button,
+			     next to the navigation menu's own, opening a sheet that lists the
+			     side groups. Rendered only while a narrow session actually has a
+			     populated side (`showsToggles`), so every other page and every
+			     desktop width is untouched. -->
+			{#if showsToggles(mobileSidePanels)}
+				<button
+					class="btn hover:preset-tonal focus-visible:preset-tonal text-foreground flex size-11 items-center justify-center p-0 [&>svg]:size-6"
+					class:preset-tonal={mobileSidePanels.menuOpen}
+					aria-label="Session panels"
+					type="button"
+					aria-expanded={mobileSidePanels.menuOpen}
+					onclick={(e) =>
+						mobileSidePanels.toggleMenu(
+							e.currentTarget as HTMLElement
+						)}
+				>
+					<Icons.PanelsTopLeft aria-hidden="true" />
+				</button>
+			{/if}
 			<button
 				class="btn hover:preset-tonal focus-visible:preset-tonal text-foreground flex size-11 items-center justify-center p-0 [&>svg]:size-6"
 				aria-label="Open navigation menu"
@@ -249,55 +272,6 @@
 			</button>
 		</div>
 	</div>
-
-	<!-- Session side panels, mobile only (P6, ruled 2026-08-30). Sits JUST BELOW
-	     the bar rather than inside it: the bar is already at its 44px tap-target
-	     minimum with the hamburger, and these are page controls, not app nav.
-	     Rendered only while a narrow session actually has a populated side —
-	     `showsToggles` — so every other page and every desktop width is
-	     untouched, and the row costs nothing when there is nothing to open. -->
-	{#if showsToggles(mobileSidePanels)}
-		<div
-			class="session-panel-toggles"
-			role="group"
-			aria-label="Session side panels"
-		>
-			{#if mobileSidePanels.left > 0}
-				<button
-					class="btn hover:preset-tonal focus-visible:preset-tonal text-foreground flex h-11 w-14 items-center justify-center p-0 [&>svg]:size-5"
-					class:preset-tonal={mobileSidePanels.open === "left"}
-					type="button"
-					aria-label="Open left panels"
-					aria-pressed={mobileSidePanels.open === "left"}
-					aria-expanded={mobileSidePanels.open === "left"}
-					onclick={(e) =>
-						mobileSidePanels.toggle(
-							"left",
-							e.currentTarget as HTMLElement
-						)}
-				>
-					<Icons.PanelLeft aria-hidden="true" />
-				</button>
-			{/if}
-			{#if mobileSidePanels.right > 0}
-				<button
-					class="btn hover:preset-tonal focus-visible:preset-tonal text-foreground flex h-11 w-14 items-center justify-center p-0 [&>svg]:size-5"
-					class:preset-tonal={mobileSidePanels.open === "right"}
-					type="button"
-					aria-label="Open right panels"
-					aria-pressed={mobileSidePanels.open === "right"}
-					aria-expanded={mobileSidePanels.open === "right"}
-					onclick={(e) =>
-						mobileSidePanels.toggle(
-							"right",
-							e.currentTarget as HTMLElement
-						)}
-				>
-					<Icons.PanelRight aria-hidden="true" />
-				</button>
-			{/if}
-		</div>
-	{/if}
 </header>
 
 <style lang="postcss">
@@ -305,22 +279,12 @@
 
 	header {
 		/* justify-content was here too, but this element has exactly one child
-		   (the bar below), so it had nothing to distribute. */
+		   (the bar below), so it had nothing to distribute. The column
+		   direction outlived the mobile session-panel ROW it was added for
+		   (ruled 2026-09-10: one button in the bar, not a row under it), and is
+		   kept because with a single child it is identical to the row flex it
+		   replaced — the child still stretches to `w-full`. */
 		display: flex;
-		/* The mobile session-panel row is a SECOND child, stacked under the bar.
-		   With one child (every other page / width) this is identical to the
-		   single-row flex it replaces — the child still stretches to `w-full`. */
 		flex-direction: column;
-	}
-
-	/* Mobile only by construction: `showsToggles` is false unless a narrow
-	   session says otherwise, so there is no width rule to keep in step with
-	   SessionLayout's matchMedia. Centred, because the row's job is a thumb
-	   target, not an alignment cue. */
-	.session-panel-toggles {
-		display: flex;
-		justify-content: center;
-		gap: 0.5rem;
-		padding-block: 0.25rem;
 	}
 </style>

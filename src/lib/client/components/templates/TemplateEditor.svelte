@@ -22,18 +22,40 @@
 		lintVariableTemplate,
 		parseContextTemplate
 	} from "$lib/shared/utils/contextConfigCards"
+	import { validateTemplateContext } from "$lib/shared/utils/templateValidation"
+	import { CORE_TEMPLATE_ENGINE } from "$lib/shared/pipelines/templateEngines"
 	import type { TemplateScope } from "@serene-pub/sdk"
 
 	interface Props {
 		value: string
 		/** What the template may reference. Omitted means no assistance. */
 		scope?: TemplateScope
+		/**
+		 * The language the row is written in.
+		 *
+		 * The completion list, the hover card and the lint below all speak
+		 * Handlebars — they read `{{#each}}` and `{{path}}` specifically — so
+		 * for any other engine they are switched off rather than left to offer
+		 * `{{#if}}` into a Liquid template. What survives for every engine core
+		 * can parse is the part that is not syntax-specific: does this parse,
+		 * and does it name anything nobody supplies.
+		 */
+		engine?: string
 		readonly?: boolean
 		rows?: number
 		oninput: (value: string) => void
 	}
 
-	let { value, scope, readonly = false, rows = 8, oninput }: Props = $props()
+	let {
+		value,
+		scope,
+		engine = CORE_TEMPLATE_ENGINE,
+		readonly = false,
+		rows = 8,
+		oninput
+	}: Props = $props()
+
+	const isHandlebars = $derived(engine === CORE_TEMPLATE_ENGINE)
 
 	let el = $state<HTMLTextAreaElement | null>(null)
 	let mirror = $state<HTMLDivElement | null>(null)
@@ -44,13 +66,28 @@
 	let pos = $state({ top: 0, left: 0 })
 
 	const items = $derived.by<Completion[]>(() => {
-		if (!scope || readonly || dismissedAt === caret) return []
+		if (!scope || readonly || !isHandlebars || dismissedAt === caret)
+			return []
 		return completionsAt(value, caret, scope).slice(0, 10)
 	})
 
 	const hover = $derived(
-		scope && !readonly ? describeAt(value, caret, scope) : null
+		scope && !readonly && isHandlebars
+			? describeAt(value, caret, scope)
+			: null
 	)
+
+	/** A 1-based line/column, as an offset into `value`, so a click can jump. */
+	function offsetAt(line?: number, column?: number): number {
+		if (!line) return 0
+		let at = 0
+		for (let i = 1; i < line; i++) {
+			const next = value.indexOf("\n", at)
+			if (next < 0) return at
+			at = next + 1
+		}
+		return at + Math.max(0, (column ?? 1) - 1)
+	}
 
 	/**
 	 * Lint, but not while the source is mid-word.
@@ -61,6 +98,39 @@
 	 */
 	const issues = $derived.by(() => {
 		if (!scope || readonly) return []
+		if (!isHandlebars) {
+			const result = validateTemplateContext(
+				engine,
+				value,
+				Object.keys(scope)
+			)
+			// An engine core cannot parse says nothing rather than saying
+			// "clean" — an empty list from an unchecked template is an
+			// assurance nobody earned.
+			if (!result.checked) return []
+			if (result.error)
+				return blurred
+					? [
+							{
+								cardId: "syntax",
+								start: offsetAt(
+									result.error.line,
+									result.error.column
+								),
+								end: 0,
+								message: result.error.line
+									? `Line ${result.error.line}: ${result.error.message}`
+									: result.error.message
+							}
+						]
+					: []
+			return result.warnings.map((w) => ({
+				cardId: `unsupplied:${w.name}:${w.line}:${w.column}`,
+				start: offsetAt(w.line, w.column),
+				end: 0,
+				message: w.line ? `Line ${w.line}: ${w.message}` : w.message
+			}))
+		}
 		const parsed = parseContextTemplate(value)
 		if (parsed.parseError && !blurred) return []
 		return lintVariableTemplate(value, scope)

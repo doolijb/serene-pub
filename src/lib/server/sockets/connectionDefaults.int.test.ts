@@ -238,6 +238,10 @@ describe("connectionDefaults:set", () => {
 		)
 		expect(res.defaults["text->text"]).toEqual({
 			connectionId: conn.id,
+			// The MODEL half (0114), untouched by a sampling write and null
+			// because the connection was registered without naming one — which
+			// means "that endpoint's default model".
+			connectionModelId: null,
 			samplingConfigId: null
 		})
 	})

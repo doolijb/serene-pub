@@ -992,6 +992,11 @@ describe("the builder's structural payload", () => {
 			"entities",
 			"history",
 			"historyEntries",
+			// The narrative graph as ranked candidates (ruling 2026-09-10, Q1),
+			// beside the two branches that hand it to the template as keyed
+			// sections. Three graph reads in one block, and the map draws them
+			// as three columns because that is what runs.
+			"relationships",
 			"relationshipsKnown",
 			"relationshipsPerspectives",
 			"worldLore"

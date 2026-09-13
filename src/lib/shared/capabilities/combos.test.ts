@@ -61,13 +61,18 @@ describe("servableTransforms", () => {
 
 describe("aggregateCombos — the union is necessary in both directions", () => {
 	test("manifest-only would drop what core demands and no adapter serves", () => {
-		// The real case: `core:provider/speak@1` requires `text->audio` and
-		// `core:provider/embed-text@1` requires `text->embedding`. No manifest
-		// entry declares either — nothing implements `synthesizeSpeech` or
-		// `embedText` — so a list built from the manifest alone offers no way
-		// to register a default for a capability core will ask for.
+		// The real case: `core:provider/speak@1` requires `text->audio`, no
+		// manifest entry declares it and nothing implements `synthesizeSpeech`,
+		// so a list built from the manifest alone offers no way to register a
+		// default for a capability core will ask for.
+		//
+		// ⚠ `text->embedding` is NOT the second example any more: the three
+		// embedding types declare it and their adapters implement `embedText`,
+		// so it is servable. It is asserted here in the other direction instead
+		// — a capability both demanded AND servable, which is what the two
+		// halves of this aggregation are supposed to agree about.
 		expect(servableTransforms()).not.toContain("text->audio")
-		expect(servableTransforms()).not.toContain("text->embedding")
+		expect(servableTransforms()).toContain("text->embedding")
 
 		const combos = aggregateCombos([
 			type("core:provider/speak", {
@@ -87,6 +92,11 @@ describe("aggregateCombos — the union is necessary in both directions", () => 
 		expect(speech!.requiredBy).toEqual([
 			{ typeId: "core:provider/speak", version: 1, slot: "connection" }
 		])
+
+		const embed = combos.find((c) => c.id === "text->embedding")
+		expect(embed).toBeDefined()
+		expect(embed!.demanded).toBe(true)
+		expect(embed!.servable).toBe(true)
 	})
 
 	test("registry-only would drop what this build serves and nothing demands", () => {

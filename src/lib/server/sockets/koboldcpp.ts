@@ -58,6 +58,11 @@ import {
 } from "$lib/server/localModels/registry"
 import { resolveConnectionCapabilities } from "$lib/server/connections/resolve"
 import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
+import {
+	endpointIdsServingModel,
+	ensureDefaultModel,
+	forgetModelEverywhere
+} from "$lib/server/connections/models"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { isAndroidWrapper } from "$lib/server/utils"
 
@@ -326,9 +331,7 @@ export const koboldCppListModelsHandler: Handler<
 			if (staleFilenames.length > 0) {
 				await db
 					.delete(schema.localModels)
-					.where(
-						inArray(schema.localModels.filename, staleFilenames)
-					)
+					.where(inArray(schema.localModels.filename, staleFilenames))
 			}
 		}
 
@@ -427,9 +430,7 @@ export const koboldCppListModelsHandler: Handler<
 									kindSource,
 									modality: modalityForKind(kind)
 								})
-								.where(
-									eq(schema.localModels.filename, name)
-								)
+								.where(eq(schema.localModels.filename, name))
 						} else if (
 							kindSource === "assumed" &&
 							kind !== "unknown"
@@ -459,9 +460,7 @@ export const koboldCppListModelsHandler: Handler<
 							await db
 								.update(schema.localModels)
 								.set({ kind, modality: modalityForKind(kind) })
-								.where(
-									eq(schema.localModels.filename, name)
-								)
+								.where(eq(schema.localModels.filename, name))
 						}
 					}
 
@@ -554,13 +553,22 @@ export const koboldCppConnectModelHandler: Handler<
 
 		// Activating a model always targets a Managed-type connection — a
 		// dumb/unmanaged connection never has model-swap behavior applied to it.
-		let existingConnection = await db.query.connections.findFirst({
-			where: (c, { and, eq }) =>
-				and(
-					eq(c.type, CONNECTION_TYPE.KOBOLDCPP_MANAGED),
-					eq(c.model, params.modelName)
-				)
-		})
+		// Which managed endpoint already SERVES this gguf — asked of
+		// `connection_models` and not of the endpoint's mirror column (0114).
+		// One managed instance can hold several models now, so the old
+		// `WHERE connections.model = $1` would report "no connection for this
+		// one" while the endpoint listing it sat right there, and make a
+		// duplicate every time somebody pressed Use for chat.
+		const servingText = await endpointIdsServingModel(
+			db,
+			params.modelName,
+			[CONNECTION_TYPE.KOBOLDCPP_MANAGED]
+		)
+		let existingConnection = servingText.length
+			? await db.query.connections.findFirst({
+					where: (c, { eq }) => eq(c.id, servingText[0])
+				})
+			: undefined
 
 		if (!existingConnection) {
 			const connectionName = params.modelName
@@ -599,6 +607,12 @@ export const koboldCppConnectModelHandler: Handler<
 				.insert(schema.connections)
 				.values(data)
 				.returning()
+			// The other half of the row this raw insert bypasses (0114): without
+			// a model row the new endpoint resolves to no model at all, and the
+			// next send fails against a connection that looks configured.
+			// `ensureDefaultModel` writes the mirror too, so the column set
+			// above stays in step rather than becoming the only copy.
+			await ensureDefaultModel(db, newConnection.id, params.modelName)
 			existingConnection = newConnection
 		}
 
@@ -691,13 +705,19 @@ export const koboldCppConnectImageModelHandler: Handler<
 			return fail("That model file is no longer on disk")
 		}
 
-		let connection = await db.query.connections.findFirst({
-			where: (c, { and, eq }) =>
-				and(
-					eq(c.type, CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE),
-					eq(c.model, params.filename)
-				)
-		})
+		// The image sibling of connectModel's lookup, and the same 0114 reason:
+		// the question "which endpoint serves this checkpoint" belongs to
+		// `connection_models` now.
+		const servingImage = await endpointIdsServingModel(
+			db,
+			params.filename,
+			[CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE]
+		)
+		let connection = servingImage.length
+			? await db.query.connections.findFirst({
+					where: (c, { eq }) => eq(c.id, servingImage[0])
+				})
+			: undefined
 
 		if (!connection) {
 			const connectionName = params.filename.replace(
@@ -736,6 +756,9 @@ export const koboldCppConnectImageModelHandler: Handler<
 				.insert(schema.connections)
 				.values(data)
 				.returning()
+			// Same as connectModel's: the raw insert skips the model row, and an
+			// image endpoint with none renders nothing (0114).
+			await ensureDefaultModel(db, newConnection.id, params.filename)
 			connection = newConnection
 		}
 
@@ -2380,17 +2403,16 @@ export const koboldCppDeleteModelHandler: Handler<
 		await db
 			.delete(schema.localModels)
 			.where(eq(schema.localModels.filename, params.modelName))
-		await db
-			.delete(schema.connections)
-			.where(
-				and(
-					inArray(schema.connections.type, [
-						CONNECTION_TYPE.KOBOLDCPP_MANAGED,
-						CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
-					]),
-					eq(schema.connections.model, params.modelName)
-				)
-			)
+		// The MODEL, and the endpoint only if that empties it (0114). The
+		// comment above still holds for every row these flows create — one
+		// connection, one model — so the outcome for them is unchanged,
+		// `connection_defaults`' ON DELETE SET NULL release included. What is no
+		// longer possible is deleting a managed endpoint that serves four other
+		// ggufs because one of them left the directory.
+		await forgetModelEverywhere(db, params.modelName, [
+			CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+			CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
+		])
 
 		await connectionsList.handler(socket, {}, emitToUser)
 		// The text->image default may have just been released by the cascade

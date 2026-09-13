@@ -21,6 +21,12 @@ import { resolveConfigSources } from "@serene-pub/sdk"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { withCompletionTemplate } from "$lib/server/connections/completionTemplates"
 import { withWireMode } from "$lib/server/connections/resolve"
+import {
+	connectionModelById,
+	defaultConnectionModel,
+	mergeEndpointModel
+} from "$lib/server/connections/models"
+import { slotModelId } from "$lib/shared/connections/slotRef"
 
 export interface ResolvedStepConfig {
 	/** The configured prompt text per declared field, where one was chosen. */
@@ -107,9 +113,40 @@ export async function resolveStepConfigs(
 			const text = (entry as any)?.value
 			if (typeof text === "string" && text.trim()) prompts[field] = text
 		}
-		const connection = await connectionById(
-			refId(at?.connection?.[""]?.value)
-		)
+		const slot = at?.connection?.[""]?.value
+		const connection = await connectionById(refId(slot))
+		/**
+		 * The MODEL half of the slot's pair (0114), merged onto the row before
+		 * anything else touches it.
+		 *
+		 * ⚠ Merged HERE and not later, because `withCompletionTemplate` reads
+		 * `promptFormat` and `withWireMode` reads the capability column, and both
+		 * of those are the model's answers once a pair has been formed. Merging
+		 * after either would dereference the endpoint's template for a model that
+		 * overrides it — the failure `withCompletionTemplate`'s own header
+		 * describes, arriving by a new route.
+		 *
+		 * A slot naming a model that has gone, or that belongs to another
+		 * endpoint, resolves to the endpoint's DEFAULT here rather than refusing
+		 * the way `resolveCapabilityTarget` does. These two callers are the graph
+		 * builder and the history compile: neither has a refusal channel a person
+		 * ever sees — `resolveStepConfigs` returns configuration, not a verdict —
+		 * so a throw would surface as an unexplained failure mid-build. The
+		 * resolver refuses because it CAN say why; this degrades because it
+		 * cannot.
+		 */
+		const modelId = slotModelId(slot)
+		let model: SelectConnectionModel | undefined
+		if (connection) {
+			const named =
+				modelId == null
+					? undefined
+					: await connectionModelById(db, modelId)
+			model =
+				named && named.connectionId === connection.id
+					? named
+					: await defaultConnectionModel(db, connection.id)
+		}
 		out[nodeKey] = {
 			prompts,
 			/**
@@ -123,10 +160,13 @@ export async function resolveStepConfigs(
 			 */
 			connection:
 				connection &&
-				withWireMode(await withCompletionTemplate(db, connection)),
-			sampling: await samplingConfigById(
-				refId(at?.sampling?.[""]?.value)
-			)
+				withWireMode(
+					await withCompletionTemplate(
+						db,
+						mergeEndpointModel(connection, model)
+					)
+				),
+			sampling: await samplingConfigById(refId(at?.sampling?.[""]?.value))
 		}
 	}
 	return out

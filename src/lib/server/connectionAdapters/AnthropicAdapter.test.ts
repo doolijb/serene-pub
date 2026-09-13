@@ -91,11 +91,16 @@ function makeSession(): any {
 	}
 }
 
-function makeAdapter(connectionOverrides: Record<string, any> = {}) {
+function makeAdapter(
+	connectionOverrides: Record<string, any> = {},
+	// Already RESOLVED, the way an adapter receives it: a key being present is
+	// the switch being on.
+	sampling: Record<string, unknown> = {}
+) {
 	return new exportsDefault.Adapter({
 		connection: makeConnection(connectionOverrides),
 		// Empty is what "the context budget is switched off" resolves to now:
-		sampling: {},
+		sampling,
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "Test system prompt." } as any,
 		session: makeSession(),
@@ -741,5 +746,520 @@ describe("AnthropicAdapter — continuing a reply", () => {
 	test("the adapter reports HOW it continues, and it is a real prefill", async () => {
 		const adapter = makeAdapter() as any
 		expect(adapter.continuationRoute.kind).toBe("prefill")
+	})
+})
+
+/**
+ * Native tool calling (20 §9). The Messages API differs from OpenAI's in more
+ * than a wrapper — `input_schema`, and the call arrives as a content BLOCK
+ * interleaved with the prose rather than beside it — so both halves are pinned.
+ */
+describe("AnthropicAdapter — tools on the wire", () => {
+	const TOOLS = [
+		{
+			name: "get_entry",
+			description: "Read one entry.",
+			parameters: {
+				type: "object",
+				properties: { id: { type: "integer" } }
+			}
+		}
+	]
+
+	const primed = (overrides: Record<string, any> = {}) => {
+		const adapter = makeAdapter(overrides)
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [{ role: "user", content: "who leads them?" }],
+			meta: {} as any
+		} as any)
+		return adapter
+	}
+
+	test("sends the declarations under input_schema, not parameters", async () => {
+		messagesCreateMock.mockClear()
+		messagesCreateMock.mockResolvedValue({ content: [] })
+		const adapter = primed()
+		adapter.withTools(TOOLS)
+		await adapter.generateText()
+
+		const [params] = messagesCreateMock.mock.calls.at(-1)!
+		expect(params.tools).toEqual([
+			{
+				name: "get_entry",
+				description: "Read one entry.",
+				input_schema: TOOLS[0]!.parameters
+			}
+		])
+	})
+
+	test("a request with no tools carries no tools key", async () => {
+		// Present-but-empty costs a tool-use system preamble the model then
+		// reads on every turn.
+		messagesCreateMock.mockClear()
+		messagesCreateMock.mockResolvedValue({
+			content: [{ type: "text", text: "hi" }]
+		})
+		await primed().generateText()
+		const [params] = messagesCreateMock.mock.calls.at(-1)!
+		expect("tools" in params).toBe(false)
+	})
+
+	test("reads a tool_use block, and keeps the prose either side of it", async () => {
+		messagesCreateMock.mockClear()
+		messagesCreateMock.mockResolvedValue({
+			content: [
+				{ type: "text", text: "Let me check. " },
+				{ type: "tool_use", name: "get_entry", input: { id: 7 } },
+				{ type: "text", text: "One moment." }
+			]
+		})
+		const adapter = primed()
+		adapter.withTools(TOOLS)
+		const result = await adapter.generateText()
+
+		expect(result.toolCall).toEqual({ tool: "get_entry", args: { id: 7 } })
+		expect(result.completionResult).toBe("Let me check. One moment.")
+	})
+
+	test("no call is null — the loop's predicate reads it", async () => {
+		messagesCreateMock.mockClear()
+		messagesCreateMock.mockResolvedValue({
+			content: [{ type: "text", text: "Captain Vell." }]
+		})
+		const adapter = primed()
+		adapter.withTools(TOOLS)
+		expect((await adapter.generateText()).toolCall).toBeNull()
+	})
+})
+
+/**
+ * The same call, off a STREAMING request (20 §9).
+ *
+ * A tool call arrives here as a content BLOCK opened by `content_block_start`,
+ * filled by `input_json_delta` fragments and closed by `content_block_stop` —
+ * three events where the non-streaming branch has one object. A connection with
+ * `extraJson.stream` surfaced none of it, so a tool loop's predicate never fired
+ * and the loop ran to its ceiling.
+ */
+describe("AnthropicAdapter — tool calls off the stream", () => {
+	const TOOLS = [
+		{
+			name: "get_entry",
+			description: "Read one entry.",
+			parameters: {
+				type: "object",
+				properties: { id: { type: "integer" } }
+			}
+		}
+	]
+
+	function eventStream(events: any[]) {
+		return {
+			async *[Symbol.asyncIterator]() {
+				for (const event of events) yield event
+			},
+			controller: { abort: vi.fn() }
+		}
+	}
+
+	const streamingAdapter = () => {
+		const adapter = makeAdapter({
+			extraJson: { apiKey: "sk-ant-test", stream: true }
+		})
+		adapter.withCompiledPrompt({
+			prompt: "hi",
+			messages: [{ role: "user", content: "who leads them?" }],
+			meta: {} as any
+		} as any)
+		adapter.withTools(TOOLS)
+		return adapter
+	}
+
+	const drain = async (result: any) => {
+		let content = ""
+		await result.completionResult((chunk: string) => {
+			content += chunk
+		})
+		return content
+	}
+
+	test("partial_json fragments become the call, and the prose either side survives", async () => {
+		messagesStreamMock.mockReturnValueOnce(
+			eventStream([
+				{
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "text_delta", text: "Let me check. " }
+				},
+				{
+					type: "content_block_start",
+					index: 1,
+					content_block: {
+						type: "tool_use",
+						id: "toolu_1",
+						name: "get_entry",
+						input: {}
+					}
+				},
+				{
+					type: "content_block_delta",
+					index: 1,
+					delta: { type: "input_json_delta", partial_json: '{"id"' }
+				},
+				{
+					type: "content_block_delta",
+					index: 1,
+					delta: { type: "input_json_delta", partial_json: ": 7}" }
+				},
+				{ type: "content_block_stop", index: 1 },
+				{
+					type: "content_block_delta",
+					index: 2,
+					delta: { type: "text_delta", text: "One moment." }
+				}
+			])
+		)
+		const adapter = streamingAdapter()
+		const result = await adapter.generateText()
+		expect(await drain(result)).toBe("Let me check. One moment.")
+		expect(adapter.streamedToolCall).toEqual({
+			tool: "get_entry",
+			args: { id: 7 }
+		})
+	})
+
+	test("a block that carried no fragments at all still calls the tool", async () => {
+		// A zero-argument tool sends `input: {}` and no delta whatsoever, so an
+		// accumulator that waited for JSON would lose the turn entirely.
+		messagesStreamMock.mockReturnValueOnce(
+			eventStream([
+				{
+					type: "content_block_start",
+					index: 0,
+					content_block: {
+						type: "tool_use",
+						id: "toolu_2",
+						name: "get_entry",
+						input: {}
+					}
+				},
+				{ type: "content_block_stop", index: 0 }
+			])
+		)
+		const adapter = streamingAdapter()
+		await drain(await adapter.generateText())
+		expect(adapter.streamedToolCall).toEqual({
+			tool: "get_entry",
+			args: {}
+		})
+	})
+
+	test("the first block only, even when the model opens two", async () => {
+		messagesStreamMock.mockReturnValueOnce(
+			eventStream([
+				{
+					type: "content_block_start",
+					index: 0,
+					content_block: {
+						type: "tool_use",
+						name: "get_entry",
+						input: {}
+					}
+				},
+				{
+					type: "content_block_delta",
+					index: 0,
+					delta: {
+						type: "input_json_delta",
+						partial_json: '{"id":7}'
+					}
+				},
+				{ type: "content_block_stop", index: 0 },
+				{
+					type: "content_block_start",
+					index: 1,
+					content_block: {
+						type: "tool_use",
+						name: "get_entry",
+						input: {}
+					}
+				},
+				{
+					type: "content_block_delta",
+					index: 1,
+					delta: {
+						type: "input_json_delta",
+						partial_json: '{"id":9}'
+					}
+				},
+				{ type: "content_block_stop", index: 1 }
+			])
+		)
+		const adapter = streamingAdapter()
+		await drain(await adapter.generateText())
+		expect(adapter.streamedToolCall).toEqual({
+			tool: "get_entry",
+			args: { id: 7 }
+		})
+	})
+
+	test("a stream that called nothing leaves it null, not undefined", async () => {
+		messagesStreamMock.mockReturnValueOnce(
+			eventStream([
+				{
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "text_delta", text: "Captain Vell." }
+				}
+			])
+		)
+		const adapter = streamingAdapter()
+		await drain(await adapter.generateText())
+		expect(adapter.streamedToolCall).toBeNull()
+	})
+})
+
+/**
+ * The prompt cache, recorded (ruled "later, non-disruptive").
+ *
+ * Anthropic is the one service here that reports both halves — what was READ
+ * from the cache and what was WRITTEN to it — and the one whose `input_tokens`
+ * EXCLUDES both, so the prompt total is the sum of the three rather than the
+ * field of that name.
+ */
+describe("AnthropicAdapter — prompt cache accounting", () => {
+	const primed = () => {
+		const adapter = makeAdapter()
+		adapter.withCompiledPrompt({
+			prompt: "hi",
+			messages: [{ role: "user", content: "hello" }],
+			meta: {} as any
+		} as any)
+		return adapter
+	}
+
+	test("reads both cache counts, and totals the prompt across all three fields", async () => {
+		messagesCreateMock.mockClear()
+		messagesCreateMock.mockResolvedValue({
+			content: [{ type: "text", text: "hi" }],
+			usage: {
+				input_tokens: 120,
+				output_tokens: 8,
+				cache_read_input_tokens: 3000,
+				cache_creation_input_tokens: 500
+			}
+		})
+		const result = await primed().generateText()
+		expect(result.tokensCached).toBe(3000)
+		expect(result.tokensCacheWrite).toBe(500)
+		expect(result.tokensPrompt).toBe(3620)
+	})
+
+	test("streaming: message_start carries the same accounting, unasked", async () => {
+		// This is the one service that reports the input side of a stream
+		// without being asked for it — the OpenAI envelope carries `usage` on a
+		// stream only when the request opted in, which this app does not do.
+		messagesStreamMock.mockReturnValueOnce({
+			async *[Symbol.asyncIterator]() {
+				yield {
+					type: "message_start",
+					message: {
+						usage: {
+							input_tokens: 120,
+							cache_read_input_tokens: 3000,
+							cache_creation_input_tokens: 500
+						}
+					}
+				}
+				yield {
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "text_delta", text: "hi" }
+				}
+			},
+			controller: { abort: vi.fn() }
+		})
+		const adapter = makeAdapter({
+			extraJson: { apiKey: "sk-ant-test", stream: true }
+		})
+		adapter.withCompiledPrompt({
+			prompt: "hi",
+			messages: [{ role: "user", content: "hello" }],
+			meta: {} as any
+		} as any)
+		const result = await adapter.generateText()
+		await result.completionResult(() => {})
+		// Read after the drain, like the tool call beside it.
+		expect(adapter.streamedUsage).toEqual({
+			tokensPrompt: 3620,
+			tokensCached: 3000,
+			tokensCacheWrite: 500
+		})
+	})
+
+	test("usage without either cache field reports the prompt and nothing else", async () => {
+		messagesCreateMock.mockClear()
+		messagesCreateMock.mockResolvedValue({
+			content: [{ type: "text", text: "hi" }],
+			usage: { input_tokens: 120, output_tokens: 8 }
+		})
+		const result = await primed().generateText()
+		expect(result.tokensPrompt).toBe(120)
+		expect(result.tokensCached).toBeUndefined()
+		expect(result.tokensCacheWrite).toBeUndefined()
+	})
+})
+
+/**
+ * The node's `streaming` parameter, at the one line that reads it.
+ *
+ * This adapter's own default is `?? true`, so `auto` has to resolve to the
+ * connection's answer rather than to a constant in either direction: an
+ * Anthropic connection nobody has configured streams, and one with the flag
+ * cleared does not. Read off `completionResult`, because that is the fact the
+ * dispatch branches on.
+ */
+describe("AnthropicAdapter — the node's streaming parameter", () => {
+	const sendWith = async (
+		extraJson: Record<string, unknown>,
+		mode?: "auto" | "off"
+	) => {
+		messagesCreateMock.mockReset()
+		// Only the non-streaming branch reaches this: a streaming request
+		// returns a closure and calls the SDK when somebody drains it.
+		messagesCreateMock.mockResolvedValue({
+			content: [{ type: "text", text: "ok" }]
+		})
+		const adapter = makeAdapter({
+			extraJson: { apiKey: "sk-ant-test", ...extraJson }
+		})
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [{ role: "user", content: "who leads them?" }],
+			meta: {} as any
+		} as any)
+		if (mode) adapter.withStreaming(mode)
+		const result = await adapter.generateText()
+		return typeof result.completionResult === "function"
+			? "streamed"
+			: "one request"
+	}
+
+	test("auto answers whatever the connection says, both ways", async () => {
+		expect(await sendWith({ stream: true }, "auto")).toBe("streamed")
+		expect(await sendWith({ stream: false }, "auto")).toBe("one request")
+	})
+
+	test("a node that hands nothing over is the same as auto", async () => {
+		// The unset case is the one that matters here: `?? true` means an
+		// untouched Anthropic connection streams, and it has to keep doing so.
+		expect(await sendWith({})).toBe("streamed")
+		expect(await sendWith({ stream: false })).toBe("one request")
+	})
+
+	test("off sends one request even on a streaming connection", async () => {
+		expect(await sendWith({ stream: true }, "off")).toBe("one request")
+	})
+})
+
+/**
+ * Reasoning, as a SAMPLING parameter (ruling 2026-09-12).
+ *
+ * This used to be `extraJson.thinking` and `extraJson.thinkingBudget` on the
+ * CONNECTION, which gave every stage sharing an Anthropic row the same answer.
+ * The two halves of the vocabulary land on one field here, and the Messages API
+ * refuses temperature/top_p/top_k beside an enabled one — which is why those
+ * three are RECORDED rather than quietly left out.
+ */
+describe("AnthropicAdapter — reasoning on the wire", () => {
+	async function requestFor(
+		sampling: Record<string, unknown>,
+		connectionOverrides: Record<string, any> = {}
+	) {
+		messagesCreateMock.mockClear()
+		messagesCreateMock.mockResolvedValue({
+			content: [{ type: "text", text: "ok" }]
+		})
+		const adapter = makeAdapter(
+			{
+				extraJson: { apiKey: "sk-test", stream: false },
+				...connectionOverrides
+			},
+			sampling
+		)
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [{ role: "user", content: "hello" }],
+			meta: {} as any
+		} as any)
+		await adapter.generateText()
+		return { req: messagesCreateMock.mock.calls[0][0], adapter }
+	}
+
+	test("a config that never enabled it sends no thinking block and no beta", async () => {
+		// Today's bytes, including for a row whose `extraJson` still carries the
+		// old connection-level keys: they are read by nothing now.
+		const { req, adapter } = await requestFor(
+			{ temperature: 0.6 },
+			{ extraJson: { apiKey: "sk-test", stream: false, thinking: true } }
+		)
+		expect(req).not.toHaveProperty("thinking")
+		expect(req).not.toHaveProperty("betas")
+		expect(req.temperature).toBe(0.6)
+		expect(adapter.ignoredSamplers).toEqual([])
+	})
+
+	test("off says so out loud, and is still an ordinary request", async () => {
+		const { req, adapter } = await requestFor({
+			reasoning: "off",
+			temperature: 0.6
+		})
+		expect(req.thinking).toEqual({ type: "disabled" })
+		// `disabled` is not extended thinking, so the beta header and the
+		// sampler restriction both stay off.
+		expect(req).not.toHaveProperty("betas")
+		expect(req.temperature).toBe(0.6)
+		expect(adapter.ignoredSamplers).toEqual([])
+	})
+
+	test("a level becomes a budget from the shared table", async () => {
+		const budgets = { low: 2048, medium: 8000, high: 32000 } as const
+		for (const [level, budget] of Object.entries(budgets)) {
+			const { req } = await requestFor({ reasoning: level })
+			expect(req.thinking).toEqual({
+				type: "enabled",
+				budget_tokens: budget
+			})
+			expect(req.betas).toEqual(["interleaved-thinking-2025-05-14"])
+		}
+	})
+
+	test("a budget set outright beats the level's table entry", async () => {
+		const { req } = await requestFor({
+			reasoning: "medium",
+			reasoningBudget: 12345
+		})
+		expect(req.thinking).toEqual({
+			type: "enabled",
+			budget_tokens: 12345
+		})
+	})
+
+	test("the three samplers thinking forbids are dropped AND recorded", async () => {
+		// The service refuses the request outright if they are present, so
+		// dropping them is not a preference. Without the record the only
+		// evidence is an absence in the body, and "I set temperature and
+		// nothing changed" has no answer anywhere on the screen.
+		const { req, adapter } = await requestFor({
+			reasoning: "high",
+			temperature: 0.6,
+			topP: 0.9,
+			topK: 40
+		})
+		expect(req).not.toHaveProperty("temperature")
+		expect(req).not.toHaveProperty("top_p")
+		expect(req).not.toHaveProperty("top_k")
+		expect(adapter.ignoredSamplers).toEqual(["temperature", "topP", "topK"])
 	})
 })

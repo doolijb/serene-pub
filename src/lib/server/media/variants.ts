@@ -445,13 +445,19 @@ async function deriveDisplay(
  * the display rule: a still preview of an animated image is the understood
  * contract for a list cell, and it is declared reduced. Do not read this as
  * permission to flatten anywhere else.
+ *
+ * Cut from `files.frame`, or from the default rule when the file has none.
+ * Changing that frame has to REMOVE this row — `ensureVariant` returns what is
+ * stored and would otherwise keep serving the old crop forever.
  */
 async function deriveThumb(
 	db: Db,
 	file: FileRow,
 	source: ResolvedVariant
 ): Promise<ResolvedVariant | null> {
-	const thumb = await makeThumbnail(source.bytes, source.mime)
+	// The frame is in the ORIGINAL's pixels, and every representation in
+	// `SOURCE_PRIORITY` is full size, so it applies to whichever one was loaded.
+	const thumb = await makeThumbnail(source.bytes, source.mime, file.frame)
 	// Already small enough to be its own thumbnail. Serving the source is the
 	// long-standing behaviour and the reason `thumbUrl` can be unconditional.
 	if (!thumb) return source

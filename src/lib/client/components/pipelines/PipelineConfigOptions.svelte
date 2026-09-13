@@ -28,6 +28,14 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import ShareBar from "$lib/client/components/pipelines/ShareBar.svelte"
 	import StrengthBars from "$lib/client/components/pipelines/StrengthBars.svelte"
+	// The ONE spelling of what a connection slot stores, shared with the three
+	// server readers — see `$lib/shared/connections/slotRef`.
+	import {
+		connectionSlotValue,
+		slotConnectionId,
+		slotModelId
+	} from "$lib/shared/connections/slotRef"
+	import { languageOf } from "$lib/shared/pipelines/templateEngines"
 	// The value-decl controls (24 T6c): the simple editors live in
 	// @serene-pub/controls now — one component per value-type id, the render
 	// leg of the four-way registry. This panel keeps the behavioural wiring
@@ -298,6 +306,110 @@
 		set(option, ids)
 	}
 
+	/* --- ordered lists (a `list` param) ------------------------------ */
+
+	/**
+	 * An ordered list is **one value**, written whole.
+	 *
+	 * Exactly the rule the script chain states one block above, and for the
+	 * same reason: the order is part of the value, so reordering is one write
+	 * and Reset is the only way back to inheriting. The rows are the resolved
+	 * value — which is the declared default until somebody departs from it —
+	 * so the first drag writes the whole pack rather than a delta nobody could
+	 * read.
+	 */
+	const listRows = (
+		option: Sockets.Pipelines.Option
+	): Record<string, unknown>[] =>
+		Array.isArray(option.value)
+			? (option.value as unknown[]).map((r) => ({
+					...((r ?? {}) as Record<string, unknown>)
+				}))
+			: []
+
+	/** The row member that names it — an enum or a string, the first of either. */
+	const listIdField = (option: Sockets.Pipelines.Option) =>
+		option.item?.fields.find(
+			(f) => f.control === "enum" || f.control === "string"
+		)
+
+	/** What a row is called: the declaration's label for its id, or the id. */
+	function listRowLabel(
+		option: Sockets.Pipelines.Option,
+		row: Record<string, unknown>
+	): string {
+		const idField = listIdField(option)
+		if (!idField) return ""
+		const value = String(row[idField.key] ?? "")
+		return idField.members?.find((m) => m.key === value)?.label ?? value
+	}
+
+	/** Rows this list could still gain — the id member's options, minus what is in. */
+	function listAvailable(option: Sockets.Pipelines.Option) {
+		const idField = listIdField(option)
+		if (!idField?.of) return []
+		const present = new Set(
+			listRows(option).map((r) => String(r[idField.key] ?? ""))
+		)
+		return idField.of
+			.filter((key) => !present.has(key))
+			.map((key) => ({
+				key,
+				label: idField.members?.find((m) => m.key === key)?.label ?? key
+			}))
+	}
+
+	function listMove(
+		option: Sockets.Pipelines.Option,
+		from: number,
+		to: number
+	) {
+		const rows = listRows(option)
+		if (from === to || to < 0 || to >= rows.length) return
+		const [moved] = rows.splice(from, 1)
+		rows.splice(to, 0, moved!)
+		set(option, rows)
+	}
+
+	function listRemove(option: Sockets.Pipelines.Option, index: number) {
+		const rows = listRows(option)
+		rows.splice(index, 1)
+		set(option, rows)
+	}
+
+	function listAdd(option: Sockets.Pipelines.Option, key: string) {
+		const idField = listIdField(option)
+		if (!idField || !key) return
+		// The declared defaults for the other members, so an added row is a
+		// complete one rather than a half-row the reader has to finish.
+		const row: Record<string, unknown> = { [idField.key]: key }
+		for (const f of option.item?.fields ?? [])
+			if (f.key !== idField.key && f.default !== undefined)
+				row[f.key] = f.default
+		set(option, [...listRows(option), row])
+	}
+
+	function listSet(
+		option: Sockets.Pipelines.Option,
+		index: number,
+		field: string,
+		value: unknown
+	) {
+		const rows = listRows(option)
+		if (!rows[index]) return
+		rows[index]![field] = value
+		set(option, rows)
+	}
+
+	/**
+	 * The row being dragged, as (option, index).
+	 *
+	 * The option id rides along so a drag started in one list cannot drop into
+	 * another — two `list` options on one step is an ordinary arrangement, and
+	 * an index alone would let a block land in somebody else's pack.
+	 */
+	let listDrag = $state<{ optionId: string; from: number } | null>(null)
+
 	/* --- prompt create / clone / edit / delete ----------------------- */
 
 	/**
@@ -559,14 +671,29 @@
 
 	/* --- context template create / clone / edit / delete -------------- */
 
-	function createTemplate(option: Sockets.Pipelines.Option) {
+	/**
+	 * `engine` is sent, never inferred: a slot that renders two languages has
+	 * no way to know which one the click meant, and the server's fallback is
+	 * the slot's first — so a person wanting the second would silently get the
+	 * first.
+	 */
+	function createTemplate(option: Sockets.Pipelines.Option, engine?: string) {
 		cloningTemplateFor = option.id
 		socket.emit("pipelines:createContextTemplate", {
 			slug,
 			optionId: option.id,
+			...(engine ? { engine } : {}),
 			sessionId
 		})
 	}
+
+	/**
+	 * The languages this slot renders. One is the ordinary case and gets one
+	 * unlabelled button; a language name on every button of a single-language
+	 * slot is a constant repeated in the only place a person is choosing.
+	 */
+	const templateEngines = (option: Sockets.Pipelines.Option): string[] =>
+		option.templateEngines?.length ? option.templateEngines : []
 
 	function cloneTemplate(option: Sockets.Pipelines.Option) {
 		if (!option.contextTemplate) return
@@ -849,10 +976,19 @@
 				...o,
 				value: o.authorDefault ?? null,
 				overriddenHere: false,
+				// The changed marker follows the draft too, or a queued reset
+				// would keep its dot until Save all and the panel would be
+				// saying the opposite of what the draft bar says.
+				changed: false,
 				source: "author"
 			}
 		if (pending && o.id in pending)
-			return { ...o, value: pending[o.id], overriddenHere: true }
+			return {
+				...o,
+				value: pending[o.id],
+				overriddenHere: true,
+				changed: true
+			}
 		return o
 	}
 
@@ -1035,6 +1171,30 @@
 				</span>
 			{/if}
 
+			<!--
+				The changed marker (ruled 2026-09-10).
+
+				A configuration stores **deviations**: it holds a row only where
+				somebody departed from the shipped default, so `changed` is that
+				row's existence and this dot is the whole of what provenance
+				means now. It is worth a mark precisely because it is rare — the
+				old model materialized every declared value into every config,
+				so a "this was set" mark would have been on every field in the
+				panel, which is the same as being on none.
+
+				Beside the Reset button rather than instead of it: outside a
+				session the two coincide and the pair reads as "changed, and
+				here is the undo", while INSIDE one they are different facts —
+				Reset clears your session's own value and this says the
+				configuration underneath it was tuned for everyone.
+			-->
+			{#if option.changed}
+				<span
+					class="bg-primary-500 mt-1.5 size-1.5 shrink-0 rounded-full"
+					title="Changed — this configuration departs from the shipped default here."
+				></span>
+			{/if}
+
 			<!-- Provenance, but only when it is worth a word.
 			     "your value" on every field is noise; "set by an
 			     admin" on the one field that is not doing what
@@ -1048,17 +1208,24 @@
 				>
 					<Icons.RotateCcw size={12} /> Reset
 				</button>
-			{:else if option.source !== "author"}
+			{:else if option.source !== "author" && !option.changed}
 				<!--
 					A dot, not a sentence.
 
 					"from the selected config" on every row is a hundred-odd
 					pixels of the same words repeated down the panel — at rail
-					width it crowds out the control it annotates, and because
-					almost every value comes from the shipped config it marks
-					nearly all of them, which is the same as marking none. The
-					wording moves to the tooltip, where it is available and not
-					in the way.
+					width it crowds out the control it annotates. The wording
+					moves to the tooltip, where it is available and not in the
+					way.
+
+					⚠ `&& !option.changed` because the two used to be the same
+					mark. A value whose source is `preset` is a value the
+					configuration holds a row for, which is now exactly what the
+					changed dot above says — so without the guard every
+					deviation would carry two dots meaning one thing. What is
+					left here is the case they do not share: a value inherited
+					from somewhere that is neither this configuration nor the
+					declaration.
 				-->
 				<span
 					class="bg-secondary-500 mt-1.5 size-1.5 shrink-0 rounded-full"
@@ -1505,14 +1672,30 @@
 						{/if}
 					{/each}
 				</select>
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-surface shrink-0"
-					title="Write a new context template from scratch"
-					onclick={() => createTemplate(option)}
-				>
-					<Icons.Plus size={14} />
-				</button>
+				{#if templateEngines(option).length > 1}
+					{#each templateEngines(option) as engine (engine)}
+						<button
+							type="button"
+							class="btn btn-sm preset-tonal-surface shrink-0"
+							title="Write a new {languageOf(
+								engine
+							)} context template from scratch"
+							onclick={() => createTemplate(option, engine)}
+						>
+							<Icons.Plus size={14} />
+							<span class="text-xs">{languageOf(engine)}</span>
+						</button>
+					{/each}
+				{:else}
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-surface shrink-0"
+						title="Write a new context template from scratch"
+						onclick={() => createTemplate(option)}
+					>
+						<Icons.Plus size={14} />
+					</button>
+				{/if}
 				{#if option.contextTemplate && !selectorsOnly}
 					<button
 						type="button"
@@ -1909,14 +2092,46 @@
 			     what this option may point at, already narrowed to the
 			     namespace and the declared shape — so this renders the list
 			     and never decides what belongs in it. -->
+			{@const isConnection = option.control === "connection-ref"}
+			<!-- A connection slot's value is a PAIR since 0114, and the two
+			     legacy spellings (a bare id, `{ref}`) both still mean "that
+			     endpoint, its default model". `slotConnectionId` reads all of
+			     them, which is why nothing stored needed migrating; `String(
+			     option.value)` alone would render `[object Object]` for a pair
+			     and select nothing. -->
+			{@const chosenId = isConnection
+				? slotConnectionId(option.value)
+				: null}
+			{@const chosenModelId = isConnection
+				? slotModelId(option.value)
+				: null}
+			{@const chosenModels = isConnection
+				? (option.choices.find((c) => c.id === chosenId)?.models ?? [])
+				: []}
 			<select
 				id="opt-{option.id}"
 				class="select w-full"
-				value={option.value == null ? "" : String(option.value)}
+				value={isConnection
+					? chosenId == null
+						? ""
+						: String(chosenId)
+					: option.value == null
+						? ""
+						: String(option.value)}
 				onchange={(e) => {
 					const raw = e.currentTarget.value
 					if (raw === "") return clear(option)
-					set(option, Number(raw))
+					// ⚠ Changing the ENDPOINT drops the model, deliberately. A
+					// `connection_models` row belongs to one connection, so
+					// carrying the old model across would write a pair whose two
+					// halves name different endpoints — which the resolver
+					// refuses at dispatch, about a choice nobody made.
+					set(
+						option,
+						isConnection
+							? connectionSlotValue(Number(raw))
+							: Number(raw)
+					)
 				}}
 			>
 				<!-- Unset is not "nothing". A connection or sampling slot with
@@ -1948,6 +2163,205 @@
 					</option>
 				{/each}
 			</select>
+			{#if isConnection && chosenModels.length}
+				<!-- The second half of the pair (0114). Rendered only where the
+				     chosen endpoint HAS models, because a picker over an empty
+				     list is a control with no choice in it.
+
+				     "Its default model" is a real option and the resting one,
+				     never a blank: it is what every slot authored before the
+				     split says, and it keeps following the star when the
+				     endpoint's default moves — which is what somebody who has
+				     never thought about models wants, and what a pinned id would
+				     silently stop doing. -->
+				<select
+					class="select mt-1 w-full"
+					aria-label="Model"
+					value={chosenModelId == null ? "" : String(chosenModelId)}
+					onchange={(e) => {
+						const raw = e.currentTarget.value
+						set(
+							option,
+							connectionSlotValue(
+								chosenId,
+								raw === "" ? null : Number(raw)
+							)
+						)
+					}}
+				>
+					<option value="">
+						— Its default model{chosenModels.find(
+							(m) => m.isDefault
+						)
+							? ` (${chosenModels.find((m) => m.isDefault)!.name})`
+							: ""} —
+					</option>
+					<!-- Disabled models are LISTED and greyed, the same rule the
+					     connection list above follows: a slot pointed at one
+					     before somebody switched it off has to still show what it
+					     is pointed at. -->
+					{#each chosenModels as m (m.id)}
+						<option
+							value={String(m.id)}
+							disabled={!m.enabled}
+							title={m.model}
+						>
+							{m.name}{m.enabled ? "" : " — switched off"}
+						</option>
+					{/each}
+				</select>
+			{/if}
+		{:else if option.control === "list"}
+			<!-- An ordered list of rows, rendered from the ELEMENT's own
+			     declaration. Nothing here knows what a prompt block is: the
+			     labels, the options a row may take and which member is the
+			     on/off switch all arrive on `option.item`, so a plugin
+			     declaring `type: 'list'` gets this editor with no change.
+
+			     Reorder by the buttons or by dragging; both write the whole
+			     list, because the order is the value. The changed dot and
+			     Reset above are the ordinary ones — this option participates
+			     like any other, so putting the list back where it started
+			     stores nothing at all. -->
+			{@const rows = listRows(option)}
+			{@const idField = listIdField(option)}
+			{@const available = listAvailable(option)}
+			<div class="flex flex-col gap-1">
+				{#if !rows.length}
+					<p class="text-muted text-xs italic">
+						Nothing in this list.
+					</p>
+				{/if}
+				<!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
+				<div role="list" class="flex flex-col gap-1">
+					{#each rows as row, i (`${String(row[idField?.key ?? "id"] ?? i)}`)}
+						{@const enabled = (option.item?.fields ?? []).every(
+							(f) =>
+								f.control !== "boolean" || row[f.key] !== false
+						)}
+						<div
+							class="border-surface-200-700 flex items-center gap-1.5 rounded-lg border px-2 py-1
+						{listDrag?.optionId === option.id && listDrag.from === i ? 'opacity-40' : ''}"
+							draggable="true"
+							role="listitem"
+							ondragstart={() =>
+								(listDrag = { optionId: option.id, from: i })}
+							ondragend={() => (listDrag = null)}
+							ondragover={(e) => {
+								if (listDrag?.optionId === option.id)
+									e.preventDefault()
+							}}
+							ondrop={(e) => {
+								e.preventDefault()
+								if (listDrag?.optionId !== option.id) return
+								listMove(option, listDrag.from, i)
+								listDrag = null
+							}}
+						>
+							<span
+								class="text-muted w-4 shrink-0 cursor-grab text-right font-mono text-[10px]"
+								aria-hidden="true"
+							>
+								{i + 1}
+							</span>
+							<span
+								class="min-w-0 flex-1 truncate text-sm {enabled
+									? ''
+									: 'opacity-50'}"
+							>
+								{listRowLabel(option, row)}
+							</span>
+							{#each option.item?.fields ?? [] as field (field.key)}
+								{#if field.control === "boolean"}
+									<label
+										class="flex shrink-0 items-center gap-1 text-[10px]"
+										title={field.label}
+									>
+										<input
+											type="checkbox"
+											class="checkbox"
+											checked={row[field.key] !== false}
+											onchange={(e) =>
+												listSet(
+													option,
+													i,
+													field.key,
+													e.currentTarget.checked
+												)}
+										/>
+									</label>
+								{:else if field.control === "integer" || field.control === "number"}
+									<input
+										type="number"
+										class="input w-16 shrink-0 text-xs"
+										aria-label={field.label}
+										value={row[field.key] == null
+											? ""
+											: String(row[field.key])}
+										onchange={(e) => {
+											const n =
+												field.control === "integer"
+													? parseInt(
+															e.currentTarget
+																.value,
+															10
+														)
+													: parseFloat(
+															e.currentTarget
+																.value
+														)
+											if (!Number.isNaN(n))
+												listSet(option, i, field.key, n)
+										}}
+									/>
+								{/if}
+							{/each}
+							<button
+								type="button"
+								class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+								title="Move up"
+								disabled={i === 0}
+								onclick={() => listMove(option, i, i - 1)}
+							>
+								<Icons.ChevronUp size={12} />
+							</button>
+							<button
+								type="button"
+								class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+								title="Move down"
+								disabled={i === rows.length - 1}
+								onclick={() => listMove(option, i, i + 1)}
+							>
+								<Icons.ChevronDown size={12} />
+							</button>
+							<button
+								type="button"
+								class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+								title="Remove from this list"
+								onclick={() => listRemove(option, i)}
+							>
+								<Icons.X size={12} />
+							</button>
+						</div>
+					{/each}
+				</div>
+				{#if available.length}
+					<select
+						id="opt-{option.id}"
+						class="select w-full"
+						value=""
+						onchange={(e) => {
+							listAdd(option, e.currentTarget.value)
+							e.currentTarget.value = ""
+						}}
+					>
+						<option value="" disabled>Add…</option>
+						{#each available as choice (choice.key)}
+							<option value={choice.key}>{choice.label}</option>
+						{/each}
+					</select>
+				{/if}
+			</div>
 		{:else if option.control === "string[]"}
 			<!-- One per line: the values are stop sequences and the
 			     like, which routinely contain commas. -->

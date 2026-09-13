@@ -37,6 +37,7 @@ import { GroupReplyStrategies } from "../../shared/constants/GroupReplyStrategie
 import { SessionCharacterVisibility } from "../../shared/constants/SessionCharacterVisibility"
 import { SessionTypes } from "../../shared/constants/SessionTypes"
 import type { ConnectionIdentity } from "../../shared/connections/identity"
+import type { MediaFrame } from "../../shared/media/frame"
 import type {
 	TunnelMode,
 	TunnelProvider,
@@ -317,11 +318,13 @@ export const samplingConfigs = pgTable(
 		/**
 		 * The parameters, keyed by the camelCase names the adapters' key maps use.
 		 *
-		 * Deliberately not typed columns (0171): thirty of them could only ever name
-		 * text samplers, so a second modality meant either a second table or a wall of
-		 * nulls. Keys the shape does not declare are kept here rather than rejected —
-		 * a row written by a newer build, or a UI-only flag like `contextTokensUnlocked`,
-		 * round-trips intact. `resolveSamplingValues` is what keeps them off the wire.
+		 * Untyped JSON, not columns: a config's parameters vary by modality, and
+		 * naming every possible sampler parameter its own column would leave a
+		 * wall of nulls for any config that is not a text sampler. Keys the shape
+		 * does not declare are kept here rather than rejected, so a row written by
+		 * a newer build, or a UI-only flag like `contextTokensUnlocked`,
+		 * round-trips intact. `resolveSamplingValues` is what keeps unknown keys
+		 * off the wire.
 		 */
 		values: json("values")
 			.notNull()
@@ -337,7 +340,7 @@ export const samplingConfigs = pgTable(
 	},
 	(t) => [
 		/**
-		 * A name is unique WITHIN A MODALITY, not globally (0179).
+		 * A name is unique WITHIN A MODALITY, not globally.
 		 *
 		 * "Default" is a fair name for a text preset and for an image one, and
 		 * forcing them apart would make the built-ins read like workarounds. Two
@@ -433,11 +436,10 @@ export const completionTemplates = pgTable(
 		 * split-session bridge, retired once chat wire mode builds `messages[]`
 		 * structurally.
 		 *
-		 * ⚠ An explicit column because the decision used to be
-		 * `/split/i.test(promptFormat)` in `prompt/assemble.ts` — a SUBSTRING
-		 * test against the format's NAME. Harmless while the eight keys were
-		 * hardcoded; with rows, a template someone calls "my split format"
-		 * silently switches the entire pipeline to role-array output.
+		 * ⚠ An explicit column, not inferred from `promptFormat` by a substring
+		 * test (`/split/i.test(promptFormat)` against the format's NAME): a
+		 * template someone names "my split format" would otherwise silently
+		 * switch the entire pipeline to role-array output.
 		 */
 		renderMode: text("render_mode")
 			.notNull()
@@ -472,14 +474,9 @@ export const completionTemplates = pgTable(
 		 * session adds.
 		 *
 		 * On the row because a format's stop strings are a property of the
-		 * format. They used to be a second, independent switch in
-		 * `server/utils/StopStrings.ts` that covered five of the eight formats —
-		 * Claude, Instruct and split-session fell through to a generic list with
-		 * nothing saying so, and nothing anywhere made adding a format add its
-		 * stop strings. That module is gone; `server/connections/stops.ts` reads
-		 * this column, tags each entry `format`, and holds them back on a chat
-		 * wire where a request carries none of these markers (ruling
-		 * 2026-09-10).
+		 * format, not a switch statement elsewhere. `server/connections/stops.ts`
+		 * reads this column, tags each entry `format`, and holds them back on a
+		 * chat wire, where a request carries none of these markers.
 		 */
 		stopStrings: json("stop_strings")
 			.notNull()
@@ -548,7 +545,26 @@ export const connections = pgTable("connections", {
 	 */
 	preset: text("preset"),
 	baseUrl: text("base_url"), // Base URL or endpoint for API
-	model: text("model"), // Model name or identifier
+	/**
+	 * LEGACY MIRROR of the default model's identifier (0114).
+	 *
+	 * ⚠ Written by nothing but `mirrorDefaultModel()`
+	 * (`server/connections/models.ts`) and read by nothing at run time. The
+	 * endpoint/model split moved the identifier an adapter sends onto
+	 * `connection_models.model`, and the pair `(endpoint, model)` is what every
+	 * picker stores and `resolveCapabilityTarget` resolves. This column survives
+	 * the version freeze so that a downgrade, a backup restored into an older
+	 * build, and the two managed flows that still say "one connection names one
+	 * model" all keep finding the string where they have always found it.
+	 *
+	 * Kept honest by `connections/modelColumnReads.test.ts`, which greps
+	 * `$lib/server` for reads of this column and fails on any that is not the
+	 * mirror writer, the migration, or an adapter reading the ALREADY-MERGED
+	 * pair off `AdapterConnection`. A mirror nobody polices becomes a second
+	 * source of truth on the first hurried edit, and this table has already paid
+	 * for that once (`system_settings.default_connection_id`, 0181).
+	 */
+	model: text("model"),
 	// Ollama-specific options
 	extraJson: json("extra_json")
 		.notNull()
@@ -604,6 +620,190 @@ export const connections = pgTable("connections", {
 })
 
 /**
+ * One MODEL on an endpoint — the second half of the (endpoint, model) pair.
+ *
+ * `connections` stays the ENDPOINT (its id, and every foreign key pointing at
+ * it, is untouched — see the table above), and this table holds the models
+ * reachable through it. Selection everywhere is a PAIR, and where a pair
+ * names only the endpoint, `is_default` says which model it meant.
+ *
+ * Rows, not a JSON array on the connection: `connection_defaults.connection_model_id`
+ * and the pipeline config's provider slot both REFERENCE a model, and a
+ * reference needs an id a foreign key can clear — an array index cannot fill
+ * that role.
+ *
+ * `prompt_format`, `token_counter` and `context_window` are OVERRIDES: NULL
+ * means "whatever the endpoint says". `capabilities` is the same shape
+ * `connections.capabilities` uses — see `resolveModelCapabilities` for how
+ * the model's `{overrides, probe}` layer over the endpoint's.
+ *
+ * See docs/data-model-notes.md#connection_models for the full split rationale.
+ */
+export const connectionModels = pgTable(
+	"connection_models",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/**
+		 * The endpoint. `cascade`, and it is the one FK here that is not
+		 * `set null`: a model without an endpoint is not a model with a missing
+		 * setting, it is an unreachable row. The distinction
+		 * `connection_defaults` draws between "cleared" and "never set" has no
+		 * counterpart here — there is no sentence to preserve.
+		 */
+		connectionId: integer("connection_id")
+			.notNull()
+			.references(() => connections.id, { onDelete: "cascade" }),
+		/**
+		 * What the ADAPTER sends: `llama3.1:8b`, `gpt-4o`, `Mistral-7B.gguf`.
+		 *
+		 * The same string shape `connections.model` holds, so an adapter reading
+		 * `this.connection.model` off the merged pair needs no edit.
+		 */
+		model: text("model").notNull(),
+		/**
+		 * What a PERSON sees. Defaults to `model` at every write path, so a row
+		 * nobody renamed reads the way it always did, and somebody running four
+		 * quantisations of one model can tell them apart by something other than
+		 * a filename suffix.
+		 */
+		name: text("name").notNull(),
+		/**
+		 * Whether a picker may offer it. Not a delete: a model pulled off the
+		 * host for a week should stop being offered without taking the
+		 * per-model capability overrides and the selections naming it down with
+		 * it.
+		 */
+		enabled: boolean("enabled").notNull().default(true),
+		/**
+		 * The model a pair naming only the endpoint resolves to.
+		 *
+		 * At most one per endpoint, enforced BY THE DATABASE below rather than
+		 * by whichever handler last wrote — two defaults is not a display bug,
+		 * it is a run resolving to whichever row the query happened to order
+		 * first, which is the class of failure `system_settings`'
+		 * two-spellings-of-one-fact cost a release for.
+		 */
+		isDefault: boolean("is_default").notNull().default(false),
+		/**
+		 * This MODEL's capability layer, in the same `{resolved, overrides,
+		 * probe}` shape the endpoint's column holds (`StoredCapabilities`).
+		 *
+		 * Its own column and not a merge into the endpoint's, because the two
+		 * answer different questions: the endpoint's says what the PROTOCOL can
+		 * express (an OpenAI-compatible host can carry images at all), the
+		 * model's says what THIS checkpoint does (a 7B text model behind that
+		 * same host cannot see). Before the split those were one set, so
+		 * probing a vision model taught the endpoint vision and every text
+		 * model behind it inherited the claim.
+		 *
+		 * `resolved` is a CACHE here too, with the endpoint's rationale
+		 * verbatim: the picker reads every pair against every slot, and
+		 * deriving would mean importing an adapter module per row.
+		 */
+		capabilities: json("capabilities")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
+		/**
+		 * How many tokens this model can actually hold, or NULL for "the
+		 * sampling config decides".
+		 *
+		 * ⚠ Read at exactly one place — `dispatchStep`, above
+		 * `sampling.contextTokens`. The summarizer and the graph builder do not
+		 * read it: both pin 4096 outright, and their own comments say widening
+		 * them is a decision for those contracts rather than a side effect of a
+		 * schema change.
+		 *
+		 * A property of the MODEL and not of the node, which is the same rule
+		 * 17 §1a states — a step does not get its own window; a model has one.
+		 */
+		contextWindow: integer("context_window"),
+		/**
+		 * This model's completion template, overriding the endpoint's.
+		 *
+		 * ⚠ `prompt_format` and a reference to `completion_templates.KEY`, not
+		 * an id — matching the endpoint column exactly. The brief for this table
+		 * asked for `completion_template_id`; keying the override to the id
+		 * while the endpoint keys to the key would mean this merge had to
+		 * TRANSLATE between two spellings of one reference, and the merge runs
+		 * on the hot path with no database of its own. `set null` follows the
+		 * endpoint's reasoning: "the template you picked is gone" and "you never
+		 * picked one" are different sentences.
+		 *
+		 * NULL means the endpoint's, which is what every backfilled row holds.
+		 */
+		promptFormat: text("prompt_format").references(
+			() => completionTemplates.key,
+			{ onDelete: "set null" }
+		),
+		/** This model's tokenizer, or NULL for the endpoint's. */
+		tokenCounter: text("token_counter"),
+		/**
+		 * Per-model adapter options — the ADAPTER's bag, exactly as
+		 * `connections.extra_json` is, and merged OVER it.
+		 *
+		 * ⚠ No api key lives here. The crypto path
+		 * (`utils/tokenCrypto.ts`) walks `connections.extra_json` and only that
+		 * one; a key written here would sit in plaintext. The model sockets
+		 * refuse the field for that reason rather than trusting the convention.
+		 */
+		extraJson: json("extra_json")
+			.notNull()
+			.default({})
+			.$type<Record<string, any>>(),
+		/** Display order within the endpoint. Ties break on `name`. */
+		sortOrder: integer("sort_order").notNull().default(0),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [
+		/**
+		 * EXACTLY ONE default per endpoint. Partial, so any number of
+		 * non-default rows coexist — the `tunnels_one_enabled_per_server`
+		 * precedent, for the same class of reason: the thing it prevents is not
+		 * cosmetic. Two defaults means "the endpoint's model" is whichever row
+		 * the planner returned first, and that answer can change between two
+		 * runs with no write in between.
+		 */
+		uniqueIndex("connection_models_one_default")
+			.on(t.connectionId)
+			.where(sql`${t.isDefault}`),
+		/**
+		 * One row per model identifier per endpoint. `importFromProbe` re-run
+		 * against the same host is the normal case, not the exotic one, and it
+		 * relies on this to be idempotent rather than on having remembered what
+		 * it inserted last time.
+		 */
+		uniqueIndex("connection_models_endpoint_model").on(
+			t.connectionId,
+			t.model
+		),
+		// Neither identifier may be EMPTY — `connection_defaults_sides_check`'s
+		// rule at the system of record. An empty `model` is a row an adapter
+		// would send as no model at all, which on most services means "the
+		// server's default" and on the rest is an error; either way it is not
+		// what the person who saved it meant.
+		check(
+			"connection_models_identifiers_check",
+			sql`${t.model} <> '' AND ${t.name} <> ''`
+		)
+	]
+)
+
+export const connectionModelsRelations = relations(
+	connectionModels,
+	({ one }) => ({
+		connection: one(connections, {
+			fields: [connectionModels.connectionId],
+			references: [connections.id]
+		})
+	})
+)
+
+/**
  * The instance default connection per capability. The ONLY store for one.
  *
  * A table rather than a pair of columns per capability, because the capability
@@ -643,13 +843,6 @@ export const connections = pgTable("connections", {
  *      auto-fallback on delete. The fact that somebody configured this
  *      capability survives; only the target is missing, and it is asked for
  *      by name.
- *
- * ⚠ Until 0181 this docblock said `system_settings.default_connection_id` and
- * `default_sampling_id` were "deliberately still there and still read by the
- * legacy generation path". They are gone. Every star press used to write both
- * spellings, and readers checked the table first and the column only when the
- * row was ABSENT — never when it was merely STALE. Nothing reads a default from
- * anywhere but here now, legacy path included.
  */
 export const connectionDefaults = pgTable(
 	"connection_defaults",
@@ -676,10 +869,32 @@ export const connectionDefaults = pgTable(
 		samplingConfigId: integer("sampling_config_id").references(
 			() => samplingConfigs.id,
 			{ onDelete: "set null" }
+		),
+		/**
+		 * WHICH MODEL on that endpoint (0114). NULL means the endpoint's
+		 * default model — which is what every row this migration touched holds,
+		 * and what keeps the backfill behaviour-preserving.
+		 *
+		 * `set null` and not cascade, for the third reason this table's header
+		 * gives: deleting a model must not delete the registration. "The model
+		 * you picked is gone, the endpoint is still set" is a recoverable state
+		 * that resolves to the endpoint's default and keeps generating; deleting
+		 * the row would take the ENDPOINT choice with it and turn a model
+		 * deletion into an unconfigured capability.
+		 *
+		 * ⚠ It is NOT keyed to `connection_id`, and nothing here checks that the
+		 * two agree. The pair is validated where it is WRITTEN
+		 * (`connections:setDefault`, `resolveCapabilityTarget`), because a check
+		 * constraint cannot span two tables and a trigger would be a fourth
+		 * place that decides what a pair means.
+		 */
+		connectionModelId: integer("connection_model_id").references(
+			() => connectionModels.id,
+			{ onDelete: "set null" }
 		)
 	},
 	(t) => [
-		// The pair, which until 0183 was one `capability` column holding the
+		// `(input, output)` is a PAIR, not one `capability` column holding the
 		// whole transform id. Splitting it is what makes the output side
 		// QUERYABLE: "which defaults produce images" is `WHERE output = 'image'`
 		// rather than `LIKE '%->image'` against a string no index helps with.
@@ -714,6 +929,10 @@ export const connectionDefaultsRelations = relations(
 			fields: [connectionDefaults.connectionId],
 			references: [connections.id]
 		}),
+		connectionModel: one(connectionModels, {
+			fields: [connectionDefaults.connectionModelId],
+			references: [connectionModels.id]
+		}),
 		samplingConfig: one(samplingConfigs, {
 			fields: [connectionDefaults.samplingConfigId],
 			references: [samplingConfigs.id]
@@ -721,7 +940,10 @@ export const connectionDefaultsRelations = relations(
 	})
 )
 
-export const connectionsRelations = relations(connections, () => ({}))
+export const connectionsRelations = relations(connections, ({ many }) => ({
+	/** The models reachable through this endpoint. An endpoint can reach many. */
+	models: many(connectionModels)
+}))
 
 /**
  * Stop scripts attached to a connection (18 §4b) — the rides-along pattern.
@@ -1343,11 +1565,28 @@ export const lorebookBindings = pgTable(
 			.$onUpdate(() => new Date())
 	},
 	(table) => ({
-		uniqueBinding: uniqueIndex("lorebook_bindings_unique").on(
-			table.lorebookId,
-			table.characterId,
-			table.personaId
-		),
+		// One binding per person per book (ruling 2026-09-12: cast members
+		// arrive from the session on their own, so a second row for the same
+		// person was never a decision a user made).
+		//
+		// Two PARTIAL indexes, not one composite. The old
+		// (lorebook_id, character_id, persona_id) unique index could never
+		// fire: exactly one of the two id columns is always NULL, NULL is
+		// distinct from NULL, and the index was not declared
+		// nullsNotDistinct — so every duplicate passed it. Splitting the two
+		// bound kinds apart and excluding the NULL side is what makes the
+		// constraint real. Background rows (both ids NULL) are outside both
+		// predicates and stay unconstrained, which is correct: they are named,
+		// not bound, and their names dedupe through
+		// resolveOrCreateBindingByName.
+		uniqueCharacterBinding: uniqueIndex(
+			"lorebook_bindings_character_unique"
+		)
+			.on(table.lorebookId, table.characterId)
+			.where(sql`"character_id" IS NOT NULL`),
+		uniquePersonaBinding: uniqueIndex("lorebook_bindings_persona_unique")
+			.on(table.lorebookId, table.personaId)
+			.where(sql`"persona_id" IS NOT NULL`),
 		lorebookIdIdx: index("lorebook_bindings_lorebook_id_idx").on(
 			table.lorebookId
 		),
@@ -1419,8 +1658,8 @@ export const bindingMergeLogs = pgTable(
 		userId: integer("user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
-		// Nullable: if the survivor is later itself deleted/absorbed elsewhere,
-		// the log entry is kept for history but can no longer be undone.
+		// Nullable: once the survivor is itself deleted or absorbed elsewhere,
+		// the log entry stays as a record; undo is unavailable.
 		survivorId: integer("survivor_id").references(
 			() => lorebookBindings.id,
 			{
@@ -1434,12 +1673,18 @@ export const bindingMergeLogs = pgTable(
 			.$type<Record<string, unknown>>(),
 		// Relationship rows whose fromNodeId/toNodeId were rewritten from the
 		// absorbed id to the survivor's — {id, oldFromNodeId, oldToNodeId} so
-		// undo can point them back.
+		// undo can point them back. Either id is null where that end of the
+		// edge is an entry rather than a binding: a merge rewrites the cast
+		// endpoints of an edge and leaves the entry ones alone.
 		relationshipRewrites: json("relationship_rewrites")
 			.notNull()
 			.default([])
 			.$type<
-				{ id: number; oldFromNodeId: number; oldToNodeId: number }[]
+				{
+					id: number
+					oldFromNodeId: number | null
+					oldToNodeId: number | null
+				}[]
 			>(),
 		// Full row snapshots of relationships deleted outright (self-loops
 		// created by the rewrite, or third-party duplicates) — undo re-inserts
@@ -1452,7 +1697,7 @@ export const bindingMergeLogs = pgTable(
 		// undo restores these recorded values directly rather than
 		// reverse-computing the rewrite.
 		//
-		// ⚠ The two halves are no longer the same kind of thing.
+		// ⚠ The two halves are NOT the same kind of thing.
 		// `participantCharacters` is the stored decision, read off
 		// `scene_characters`, and undo writes it back. `mentionedCharacters` is
 		// the value DERIVED from annotations at the moment of the merge, frozen
@@ -1558,17 +1803,13 @@ export const worldLoreEntries = pgTable(
 		/**
 		 * ⚠ **Dead residue on a legacy table.**
 		 *
-		 * `keyword` / `rag` / `both`, NULL meaning `rag`. Nothing has read this
-		 * since the entries collapse, and its live counterpart on
-		 * `lorebook_entries` is gone — see the tombstone there for why the gate
-		 * went and what its successor would be.
+		 * `keyword` / `rag` / `both`, NULL meaning `rag`. Nothing reads this
+		 * column; its live counterpart on `lorebook_entries` is gone — see the
+		 * tombstone there for what replaced it.
 		 *
-		 * It used to be kept because `0188_lorebook_entries.sql` selected it by
-		 * name. **That reason expired**: every migration from `0094` up was
-		 * squashed into `0094_baseline_0_6` (2026-09-06) and the test replaying
-		 * that backfill went with it. The column survives only because this
-		 * whole table does; it goes when the three legacy source tables are
-		 * dropped, not before, and dropping it alone buys nothing.
+		 * The column survives only because this whole table does: it drops
+		 * with the three legacy source tables as one unit, not before, and
+		 * dropping it alone buys nothing.
 		 */
 		retrievalStrategy: text("retrieval_strategy"),
 		/**
@@ -1643,19 +1884,16 @@ export const characterLoreEntries = pgTable(
 		name: text("name").notNull(),
 		keys: text("keys").notNull().default(""),
 		/**
+		/**
 		 * ⚠ **Dead residue on a legacy table.**
 		 *
-		 * `keyword` / `rag` / `both`, NULL meaning `rag`. Nothing has read this
-		 * since the entries collapse, and its live counterpart on
-		 * `lorebook_entries` is gone — see the tombstone there for why the gate
-		 * went and what its successor would be.
+		 * `keyword` / `rag` / `both`, NULL meaning `rag`. Nothing reads this
+		 * column; its live counterpart on `lorebook_entries` is gone — see the
+		 * tombstone there for what replaced it.
 		 *
-		 * It used to be kept because `0188_lorebook_entries.sql` selected it by
-		 * name. **That reason expired**: every migration from `0094` up was
-		 * squashed into `0094_baseline_0_6` (2026-09-06) and the test replaying
-		 * that backfill went with it. The column survives only because this
-		 * whole table does; it goes when the three legacy source tables are
-		 * dropped, not before, and dropping it alone buys nothing.
+		 * The column survives only because this whole table does: it drops
+		 * with the three legacy source tables as one unit, not before, and
+		 * dropping it alone buys nothing.
 		 */
 		retrievalStrategy: text("retrieval_strategy"),
 		/**
@@ -1732,19 +1970,16 @@ export const historyEntries = pgTable(
 		day: integer("day"), // Default to 1
 		keys: text("keys").notNull().default(""),
 		/**
+		/**
 		 * ⚠ **Dead residue on a legacy table.**
 		 *
-		 * `keyword` / `rag` / `both`, NULL meaning `rag`. Nothing has read this
-		 * since the entries collapse, and its live counterpart on
-		 * `lorebook_entries` is gone — see the tombstone there for why the gate
-		 * went and what its successor would be.
+		 * `keyword` / `rag` / `both`, NULL meaning `rag`. Nothing reads this
+		 * column; its live counterpart on `lorebook_entries` is gone — see the
+		 * tombstone there for what replaced it.
 		 *
-		 * It used to be kept because `0188_lorebook_entries.sql` selected it by
-		 * name. **That reason expired**: every migration from `0094` up was
-		 * squashed into `0094_baseline_0_6` (2026-09-06) and the test replaying
-		 * that backfill went with it. The column survives only because this
-		 * whole table does; it goes when the three legacy source tables are
-		 * dropped, not before, and dropping it alone buys nothing.
+		 * The column survives only because this whole table does: it drops
+		 * with the three legacy source tables as one unit, not before, and
+		 * dropping it alone buys nothing.
 		 */
 		retrievalStrategy: text("retrieval_strategy"),
 		/**
@@ -2038,6 +2273,18 @@ export const charactersRelations = relations(characters, ({ many, one }) => ({
 		fields: [characters.lorebookId],
 		references: [lorebooks.id]
 	}),
+	/**
+	 * The avatar file behind `avatarMediaId`, so a payload can carry the
+	 * address a browser actually caches against.
+	 *
+	 * Read sites join only `{ uuid, rev }`: an avatar URL is built from those
+	 * two, and `/media/{id}` is one string for every revision of the file, so a
+	 * row that changes in place cannot dislodge what a browser already holds.
+	 */
+	avatarMedia: one(files, {
+		fields: [characters.avatarMediaId],
+		references: [files.id]
+	}),
 	characterTags: many(characterTags),
 	sessionCharacters: many(sessionCharacters),
 	sessionMessages: many(sessionMessages)
@@ -2100,6 +2347,11 @@ export const personasRelations = relations(personas, ({ one, many }) => ({
 	lorebook: one(lorebooks, {
 		fields: [personas.lorebookId],
 		references: [lorebooks.id]
+	}),
+	/** See charactersRelations.avatarMedia — same join, same two columns. */
+	avatarMedia: one(files, {
+		fields: [personas.avatarMediaId],
+		references: [files.id]
 	}),
 	personaTags: many(personaTags)
 }))
@@ -2369,9 +2621,9 @@ export const messages = pgTable(
 		/**
 		 * Filter lane within a session; the genre declares the set (20 §7).
 		 *
-		 * ⚠ **Mirrored from `session_messages.channel` since 0200**, which is
-		 * where the prompt-facing reads select from and therefore where the
-		 * lane has to live. The store is the single writer of both.
+		 * ⚠ **Mirrored from `session_messages.channel`**, which is where the
+		 * prompt-facing reads select from and therefore where the lane has to
+		 * live. The store is the single writer of both.
 		 */
 		channel: text("channel").notNull().default("main"),
 		/** Namespaced activity kind — `core:chat`, `core:narration`, a plugin's. */
@@ -2500,9 +2752,9 @@ export const messageParts = pgTable(
  *
  * **That ruling is about provenance, and does not reach a role pointer.**
  * `characters.avatar_media_id` and `personas.avatar_media_id` point INTO this
- * table and are real foreign keys, `ON DELETE SET NULL`, since 0109. The two
- * are different kinds of fact: a provenance column is evidence and a stale one
- * is useful, whereas a role names the one file an entity currently wears and a
+ * table and are real foreign keys, `ON DELETE SET NULL`. The two are
+ * different kinds of fact: a provenance column is evidence and a stale one is
+ * useful, whereas a role names the one file an entity currently wears and a
  * stale one is just a broken image. Read the direction before citing the
  * ruling — outbound from `files` is provenance, inbound is a role.
  *
@@ -2511,20 +2763,19 @@ export const messageParts = pgTable(
  * `display_variant_id` can dangle. Integrity there lives in the application and
  * in the cleanup tool.
  *
- * A path is NEVER serialised to a non-admin client — and since 0182 a path only
- * exists on a `variants` row that no payload builder ever loads, so that is now
- * structural rather than a rule someone has to remember.
+ * A path is NEVER serialised to a non-admin client — a path only exists on a
+ * `variants` row that no payload builder ever loads, so this is structural
+ * rather than a rule someone has to remember.
  */
 export const files = pgTable(
 	"files",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-
 		/**
-		 * The public address — `/media/{uuid}`. ONE uuid per logical file now,
-		 * shared across variants, and it no longer rotates: `rev` below carries
-		 * cache invalidation instead. A uuid that rotated per-variant could not
-		 * be shared, and sharing it is what lets a render site address the
+		 * The public address — `/media/{uuid}`. ONE uuid per logical file,
+		 * shared across variants; `rev` below carries cache invalidation, so the
+		 * uuid itself never has to change. A uuid that rotated per-variant could
+		 * not be shared, and sharing it is what lets a render site address the
 		 * thumbnail of a file it holds without a second query.
 		 */
 		uuid: uuid("uuid")
@@ -2630,6 +2881,23 @@ export const files = pgTable(
 		 */
 		durationMs: integer("duration_ms"),
 
+		/**
+		 * The region of the ORIGINAL that a thumbnail is cut from — see
+		 * `$lib/shared/media/frame`.
+		 *
+		 * Source pixels, whole numbers, and NULL means the default rule
+		 * applies (largest square, anchored to the top edge). Null is stored
+		 * rather than the rule's output, so changing the rule reaches every
+		 * image nobody has cropped by hand.
+		 *
+		 * On the FILE because it describes the picture, not one encoding of
+		 * it: the character form, the persona form and the Media panel all edit
+		 * this one value and every surface showing that avatar agrees.
+		 * Non-destructive — the original and display variants stay whole, so a
+		 * lightbox shows everything and re-cropping never compounds.
+		 */
+		frame: jsonb("frame").$type<MediaFrame | null>(),
+
 		/** Ordering within its group — replaces the gallery tables' only real
 		 *  function (drag-to-reorder). */
 		position: integer("position").notNull().default(0),
@@ -2658,7 +2926,7 @@ export const files = pgTable(
 	(t) => [
 		// Dedupe is per-user, not per-instance: instance-wide would make one
 		// user's upload observable to another by hash timing, and would put a
-		// blob's lifetime under an account that no longer references it. No
+		// blob's lifetime under an account that does not reference it. No
 		// `variant` in the key any more — a variant is not a file.
 		uniqueIndex("files_user_hash_unique").on(t.userId, t.hash),
 		index("files_character_idx").on(t.characterId),
@@ -2938,25 +3206,13 @@ export const sessionGuestsRelations = relations(sessionGuests, ({ one }) => ({
  */
 export const systemSettings = pgTable("system_settings", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	/**
-	 * The one active embedding connection, site-wide (20 §14) — embeddings are
-	 * an instance property, not a per-session choice, because every stored
-	 * vector must come from one model to be comparable. Changing it triggers
-	 * the 13 §8 re-embed (background, resumable), never a refusal or a silent
-	 * orphaning.
-	 *
-	 * ⚠ Not folded into `connection_defaults` alongside the two columns 0181
-	 * dropped, and that is a decision rather than an oversight. It is written
-	 * once by `migrateEmbeddingConnection` and read by nothing at runtime, so it
-	 * is not a second spelling anybody can trip over — while folding it needs a
-	 * setter that carries the re-embed above, and no such setter exists. It
-	 * moves when the embedding path reads a capability default and that setter
-	 * is written; until then, dropping it would silently discard a user's
-	 * embedding model choice mid-upgrade.
-	 */
-	activeEmbeddingConnectionId: integer(
-		"active_embedding_connection_id"
-	).references(() => connections.id, { onDelete: "set null" }),
+	// `active_embedding_connection_id` lived here and is gone (0127). Its own
+	// comment said it would move "when the embedding path reads a capability
+	// default and that setter is written" — both are now true. The one active
+	// embedding connection is the `text->embedding` row in
+	// `connection_defaults`, written by `connections:setDefault` like every
+	// other star, and the re-embed that column's note asked for rides on it
+	// (`embedding/reindex.ts`).
 	lockConnection: boolean("lock_connection").notNull().default(false),
 	// The instance default connection and sampling config lived here as
 	// `default_connection_id` / `default_sampling_id`, and the per-modality
@@ -3038,14 +3294,19 @@ export const systemSettings = pgTable("system_settings", {
 	 * reason to keep it readable at rest.
 	 */
 	recoveryKeyHash: text("recovery_key_hash"),
-	vectorizationEnabled: boolean("vectorization_enabled")
-		.notNull()
-		.default(false),
-	embeddingModelName: text("embedding_model_name"),
+	// `vectorization_enabled` and `embedding_model_name` lived here and are gone
+	// (0127). **The star is the switch**: embeddings are on when something is
+	// registered for `text->embedding` in `connection_defaults` and off when
+	// nothing is, so unstarring or deleting the connection turns them off by
+	// itself. The three spellings this collapses — a boolean here, a model name
+	// here, and the endpoint halves in `vectorization_configs` — each had to be
+	// written "in step" by every handler that touched any of them.
+	//
+	// ⚠ `embedding_model_dimensions` below is what remains, and it is DEAD:
+	// nothing has read it since before 0.6 and the three handlers that wrote it
+	// went with the columns above. Kept only because dropping a column nobody
+	// asked about is a separate migration's worth of risk.
 	embeddingModelDimensions: integer("embedding_model_dimensions"),
-	summarizationEnabled: boolean("summarization_enabled")
-		.notNull()
-		.default(false),
 	/**
 	 * The scripts kill switch (18 §10, §13.3 — ruled: default **on**). Unlike
 	 * plugins, nothing executes until an admin authors or imports a script, so
@@ -3164,11 +3425,11 @@ export const systemSettings = pgTable("system_settings", {
 	/**
 	 * Whether `migrateContextTemplates` has run.
 	 *
-	 * A ledger flag rather than a re-derived condition, and that distinction is
-	 * the whole reason the column exists. That migration carries each scope's
-	 * context config into `pipeline_context_templates` and, where the template
-	 * is one somebody wrote, pins that scope's variable layouts to the bare
-	 * rows so the heading is not written twice.
+	 * A ledger flag rather than a re-derived condition: that distinction is
+	 * why the column exists. The migration carries each scope's context
+	 * config into `pipeline_context_templates` and, where the template is one
+	 * somebody wrote, pins that scope's variable layouts to the bare rows so
+	 * the heading is not written twice.
 	 *
 	 * Both halves have to happen once. The obvious alternative — re-checking
 	 * each boot whether the selected template is core's — quietly re-pins
@@ -3213,10 +3474,10 @@ export const systemSettings = pgTable("system_settings", {
 	 * wants translation without a third party: point it at their own
 	 * LibreTranslate and nothing leaves the network.
 	 *
-	 * The engines needing an API key (`deepl`, `yandex`) are deliberately not
-	 * offered. A key is a secret, and a secret column is an encryption scheme,
-	 * a never-send-to-client exclusion and a rotation story — none of which
-	 * this lane built, and all of which a half-done version would imply.
+	 * The engines needing an API key (`deepl`, `yandex`) are not offered: a
+	 * key is a secret, and a secret column is an encryption scheme, a
+	 * never-send-to-client exclusion and a rotation story — none of which
+	 * this lane builds, and all of which a half-done version would imply.
 	 */
 	autoTranslateEngine: text("auto_translate_engine")
 		.notNull()
@@ -3486,9 +3747,9 @@ export const localModels = pgTable("local_models", {
 	 * What this model is FOR: `text-gen | embeddings | image-gen | ner | tts |
 	 * …` — the same open vocabulary `connections.modality` documents, reused
 	 * verbatim so a connection of a given modality can be pointed at a local
-	 * model of the same one. Deliberately not narrowed with `$type`, for the
-	 * reason that column is not either: a closed union here would be a second,
-	 * parallel vocabulary.
+	 * model of the same one. Not narrowed with `$type`, for the same reason
+	 * `connections.modality` is not either: a closed union here would be a
+	 * second, parallel vocabulary.
 	 *
 	 * NULL means "nobody knows yet" — the same open state `kind: "unknown"` is,
 	 * and where the backfill left every unknown row. It is NOT "text-gen unless
@@ -3668,15 +3929,34 @@ export const narrativeRelationships = pgTable(
 		lorebookId: integer("lorebook_id")
 			.notNull()
 			.references(() => lorebooks.id, { onDelete: "cascade" }),
-		// Post-merge: references lorebookBindings.id (formerly narrativeNodes.id
-		// — see the lorebookBindings/narrativeNodes merge plan). Column names
-		// kept as-is; only the FK target changed.
-		fromNodeId: integer("from_node_id")
-			.notNull()
-			.references(() => lorebookBindings.id, { onDelete: "cascade" }),
-		toNodeId: integer("to_node_id")
-			.notNull()
-			.references(() => lorebookBindings.id, { onDelete: "cascade" }),
+		/**
+		 * The cast half of an endpoint — a `lorebookBindings.id` (formerly
+		 * `narrativeNodes.id`; only the FK target moved in the merge).
+		 *
+		 * ⚠ **Nullable, and paired with `from_entry_id` under a CHECK:** an
+		 * endpoint is a cast binding or an entry, never both and never neither.
+		 * A road between two places is an edge whose two endpoints are entries,
+		 * so this column is one endpoint kind of two.
+		 */
+		fromNodeId: integer("from_node_id").references(
+			() => lorebookBindings.id,
+			{ onDelete: "cascade" }
+		),
+		toNodeId: integer("to_node_id").references(() => lorebookBindings.id, {
+			onDelete: "cascade"
+		}),
+		/**
+		 * The entry half of an endpoint. Cascades: an edge to a deleted place
+		 * is not an edge, it is a dangling half.
+		 */
+		fromEntryId: integer("from_entry_id").references(
+			(): AnyPgColumn => lorebookEntries.id,
+			{ onDelete: "cascade" }
+		),
+		toEntryId: integer("to_entry_id").references(
+			(): AnyPgColumn => lorebookEntries.id,
+			{ onDelete: "cascade" }
+		),
 		// History entry this relationship state was established in (optional)
 		historyEntryId: integer("history_entry_id").references(
 			(): AnyPgColumn => lorebookEntries.id,
@@ -3715,7 +3995,22 @@ export const narrativeRelationships = pgTable(
 	(table) => [
 		index("narrative_relationships_from_node_id_idx").on(table.fromNodeId),
 		index("narrative_relationships_to_node_id_idx").on(table.toNodeId),
-		index("narrative_relationships_lorebook_id_idx").on(table.lorebookId)
+		index("narrative_relationships_from_entry_id_idx").on(
+			table.fromEntryId
+		),
+		index("narrative_relationships_to_entry_id_idx").on(table.toEntryId),
+		index("narrative_relationships_lorebook_id_idx").on(table.lorebookId),
+		// Exactly one endpoint kind per side. Without it a row could name a
+		// binding AND an entry — two answers to "what is this end of the edge"
+		// — or neither, which is an edge attached to nothing.
+		check(
+			"narrative_relationships_from_endpoint_check",
+			sql`(${table.fromNodeId} IS NULL) <> (${table.fromEntryId} IS NULL)`
+		),
+		check(
+			"narrative_relationships_to_endpoint_check",
+			sql`(${table.toNodeId} IS NULL) <> (${table.toEntryId} IS NULL)`
+		)
 	]
 )
 
@@ -3736,6 +4031,16 @@ export const narrativeRelationshipsRelations = relations(
 			references: [lorebookBindings.id],
 			relationName: "toNode"
 		}),
+		fromEntry: one(lorebookEntries, {
+			fields: [narrativeRelationships.fromEntryId],
+			references: [lorebookEntries.id],
+			relationName: "fromEntry"
+		}),
+		toEntry: one(lorebookEntries, {
+			fields: [narrativeRelationships.toEntryId],
+			references: [lorebookEntries.id],
+			relationName: "toEntry"
+		}),
 		historyEntry: one(lorebookEntries, {
 			fields: [narrativeRelationships.historyEntryId],
 			references: [lorebookEntries.id]
@@ -3753,9 +4058,6 @@ export const setup = pgTable("setup", {
 		.notNull()
 		.references(() => users.id, { onDelete: "cascade" })
 		.unique(),
-	summarizationStepComplete: boolean("summarization_step_complete")
-		.notNull()
-		.default(false),
 	ragStepComplete: boolean("rag_step_complete").notNull().default(false)
 })
 
@@ -3766,26 +4068,22 @@ export const setupRelations = relations(setup, ({ one }) => ({
 	})
 }))
 
-export const vectorizationConfigs = pgTable("vectorization_configs", {
-	id: integer("id").primaryKey().default(1),
-	embeddingModelTtlMinutes: integer("embedding_model_ttl_minutes")
-		.notNull()
-		.default(5),
-	// "local" (in-process ONNX model) or "api" (external OpenAI-compatible
-	// embeddings endpoint). Only one is ever active, so this singleton table
-	// holds both configs rather than a dedicated multi-row connections table.
-	mode: text("mode").notNull().default("local"),
-	apiBaseUrl: text("api_base_url"),
-	// Encrypted at rest (AES-256-GCM via tokenCrypto.ts, VECTORIZATION_API_KEY_INFO)
-	// — apiKey holds the ciphertext, apiKeyIv/apiKeyAuthTag the companion
-	// values needed to decrypt it. Never echoed back to the client in
-	// plaintext (vectorization:listModels returns apiKeySet instead).
-	apiKey: text("api_key"),
-	apiKeyIv: text("api_key_iv"),
-	apiKeyAuthTag: text("api_key_auth_tag"),
-	apiModel: text("api_model"),
-	apiDimensions: integer("api_dimensions")
-})
+/**
+ * ⚠ `vectorization_configs` is GONE (0127), and nothing replaces it.
+ *
+ * It was a singleton holding one embedding endpoint: `mode` (local or api), a
+ * base URL, an encrypted key, a model name, a measured width, and the idle TTL.
+ * Every one of those is a property of a CONNECTION — which is what an embedding
+ * endpoint is now, a `connections` row with `modality = 'embeddings'` — and the
+ * TTL rode onto that row's `extra_json` with them. `mode` needed no home at all:
+ * it only ever answered "which half of this table is live", and the connection's
+ * TYPE answers that.
+ *
+ * The shape is worth remembering rather than just deleting, because it is the
+ * shape that made embeddings unlike every other backend in the app: one row, so
+ * one endpoint, so switching model was a bespoke verb instead of moving a star,
+ * and an admin could not keep two configured and choose.
+ */
 
 export const customThemes = pgTable("custom_themes", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
@@ -3854,11 +4152,27 @@ export const pipelineSpecVersions = pgTable(
 			.references(() => pipelineSpecs.id, { onDelete: "cascade" }),
 		semver: text("semver").notNull(),
 		engineRange: text("engine_range"),
-		status: text("status").notNull().default("draft"), // draft | published | retired
+		/**
+		 * draft | published | retired.
+		 *
+		 * ⚠ **`retired` now also means superseded** (ruling 2026-09-10). A slug
+		 * resolves to whatever `pipeline_specs.active_version_id` points at, so
+		 * republishing an edited document under an unchanged semver inserts a
+		 * new row, moves the pointer, and retires the row it moved off. The old
+		 * row stays for the receipts that pinned its hash. Every reader asking
+		 * for `status = 'published'` therefore still gets exactly one row per
+		 * slug, which is why the pointer move retires rather than leaving two.
+		 */
+		status: text("status").notNull().default("draft"),
 		/**
 		 * The document hash. Two instances that compiled the same authoring
 		 * source land on the same string, which is what makes an import
 		 * verifiable rather than trusted.
+		 *
+		 * It is also **the key a slug resolves through**: a version is
+		 * identified by `(spec, semver, hash)`, not by `(spec, semver)`, so an
+		 * edited document publishes as a new row instead of overwriting the one
+		 * a run is holding.
 		 */
 		canonicalHash: text("canonical_hash").notNull(),
 		schemaVersion: integer("schema_version").notNull().default(1),
@@ -3889,9 +4203,12 @@ export const pipelineSpecVersions = pgTable(
 		publishedAt: timestamp("published_at")
 	},
 	(t) => [
+		// The content hash is part of the key. Without it an in-place edit had
+		// nowhere to land but on top of the row a receipt already named.
 		uniqueIndex("pipeline_spec_versions_spec_semver_idx").on(
 			t.specId,
-			t.semver
+			t.semver,
+			t.canonicalHash
 		)
 	]
 )
@@ -4121,12 +4438,11 @@ export const pipelinePresetValues = pgTable("pipeline_preset_values", {
  * The session's overrides, per pipeline (12 §2 as simplified 2026-08-24).
  *
  * Three layers remain: the pipeline's author defaults, the selected config's
- * values, and this table — **session scope only**. The instance's tuning lives in
- * the config itself (edited as a thing with a name, duplicated when shipped),
- * and the per-user layer no longer exists; migration 0140 folded instance rows
- * into configs and removed the rest. A session's overrides stay a separate table
- * because they are arguably the session's content, and must never travel with an
- * exported document.
+ * values, and this table — **session scope only**. The instance's tuning lives
+ * in the config itself (edited as a thing with a name, duplicated when
+ * shipped); there is no per-user layer. A session's overrides stay a separate
+ * table because they are arguably the session's content, and must never
+ * travel with an exported document.
  *
  * **The reason is export.** A preset is execution-affecting and round-trips (F4);
  * a user's overrides are their configuration and, at session scope, arguably their
@@ -4210,9 +4526,10 @@ export const pipelineNodeOverrides = pgTable(
  * which is when they are least able to tell what changed. A slug is the identity
  * that survives, so the same name resolves against whichever version is live.
  *
- * A slug that no longer exists resolves to nothing rather than to an error: 12 §3b
- * retires presets instead of deleting them, and a selection pointing at a retired
- * one keeps working. Falling back is what happens when it is genuinely gone.
+ * A slug with no matching preset resolves to nothing rather than to an error:
+ * 12 §3b retires presets instead of deleting them, and a selection pointing
+ * at a retired one keeps working. Falling back is what happens when a slug
+ * is genuinely gone.
  */
 export const pipelineConfigSelections = pgTable(
 	"pipeline_config_selections",
@@ -4561,7 +4878,7 @@ export const pipelineConfigValues = pgTable(
  * row's id, never a copy of its text, so renaming or rewriting a prompt reaches
  * every node pointing at it and an admin's edit is not silently forked.
  *
- * ## What it deliberately no longer carries
+ * ## What it does not carry
  *
  * `prompt_configs` — the table this succeeds — is a bundle: system text,
  * post-history text, `post_history_depth`, `post_history_token_trigger`, a
@@ -4653,7 +4970,7 @@ export const pipelinePrompts = pgTable(
 			.default({})
 			.$type<Record<string, string>>(),
 		/**
-		 * Text for a field the slot no longer declares, moved here by the boot
+		 * Text for a field the slot does not declare, moved here by the boot
 		 * sweep. Left in `fields` it is invisible: the panel renders one box per
 		 * DECLARED field, so a prompt someone spent an afternoon on becomes
 		 * unfindable. On the ROW so a duplicate carries it to another pipeline —
@@ -4738,7 +5055,7 @@ export const pipelineScripts = pgTable(
  * reference, this row holds the content, and rewording reaches every node
  * pointing at it instead of forking at the first edit.
  *
- * ## Keyed by the variable, deliberately not by the spec
+ * ## Keyed by the variable, not by the spec
  *
  * This is the one place the prompt pattern is *not* copied, and the difference
  * is the entire feature. A prompt is namespaced to a pipeline because a session
@@ -4754,11 +5071,11 @@ export const pipelineScripts = pgTable(
  *
  * ## Why `engine` is NOT nullable
  *
- * It used to be, on the reading that NULL meant "core's default". But the
- * column's own argument — a stored value keeps whatever it was authored in
- * rather than inheriting whatever core happens to render with later — is an
- * argument FOR a concrete value and AGAINST NULL: a NULL is precisely a row
- * that inherits later. The seed already wrote the id explicitly and said so.
+ * NULL might read as "core's default", but the column's own argument cuts the
+ * other way: a stored value keeps whatever it was authored in rather than
+ * inheriting whatever core happens to render with later, which argues FOR a
+ * concrete value and AGAINST NULL — NULL is precisely a row that inherits
+ * later. The seed writes the id explicitly and says so.
  *
  * And here it is load-bearing rather than decorative: this table's engine
  * genuinely reaches `renderTemplate` (`variableLayouts.ts`), so a NULL was a
@@ -4794,7 +5111,7 @@ export const pipelineVariableTemplates = pgTable(
 	(t) => [
 		index("pipeline_variable_templates_variable_idx").on(t.variableId),
 		// The engine is in the key: one "Default" per language, and a layout
-		// written in one language can no longer be selected into a slot that
+		// written in one language cannot be selected into a slot that
 		// renders another.
 		uniqueIndex("pipeline_variable_templates_variable_name_idx").on(
 			t.variableId,
@@ -4811,7 +5128,7 @@ export const pipelineVariableTemplates = pgTable(
  * pipeline reads; the legacy one is kept so a template somebody spent a year on
  * survives the upgrade, and is dropped once nothing needs to read it.
  *
- * ## What it owns, and what it no longer owns
+ * ## What it owns, and what it does not
  *
  * Structure: message blocks, placement, `{{#if}}`, `{{#each}}`. It has no
  * opinion on how the data inside is *presented* — the headings, fences and JSON
@@ -4838,10 +5155,10 @@ export const pipelineVariableTemplates = pgTable(
  *
  * Which pipeline's panel a row was written in. The picker groups on it — used
  * here, then shipped, then everything else that fits — because "compatible" and
- * "the one I want" stop being the same answer at about ten rows. It is
- * deliberately not a permission: a template written while editing session replies
- * is still one scroll away in the narrator, because the whole reason this is not
- * spec-scoped is that it genuinely works there.
+ * "the one I want" stop being the same answer at about ten rows. It is not a
+ * permission: a template written while editing session replies is still one
+ * scroll away in the narrator, because it genuinely works there and this
+ * table is not spec-scoped.
  *
  * ## The engine is half the pool key, and NOT NULL
  *
@@ -4930,7 +5247,7 @@ export const pipelineContextTemplates = pgTable(
  * would be the worst of the three available behaviours: the setting stops
  * applying, the panel stops showing it, and nothing anywhere says why the
  * pipeline started behaving differently. Silently keeping it is no better — it
- * is a row addressing a field that no longer exists, which resolves to nothing
+ * is a row addressing a field the schema does not declare, which resolves to nothing
  * and reads as corruption the first time anyone looks.
  *
  * So the value is culled and the cull is recorded. The notice is the part that
@@ -5044,6 +5361,25 @@ export const pipelineRuns = pgTable(
 		specVersion: text("spec_version").notNull(),
 		/** Nullable on purpose: see the note above about retired specs. */
 		specVersionId: integer("spec_version_id"),
+		/**
+		 * **The document this run actually ran** — the canonical hash of the
+		 * spec version, pinned at the moment of the run (ruling 2026-09-10).
+		 *
+		 * `spec_slug` and `spec_version` name an indirection: an edited document
+		 * republishes under the same semver and the slug moves on, so the pair
+		 * answers "which pipeline" and not "which document". The hash answers
+		 * the second, which is the one an explain surface needs to say whether a
+		 * receipt still describes what the slug resolves to today.
+		 *
+		 * ⚠ **A row written before migration 0119 carries the hash that was
+		 * current when that migration ran, not the one its run used.** Such a
+		 * run's document was overwritten in place rather than kept, so there is
+		 * nothing else to name it by; the honest alternative was NULL, which
+		 * would make every historical receipt unattributable. Rows written since
+		 * are the genuine article. NULL means the backfill matched no version
+		 * row for the slug and semver at all.
+		 */
+		specHash: text("spec_hash"),
 		sessionId: integer("session_id").references(() => sessions.id, {
 			onDelete: "set null"
 		}),
@@ -5115,7 +5451,7 @@ export const pipelineRunNodes = pgTable(
 )
 
 /**
- * What a run left behind — every row it made, not just the one it used to name.
+ * What a run left behind — every row it made, not a single named row.
  *
  * `pipeline_runs.message_id` was a single nullable column, so a run could
  * record exactly one message and nothing else. That was wrong in both
@@ -5236,7 +5572,7 @@ export const plugins = pgTable(
 		 * AES-256-GCM ciphertext under the app secret (settingsHost.ts):
 		 * typed, so core mechanically masks it to the client, excludes it
 		 * from export, and decrypts it only into the declaring plugin's own
-		 * hook invocations. Fields the current schema no longer declares are
+		 * hook invocations. Fields the current schema does not declare are
 		 * kept, never deleted — the SDK's `reconcile` reports them as
 		 * orphaned diagnostics (an update must stay reversible).
 		 */
@@ -5298,9 +5634,9 @@ export const pluginFiles = pgTable(
  * filter in application code would have been a naming rule one bug away from
  * being nothing at all.
  *
- * **Why a table rather than files.** Rows back up and restore with the rest of
- * the instance, which is the whole reason the SDK splits them from
- * `storage.files`: a downloaded model index belongs on disk, an extension's
+ * **Why a table rather than files.** Rows back up and restore with the rest
+ * of the instance — that is why the SDK splits them from `storage.files`: a
+ * downloaded model index belongs on disk, an extension's
  * state belongs where `pg_dump` can see it. They share one quota with the file
  * half (`plugins.storage_quota_override` / the manifest grant), with a sub-cap
  * on the row side — see `rowQuotaFor` in `plugins/storageHost.ts` for why that
@@ -5482,6 +5818,20 @@ export const pipelineTypeRegistry = pgTable(
 		i18n: json("i18n").$type<Record<string, any> | null>(),
 		/** Which release seeded the row — what a drift diagnostic reports against. */
 		release: text("release"),
+		/**
+		 * **The slug's current pointer** (ruling 2026-09-10, content-addressed
+		 * types).
+		 *
+		 * One row per `type_id@version`, and the hash on it names which
+		 * declaration that slug resolves to *now*. Every declaration the slug
+		 * has ever resolved to is kept in `pipeline_type_declarations`, keyed by
+		 * this hash, so moving the pointer loses nothing.
+		 *
+		 * Nullable only because it has always been: a row written before the
+		 * column existed carries NULL, and the next boot heals it. Nothing may
+		 * treat NULL as "no declaration" — it means "this install has not
+		 * re-synced yet".
+		 */
 		contentHash: text("content_hash")
 	},
 	(t) => [
@@ -5489,6 +5839,75 @@ export const pipelineTypeRegistry = pgTable(
 			t.typeId,
 			t.version
 		)
+	]
+)
+
+/**
+ * Every declaration a type slug has ever resolved to, keyed by content hash.
+ *
+ * ## The rule
+ *
+ * A slug is an **indirection** (ruling 2026-09-10): `pipeline_type_registry`
+ * holds one row per slug carrying the declaration it currently resolves to, and
+ * this table holds the declaration itself under its hash. Publishing a changed
+ * declaration inserts a row here if the hash is unseen and moves the pointer.
+ * Nothing is rewritten and nothing is deleted, so a receipt, a notice or an
+ * audit that names a hash still resolves it after the slug has moved on.
+ *
+ * That retention is what lets an edited declaration publish at all: without a
+ * home for the declaration a slug moves off, the only safe answers are refusing
+ * the boot or a migration per edit. See `docs/pipelines.md`, *Specs and types
+ * are content-addressed*.
+ *
+ * ## Why `material` rather than a copy of the registry's columns
+ *
+ * `material` is the exact object `typeContentHash` digests — not a projection
+ * of it, and not the columns spread out a second time. Two consequences, both
+ * wanted: the table is self-verifying (re-hash `material`, you must get
+ * `content_hash`), and a declaration shape that grows a field does not grow this
+ * table by a column. The registry row stays the shape readers query; this stays
+ * the shape the hash was taken over.
+ */
+export const pipelineTypeDeclarations = pgTable(
+	"pipeline_type_declarations",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** The slug this declaration was published under — an attribute, not the key. */
+		typeId: text("type_id").notNull(),
+		version: integer("version").notNull().default(1),
+		kind: text("kind").notNull(),
+		/** The digest of `material`. The key, and what a receipt would pin. */
+		contentHash: text("content_hash").notNull(),
+		/** Exactly what was hashed — see the table note. */
+		material: json("material").notNull().$type<Record<string, any>>(),
+		/**
+		 * The declaration as the registry projects it, so a reader can render a
+		 * superseded declaration's form without the running build declaring it.
+		 * Display text included: it is what the author wrote at the time.
+		 */
+		entry: json("entry").notNull().$type<Record<string, any>>(),
+		/** Which release first published this hash. */
+		release: text("release"),
+		/**
+		 * Whether the material was recorded at publish or reconstructed.
+		 *
+		 * `declared` — written by a boot that held the declaration.
+		 * `adopted` — reconstructed at boot from a `pipeline_type_registry` row
+		 * that predates this table, whose stored columns *are* the declaration
+		 * material (the registry round trip is lossless, and
+		 * `registrySync.int.test.ts` pins that). An adopted row's hash is the
+		 * one the registry row already carried, not one recomputed here.
+		 */
+		source: text("source").notNull().default("declared"),
+		firstSeenAt: timestamp("first_seen_at").notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex("pipeline_type_declarations_hash_idx").on(
+			t.typeId,
+			t.version,
+			t.contentHash
+		),
+		index("pipeline_type_declarations_slug_idx").on(t.typeId, t.version)
 	]
 )
 
@@ -5529,7 +5948,7 @@ export const pipelineEventSubscriptions = pgTable(
 		 * suffix was the first thing C1 caught.
 		 */
 		eventRef: text("event_ref").notNull(),
-		/** Split out for joins and the cycle check; never used to rebuild `eventRef`. */
+		/** Split out for joins and the cycle check. `eventRef` is never rebuilt from it. */
 		eventSlug: text("event_slug").notNull(),
 		eventVersion: integer("event_version").notNull().default(1),
 		specVersionId: integer("spec_version_id")
@@ -5781,10 +6200,59 @@ export const widgetStyles = pgTable(
 )
 
 /**
+ * Per-instance widget settings (PLAN 25; ruled 2026-09-10). One row per
+ * (user, session, widget), holding the DEVIATIONS from the widget's declared
+ * defaults — the defaults themselves live in the declaration and are never
+ * copied here, so a changed default reaches every instance that has not
+ * overridden it.
+ *
+ * A table rather than a key in `session_panel_layouts.layout_settings`, because
+ * the boot reconciler prunes values for fields a descriptor has stopped
+ * declaring: keyed by `widget_slug` it touches exactly the widgets it is
+ * syncing, while a shared json blob would have to be read, rewritten and raced
+ * against the client's wholesale replacement of that same blob.
+ *
+ * `values` holding `{}` is a row with nothing to say; the write path deletes it
+ * rather than storing one.
+ */
+export const widgetSettings = pgTable(
+	"widget_settings",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		sessionId: integer("session_id")
+			.notNull()
+			.references(() => sessions.id, { onDelete: "cascade" }),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		/** The widget this configures (WidgetDecl/PanelDecl id). */
+		widgetSlug: text("widget_slug").notNull(),
+		/** Deviations from the declared defaults, keyed by field. */
+		values: json("values")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [
+		uniqueIndex("widget_settings_user_session_widget_idx").on(
+			t.userId,
+			t.sessionId,
+			t.widgetSlug
+		),
+		index("widget_settings_widget_idx").on(t.widgetSlug)
+	]
+)
+
+/**
  * Session presets (23 §9) — the bundle a person actually chooses to start a
  * session: which type (create spec), optionally which primary variant, which
- * pipeline configurations, which actions. The preset semantics that used to
- * squat on `pipeline_configs` (`enabled`, `includedActions`) live here now;
+ * pipeline configurations, which actions. Preset semantics (`enabled`,
+ * `includedActions`) live here rather than squatting on `pipeline_configs`;
  * pipeline configs go back to being value-sets against one spec.
  */
 export const sessionPresets = pgTable(
@@ -5821,13 +6289,107 @@ export const sessionPresets = pgTable(
 		enabled: boolean("enabled").notNull().default(true),
 		isDefault: boolean("is_default").notNull().default(false),
 		isImmutable: boolean("is_immutable").notNull().default(false),
+		/**
+		 * The plugin whose `preset()` declaration projected this row. NULL for
+		 * core's own and for anything an admin made.
+		 *
+		 * `plugins.id` rather than the string `plugin_id`, matching
+		 * `pipeline_type_registry.owner_plugin_id`. No foreign key, for the
+		 * reason `withdrawn_at` exists: uninstalling a plugin must not take the
+		 * presets sessions are running on with it.
+		 */
+		ownerPluginId: integer("owner_plugin_id"),
+		/**
+		 * When the owning plugin stopped supplying this preset — disabled,
+		 * uninstalled, or dropped from its declarations.
+		 *
+		 * **Marked, never deleted.** A session names its preset, so removing the
+		 * row would leave the session pointing at nothing the moment somebody
+		 * switched an extension off. Withdrawn presets drop out of the pickers
+		 * and stay visible to admins and to history; re-enabling the plugin
+		 * clears the mark.
+		 *
+		 * Distinct from `enabled`, and deliberately: `enabled` is the
+		 * administrator's decision and has to survive a withdrawal, or turning
+		 * an extension off and on again would silently un-approve its presets.
+		 */
+		withdrawnAt: timestamp("withdrawn_at"),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at")
 			.notNull()
 			.defaultNow()
 			.$onUpdate(() => new Date())
 	},
-	(t) => [index("session_presets_genre_idx").on(t.genreId)]
+	(t) => [
+		index("session_presets_genre_idx").on(t.genreId),
+		index("session_presets_owner_idx").on(t.ownerPluginId)
+	]
+)
+
+/**
+ * A preset slot whose bound pipeline stopped answering (ruling 2026-09-10).
+ *
+ * The run itself never stops: dispatch falls back to the genre's default for
+ * that event and stamps the substitution on its receipt. That covers the
+ * person taking the turn. It does not cover the administrator, who has no
+ * reason to open a receipt and whose preset screen would otherwise keep
+ * showing a binding the instance cannot honour — so the boot reconcile writes
+ * one row per stale slot and the preset surfaces read it.
+ *
+ * ⚠ **Not `pipeline_config_notices`.** That table's subject is a config, by a
+ * NOT NULL foreign key, and a stale binding's subject is a preset — squeezing
+ * one into the other would mean a nullable subject column and every reader
+ * branching on which kind of notice it had.
+ *
+ * Cleared by deletion rather than by an `acknowledged_at`, and that is the
+ * difference from the config notices beside it: a culled option is *news*
+ * about something that already happened and stays true, so a person dismisses
+ * it. This is a *condition* — the binding either resolves or it does not — and
+ * a dismissable one would let an administrator hide a session running
+ * something other than what the preset says. Republish the pipeline and the
+ * next reconcile takes the row away.
+ */
+export const sessionPresetNotices = pgTable(
+	"session_preset_notices",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		presetId: integer("preset_id")
+			.notNull()
+			.references(() => sessionPresets.id, { onDelete: "cascade" }),
+		/** The genre event whose slot does not resolve. */
+		event: text("event").notNull(),
+		/** The slug the preset binds — kept so the notice can name it. */
+		boundSpec: text("bound_spec").notNull(),
+		/** Why it does not resolve, in the sentence the surfaces show. */
+		reason: text("reason").notNull(),
+		/** The genre's own answer that ran instead. Null = nothing serves. */
+		fallbackSpec: text("fallback_spec"),
+		/**
+		 * When the condition was first observed.
+		 *
+		 * Preserved across reconciles — a boot that finds the same slot still
+		 * stale updates `last_seen_at` and leaves this alone, so "since the
+		 * upgrade" stays answerable rather than resetting every restart.
+		 */
+		firstSeenAt: timestamp("first_seen_at").notNull().defaultNow(),
+		lastSeenAt: timestamp("last_seen_at").notNull().defaultNow()
+	},
+	(t) => [
+		// One notice per slot, so a reconcile is an upsert rather than a
+		// growing pile of the same fact.
+		unique("session_preset_notices_slot_uq").on(t.presetId, t.event),
+		index("session_preset_notices_preset_idx").on(t.presetId)
+	]
+)
+
+export const sessionPresetNoticesRelations = relations(
+	sessionPresetNotices,
+	({ one }) => ({
+		preset: one(sessionPresets, {
+			fields: [sessionPresetNotices.presetId],
+			references: [sessionPresets.id]
+		})
+	})
 )
 
 /**
@@ -5990,7 +6552,7 @@ export const tunnelsRelations = relations(tunnels, ({ one }) => ({
  * One TOTP enrolment per user.
  *
  * `enabledAt` stays NULL between generating a secret and the user proving they
- * can produce a code from it. That gap is the whole reason the column exists:
+ * can produce a code from it. That gap is why the column exists:
  * an enrolment that took effect before it was verified would lock a user out of
  * their own account using a secret they never successfully scanned.
  */
@@ -6871,4 +7433,264 @@ export const bindingSuggestionsRelations = relations(
 			references: [lorebookBindings.id]
 		})
 	})
+)
+
+// ─── Stats and states ────────────────────────────────────────────────────────
+//
+// Three levels, three tables, one key. A slot is **declared** in the SDK
+// registry (`@serene-pub/sdk` attributes.ts, owned by core for the types and by
+// genres/plugins/admins for the definitions), **configured** here per owner,
+// and **valued** here per owner. Config and value are structurally identical —
+// `(owner, slot, validity, payload)` — differing only in whether the payload is
+// schema-shaped or value-shaped, which is why they are two tables and not two
+// systems.
+//
+// ## `owner_kind` + `owner_id`, and what each one points at
+//
+// | kind | `owner_id` | `session_id` |
+// |---|---|---|
+// | `card` | `characters.id` — the portable template | null |
+// | `cast_member` | `lorebook_bindings.id` — this world's cast | null |
+// | `lorebook` | `lorebooks.id` — the world itself | null |
+// | `session` | `sessions.id` — this run's world | the same id |
+// | `session_cast` | `characters.id` — this run's cast member | the session |
+//
+// No foreign key on `owner_id`: it points at five different tables depending on
+// the row beside it, which is the one thing a foreign key cannot express.
+// `session_id` **is** a key, and it is what makes the session layer disappear
+// with its session instead of outliving it.
+//
+// ## Deviations only
+//
+// Every layer stores what it changes and nothing else, exactly as pipeline
+// config does. Absence means **inherit**, never zero — which is the single rule
+// that makes a genre raising a default reach every character nobody overrode.
+// A read resolves session → lorebook → card → declaration default.
+
+/**
+ * What attaching a slot to an owner decided: "this character's Health caps at
+ * 20", "moods in this world are these five".
+ *
+ * ⚠ Not validated by a database constraint, and it cannot be: the schema a
+ * value is checked against is *derived from this row*, and it is the SDK
+ * registry that knows how. Writes go through `$lib/server/state`, which
+ * resolves the declaration and checks there.
+ */
+export const attributeConfigs = pgTable(
+	"attribute_configs",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		ownerKind: text("owner_kind").notNull(),
+		ownerId: integer("owner_id").notNull(),
+		/** The declared slot: `core:slot/hp@1`, `acme.rp:slot/tension@1`. */
+		slotId: text("slot_id").notNull(),
+		/** The deviations this layer makes — `{ max: 40 }`, not the whole config. */
+		config: jsonb("config")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
+		/**
+		 * Required for the session-layer owner kinds, null for the template
+		 * layers. Cascade is what retracts a session's whole state when the
+		 * session goes.
+		 */
+		sessionId: integer("session_id").references(() => sessions.id, {
+			onDelete: "cascade"
+		}),
+		/**
+		 * From which message this configuration holds, on the session clock.
+		 * NULL means "from the beginning", which is what every template-layer
+		 * row is.
+		 *
+		 * ⚠ The parent is `messages`, not the legacy `session_messages` — the
+		 * same call `message_annotations` makes, and for the same reason: the
+		 * two share identity by construction and `deleteLegacy*` removes both,
+		 * so this is the cascade that survives the legacy table retiring.
+		 * Replacing a message is a different path and is not a delete; see
+		 * `retractStateAnchoredTo`.
+		 */
+		validFromMessageId: integer("valid_from_message_id").references(
+			(): AnyPgColumn => messages.id,
+			{ onDelete: "cascade" }
+		),
+		/** `user` · `run:<id>` · `script:<id>`. Provenance, free text by design. */
+		updatedBy: text("updated_by").notNull().default("user"),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		// The whole read: "what does this owner say about this slot".
+		index("attribute_configs_owner_idx").on(
+			t.ownerKind,
+			t.ownerId,
+			t.slotId
+		),
+		// `stateFor(sessionId)` is one query over this.
+		index("attribute_configs_session_idx").on(t.sessionId),
+		check(
+			"attribute_configs_owner_kind_check",
+			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast')`
+		)
+	]
+)
+
+/**
+ * What a slot *is* right now, for one owner: "health = 12, as of message 47".
+ *
+ * ⚠ **A value is validated against the config valid at its own anchor**, never
+ * against the current one. A cap that drops from 40 to 20 does not make a
+ * recorded 35 illegitimate — it was legitimate when it was written, and a
+ * declaration change governs new writes rather than destroying old rows. Same
+ * rule the CHECK projection applies with `NOT VALID`.
+ */
+export const attributeValues = pgTable(
+	"attribute_values",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		ownerKind: text("owner_kind").notNull(),
+		ownerId: integer("owner_id").notNull(),
+		slotId: text("slot_id").notNull(),
+		/**
+		 * The value, wrapped: `{ "v": 12 }`.
+		 *
+		 * Wrapped rather than stored bare because a slot's value is a scalar of
+		 * four different types and `null` is a *meaningful* one — "cleared, read
+		 * the layer below" — which a bare JSON `null` column could not tell from
+		 * "no row".
+		 */
+		value: jsonb("value").notNull().$type<{ v: unknown }>(),
+		sessionId: integer("session_id").references(() => sessions.id, {
+			onDelete: "cascade"
+		}),
+		validFromMessageId: integer("valid_from_message_id").references(
+			(): AnyPgColumn => messages.id,
+			{ onDelete: "cascade" }
+		),
+		updatedBy: text("updated_by").notNull().default("user"),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		index("attribute_values_owner_idx").on(
+			t.ownerKind,
+			t.ownerId,
+			t.slotId
+		),
+		index("attribute_values_session_idx").on(t.sessionId),
+		check(
+			"attribute_values_owner_kind_check",
+			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast')`
+		)
+	]
+)
+
+/**
+ * Who is carrying what — an inventory, which is **not** a slot.
+ *
+ * An inventory is possession *edges* to entries, and the distinction is the
+ * classic RPG-modelling trap: a rusty key is a named topic with prose worth
+ * retrieving, so it is a lorebook entry; "Verity has it" is an edge; only
+ * `health: 12` is an attribute. Storing an inventory as a slot would flatten a
+ * thing with keywords, an embedding and a history into a string in a list.
+ *
+ * Session-scoped only. What a character owns *in the world* is a lorebook-layer
+ * question the entries spine will answer; what they are carrying *this run* is
+ * this table, and it diverges from message 1.
+ */
+export const sessionPossessions = pgTable(
+	"session_possessions",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		sessionId: integer("session_id")
+			.notNull()
+			.references(() => sessions.id, { onDelete: "cascade" }),
+		/**
+		 * `session_cast` — a character in this session, by `characters.id` — or
+		 * `session`, the world owner that holds what nobody is carrying ("on
+		 * the table"), by `sessions.id`.
+		 */
+		ownerKind: text("owner_kind").notNull(),
+		ownerId: integer("owner_id").notNull(),
+		entryId: integer("entry_id")
+			.notNull()
+			.references((): AnyPgColumn => lorebookEntries.id, {
+				onDelete: "cascade"
+			}),
+		/**
+		 * How many. Zero is a real row and not a deletion: "Verity has no
+		 * arrows left" is a fact the ledger showed and a swipe must be able to
+		 * take back, which a deleted row could not be.
+		 */
+		quantity: integer("quantity").notNull().default(1),
+		validFromMessageId: integer("valid_from_message_id").references(
+			(): AnyPgColumn => messages.id,
+			{ onDelete: "cascade" }
+		),
+		updatedBy: text("updated_by").notNull().default("user"),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		index("session_possessions_session_idx").on(t.sessionId),
+		index("session_possessions_owner_idx").on(
+			t.sessionId,
+			t.ownerKind,
+			t.ownerId
+		),
+		check(
+			"session_possessions_owner_kind_check",
+			sql`${t.ownerKind} IN ('session_cast', 'session')`
+		)
+	]
+)
+
+/**
+ * A change the **model** asked for, held at the review gate.
+ *
+ * The third writer has no authority of its own (`DESIGN-stats-and-states.md`):
+ * a person's edit and a genre script's roll apply immediately, and a model's
+ * lands here as a pending line with Accept and Reject. That is what supplies
+ * the audit trail for "why is my HP 3", and it is the same propose-and-review
+ * discipline the graph builder uses for everything play invents.
+ *
+ * Anchored to the message that proposed it, so a swipe takes its proposals with
+ * it and the new reply proposes its own.
+ */
+export const stateProposals = pgTable(
+	"state_proposals",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		sessionId: integer("session_id")
+			.notNull()
+			.references(() => sessions.id, { onDelete: "cascade" }),
+		messageId: integer("message_id").references(
+			(): AnyPgColumn => messages.id,
+			{ onDelete: "cascade" }
+		),
+		/** `value` — an attribute change — or `possession` — an item moving. */
+		kind: text("kind").notNull(),
+		/**
+		 * The change, in the same shape `core:task/set-state@1` takes on its
+		 * `changes` port: `{ owner, slotId, value }` or `{ owner, entryId,
+		 * delta }`. One shape either side of the gate, so accepting a proposal
+		 * is the same write the script writer makes.
+		 */
+		payload: jsonb("payload").notNull().$type<Record<string, unknown>>(),
+		/** `pending` · `accepted` · `rejected`. */
+		status: text("status").notNull().default("pending"),
+		/** The run that asked. Free text, matching `updated_by` elsewhere. */
+		proposedBy: text("proposed_by").notNull().default(""),
+		decidedAt: timestamp("decided_at"),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		// The widget's whole query: this session's pending lines.
+		index("state_proposals_session_status_idx").on(t.sessionId, t.status),
+		index("state_proposals_message_idx").on(t.messageId),
+		check(
+			"state_proposals_kind_check",
+			sql`${t.kind} IN ('value', 'possession')`
+		),
+		check(
+			"state_proposals_status_check",
+			sql`${t.status} IN ('pending', 'accepted', 'rejected')`
+		)
+	]
 )

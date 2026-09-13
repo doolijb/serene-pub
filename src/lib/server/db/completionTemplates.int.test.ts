@@ -46,10 +46,7 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { BUILTIN_COMPLETION_TEMPLATES } from "$lib/shared/constants/completionTemplates"
 
 /** The file that ships, not a re-typed copy of it. */
-const MIGRATION = readFileSync(
-	"drizzle/0097_brave_layla_miller.sql",
-	"utf8"
-)
+const MIGRATION = readFileSync("drizzle/0097_brave_layla_miller.sql", "utf8")
 
 const TAG = "0097_brave_layla_miller"
 
@@ -63,7 +60,10 @@ const { JOURNAL_WHEN, PRECEDING_MAX } = (() => {
 		when: number
 	}>
 	const entry = entries.find((e) => e.tag === TAG)
-	expect(entry, `${TAG} has no journal entry, so it runs nowhere`).toBeTruthy()
+	expect(
+		entry,
+		`${TAG} has no journal entry, so it runs nowhere`
+	).toBeTruthy()
 	return {
 		JOURNAL_WHEN: entry!.when,
 		PRECEDING_MAX: Math.max(
@@ -96,6 +96,23 @@ async function regressToPreMigration(db: TestDb) {
 	await db.execute(
 		`ALTER TABLE "connections"
 		 DROP CONSTRAINT "connections_prompt_format_completion_templates_key_fk"`
+	)
+	// ⚠ And the SECOND reference to the same key, added by 0114 when the
+	// endpoint/model split gave a model its own template override
+	// (`connection_models.prompt_format`). Dropping the table with only the
+	// first constraint released fails outright — "cannot drop table
+	// completion_templates because other objects depend on it" — which is a
+	// clear enough error, but a `CASCADE` here would not be: it would silently
+	// take the constraint away and leave every assertion below passing against a
+	// schema this file never described.
+	//
+	// A migration LATER than the one under test is being undone here, which is
+	// the honest cost of a hand-written inverse: 0114 is not "pre-0097" state.
+	// It does not weaken anything asserted below — nothing in this file reads
+	// `connection_models`, and 0097's own statements never mention it.
+	await db.execute(
+		`ALTER TABLE "connection_models"
+		 DROP CONSTRAINT "connection_models_prompt_format_completion_templates_key_fk"`
 	)
 	await db.execute(`DROP TABLE "completion_templates"`)
 }
@@ -307,10 +324,9 @@ describe("0097 adds the template table and keys connections to it", () => {
 				"token_counter",
 				"extra_json"
 			]) {
-				expect(
-					JSON.stringify(row[col]),
-					`${col} on ${row.name}`
-				).toBe(JSON.stringify(before[i][col]))
+				expect(JSON.stringify(row[col]), `${col} on ${row.name}`).toBe(
+					JSON.stringify(before[i][col])
+				)
 			}
 		}
 	}, 60_000)

@@ -55,6 +55,9 @@ function toInstance(p: ModePanel, layout?: LayoutBlob): PanelInstance {
 		surface: p.surface,
 		src: p.src,
 		channels: p.channels ?? [],
+		...(p.settings
+			? { settings: p.settings as PanelInstance["settings"] }
+			: {}),
 		layout: norm,
 		active,
 		collapsed: saved?.collapsed ?? false,

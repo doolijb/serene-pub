@@ -1,6 +1,8 @@
 # Context Templates
 
-Where a [Sampling Config](./connections.md#sampling-configs) controls _how_ a model samples tokens, a **Context Template** controls _what_ gets sent to it — the Handlebars template that assembles the system block, character and persona data, scenario, lorebook entries, session history, and post-history reminders into the final request.
+Where a [Sampling Config](./connections.md#sampling-configs) controls _how_ a model samples tokens, a **Context Template** controls _what_ gets sent to it — the template that assembles the system block, character and persona data, scenario, lorebook entries, session history, and post-history reminders into the final request.
+
+A template says which language it is written in, and Serene Pub renders two: **Handlebars**, which everything shipped is written in and which every example on this page uses, and **Liquid**, described in [its own section below](#writing-a-template-in-liquid). Neither is more supported than the other; Handlebars is simply what the defaults are written in, and nothing about adding Liquid changed them.
 
 **Context Templates are distinct from Prompt Configs.** A [Prompt Config](./prompt-configs.md) supplies the free-text _instructions_ — writing style, tone, rules — that get slotted into the template via the `{{{instructions}}}` variable below. The template is the structure itself.
 
@@ -10,6 +12,8 @@ Where a [Sampling Config](./connections.md#sampling-configs) controls _how_ a mo
 
 A Context Template is chosen per pipeline, in the **Pipelines** panel, on the step that assembles the prompt. That is a change from 0.5, where a single Context Config was selected instance-wide and per user.
 
+That pick is stored on the pipeline's selected **configuration** — see [Pipeline Configurations](./pipelines.md), which covers how a configuration stores what you changed and how to see or reset it.
+
 Templates are **shared across pipelines, not owned by one**. A template is compatible with the _kind of step_ that renders it, so one written while configuring session replies is equally selectable for the narrator — the two run the same assemble step and see the same values. The picker groups by where a template came from (this pipeline's, then the ones Serene Pub ships, then everything else that fits) so a long list stays navigable, but nothing is ever hidden from you.
 
 A pipeline with no assembling step — the summarizers, the graph builder — has no Context Template setting at all, so their settings never fill up with templates written for session.
@@ -18,7 +22,7 @@ A pipeline with no assembling step — the summarizers, the graph builder — ha
 
 The built-in **Default** is immutable, so customizing means duplicating it first and editing the copy. Everything already pointing at the original keeps working, which is the reason the shipped ones do not change in place.
 
-A template is an advanced, all-or-nothing thing to edit: malformed Handlebars breaks every pipeline selecting it, so it is worth trying changes on a low-stakes session before making one an instance default.
+A template is an advanced, all-or-nothing thing to edit. A template that does not parse is refused when you save it, but one that parses and says the wrong thing is not, so it is worth trying changes on a low-stakes session before making one an instance default. See [Templates are checked when you save them](#templates-are-checked-when-you-save-them).
 
 Deleting refuses while any pipeline or session still selects the template. Because templates are shared, that may well be a pipeline you are not looking at — point that setting elsewhere first, then delete.
 
@@ -160,18 +164,24 @@ A variable with nothing in it renders nothing at all, heading included — so a 
 Rather than a single flat "post-history instructions" variable rendered once after the whole session history, the post-history reminder is a small object, `postHistory`, accessed with `{{#with ../postHistory}}` from inside the `{{#each sessionMessages}}` loop (the `../` reaches out of the each-block's own scope to the top-level `postHistory`):
 
 - **`targetIndex`** — which message index the reminder should render at. Computed from the active Session Prompt's **Post-History Depth** setting: depth 0 targets the last entry in `sessionMessages` (the seed/prefill placeholder the model continues writing from), depth _N_ targets _N_ real messages earlier than that. A depth larger than the available history clamps to the oldest position rather than vanishing.
-- **`hasContent`** — `true` if any of `instructions`, `charInstructions`, or `exampleDialogue` below are populated; lets the template gate the whole reminder block in one check rather than three.
-- **`instructions`** — the active Session Prompt's own **Post-History Instructions** text (see [Prompt Configs](./prompt-configs.md)), gated by that config's **Post-History Token Trigger**: below the trigger threshold, this is left empty so a short session doesn't get a redundant reminder — the reminder only kicks in once the conversation is long enough that the system prompt feels distant.
-- **`charInstructions`** — the current character's own **Post-History Instructions** field (see [Characters](./characters.md)), rendered whenever the character has one set, with no token-trigger gating. This is a distinct, character-authored reinforcement note, separate from the Session Prompt's `instructions` above.
+- **`hasContent`** — `true` when at least one of `instructions`, `charInstructions`, or `exampleDialogue` below is populated and the trigger admits the block; lets the template gate the whole reminder block in one check rather than three.
+- **`instructions`** — the active Session Prompt's own **Post-History Instructions** text (see [Prompt Configs](./prompt-configs.md)). The config's **Post-History Token Trigger** gates the whole block: below the threshold every part below is left empty, so a short session gets no reminder at all. The reminder only kicks in once the conversation is long enough that the system prompt feels distant.
+- **`charInstructions`** — the current character's own **Post-History Instructions** field (see [Characters](./characters.md)), a character-authored reinforcement note separate from the Session Prompt's `instructions` above. It rides in the same block and is gated by the same trigger.
 - **`exampleDialogue`** — the current character's **Example Dialogues** field. Unlike earlier versions of this template, example dialogue is rendered here (near the generation point) rather than up in the top system block — a model many turns deep into a conversation benefits more from seeing example dialogue right before it writes than from seeing it once, far above the recent history.
 
 The template checks `(and (eq msgIndex targetIndex) hasContent)` inside the loop so the reminder block renders exactly once, at exactly the right position, only when there's actually something to say.
+
+**Which stage the trigger applies to.** The depth and the trigger are settings on the step that _assembles_ a prompt, so every assembling stage in a pipeline reads them. A plain chat has one of those; a genre that plans a turn, narrates it, gives each speaking character a voice and then records what changed has four, and each one honours the same two numbers unless that step's own value is set in the pipeline panel (see [Pipelines](./pipelines.md)), which wins.
+
+**The block is one unit.** The trigger and the depth govern the reminder, the character reminder and the example dialogue together. Below the trigger none of them is rendered; above it all three render at the same position. A card author's note is not exempt: the trigger is the reader's ceiling on reminders of any origin.
+
+**Reading the decision back.** A suppressed reminder leaves nothing behind in the prompt, so the run inspector's Prompt tab states it outright for the stage that decided: _Post-history reminder: suppressed, 278 tokens is below the 100000 trigger_, or _included at message 12_, plus _Includes the character reminder_ or _Character reminder suppressed with it_ when the card carries one. The context-building stage one step earlier carries the reminder ungated and its Output tab labels it _carried, gated at assemble_, so the copy shown there is never mistaken for the verdict.
 
 ### The injectionsByIndex map
 
 Script injections (see the Scripts page) land here: a map of **message index → injected entries**, each entry `{role, content}`. The depth a script declares resolves with the same arithmetic as `postHistory.targetIndex` — depth 0 is the seed placeholder's own iteration (right before the line the model continues from), depth _N_ is _N_ real messages earlier, clamped to the oldest position. The default template reads it inside the message loop with `{{#each (lookup ../injectionsByIndex msgIndex)}}` and wraps each entry in the role block it declared.
 
-This is deliberate: an injection is *data the template renders*, never a row spliced into the conversation behind the template's back. Your template decides where — and whether — injections appear: keep the block where the default puts it, move it after the message instead of before, restyle it, or leave it out entirely and injections render nowhere. A template written before this feature renders exactly as it always did, because an absent block renders nothing.
+This is deliberate: an injection is _data the template renders_, never a row spliced into the conversation behind the template's back. Your template decides where — and whether — injections appear: keep the block where the default puts it, move it after the message instead of before, restyle it, or leave it out entirely and injections render nowhere. A template written before this feature renders exactly as it always did, because an absent block renders nothing.
 
 **A `{{/each}}` boundary matters here.** `sessionMessages`' last entry is always the seed/prefill placeholder (`"Name: "`, the turn the model continues writing from) — it must stay the literal final block in the rendered output for that continuation to work. Rendering a post-history reminder _after_ `{{/each}}` instead of inside the loop (gated on the target message) would push a system block after the seed, breaking it into a standalone, non-continued turn.
 
@@ -213,6 +223,83 @@ The reasoning behind serializing the factual side as JSON specifically:
 - **Explicit key boundaries reduce attribute bleed.** In a group session with several characters, prose descriptions concatenated back-to-back are genuinely ambiguous for a model to attribute correctly — a trait mentioned near the end of one character's paragraph can get picked up as belonging to the next one. A JSON array of objects with explicit `name` keys removes that ambiguity structurally, independent of how any individual field is written.
 - **It's a base-model competency, not a roleplay one.** The instinct is that RP-oriented models — fine-tuned mostly on the prose/PList-style character cards common across other popular roleplay applications — would parse JSON _worse_ than the format they were tuned on. In practice, RP fine-tuning mostly reshapes _output_ voice and pacing, not _input_ parsing; general structured-data comprehension (reinforced heavily in most base/instruct training via function-calling and tool-use data) tends to survive underneath a lighter RP fine-tune layer largely intact.
 - **It keeps the retrieval paths consistent.** Both Context Infill Engines (keyword matching and RAG — see [Embeddings & RAG](./embeddings-and-rag.md)) serialize these same fields to JSON before injection, so switching retrieval modes doesn't also change the shape of what the model sees.
+
+## Writing a template in Liquid
+
+Serene Pub renders two template languages, and a template carries the one it is written in. **Liquid** ([LiquidJS](https://liquidjs.com)) is offered alongside Handlebars for people who already know it, or who find `{% if %}`/`{% endif %}` easier to read than `{{#if}}`/`{{/if}}`. It is not a migration: everything Serene Pub ships is Handlebars, and it stays that way.
+
+Both engines are handed the **same context object** and are held to producing the **same bytes** from equivalent sources — there is a parity test that renders the shipped templates through both and compares them character for character. So the choice is about which syntax you prefer to write, and about nothing else.
+
+### Choosing the language
+
+The engine is chosen when a template is **created**, and it is read-only afterwards. Switching an existing template's language is a rewrite, not a setting: storing the same text under a different engine id does not translate a word of it, and every `{{#if}}` in it would arrive at the model as literal characters. To move a template across, duplicate it and rewrite the copy — everything already pointing at the original keeps working.
+
+A template also has to land somewhere a step will look. Templates are grouped by _(what they render for, which language)_, so a Liquid template written for the assemble step appears under that step's Liquid heading, and is offered by a step that renders Liquid.
+
+**Where you can pick one.** A step declares which languages it renders, and the story string — the assemble step, the one this whole page is about — renders **both**. So a Liquid template is selectable anywhere that template is chosen: in a pipeline's own settings panel, where the picker lists Handlebars and Liquid templates together with each row's language in its subtitle, and in **Pipelines → Library**, where each language is its own heading. In the settings panel the `+` button splits into one per language, so "new Liquid template" is a single click; the Library's **New** button takes the language from the heading you create under. New templates default to Handlebars — the language everything shipped is written in — so nothing changes until you ask for Liquid by name. A step that renders only one language keeps a single `+` and a single heading.
+
+### The syntax, side by side
+
+|                        | Handlebars                                 | Liquid                                                            |
+| ---------------------- | ------------------------------------------ | ----------------------------------------------------------------- |
+| A variable             | `{{{scenario}}}`                           | `{{ scenario }}`                                                  |
+| Conditional            | `{{#if x}}…{{else if y}}…{{else}}…{{/if}}` | `{% if x %}…{% elsif y %}…{% else %}…{% endif %}`                 |
+| Negated                | `{{#unless x}}…{{/unless}}`                | `{% unless x %}…{% endunless %}`                                  |
+| Loop                   | `{{#each xs}}…{{/each}}`                   | `{% for x in xs %}…{% endfor %}`                                  |
+| The item               | `{{name}}` (implicit `this`)               | `{{ x.name }}` (the loop names it)                                |
+| Position               | `{{#each xs as \|x i\|}}` … `{{i}}`        | `{{ forloop.index0 }}`                                            |
+| Last item              | `{{#if @last}}` / `{{#unless @last}}`      | `{% if forloop.last %}` / `{% unless forloop.last %}`             |
+| A record's key/value   | `{{#each rec}}{{@key}}:{{this}}{{/each}}`  | `{% for pair in rec %}{{ pair[0] }}:{{ pair[1] }}{% endfor %}`    |
+| Lookup by index        | `{{lookup m i}}`                           | `m[i]`                                                            |
+| Reaching out of a loop | `{{../postHistory}}`                       | `{{ postHistory }}` — a Liquid loop does not hide the outer names |
+| Shifting scope         | `{{#with obj}}…{{/with}}`                  | no equivalent; write `obj.field`, or `{% assign o = obj %}`       |
+| Comparison             | `(eq a b)`, `(ne a b)`                     | `a == b`, `a != b`                                                |
+| Combining              | `(and a b)`, `(or a b)`                    | `a and b`, `a or b`                                               |
+| Present vs. empty      | `(isSet x)`                                | `x != nil`                                                        |
+| Whitespace control     | `{{~ … ~}}`                                | `{{- … -}}` and `{%- … -%}`                                       |
+
+Helpers become **filters**, with the same names and the same arguments:
+
+| Handlebars                                  | Liquid                                             |
+| ------------------------------------------- | -------------------------------------------------- |
+| `{{{json x}}}` / `{{{json x 1}}}`           | `{{ x \| json }}` / `{{ x \| json: 1 }}`           |
+| `{{{jsonValue x}}}` / `{{{jsonValue x 4}}}` | `{{ x \| jsonValue }}` / `{{ x \| jsonValue: 4 }}` |
+| `{{{jsonValue x indent=1 offset=1}}}`       | `{{ x \| jsonValue: indent: 1, offset: 1 }}`       |
+| `{{pad n 2}}`                               | `{{ n \| pad: 2 }}`                                |
+
+And the three block helpers become **tags**, spelled the same way:
+
+| Handlebars                                | Liquid                                         |
+| ----------------------------------------- | ---------------------------------------------- |
+| `{{#systemBlock}}…{{/systemBlock}}`       | `{% systemBlock %}…{% endsystemBlock %}`       |
+| `{{#userBlock}}…{{/userBlock}}`           | `{% userBlock %}…{% enduserBlock %}`           |
+| `{{#assistantBlock}}…{{/assistantBlock}}` | `{% assistantBlock %}…{% endassistantBlock %}` |
+
+`assistantBlock` takes one optional argument that Handlebars did not need: **`{% assistantBlock id: sessionMessage.id %}`**, inside the message loop. Handlebars reads the message off the block's implicit `this`; Liquid has no implicit `this`, so the message is named. It is load-bearing — the seed/prefill placeholder carries `id` `-2`, and that is what tells the block to leave its closing delimiter off so the model continues the turn rather than starting a new one.
+
+### Three things that behave differently
+
+**Blank lines.** Handlebars silently removes a line that contains nothing but a block tag. Liquid does not, so write `{%- if x -%}` rather than `{% if x %}` for a tag sitting on its own line. Serene Pub configures Liquid's trimming to be **line-bounded**, so `{%-`/`-%}` removes exactly what Handlebars would have — the indentation before the tag and the newline after it — and leaves your blank lines alone.
+
+**Empty arrays.** `""`, `0`, `nil` and `false` are falsy in both languages here. An empty _array_ is not: `{{#if xs}}` is false in Handlebars and `{% if xs %}` is **true** in Liquid. Write `{% if xs.size %}` or `{% if xs != empty %}`.
+
+**`nil` covers both.** Handlebars' `(ne x undefined)` distinguishes a missing key from one explicitly set to `null`. Liquid's `x != nil` treats them the same.
+
+### What Liquid is not allowed to do
+
+`{% include %}`, `{% render %}` and `{% layout %}` are **refused when the template is saved**, and the refusal names the tag and the line. A context template is a row in a table; there is no directory for it to pull from, and an engine that could open files is one an authored template could use to read the install. Put shared text in the template.
+
+An unknown filter is refused the same way — a misspelled `{{ x | jsonvalue }}` will not silently render `x` unfiltered.
+
+## Templates are checked when you save them
+
+Both languages get the same two checks, and they are deliberately different in kind.
+
+**A template that does not parse is refused, and nothing is written.** The message is the engine's own, with the line it failed on. A malformed template stored is a pipeline that fails at generation time — far from the edit that caused it, with an error nobody reading a session can act on.
+
+**A template that references a name nothing supplies is saved, with a warning.** Writing `{{{speakerRelationship}}}` where the contract says `speakerRelationships` parses perfectly and renders an empty string — a whole block of world lore quietly missing from every prompt. The warning names the value and the line, and the editor shows it as you type as well as when you save.
+
+The warnings are deliberately conservative. A name is only reported when it must come from the context: fields of a loop item, loop bindings, `{% assign %}`d names, `@key`/`forloop.last` and every helper or filter name are excluded. The cost is that a typo _inside_ a loop body goes unreported; the alternative is a panel with `each` and `upcase` in it, which teaches people to stop reading it.
 
 ## Block helpers: systemBlock, assistantBlock, userBlock
 

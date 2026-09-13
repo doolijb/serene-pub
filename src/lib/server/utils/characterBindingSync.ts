@@ -159,6 +159,27 @@ export async function syncLorebookBindingsForPersona(
  * path so they can't drift.
  */
 export async function resolveOrCreateBinding(
+	args: {
+		lorebookId: number
+		characterId?: number | null
+		personaId?: number | null
+	},
+	dbInstance?: Db
+): Promise<number> {
+	return (await resolveOrCreateBindingRow(args, dbInstance)).id
+}
+
+/**
+ * The same resolve-or-create as `resolveOrCreateBinding`, reporting whether
+ * the row was minted here. Same `{ id, created }` shape as the sibling
+ * `resolveOrCreateBindingByName` (availableSceneCast.ts).
+ *
+ * Callers that only need the id use the wrapper above; this exists for the
+ * ones that must tell "already bound" from "bound just now" — the
+ * `lorebooks:createBinding` ack, and the session cast check's decision to
+ * re-broadcast the cast list only when it actually changed.
+ */
+export async function resolveOrCreateBindingRow(
 	{
 		lorebookId,
 		characterId,
@@ -169,7 +190,7 @@ export async function resolveOrCreateBinding(
 		personaId?: number | null
 	},
 	dbInstance?: Db
-): Promise<number> {
+): Promise<{ id: number; created: boolean }> {
 	const db = dbInstance ?? (await defaultDb())
 	if (!characterId && !personaId)
 		throw new Error("characterId or personaId required")
@@ -217,7 +238,7 @@ export async function resolveOrCreateBinding(
 		}
 	}
 
-	return result.row.id
+	return { id: result.row.id, created: result.created }
 }
 
 /**

@@ -260,9 +260,11 @@ describe("the assemble binding refuses a template it cannot identify", () => {
 	 * prompt for that run was a stringified empty object sent to the model as
 	 * prose.
 	 *
-	 * It is reachable on a real install: `bootstrapPipelines` returns early on
-	 * a `TypeRegistryConflictError` without writing config values, and this
-	 * slot then resolves to `{}` on every run afterwards.
+	 * It is reachable on a real install: a boot that does not finish
+	 * `bootstrapPipelines` writes no config values, and this slot then resolves
+	 * to `{}` on every run afterwards. Until the content-addressing ruling
+	 * (2026-09-10) a type-registry conflict was the everyday way to get there —
+	 * that route is gone, and the failure this guards is not.
 	 */
 	const assemble = async (template: unknown) => {
 		const { coreBindings } = await import(

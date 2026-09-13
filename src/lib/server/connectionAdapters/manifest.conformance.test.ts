@@ -65,6 +65,8 @@ import {
 import { actionsOf } from "$lib/server/adapters/actions"
 import { BaseConnectionAdapter } from "$lib/server/connectionAdapters/BaseConnectionAdapter"
 import { BaseImageAdapter } from "$lib/server/imageAdapters/BaseImageAdapter"
+import { BaseEmbeddingAdapter } from "$lib/server/embeddingAdapters/BaseEmbeddingAdapter"
+import { BaseNerAdapter } from "$lib/server/nerAdapters/BaseNerAdapter"
 import {
 	ADAPTER_MANIFEST,
 	adapterCapabilities
@@ -102,7 +104,7 @@ const METHOD_FOR = Object.fromEntries(
  * Which actions the modules registered for each type define, between them.
  *
  * A type's action set is the UNION across its modules, which is the whole reason
- * the two adapter families never had to be merged: KOBOLDCPP has a text module
+ * the three adapter families never had to be merged: KOBOLDCPP has a text module
  * and an image one, `KoboldCppAdapter.generateText` and `A1111Adapter.generateImage`
  * cannot collide, and the type derives `{text->text, text->image}` between them.
  *
@@ -141,6 +143,25 @@ beforeAll(async () => {
 			for (const a of actionsOf(
 				(await modules.image()).Adapter,
 				BaseImageAdapter
+			))
+				found.add(a)
+		// The third family, walked with its OWN stop class for the same reason
+		// the other two are: `BaseEmbeddingAdapter` declares the text and image
+		// actions as an interface merge that emits nothing, so an embedding
+		// module implementing `generateText` would be a real override and would
+		// be counted — which is exactly the drift worth catching.
+		if (modules?.embedding)
+			for (const a of actionsOf(
+				(await modules.embedding()).Adapter,
+				BaseEmbeddingAdapter
+			))
+				found.add(a)
+		// The fourth family, with its OWN stop class for the same reason the
+		// other three have theirs.
+		if (modules?.ner)
+			for (const a of actionsOf(
+				(await modules.ner()).Adapter,
+				BaseNerAdapter
 			))
 				found.add(a)
 		IMPLEMENTED.set(type, found)

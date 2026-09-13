@@ -49,9 +49,8 @@
 	let connections: Sockets.Connections.List.Response["connectionsList"] =
 		$state([])
 
-	// Setup data — tracks summarization and RAG wizard step completion (server-side)
+	// Setup data — tracks RAG wizard step completion (server-side)
 	let setupData = $state<{
-		summarizationStepComplete: boolean
 		ragStepComplete: boolean
 	} | null>(null)
 
@@ -96,16 +95,12 @@
 	let isCheckingKoboldCPP = $state(false)
 	let koboldcppBaseUrl = $state("http://localhost:5001")
 
-	// Summarization step state
-	let wizardSummarizationLoading = $state(false)
-
 	// Vectorization step state — configuration itself now happens in the
 	// Connections sidebar's Embedding category (opened from this step, same as
 	// the Ollama/KoboldCPP Easy Setup steps); this file just tracks whether
 	// it's working yet.
 	let vectorizationEnabled = $state(false)
 	let vectorizationModelReady = $state(false)
-	let disablingVectorization = $state(false)
 
 	// Card import state
 	let wizardImportingCharacterCard = $state(false)
@@ -223,7 +218,6 @@
 	type WizardStepType =
 		| "welcome"
 		| "connection-setup"
-		| "summarization"
 		| "vectorization"
 		| "character"
 		| "persona"
@@ -240,7 +234,6 @@
 		const ids: WizardStepType[] = ["welcome"]
 		if (userCtx.user?.isAdmin) {
 			ids.push("connection-setup")
-			ids.push("summarization")
 			// Reachable on Android too now — local vectorization still can't
 			// work there (native ABI), but external-API vectorization does;
 			// the sidebar's setup screen hides the Local option on Android.
@@ -259,12 +252,6 @@
 			label: "Connect",
 			requiresAdmin: true,
 			isComplete: () => hasConnection
-		},
-		summarization: {
-			id: "summarization",
-			label: "Summarization",
-			requiresAdmin: true,
-			isComplete: () => setupData?.summarizationStepComplete ?? false
 		},
 		vectorization: {
 			id: "vectorization",
@@ -384,14 +371,13 @@
 	function closeWizard() {
 		wizardStep = 0
 		connectionChoice = null
-		wizardSummarizationLoading = false
 		isKoboldCppConnected = false
 		koboldcppLoadedModels = []
 		selectedKoboldCppModel = ""
 		isCheckingKoboldCPP = false
 	}
 
-	function markSetupComplete(step: "summarization" | "rag") {
+	function markSetupComplete(step: "rag") {
 		socket.emit("setup:markComplete", { step })
 	}
 
@@ -442,18 +428,6 @@
 
 	function toggleBanner() {
 		socket.emit("userSettings:updateShowHomePageBanner", { enabled: false })
-	}
-
-	function enableSummarization() {
-		wizardSummarizationLoading = true
-		socket.emit("systemSettings:updateSummarizationEnabled", {
-			enabled: true
-		})
-	}
-
-	function disableAndSkipVectorization() {
-		disablingVectorization = true
-		socket.emit("vectorization:disable", {})
 	}
 
 	async function handleCharacterCardImport(details: FileAcceptDetails) {
@@ -643,33 +617,21 @@
 		}
 	}
 
-	// Summarization enable response — also marks summarization step complete
-	function handleSystemSettingsUpdateSummarizationEnabled(msg: any) {
-		wizardSummarizationLoading = false
-		if (msg.enabled && currentWizardStep?.id === "summarization") {
-			markSetupComplete("summarization")
-			nextWizardStep()
-		}
-	}
-
-	// Vectorization status — actual configuration happens in the
-	// Connections sidebar's Embedding category (opened via the footer
-	// button); this just tracks whether it's enabled/ready so the footer
-	// can react.
-	function handleVectorizationListModels(msg: any) {
-		vectorizationEnabled = msg.vectorizationEnabled ?? false
+	/**
+	 * Retrieval status, for the step's summary line.
+	 *
+	 * ⚠ This step CONFIGURES NOTHING, and must not grow a control that does.
+	 * Embeddings are on when an embedding connection is starred, so the one place
+	 * to turn them on or off is the Connections panel. What the step is for is
+	 * the explanation and the pointer.
+	 *
+	 * `activeConnectionId` rather than a flag: the star IS the switch.
+	 */
+	function handleVectorizationListModels(
+		msg: Sockets.Vectorization.ListModels.Response
+	) {
+		vectorizationEnabled = msg.activeConnectionId != null
 		vectorizationModelReady = msg.modelReady ?? false
-	}
-
-	function handleVectorizationDisable(msg: any) {
-		disablingVectorization = false
-		if (msg.success) {
-			vectorizationEnabled = false
-			if (currentWizardStep?.id === "vectorization") {
-				markSetupComplete("rag")
-				nextWizardStep()
-			}
-		}
 	}
 
 	// Card imports from wizard
@@ -748,12 +710,7 @@
 		socket.on("characters:create", handleCharacterCreated)
 		socket.on("personas:create", handlePersonaCreated)
 		socket.on("sessions:create", handleSessionsCreate)
-		socket.on(
-			"systemSettings:updateSummarizationEnabled",
-			handleSystemSettingsUpdateSummarizationEnabled
-		)
 		socket.on("vectorization:listModels", handleVectorizationListModels)
-		socket.on("vectorization:disable", handleVectorizationDisable)
 		socket.on("characters:importCard", handleCharactersImportCard)
 		;(socket as any).on(
 			"characters:importCard:error",
@@ -806,12 +763,7 @@
 			"koboldcpp:connectModel:error",
 			handleKoboldcppConnectModelError
 		)
-		socket.off(
-			"systemSettings:updateSummarizationEnabled",
-			handleSystemSettingsUpdateSummarizationEnabled
-		)
 		socket.off("vectorization:listModels", handleVectorizationListModels)
-		socket.off("vectorization:disable", handleVectorizationDisable)
 		socket.off("characters:importCard", handleCharactersImportCard)
 		;(socket as any).off(
 			"characters:importCard:error",
@@ -1552,62 +1504,6 @@
 								{/if}
 							{/if}
 
-							<!-- ══ SUMMARIZATION ══ -->
-						{:else if currentWizardStep?.id === "summarization"}
-							<div class="text-center">
-								<Icons.BookOpen
-									size={60}
-									class="text-primary-500 mx-auto mb-4"
-								/>
-								<h2 class="mb-3 text-3xl font-bold">
-									Help the AI Remember
-								</h2>
-								<p
-									class="text-muted-foreground mx-auto max-w-sm"
-								>
-									Manually summarize conversations to help the
-									AI build a clearer picture of your story —
-									you choose what gets captured and when.
-								</p>
-							</div>
-							<div class="grid gap-3 sm:grid-cols-2">
-								<div class="bg-surface-500/10 rounded-xl p-4">
-									<div
-										class="mb-2 flex items-center gap-2 font-semibold"
-									>
-										<Icons.Lightbulb
-											size={16}
-											class="text-primary-500"
-										/>
-										What it does
-									</div>
-									<p class="text-sm opacity-75">
-										You trigger summarization manually in a
-										session. Serene compresses selected
-										messages into a compact record that the
-										AI uses to stay aware of past events
-										without running out of context.
-									</p>
-								</div>
-								<div class="bg-surface-500/10 rounded-xl p-4">
-									<div
-										class="mb-2 flex items-center gap-2 font-semibold"
-									>
-										<Icons.Zap
-											size={16}
-											class="text-warning-500"
-										/>
-										Resource usage
-									</div>
-									<p class="text-sm opacity-75">
-										Increases AI usage by around 30%.
-										Summarization only runs when you
-										manually trigger it in a session, so you
-										stay in control.
-									</p>
-								</div>
-							</div>
-
 							<!-- ══ VECTORIZATION ══ -->
 						{:else if currentWizardStep?.id === "vectorization"}
 							<div class="text-center">
@@ -1675,8 +1571,9 @@
 										class="text-success-500 flex-shrink-0"
 									/>
 									<p class="text-sm">
-										Embeddings are configured and ready —
-										RAG will use them automatically.
+										An embedding connection is in use and
+										ready. Retrieval will use it
+										automatically.
 									</p>
 								</div>
 							{:else if vectorizationEnabled}
@@ -1688,16 +1585,17 @@
 										class="flex-shrink-0 animate-spin"
 									/>
 									<p class="text-sm opacity-75">
-										Embeddings are enabled but not ready yet
-										— check the Embeddings panel for status.
+										An embedding connection is in use but
+										its model is not loaded yet. Its panel
+										shows the status.
 									</p>
 								</div>
 							{:else}
 								<div class="bg-surface-500/10 rounded-xl p-4">
 									<p class="text-sm opacity-75">
-										Choose a local model or an external
-										embeddings API in the Embeddings panel
-										to turn this on.
+										Add an embedding connection (a local
+										model, or a service you already use) and
+										mark it in use to turn this on.
 									</p>
 								</div>
 							{/if}
@@ -2138,61 +2036,21 @@
 								Open Connections Panel
 							</button>
 						{/if}
-					{:else if currentWizardStep?.id === "summarization"}
+					{:else if currentWizardStep?.id === "vectorization"}
+						<!-- ⚠ No enable or disable action here. Embeddings are on
+						     when an embedding connection is starred, so turning
+						     them on or off happens in exactly one place and it
+						     is not a wizard footer. -->
 						<div class="flex items-center gap-2">
 							<button
 								class="btn preset-filled-surface-400-600 btn-sm"
 								onclick={() => {
-									markSetupComplete("summarization")
+									markSetupComplete("rag")
 									nextWizardStep()
 								}}
 							>
 								Skip for now
 							</button>
-							<button
-								class="btn preset-filled-primary-500"
-								onclick={enableSummarization}
-								disabled={wizardSummarizationLoading}
-							>
-								{#if wizardSummarizationLoading}
-									<Icons.Loader
-										size={16}
-										class="animate-spin"
-									/>
-									Enabling…
-								{:else}
-									<Icons.BookOpen size={16} />
-									Enable Summarization
-								{/if}
-							</button>
-						</div>
-					{:else if currentWizardStep?.id === "vectorization"}
-						<div class="flex items-center gap-2">
-							{#if vectorizationEnabled}
-								<button
-									class="btn preset-filled-surface-400-600 btn-sm"
-									onclick={disableAndSkipVectorization}
-									disabled={disablingVectorization}
-								>
-									{#if disablingVectorization}
-										<Icons.Loader
-											size={14}
-											class="animate-spin"
-										/>
-									{/if}
-									Disable & Skip
-								</button>
-							{:else}
-								<button
-									class="btn preset-filled-surface-400-600 btn-sm"
-									onclick={() => {
-										markSetupComplete("rag")
-										nextWizardStep()
-									}}
-								>
-									Skip for now
-								</button>
-							{/if}
 
 							{#if vectorizationEnabled && vectorizationModelReady}
 								<button
@@ -2210,13 +2068,13 @@
 									class="btn preset-filled-primary-500"
 									onclick={() => {
 										panelsCtx.digest.tutorial = true
-										panelsCtx.digest.connectionsView =
-											"embedding"
+										panelsCtx.digest.connectionsModality =
+											"embeddings"
 										openPanel("connections")
 									}}
 								>
 									<Icons.Database size={16} />
-									Open Embeddings Settings
+									Open Embedding Connections
 								</button>
 							{/if}
 						</div>
